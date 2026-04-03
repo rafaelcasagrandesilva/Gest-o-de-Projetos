@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import (
+    ROLE_ADMIN,
+    ROLE_CONSULTA,
+    get_current_user,
+    require_gestor_or_admin,
+    require_project_access,
+    require_roles,
+)
+from app.database.session import get_db
+from app.models.user import ProjectUser, User
+from app.schemas.employees import EmployeeAllocationCreate, EmployeeAllocationRead
+from app.schemas.projects import ProjectCreate, ProjectRead, ProjectUpdate
+from app.services.employees_service import EmployeesService
+from app.services.projects_service import ProjectsService
+
+
+router = APIRouter()
+
+
+def _has_role(user: User, role: str) -> bool:
+    return any(link.role and link.role.name == role for link in (user.roles or []))
+
+
+@router.get("/", response_model=list[ProjectRead])
+async def list_projects(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[ProjectRead]:
+    svc = ProjectsService(db)
+    if _has_role(user, ROLE_ADMIN) or _has_role(user, ROLE_CONSULTA):
+        rows = await svc.list_projects(offset=offset, limit=limit)
+    else:
+        rows = await svc.list_projects_for_user(user_id=user.id, offset=offset, limit=limit)
+    return [ProjectRead.model_validate(p) for p in rows]
+
+
+@router.get("/{project_id}/allocations", response_model=list[EmployeeAllocationRead])
+async def list_project_allocations(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_access),
+) -> list[EmployeeAllocationRead]:
+    rows = await EmployeesService(db).list_allocations_by_project(project_id=project_id)
+    return [EmployeeAllocationRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/{project_id}/allocations",
+    response_model=EmployeeAllocationRead,
+    dependencies=[Depends(require_gestor_or_admin)],
+)
+async def create_project_allocation(
+    project_id: UUID,
+    payload: EmployeeAllocationCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+    _: User = Depends(require_project_access),
+) -> EmployeeAllocationRead:
+    if payload.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="project_id do corpo deve coincidir com a URL.")
+    row = await EmployeesService(db).create_allocation(actor_user_id=actor.id, data=payload.model_dump())
+    return EmployeeAllocationRead.model_validate(row)
+
+
+@router.get("/{project_id}", response_model=ProjectRead)
+async def get_project(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_access),
+) -> ProjectRead:
+    proj = await ProjectsService(db).get_project(project_id)
+    return ProjectRead.model_validate(proj)
+
+
+@router.post("/", response_model=ProjectRead, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+async def create_project(
+    payload: ProjectCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> ProjectRead:
+    proj = await ProjectsService(db).create_project(actor_user_id=actor.id, data=payload.model_dump())
+    return ProjectRead.model_validate(proj)
+
+
+@router.patch("/{project_id}", response_model=ProjectRead, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+async def update_project(
+    project_id: UUID,
+    payload: ProjectUpdate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> ProjectRead:
+    proj = await ProjectsService(db).update_project(actor_user_id=actor.id, project_id=project_id, data=payload.model_dump())
+    return ProjectRead.model_validate(proj)
+
+
+@router.delete("/{project_id}", status_code=204, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+async def delete_project(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> None:
+    await ProjectsService(db).delete_project(actor_user_id=actor.id, project_id=project_id)
+
+
+@router.post("/{project_id}/users/{user_id}", status_code=204, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+async def add_user_to_project(
+    project_id: UUID,
+    user_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    link = ProjectUser(project_id=project_id, user_id=user_id, access_level="member")
+    db.add(link)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Usuário já vinculado ao projeto.")
