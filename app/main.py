@@ -20,6 +20,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://artistic-connection-production-21ce.up.railway.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -39,4 +40,3 @@ async def startup_event() -> None:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
-
