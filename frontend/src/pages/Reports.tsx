@@ -1,6 +1,12 @@
 import { useAuth } from "@/context/AuthContext";
+import { useScenario } from "@/context/ScenarioContext";
 import { listProjects, type Project } from "@/services/projects";
-import { generateReport, type ReportFormat, type ReportType } from "@/services/reports";
+import {
+  generateReport,
+  type ReportFormat,
+  type ReportScenario,
+  type ReportType,
+} from "@/services/reports";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 type ReportDef = { id: ReportType; label: string; roles: string[] };
@@ -57,6 +63,7 @@ function monthDefault(): string {
 
 export function Reports() {
   const { user } = useAuth();
+  const { globalScenario } = useScenario();
   const roles = user?.role_names ?? [];
 
   const visible = useMemo(
@@ -81,6 +88,7 @@ export function Reports() {
   const [invYear, setInvYear] = useState<number | "">("");
   const [invMonth, setInvMonth] = useState<number | "">("");
   const [dashMonths, setDashMonths] = useState(6);
+  const [reportScenario, setReportScenario] = useState<ReportScenario>(globalScenario);
 
   const canGlobalDashboard = roles.includes("ADMIN") || roles.includes("CONSULTA");
 
@@ -159,7 +167,7 @@ export function Reports() {
         throw new Error("Selecione um projeto para o dashboard.");
       }
       const filters = buildFilters();
-      await generateReport(type, fmt, filters);
+      await generateReport(type, fmt, filters, reportScenario);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Falha ao gerar.");
     } finally {
@@ -185,6 +193,28 @@ export function Reports() {
         <p className="mt-1 text-sm text-slate-600">
           Gere Excel ou PDF a partir dos mesmos dados e regras do sistema (dashboard, custos e financeiro).
         </p>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p className="mb-2 text-sm font-medium text-slate-800">Cenário do relatório</p>
+        <p className="mb-3 text-xs text-slate-500">
+          Receitas, custos de projeto e folha seguem o cenário escolhido. Relatórios sem dados por cenário (ex.: NF,
+          endividamento, frota cadastral) ignoram este filtro.
+        </p>
+        <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+          {(["PREVISTO", "REALIZADO"] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setReportScenario(s)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                reportScenario === s ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              {s === "PREVISTO" ? "Previsto" : "Realizado"}
+            </button>
+          ))}
+        </div>
       </div>
 
       {err && (

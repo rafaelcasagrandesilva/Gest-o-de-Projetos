@@ -1,3 +1,4 @@
+import type { ScenarioKind } from "@/context/ScenarioContext";
 import type { DirectorSummary, MonthlyPoint } from "@/services/dashboard";
 import {
   Bar,
@@ -38,9 +39,39 @@ const BAR_COLORS: Record<string, string> = {
 };
 
 const LINE_COLORS = {
-  receita: "#4F46E5",
-  lucro: "#22C55E",
+  receitaReal: "#4F46E5",
+  receitaPrev: "#a5b4fc",
+  lucroReal: "#22C55E",
+  lucroPrev: "#86efac",
 } as const;
+
+type MergedMonthRow = {
+  mes: string;
+  receitaRealizado?: number;
+  receitaPrevisto?: number;
+  lucroRealizado?: number;
+  lucroPrevisto?: number;
+};
+
+function mergePrevistoRealizado(prev: MonthlyPoint[], real: MonthlyPoint[]): MergedMonthRow[] {
+  const map = new Map<string, MergedMonthRow>();
+  for (const m of real) {
+    const key = m.competencia.slice(0, 10);
+    map.set(key, {
+      mes: m.competencia.slice(0, 7),
+      receitaRealizado: m.revenue_total,
+      lucroRealizado: m.net_profit ?? m.profit,
+    });
+  }
+  for (const m of prev) {
+    const key = m.competencia.slice(0, 10);
+    const row = map.get(key) ?? { mes: m.competencia.slice(0, 7) };
+    row.receitaPrevisto = m.revenue_total;
+    row.lucroPrevisto = m.net_profit ?? m.profit;
+    map.set(key, row);
+  }
+  return Array.from(map.values()).sort((a, b) => a.mes.localeCompare(b.mes));
+}
 
 const chartCardClass =
   "rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6 min-h-[300px] flex flex-col";
@@ -48,6 +79,12 @@ const chartCardClass =
 type Props = {
   summary: DirectorSummary;
   monthlySeries: MonthlyPoint[];
+  monthlySeriesPrevisto?: MonthlyPoint[];
+  monthlySeriesRealizado?: MonthlyPoint[];
+  /** Mais de um mês: textos dos gráficos falam em “período” */
+  multiMonth?: boolean;
+  /** Cenário dos gráficos de pizza / barras (série principal); linhas prev×real são sempre comparativas */
+  selectedScenario?: ScenarioKind;
 };
 
 /** Fatia do donut: valores absolutos + % sobre a receita (não sobre a soma dos custos). */
@@ -150,7 +187,15 @@ function BarChartLegend({ rows }: { rows: BarRow[] }) {
   );
 }
 
-export function FinancialDashboardCharts({ summary: s, monthlySeries }: Props) {
+export function FinancialDashboardCharts({
+  summary: s,
+  monthlySeries,
+  monthlySeriesPrevisto = [],
+  monthlySeriesRealizado = [],
+  multiMonth = false,
+  selectedScenario = "REALIZADO",
+}: Props) {
+  const scLabel = selectedScenario === "PREVISTO" ? "previsto" : "realizado";
   const receita = s.total_revenue ?? s.revenue_total;
   const costCompositionAll = buildCostCompositionRows(s, receita);
   const costCompositionLegend = [...costCompositionAll].sort(
@@ -165,11 +210,11 @@ export function FinancialDashboardCharts({ summary: s, monthlySeries }: Props) {
     { name: "Lucro líquido", valor: s.net_profit ?? s.profit },
   ];
 
-  const lineData = monthlySeries.map((m) => ({
-    mes: m.competencia.slice(0, 7),
-    receita: m.revenue_total,
-    lucro: m.net_profit ?? m.profit,
-  }));
+  const prevForMerge =
+    monthlySeriesPrevisto.length > 0 ? monthlySeriesPrevisto : monthlySeries;
+  const realForMerge =
+    monthlySeriesRealizado.length > 0 ? monthlySeriesRealizado : monthlySeries;
+  const lineDataCompare = mergePrevistoRealizado(prevForMerge, realForMerge);
 
   return (
     <div className="space-y-6">
@@ -177,12 +222,15 @@ export function FinancialDashboardCharts({ summary: s, monthlySeries }: Props) {
         <div className={chartCardClass}>
           <h3 className="text-sm font-medium text-slate-700">Composição de custos</h3>
           <p className="mt-0.5 text-xs text-slate-500">
-            Proporção dos custos sobre a receita do mês — legenda com percentuais; passe o mouse sobre o gráfico para detalhes
+            Cenário <strong>{scLabel}</strong> — proporção dos custos sobre a receita{" "}
+            {multiMonth ? "no período" : "do mês"}; legenda com percentuais
           </p>
           <div className="mt-2 flex min-h-[280px] w-full flex-1 flex-col gap-5 md:flex-row md:items-center md:justify-between md:gap-6">
             <div className="flex min-h-[240px] w-full flex-1 items-center justify-center md:min-h-[280px] md:max-w-[min(100%,280px)] md:flex-[0_1_280px]">
               {pieData.length === 0 ? (
-                <p className="text-center text-sm text-slate-500">Sem custos nesta competência.</p>
+                <p className="text-center text-sm text-slate-500">
+                  Sem custos {multiMonth ? "neste período" : "nesta competência"}.
+                </p>
               ) : (
                 <ResponsiveContainer width="100%" height={280}>
                   <PieChart margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
@@ -218,7 +266,10 @@ export function FinancialDashboardCharts({ summary: s, monthlySeries }: Props) {
 
         <div className={chartCardClass}>
           <h3 className="text-sm font-medium text-slate-700">Resumo financeiro</h3>
-          <p className="mt-0.5 text-xs text-slate-500">Receita, custo total e lucros</p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Cenário <strong>{scLabel}</strong> — receita, custo total e lucros{" "}
+            {multiMonth ? "(soma no período)" : ""}
+          </p>
           <div className="mt-2 w-full flex-1">
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={barData} margin={{ top: 12, right: 12, left: 8, bottom: 56 }}>
@@ -259,14 +310,16 @@ export function FinancialDashboardCharts({ summary: s, monthlySeries }: Props) {
       </div>
 
       <div className={chartCardClass + " min-h-[320px]"}>
-        <h3 className="text-sm font-medium text-slate-700">Evolução mensal</h3>
-        <p className="mt-0.5 text-xs text-slate-500">Receita e lucro líquido por mês</p>
-        <div className="mt-2 min-h-[280px] w-full flex-1">
-          {lineData.length === 0 ? (
-            <p className="flex h-full items-center justify-center text-sm text-slate-500">Sem série mensal.</p>
+        <h3 className="text-sm font-medium text-slate-700">Receita — previsto × realizado</h3>
+        <p className="mt-0.5 text-xs text-slate-500">Um ponto por mês no período selecionado</p>
+        <div className="mt-2 min-h-[260px] w-full flex-1">
+          {lineDataCompare.length === 0 ? (
+            <p className="flex h-full min-h-[200px] items-center justify-center text-sm text-slate-500">
+              Sem série mensal.
+            </p>
           ) : (
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={lineData} margin={{ top: 12, right: 20, left: 8, bottom: 8 }}>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={lineDataCompare} margin={{ top: 12, right: 20, left: 8, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="mes" tick={{ fontSize: 11, fill: "#475569" }} />
                 <YAxis
@@ -292,21 +345,81 @@ export function FinancialDashboardCharts({ summary: s, monthlySeries }: Props) {
                 />
                 <Line
                   type="monotone"
-                  dataKey="receita"
-                  name="Receita"
-                  stroke={LINE_COLORS.receita}
-                  strokeWidth={2.5}
+                  dataKey="receitaPrevisto"
+                  name="Receita (previsto)"
+                  stroke={LINE_COLORS.receitaPrev}
+                  strokeWidth={2}
+                  strokeDasharray="5 4"
                   dot={{ r: 3, strokeWidth: 1, fill: "#fff" }}
-                  activeDot={{ r: 5 }}
+                  connectNulls
                 />
                 <Line
                   type="monotone"
-                  dataKey="lucro"
-                  name="Lucro líquido"
-                  stroke={LINE_COLORS.lucro}
+                  dataKey="receitaRealizado"
+                  name="Receita (realizado)"
+                  stroke={LINE_COLORS.receitaReal}
                   strokeWidth={2.5}
                   dot={{ r: 3, strokeWidth: 1, fill: "#fff" }}
-                  activeDot={{ r: 5 }}
+                  connectNulls
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      <div className={chartCardClass + " min-h-[320px]"}>
+        <h3 className="text-sm font-medium text-slate-700">Lucro líquido — previsto × realizado</h3>
+        <p className="mt-0.5 text-xs text-slate-500">Comparativo mensal entre cenários</p>
+        <div className="mt-2 min-h-[260px] w-full flex-1">
+          {lineDataCompare.length === 0 ? (
+            <p className="flex h-full min-h-[200px] items-center justify-center text-sm text-slate-500">
+              Sem série mensal.
+            </p>
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={lineDataCompare} margin={{ top: 12, right: 20, left: 8, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="mes" tick={{ fontSize: 11, fill: "#475569" }} />
+                <YAxis
+                  tick={{ fontSize: 11, fill: "#475569" }}
+                  tickFormatter={(v) =>
+                    Math.abs(v) >= 1_000_000
+                      ? `${(v / 1_000_000).toFixed(1)}M`
+                      : Math.abs(v) >= 1000
+                        ? `${(v / 1000).toFixed(0)}k`
+                        : String(v)
+                  }
+                  width={48}
+                />
+                <Tooltip
+                  formatter={(value: number) => formatCurrency(value)}
+                  contentStyle={chartTooltipStyle}
+                />
+                <Legend
+                  verticalAlign="top"
+                  align="center"
+                  wrapperStyle={{ fontSize: "12px", paddingBottom: "8px" }}
+                  iconType="line"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="lucroPrevisto"
+                  name="Lucro líquido (previsto)"
+                  stroke={LINE_COLORS.lucroPrev}
+                  strokeWidth={2}
+                  strokeDasharray="5 4"
+                  dot={{ r: 3, strokeWidth: 1, fill: "#fff" }}
+                  connectNulls
+                />
+                <Line
+                  type="monotone"
+                  dataKey="lucroRealizado"
+                  name="Lucro líquido (realizado)"
+                  stroke={LINE_COLORS.lucroReal}
+                  strokeWidth={2.5}
+                  dot={{ r: 3, strokeWidth: 1, fill: "#fff" }}
+                  connectNulls
                 />
               </LineChart>
             </ResponsiveContainer>

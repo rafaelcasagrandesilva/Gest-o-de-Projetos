@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.costs import CorporateCost, CostAllocation
+from app.core.scenario import Scenario, scenario_pg_rhs
 from app.models.financial import Revenue
 from app.models.project import Project
 
@@ -33,7 +34,10 @@ class AllocationService:
         if strategy == "by_revenue":
             stmt = (
                 select(Revenue.project_id, func.coalesce(func.sum(Revenue.amount), 0))
-                .where(Revenue.competencia == competencia)
+                .where(
+                    Revenue.competencia == competencia,
+                    Revenue.scenario == scenario_pg_rhs(Scenario.REALIZADO),
+                )
                 .group_by(Revenue.project_id)
             )
             rows = (await self.session.execute(stmt)).all()

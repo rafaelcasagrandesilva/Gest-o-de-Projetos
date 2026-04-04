@@ -1,8 +1,10 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { listFleetVehicles, type FleetVehicle } from "@/services/vehicles";
 import { Link, useParams } from "react-router-dom";
 import { getProject, type Project } from "@/services/projects";
 import {
+  copyLaborsFromPrevious,
   createFixedOperational,
   createLabor,
   createSystem,
@@ -16,6 +18,8 @@ import {
   listFixedOperational,
   listSystems,
   listVehicles,
+  updateLaborCosts,
+  type LaborCostPatch,
   type ProjectLaborDetail,
   type ProjectOperationalFixed,
   type ProjectSystemCost,
@@ -97,7 +101,8 @@ function fleetTypeLabel(t: string): string {
   }
 }
 
-function fuelLabel(f: string): string {
+function fuelLabel(f: string | null | undefined): string {
+  if (f == null || f === "") return "—";
   switch (f) {
     case "ETHANOL":
       return "Etanol";
@@ -118,20 +123,249 @@ const PROJECT_FLEET_SUMMARY_TYPES: { key: "LIGHT" | "PICKUP" | "SEDAN"; title: s
 
 type Tab = "labor" | "vehicles" | "systems" | "fixed";
 
+function strOrEmpty(v: number | null | undefined): string {
+  return v == null ? "" : String(v);
+}
+
+function laborBaseLabel(src: string | undefined): string {
+  if (src === "OVERRIDE_TOTAL") return "Custo total: override";
+  if (src === "OVERRIDE_SALARY") return "Base: override";
+  return "Base: cadastro";
+}
+
+function LaborCostEditor({
+  projectId,
+  detail,
+  onSaved,
+}: {
+  projectId: string;
+  detail: ProjectLaborDetail;
+  onSaved: () => void | Promise<void>;
+}) {
+  const isClt = (detail.tipo || "").toUpperCase() === "CLT";
+  const [salary, setSalary] = useState(() => strOrEmpty(detail.cost_salary_base));
+  const [add, setAdd] = useState(() => strOrEmpty(detail.cost_additional_costs));
+  const [h50, setH50] = useState(() => strOrEmpty(detail.cost_extra_hours_50));
+  const [h70, setH70] = useState(() => strOrEmpty(detail.cost_extra_hours_70));
+  const [h100, setH100] = useState(() => strOrEmpty(detail.cost_extra_hours_100));
+  const [pjH, setPjH] = useState(() => strOrEmpty(detail.cost_pj_hours_per_month));
+  const [pjAdd, setPjAdd] = useState(() => strOrEmpty(detail.cost_pj_additional_cost));
+  const [totalOv, setTotalOv] = useState(() => strOrEmpty(detail.cost_total_override));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSalary(strOrEmpty(detail.cost_salary_base));
+    setAdd(strOrEmpty(detail.cost_additional_costs));
+    setH50(strOrEmpty(detail.cost_extra_hours_50));
+    setH70(strOrEmpty(detail.cost_extra_hours_70));
+    setH100(strOrEmpty(detail.cost_extra_hours_100));
+    setPjH(strOrEmpty(detail.cost_pj_hours_per_month));
+    setPjAdd(strOrEmpty(detail.cost_pj_additional_cost));
+    setTotalOv(strOrEmpty(detail.cost_total_override));
+    setErr(null);
+  }, [detail]);
+
+  function parseNum(s: string): number | null {
+    if (s.trim() === "") return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  async function submit(patch: LaborCostPatch) {
+    setSaving(true);
+    setErr(null);
+    try {
+      await updateLaborCosts(projectId, detail.labor_id, patch);
+      await Promise.resolve(onSaved());
+    } catch {
+      setErr("Não foi possível salvar os custos.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/40 p-4">
+      <p className="text-xs font-medium text-indigo-900">Custos deste mês neste projeto (não altera o cadastro RH)</p>
+      {detail.uses_cost_total_override ? (
+        <p className="mt-1 text-xs text-amber-800">
+          Custo total fixo ativo — demais campos de composição são ignorados no cálculo.
+        </p>
+      ) : null}
+      {err ? <p className="mt-2 text-xs text-red-700">{err}</p> : null}
+      <p className="mt-2 text-xs font-medium text-slate-700">
+        Fonte do cálculo:{" "}
+        <span className="rounded-md bg-white px-2 py-0.5 ring-1 ring-slate-200">
+          {laborBaseLabel(detail.cost_base_source)}
+        </span>
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <label className="block text-xs text-slate-600">
+          Custo total (override)
+          <input
+            type="number"
+            step="0.01"
+            min={0}
+            value={totalOv}
+            onChange={(e) => setTotalOv(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+            placeholder="Vazio = calcular"
+          />
+        </label>
+        <label className="block text-xs text-slate-600">
+          Salário base (override)
+          <input
+            type="number"
+            step="0.01"
+            min={0}
+            value={salary}
+            onChange={(e) => setSalary(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+            placeholder="Vazio = cadastro"
+          />
+        </label>
+        {isClt ? (
+          <>
+            <label className="block text-xs text-slate-600">
+              Horas extras 50%
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={h50}
+                onChange={(e) => setH50(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="block text-xs text-slate-600">
+              Horas extras 70%
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={h70}
+                onChange={(e) => setH70(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="block text-xs text-slate-600">
+              Horas extras 100%
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={h100}
+                onChange={(e) => setH100(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="block text-xs text-slate-600 sm:col-span-2">
+              Custos adicionais (R$)
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={add}
+                onChange={(e) => setAdd(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+              />
+            </label>
+          </>
+        ) : (
+          <>
+            <label className="block text-xs text-slate-600">
+              Horas/mês PJ (override)
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={pjH}
+                onChange={(e) => setPjH(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="block text-xs text-slate-600">
+              Ajuda de custo PJ (override)
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={pjAdd}
+                onChange={(e) => setPjAdd(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+              />
+            </label>
+          </>
+        )}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() =>
+            submit({
+              cost_total_override: parseNum(totalOv),
+              cost_salary_base: parseNum(salary),
+              cost_additional_costs: parseNum(add),
+              cost_extra_hours_50: parseNum(h50),
+              cost_extra_hours_70: parseNum(h70),
+              cost_extra_hours_100: parseNum(h100),
+              cost_pj_hours_per_month: parseNum(pjH),
+              cost_pj_additional_cost: parseNum(pjAdd),
+            })
+          }
+          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+        >
+          {saving ? "Salvando…" : "Salvar custos do mês"}
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() =>
+            submit({
+              cost_salary_base: null,
+              cost_additional_costs: null,
+              cost_extra_hours_50: null,
+              cost_extra_hours_70: null,
+              cost_extra_hours_100: null,
+              cost_pj_hours_per_month: null,
+              cost_pj_additional_cost: null,
+              cost_total_override: null,
+            })
+          }
+          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-700 disabled:opacity-50"
+        >
+          Limpar overrides (usar cadastro)
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
+  const { globalScenario } = useScenario();
+  const [editScenario, setEditScenario] = useState<ScenarioKind>(globalScenario);
   const [project, setProject] = useState<Project | null>(null);
   const [competencia, setCompetencia] = useState(() => normalizeCompetencia(monthStart()));
   const [tab, setTab] = useState<Tab>("labor");
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [laborDetails, setLaborDetails] = useState<ProjectLaborDetail[]>([]);
-  const [vehicles, setVehicles] = useState<ProjectVehicle[]>([]);
+  const [vehicleRowsByScenario, setVehicleRowsByScenario] = useState<{
+    PREVISTO: ProjectVehicle[];
+    REALIZADO: ProjectVehicle[];
+  }>({ PREVISTO: [], REALIZADO: [] });
   const [systems, setSystems] = useState<ProjectSystemCost[]>([]);
   const [fixed, setFixed] = useState<ProjectOperationalFixed[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const competenciaApi = useMemo(() => normalizeCompetencia(competencia), [competencia]);
+
+  useEffect(() => {
+    setEditScenario(globalScenario);
+  }, [globalScenario, projectId]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -168,14 +402,22 @@ export function ProjectDetail() {
     };
   }, [projectId, competenciaApi]);
 
-  async function reloadTab() {
+  const reloadTab = useCallback(async () => {
     if (!projectId) return;
     setError(null);
     try {
-      if (tab === "labor") setLaborDetails(await fetchLaborDetails(projectId, competenciaApi));
-      if (tab === "vehicles") setVehicles(await listVehicles(projectId, competenciaApi));
-      if (tab === "systems") setSystems(await listSystems(projectId, competenciaApi));
-      if (tab === "fixed") setFixed(await listFixedOperational(projectId, competenciaApi));
+      if (tab === "labor")
+        setLaborDetails(await fetchLaborDetails(projectId, competenciaApi, editScenario));
+      if (tab === "vehicles") {
+        const [vp, vr] = await Promise.all([
+          listVehicles(projectId, competenciaApi, "PREVISTO"),
+          listVehicles(projectId, competenciaApi, "REALIZADO"),
+        ]);
+        setVehicleRowsByScenario({ PREVISTO: vp, REALIZADO: vr });
+      }
+      if (tab === "systems") setSystems(await listSystems(projectId, competenciaApi, editScenario));
+      if (tab === "fixed")
+        setFixed(await listFixedOperational(projectId, competenciaApi, editScenario));
     } catch (e) {
       if (isAxiosError(e) && e.response?.status === 403) {
         setError("Sem acesso a este projeto.");
@@ -183,11 +425,11 @@ export function ProjectDetail() {
         setError("Erro ao carregar dados.");
       }
     }
-  }
+  }, [projectId, competenciaApi, tab, editScenario]);
 
   useEffect(() => {
-    reloadTab();
-  }, [projectId, competenciaApi, tab]);
+    void reloadTab();
+  }, [reloadTab]);
 
   if (!projectId) {
     return <p className="text-slate-500">ID inválido.</p>;
@@ -221,18 +463,41 @@ export function ProjectDetail() {
             ← Projetos
           </Link>
           <h2 className="mt-2 text-xl font-semibold text-slate-900">{project.name}</h2>
-          <p className="text-sm text-slate-500">Estrutura de custo operacional por competência</p>
+          <p className="text-sm text-slate-500">
+            Estrutura por competência e cenário. Mão de obra: custos mensais editáveis aqui; cadastro global do
+            colaborador não é alterado. Na aba Mão de obra, use o botão para copiar colaboradores do mês anterior
+            (mesmo cenário) quando quiser preencher a competência.
+          </p>
         </div>
-        <div>
-          <label className="mb-1 block text-xs text-slate-500">Competência</label>
-          <input
-            type="month"
-            value={competencia.slice(0, 7)}
-            onChange={(e) =>
-              e.target.value && setCompetencia(normalizeCompetencia(`${e.target.value}-01`))
-            }
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-          />
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <span className="mb-1 block text-xs text-slate-500">Editando</span>
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+              {(["PREVISTO", "REALIZADO"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setEditScenario(s)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                    editScenario === s ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  {s === "PREVISTO" ? "Previsto" : "Realizado"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-500">Competência</label>
+            <input
+              type="month"
+              value={competencia.slice(0, 7)}
+              onChange={(e) =>
+                e.target.value && setCompetencia(normalizeCompetencia(`${e.target.value}-01`))
+              }
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </div>
         </div>
       </div>
 
@@ -259,19 +524,40 @@ export function ProjectDetail() {
         <LaborTab
           projectId={projectId}
           competencia={competenciaApi}
+          editScenario={editScenario}
           employees={employees}
           rows={laborDetails}
           onRefresh={reloadTab}
         />
       )}
       {tab === "vehicles" && (
-        <VehiclesTab projectId={projectId} competencia={competenciaApi} rows={vehicles} onRefresh={reloadTab} />
+        <VehiclesTab
+          projectId={projectId}
+          competencia={competenciaApi}
+          editScenario={editScenario}
+          rows={vehicleRowsByScenario[editScenario]}
+          rowsPrevisto={vehicleRowsByScenario.PREVISTO}
+          rowsRealizado={vehicleRowsByScenario.REALIZADO}
+          onRefresh={reloadTab}
+        />
       )}
       {tab === "systems" && (
-        <SystemsTab projectId={projectId} competencia={competenciaApi} rows={systems} onRefresh={reloadTab} />
+        <SystemsTab
+          projectId={projectId}
+          competencia={competenciaApi}
+          editScenario={editScenario}
+          rows={systems}
+          onRefresh={reloadTab}
+        />
       )}
       {tab === "fixed" && (
-        <FixedTab projectId={projectId} competencia={competenciaApi} rows={fixed} onRefresh={reloadTab} />
+        <FixedTab
+          projectId={projectId}
+          competencia={competenciaApi}
+          editScenario={editScenario}
+          rows={fixed}
+          onRefresh={reloadTab}
+        />
       )}
     </div>
   );
@@ -280,12 +566,14 @@ export function ProjectDetail() {
 function LaborTab({
   projectId,
   competencia,
+  editScenario,
   employees,
   rows,
   onRefresh,
 }: {
   projectId: string;
   competencia: string;
+  editScenario: ScenarioKind;
   employees: Employee[];
   rows: ProjectLaborDetail[];
   onRefresh: () => void;
@@ -294,6 +582,8 @@ function LaborTab({
   const [allocationPct, setAllocationPct] = useState("100");
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
   const linkedIds = new Set(rows.map((r) => r.employee_id));
   const availableEmployees = employees.filter((e) => !linkedIds.has(e.id));
@@ -329,6 +619,7 @@ function LaborTab({
         competencia,
         employee_id: employeeId,
         allocation_percentage: pct,
+        scenario: editScenario,
       });
       setEmployeeId("");
       setAllocationPct("100");
@@ -342,6 +633,48 @@ function LaborTab({
       } else {
         setFormError("Não foi possível adicionar.");
       }
+    }
+  }
+
+  async function copyFromPrevious() {
+    if (
+      !window.confirm(
+        "Isso irá copiar os colaboradores do mês anterior para este mês. Deseja continuar?"
+      )
+    ) {
+      return;
+    }
+    setCopyBusy(true);
+    setCopyFeedback(null);
+    try {
+      const res = await copyLaborsFromPrevious(projectId, {
+        competencia,
+        scenario: editScenario,
+      });
+      if (res.copied > 0) {
+        setCopyFeedback(
+          `${res.copied} colaborador(es) copiado(s).` +
+            (res.skipped_allocation_cap > 0
+              ? ` ${res.skipped_allocation_cap} omitido(s) por limite de alocação (>100%).`
+              : "")
+        );
+      } else {
+        setCopyFeedback(
+          "Nenhum colaborador novo foi copiado (já vinculados neste mês, mês anterior vazio ou limite de alocação)."
+        );
+      }
+      onRefresh();
+    } catch (err) {
+      if (isAxiosError(err) && err.response?.data?.detail) {
+        const d = err.response.data.detail;
+        setCopyFeedback(
+          typeof d === "string" ? d : "Não foi possível copiar. Tente novamente."
+        );
+      } else {
+        setCopyFeedback("Não foi possível copiar. Tente novamente.");
+      }
+    } finally {
+      setCopyBusy(false);
     }
   }
 
@@ -389,8 +722,44 @@ function LaborTab({
         </button>
       </form>
 
+      {rows.length === 0 ? (
+        <div className="rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50/60 p-6 text-center shadow-sm">
+          <p className="text-sm text-slate-700">
+            Esta competência ainda não tem colaboradores vinculados. Você pode trazer os do mês anterior de uma vez.
+          </p>
+          <button
+            type="button"
+            disabled={copyBusy}
+            onClick={copyFromPrevious}
+            className="mt-4 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+          >
+            {copyBusy ? "Copiando…" : "Inicializar mês com base no mês anterior"}
+          </button>
+        </div>
+      ) : null}
+
+      {copyFeedback && (
+        <p
+          className={`text-sm ${copyFeedback.startsWith("Não foi") || copyFeedback.includes("conflito") ? "text-red-600" : "text-slate-600"}`}
+        >
+          {copyFeedback}
+        </p>
+      )}
+
       <div className="space-y-4">
-        <h3 className="text-sm font-semibold text-slate-900">Participação na mão de obra</h3>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-slate-900">Participação na mão de obra</h3>
+          {rows.length > 0 ? (
+            <button
+              type="button"
+              disabled={copyBusy}
+              onClick={copyFromPrevious}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+            >
+              {copyBusy ? "Copiando…" : "Copiar colaboradores do mês anterior"}
+            </button>
+          ) : null}
+        </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <p className="text-sm font-medium text-slate-500">Total de colaboradores</p>
@@ -475,7 +844,25 @@ function LaborTab({
                 return (
                   <Fragment key={r.labor_id}>
                     <tr className="border-b border-slate-100">
-                      <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
+                      <td className="px-4 py-3 font-medium text-slate-900">
+                        <span className="align-middle">{r.name}</span>
+                        <span
+                          className={`ml-2 inline-block align-middle rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                            r.cost_base_source === "OVERRIDE_TOTAL"
+                              ? "bg-amber-100 text-amber-900"
+                              : r.cost_base_source === "OVERRIDE_SALARY"
+                                ? "bg-indigo-100 text-indigo-900"
+                                : "bg-slate-100 text-slate-600"
+                          }`}
+                          title={laborBaseLabel(r.cost_base_source)}
+                        >
+                          {r.cost_base_source === "OVERRIDE_TOTAL"
+                            ? "Total ov."
+                            : r.cost_base_source === "OVERRIDE_SALARY"
+                              ? "Base ov."
+                              : "Cadastro"}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 text-slate-600">{r.tipo}</td>
                       <td className="px-4 py-3 text-right tabular-nums">{r.allocation_percentage}%</td>
                       <td className="px-4 py-3 text-right tabular-nums">{money(r.allocated_cost)}</td>
@@ -541,6 +928,7 @@ function LaborTab({
                               <dd className="font-medium tabular-nums">{money(b.ajuda_custo)}</dd>
                             </div>
                           </dl>
+                          <LaborCostEditor projectId={projectId} detail={r} onSaved={onRefresh} />
                           <div className="mt-3 flex justify-end border-t border-slate-200 pt-3">
                             <button
                               type="button"
@@ -571,22 +959,39 @@ function LaborTab({
 function VehiclesTab({
   projectId,
   competencia,
+  editScenario,
   rows,
+  rowsPrevisto,
+  rowsRealizado,
   onRefresh,
 }: {
   projectId: string;
   competencia: string;
+  editScenario: ScenarioKind;
   rows: ProjectVehicle[];
+  rowsPrevisto: ProjectVehicle[];
+  rowsRealizado: ProjectVehicle[];
   onRefresh: () => void;
 }) {
+  const isPrevisto = editScenario === "PREVISTO";
   const [fleet, setFleet] = useState<FleetVehicle[]>([]);
   const [fleetVid, setFleetVid] = useState("");
   const [ft, setFt] = useState<"ETHANOL" | "GASOLINE" | "DIESEL">("GASOLINE");
   const [km, setKm] = useState("");
+  const [fuelRealized, setFuelRealized] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editKm, setEditKm] = useState("");
   const [editFt, setEditFt] = useState<"ETHANOL" | "GASOLINE" | "DIESEL">("GASOLINE");
+  const [editFuelRealized, setEditFuelRealized] = useState("");
   const [editVid, setEditVid] = useState("");
+
+  useEffect(() => {
+    setKm("");
+    setFuelRealized("");
+    setEditKm("");
+    setEditFuelRealized("");
+    setEditingId(null);
+  }, [editScenario]);
 
   useEffect(() => {
     let c = false;
@@ -604,34 +1009,64 @@ function VehiclesTab({
 
   const selectedFleet = fleet.find((v) => v.id === fleetVid);
 
+  function rowByVehicleId(list: ProjectVehicle[], vehicleId: string) {
+    return list.find((x) => x.vehicle_id === vehicleId);
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!fleetVid) return;
-    await createVehicle(projectId, {
-      competencia,
-      vehicle_id: fleetVid,
-      fuel_type: ft,
-      km_per_month: Number(km),
-    });
+    if (isPrevisto) {
+      if (km.trim() === "" || Number(km) < 0) return;
+      await createVehicle(projectId, {
+        competencia,
+        vehicle_id: fleetVid,
+        fuel_type: ft,
+        km_per_month: Number(km),
+        scenario: editScenario,
+      });
+    } else {
+      const v = Number(fuelRealized);
+      if (Number.isNaN(v) || v < 0) return;
+      await createVehicle(projectId, {
+        competencia,
+        vehicle_id: fleetVid,
+        fuel_cost_realized: v,
+        scenario: editScenario,
+      });
+    }
     setFleetVid("");
     setKm("");
+    setFuelRealized("");
     onRefresh();
   }
 
   function startEdit(r: ProjectVehicle) {
     setEditingId(r.id);
-    setEditKm(String(r.km_per_month));
-    setEditFt(r.fuel_type as typeof editFt);
+    setEditKm(r.km_per_month != null ? String(r.km_per_month) : "");
+    setEditFt((r.fuel_type as typeof editFt) || "GASOLINE");
     setEditVid(r.vehicle_id);
+    setEditFuelRealized(r.fuel_cost_realized != null ? String(r.fuel_cost_realized) : "");
   }
 
   async function saveEdit() {
     if (!editingId) return;
-    await updateProjectVehicleAllocation(projectId, editingId, {
-      vehicle_id: editVid,
-      fuel_type: editFt,
-      km_per_month: Number(editKm),
-    });
+    if (isPrevisto) {
+      if (editKm.trim() === "" || Number(editKm) < 0) return;
+      await updateProjectVehicleAllocation(projectId, editingId, {
+        vehicle_id: editVid,
+        fuel_type: editFt,
+        km_per_month: Number(editKm),
+      });
+    } else {
+      const v = Number(editFuelRealized);
+      if (Number.isNaN(v) || v < 0) return;
+      await updateProjectVehicleAllocation(projectId, editingId, {
+        vehicle_id: editVid,
+        fuel_cost_realized: v,
+        km_per_month: editKm.trim() === "" ? null : Number(editKm),
+      });
+    }
     setEditingId(null);
     onRefresh();
   }
@@ -655,10 +1090,21 @@ function VehiclesTab({
     return { totalVehicles: rows.length, totalCost, byKey };
   }, [rows]);
 
+  const scenarioHint = isPrevisto
+    ? "O custo será estimado com base no km e no tipo de combustível (inclui custo fixo mensal do veículo na frota)."
+    : "Informe o valor real gasto com combustível no mês. O custo da linha é custo fixo da frota (locação) + esse valor; km e tipo de combustível não entram no cálculo (km pode ser só referência).";
+
+  const addDisabled =
+    !fleetVid ||
+    (isPrevisto ? km.trim() === "" || Number(km) < 0 : fuelRealized.trim() === "" || Number(fuelRealized) < 0);
+
   return (
     <div className="space-y-6">
       <form onSubmit={submit} className="max-w-xl space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="font-medium text-slate-900">Alocar veículo da frota</h3>
+        <p className="rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-950">
+          {scenarioHint}
+        </p>
         <div>
           <label className="text-xs text-slate-500">Veículo (placa — modelo)</label>
           <select
@@ -681,34 +1127,50 @@ function VehiclesTab({
             Tipo: <span className="font-medium text-slate-900">{fleetTypeLabel(selectedFleet.type)}</span>
           </p>
         )}
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs text-slate-500">Combustível</label>
-            <select
-              value={ft}
-              onChange={(e) => setFt(e.target.value as typeof ft)}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            >
-              <option value="ETHANOL">Etanol</option>
-              <option value="GASOLINE">Gasolina</option>
-              <option value="DIESEL">Diesel</option>
-            </select>
+        {isPrevisto ? (
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-slate-500">Tipo de combustível</label>
+              <select
+                value={ft}
+                onChange={(e) => setFt(e.target.value as typeof ft)}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              >
+                <option value="ETHANOL">Etanol</option>
+                <option value="GASOLINE">Gasolina</option>
+                <option value="DIESEL">Diesel</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">Km / mês</label>
+              <input
+                type="number"
+                required
+                min={0}
+                value={km}
+                onChange={(e) => setKm(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </div>
           </div>
+        ) : (
           <div>
-            <label className="text-xs text-slate-500">Km / mês</label>
+            <label className="text-xs text-slate-500">Valor combustível (R$) — realizado</label>
             <input
               type="number"
               required
               min={0}
-              value={km}
-              onChange={(e) => setKm(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              step="0.01"
+              value={fuelRealized}
+              onChange={(e) => setFuelRealized(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
+              placeholder="0,00"
             />
           </div>
-        </div>
+        )}
         <button
           type="submit"
-          disabled={!fleetVid}
+          disabled={addDisabled}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white disabled:opacity-50"
         >
           Adicionar
@@ -718,8 +1180,8 @@ function VehiclesTab({
       <div className="space-y-4">
         <h3 className="text-lg font-semibold text-slate-900">Resumo dos veículos no projeto</h3>
         <p className="text-sm text-slate-500">
-          Veículos vinculados nesta competência. Custos são o valor mensal já calculado por alocação (tipo, km e
-          combustível).
+          Cenário atual: <strong>{isPrevisto ? "PREVISTO (simulação)" : "REALIZADO (valor informado)"}</strong>.
+          Totais abaixo refletem apenas as alocações deste cenário nesta competência.
         </p>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -757,7 +1219,7 @@ function VehiclesTab({
               <th className="px-4 py-3 font-medium text-slate-600">Placa</th>
               <th className="px-4 py-3 font-medium text-slate-600">Modelo</th>
               <th className="px-4 py-3 font-medium text-slate-600">Condutor</th>
-              <th className="px-4 py-3 font-medium text-slate-600">KM</th>
+              <th className="px-4 py-3 font-medium text-slate-600">KM (ref.)</th>
               <th className="px-4 py-3 font-medium text-slate-600">Combustível</th>
               <th className="px-4 py-3 font-medium text-slate-600">Custo</th>
               <th className="px-4 py-3" />
@@ -771,96 +1233,158 @@ function VehiclesTab({
                 </td>
               </tr>
             ) : (
-              rows.map((r) =>
-                editingId === r.id ? (
-                  <tr key={r.id} className="border-b border-slate-50 bg-amber-50/40">
-                    <td className="px-4 py-3 align-top" colSpan={3}>
-                      <label className="text-xs text-slate-500">Veículo</label>
-                      <select
-                        value={editVid}
-                        onChange={(e) => setEditVid(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-                      >
-                        {fleet.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.plate}
-                            {v.model ? ` — ${v.model}` : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-4 py-3 align-top">
-                      <label className="text-xs text-slate-500">KM</label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={editKm}
-                        onChange={(e) => setEditKm(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm tabular-nums"
-                      />
-                    </td>
-                    <td className="px-4 py-3 align-top">
-                      <label className="text-xs text-slate-500">Comb.</label>
-                      <select
-                        value={editFt}
-                        onChange={(e) => setEditFt(e.target.value as typeof editFt)}
-                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-                      >
-                        <option value="ETHANOL">Etanol</option>
-                        <option value="GASOLINE">Gasolina</option>
-                        <option value="DIESEL">Diesel</option>
-                      </select>
-                    </td>
-                    <td className="px-4 py-3 text-slate-400">—</td>
-                    <td className="px-4 py-3 align-top text-right">
-                      <div className="flex flex-col gap-1">
-                        <button
-                          type="button"
-                          onClick={() => void saveEdit()}
-                          className="text-sm text-indigo-600 hover:underline"
-                        >
-                          Salvar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingId(null)}
-                          className="text-sm text-slate-600 hover:underline"
-                        >
-                          Cancelar
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  <tr key={r.id} className="border-b border-slate-50">
-                    <td className="px-4 py-3 font-medium tabular-nums">{r.plate}</td>
-                    <td className="px-4 py-3 text-slate-600">{r.model ?? "—"}</td>
-                    <td className="px-4 py-3">{r.driver_name ?? "—"}</td>
-                    <td className="px-4 py-3 tabular-nums">{r.km_per_month}</td>
-                    <td className="px-4 py-3">{fuelLabel(r.fuel_type)}</td>
-                    <td className="px-4 py-3 font-medium tabular-nums">{money(r.monthly_cost)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => startEdit(r)}
-                        className="text-sm text-slate-600 hover:underline"
-                      >
-                        Editar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          await deleteVehicle(projectId, r.id);
-                          onRefresh();
-                        }}
-                        className="ml-3 text-sm text-red-600 hover:underline"
-                      >
-                        Excluir
-                      </button>
-                    </td>
-                  </tr>
-                )
-              )
+              rows.map((r) => {
+                const prevRow = rowByVehicleId(rowsPrevisto, r.vehicle_id);
+                const realRow = rowByVehicleId(rowsRealizado, r.vehicle_id);
+                const pv = prevRow?.display_fuel_cost;
+                const rv = realRow?.display_fuel_cost;
+                const showFuelCompare = pv != null && rv != null;
+                return (
+                  <Fragment key={r.id}>
+                    {editingId === r.id ? (
+                      <tr className="border-b border-slate-50 bg-amber-50/40">
+                        <td className="px-4 py-3 align-top" colSpan={3}>
+                          <label className="text-xs text-slate-500">Veículo</label>
+                          <select
+                            value={editVid}
+                            onChange={(e) => setEditVid(e.target.value)}
+                            className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                          >
+                            {fleet.map((v) => (
+                              <option key={v.id} value={v.id}>
+                                {v.plate}
+                                {v.model ? ` — ${v.model}` : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        {isPrevisto ? (
+                          <>
+                            <td className="px-4 py-3 align-top">
+                              <label className="text-xs text-slate-500">Km / mês</label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={editKm}
+                                onChange={(e) => setEditKm(e.target.value)}
+                                className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm tabular-nums"
+                              />
+                            </td>
+                            <td className="px-4 py-3 align-top">
+                              <label className="text-xs text-slate-500">Comb.</label>
+                              <select
+                                value={editFt}
+                                onChange={(e) => setEditFt(e.target.value as typeof editFt)}
+                                className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                              >
+                                <option value="ETHANOL">Etanol</option>
+                                <option value="GASOLINE">Gasolina</option>
+                                <option value="DIESEL">Diesel</option>
+                              </select>
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="px-4 py-3 align-top">
+                              <label className="text-xs text-slate-500">Km (opcional)</label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={editKm}
+                                onChange={(e) => setEditKm(e.target.value)}
+                                className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm tabular-nums"
+                                placeholder="—"
+                              />
+                            </td>
+                            <td className="px-4 py-3 align-top">
+                              <label className="text-xs text-slate-500">Valor comb. (R$)</label>
+                              <input
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                value={editFuelRealized}
+                                onChange={(e) => setEditFuelRealized(e.target.value)}
+                                className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm tabular-nums"
+                              />
+                            </td>
+                          </>
+                        )}
+                        <td className="px-4 py-3 text-slate-400">—</td>
+                        <td className="px-4 py-3 align-top text-right">
+                          <div className="flex flex-col gap-1">
+                            <button
+                              type="button"
+                              onClick={() => void saveEdit()}
+                              className="text-sm text-indigo-600 hover:underline"
+                            >
+                              Salvar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingId(null)}
+                              className="text-sm text-slate-600 hover:underline"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr className="border-b border-slate-50">
+                        <td className="px-4 py-3 font-medium tabular-nums">{r.plate}</td>
+                        <td className="px-4 py-3 text-slate-600">{r.model ?? "—"}</td>
+                        <td className="px-4 py-3">{r.driver_name ?? "—"}</td>
+                        <td className="px-4 py-3 tabular-nums text-slate-700">
+                          {r.km_per_month != null ? r.km_per_month : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-slate-700">
+                          {isPrevisto ? fuelLabel(r.fuel_type) : "—"}
+                          {!isPrevisto && r.fuel_cost_realized != null ? (
+                            <span className="mt-0.5 block text-xs text-slate-500 tabular-nums">
+                              R$ {Number(r.fuel_cost_realized).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-3 font-medium tabular-nums">
+                          {money(r.monthly_cost)}
+                          {!isPrevisto && r.fuel_cost_per_km_realized != null ? (
+                            <span className="mt-0.5 block text-xs font-normal text-slate-500 tabular-nums">
+                              ≈ {money(r.fuel_cost_per_km_realized)}/km
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => startEdit(r)}
+                            className="text-sm text-slate-600 hover:underline"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await deleteVehicle(projectId, r.id);
+                              onRefresh();
+                            }}
+                            className="ml-3 text-sm text-red-600 hover:underline"
+                          >
+                            Excluir
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                    {showFuelCompare && editingId !== r.id ? (
+                      <tr className="border-b border-slate-50 bg-slate-50/70">
+                        <td colSpan={7} className="px-4 py-2 text-xs text-slate-600">
+                          <span className="font-medium text-slate-800">Combustível (previsto × realizado):</span>{" "}
+                          Previsto {money(pv!)} · Realizado {money(rv!)} · Δ {money(rv! - pv!)}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -872,11 +1396,13 @@ function VehiclesTab({
 function SystemsTab({
   projectId,
   competencia,
+  editScenario,
   rows,
   onRefresh,
 }: {
   projectId: string;
   competencia: string;
+  editScenario: ScenarioKind;
   rows: ProjectSystemCost[];
   onRefresh: () => void;
 }) {
@@ -890,7 +1416,12 @@ function SystemsTab({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    await createSystem(projectId, { competencia, name: name.trim(), value: Number(value) });
+    await createSystem(projectId, {
+      competencia,
+      name: name.trim(),
+      value: Number(value),
+      scenario: editScenario,
+    });
     setName("");
     setValue("");
     onRefresh();
@@ -968,11 +1499,13 @@ function SystemsTab({
 function FixedTab({
   projectId,
   competencia,
+  editScenario,
   rows,
   onRefresh,
 }: {
   projectId: string;
   competencia: string;
+  editScenario: ScenarioKind;
   rows: ProjectOperationalFixed[];
   onRefresh: () => void;
 }) {
@@ -986,7 +1519,12 @@ function FixedTab({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    await createFixedOperational(projectId, { competencia, name: name.trim(), value: Number(value) });
+    await createFixedOperational(projectId, {
+      competencia,
+      name: name.trim(),
+      value: Number(value),
+      scenario: editScenario,
+    });
     setName("");
     setValue("");
     onRefresh();

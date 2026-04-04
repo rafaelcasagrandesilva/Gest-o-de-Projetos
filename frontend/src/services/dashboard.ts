@@ -1,5 +1,8 @@
 import { api } from "./api";
 
+/** Padrão de API quando o cenário não é informado (alinhado ao backend). */
+const DEFAULT_SCENARIO_QUERY = "REALIZADO";
+
 export interface DirectorSummary {
   /** Ausente ou null no consolidado global; preenchido ao filtrar por projeto */
   project_id?: string | null;
@@ -70,20 +73,39 @@ export interface MonthlyPoint {
 }
 
 export interface FinancialDashboardSummary {
+  scenario?: string;
   summary: DirectorSummary;
   monthly_series: MonthlyPoint[];
+  monthly_series_previsto?: MonthlyPoint[];
+  monthly_series_realizado?: MonthlyPoint[];
+  period_start?: string;
+  period_end?: string;
+  month_count?: number;
+  /** Lucro líquido (`net_profit`) na competência — cenário PREVISTO */
+  lucro_liquido_previsto?: number;
+  /** Lucro líquido (`net_profit`) na competência — cenário REALIZADO */
+  lucro_liquido_realizado?: number;
 }
 
 export async function fetchFinancialSummary(params: {
+  /** Mês único ou âncora para “últimos N meses” (primeiro dia do mês, YYYY-MM-DD) */
   competencia?: string;
+  start_date?: string;
+  end_date?: string;
+  /** Últimos N meses terminando em `competencia` (ou mês atual se omitido) */
   months?: number;
   /** Omitir ou vazio = consolidado global (ADMIN ou CONSULTA; GESTOR deve informar projeto) */
   project_id?: string;
+  /** PREVISTO ou REALIZADO */
+  scenario?: string;
 }): Promise<FinancialDashboardSummary> {
   const q: Record<string, string | number> = {};
   if (params.competencia != null) q.competencia = params.competencia;
+  if (params.start_date != null) q.start_date = params.start_date;
+  if (params.end_date != null) q.end_date = params.end_date;
   if (params.months != null) q.months = params.months;
   if (params.project_id) q.project_id = params.project_id;
+  q.scenario = params.scenario ?? DEFAULT_SCENARIO_QUERY;
   const { data } = await api.get<FinancialDashboardSummary>("/dashboard/summary", { params: q });
   return data;
 }
@@ -125,12 +147,28 @@ export interface ProjectSummary {
 export interface ProjectDashboardResponse {
   summary: ProjectSummary;
   monthly_series: MonthlyPoint[];
+  monthly_series_previsto?: MonthlyPoint[];
+  monthly_series_realizado?: MonthlyPoint[];
+  period_start?: string;
+  period_end?: string;
+  month_count?: number;
 }
 
 export async function fetchProjectFinancialDashboard(
   projectId: string,
-  params?: { competencia?: string; months?: number }
+  params?: {
+    competencia?: string;
+    start_date?: string;
+    end_date?: string;
+    months?: number;
+    scenario?: string;
+  }
 ): Promise<ProjectDashboardResponse> {
-  const { data } = await api.get<ProjectDashboardResponse>(`/dashboard/project/${projectId}`, { params });
+  const q: Record<string, string | number> = { scenario: params?.scenario ?? DEFAULT_SCENARIO_QUERY };
+  if (params?.competencia != null) q.competencia = params.competencia;
+  if (params?.start_date != null) q.start_date = params.start_date;
+  if (params?.end_date != null) q.end_date = params.end_date;
+  if (params?.months != null) q.months = params.months;
+  const { data } = await api.get<ProjectDashboardResponse>(`/dashboard/project/${projectId}`, { params: q });
   return data;
 }

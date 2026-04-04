@@ -11,6 +11,7 @@ from jose.exceptions import ExpiredSignatureError, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.scenario import Scenario
 from app.core.security import decode_token, normalize_token
 from app.database.session import get_db
 from app.models.user import User
@@ -175,6 +176,41 @@ async def require_project_access(
 
 async def get_user_projects(user_id: UUID, db: AsyncSession) -> list[UUID]:
     return await ProjectRepository(db).list_project_ids_for_user(user_id=user_id)
+
+
+async def assert_may_write_scenario(
+    *,
+    user: User,
+    scenario: str | Scenario,
+    db: AsyncSession,
+    project_id: UUID | None = None,
+) -> None:
+    """CONSULTA: bloqueia escrita. ADMIN: qualquer cenário (global ou projeto). GESTOR: PREVISTO e REALIZADO apenas com project_id e vínculo ao projeto."""
+    _ = scenario.value if isinstance(scenario, Scenario) else scenario  # reservado para regras futuras
+    names = _user_role_names(user)
+    if ROLE_CONSULTA in names and ROLE_ADMIN not in names:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário somente leitura.",
+        )
+    if ROLE_ADMIN in names:
+        return
+    if ROLE_GESTOR in names:
+        if project_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Gestores só podem alterar dados em projetos aos quais têm acesso.",
+            )
+        await ensure_project_access(user=user, project_id=project_id, db=db)
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
+
+
+def default_scenario_for_create(user: User) -> str:
+    """Padrão ao criar sem informar scenario: ADMIN → REALIZADO; demais (ex.: GESTOR) → PREVISTO."""
+    if ROLE_ADMIN in _user_role_names(user):
+        return Scenario.REALIZADO.value
+    return Scenario.PREVISTO.value
 
 
 async def block_consulta_writes(

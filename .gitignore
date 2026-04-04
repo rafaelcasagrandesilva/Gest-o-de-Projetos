@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# Ambiente virtual
+.venv/
+venv/
+.env/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Logs
+*.log
+
+# Sistema
+.DS_Store
+
+# Backup banco
+backup_sgp.sql

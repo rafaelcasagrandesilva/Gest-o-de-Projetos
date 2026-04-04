@@ -7,15 +7,21 @@ from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, UniqueConstra
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.scenario import SCENARIO_KIND_DB, Scenario
 from app.database.base import Base, TimestampUUIDMixin
 
 
 class Revenue(TimestampUUIDMixin, Base):
     __tablename__ = "revenues"
-    __table_args__ = (UniqueConstraint("project_id", "competencia", "description", name="uq_revenue_comp_desc"),)
+    __table_args__ = (
+        UniqueConstraint("project_id", "competencia", "description", "scenario", name="uq_revenue_comp_desc_scenario"),
+    )
 
     project_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
     competencia: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    scenario: Mapped[Scenario] = mapped_column(
+        SCENARIO_KIND_DB, nullable=False, default=Scenario.REALIZADO, index=True
+    )
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     description: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(20), default="recebido", nullable=False, index=True)

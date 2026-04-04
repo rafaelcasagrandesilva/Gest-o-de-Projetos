@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.financial import Invoice, InvoiceAnticipation, Revenue
 from app.repositories.financial import InvoiceAnticipationRepository, InvoiceRepository, RevenueRepository
+from app.core.scenario import coerce_scenario
 from app.services.audit_service import AuditService
 from app.services.utils import model_to_dict
 
@@ -31,9 +32,15 @@ class FinancialCrudService:
         limit: int = 50,
         project_id=None,
         project_ids: list[UUID] | None = None,
+        scenario: str | None = None,
     ) -> list[Revenue]:
+        sc = coerce_scenario(scenario)
         return await self.revenues.list(
-            offset=offset, limit=limit, project_id=project_id, project_ids=project_ids
+            offset=offset,
+            limit=limit,
+            project_id=project_id,
+            project_ids=project_ids,
+            scenario=sc,
         )
 
     async def create_revenue(self, *, actor_user_id, data: dict) -> Revenue:

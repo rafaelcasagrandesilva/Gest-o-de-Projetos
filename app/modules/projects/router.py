@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -8,11 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import (
     ROLE_ADMIN,
     ROLE_CONSULTA,
+    assert_may_write_scenario,
+    default_scenario_for_create,
     get_current_user,
     require_gestor_or_admin,
     require_project_access,
     require_roles,
 )
+from app.core.scenario import coerce_scenario, parse_scenario
 from app.database.session import get_db
 from app.models.user import ProjectUser, User
 from app.schemas.employees import EmployeeAllocationCreate, EmployeeAllocationRead
@@ -46,10 +50,18 @@ async def list_projects(
 @router.get("/{project_id}/allocations", response_model=list[EmployeeAllocationRead])
 async def list_project_allocations(
     project_id: UUID,
+    scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
+    competencia: date | None = Query(
+        default=None,
+        description="Primeiro dia do mês: retorna apenas alocações ativas nesta competência.",
+    ),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_access),
 ) -> list[EmployeeAllocationRead]:
-    rows = await EmployeesService(db).list_allocations_by_project(project_id=project_id)
+    scenario = coerce_scenario(scenario_param)
+    rows = await EmployeesService(db).list_allocations_by_project(
+        project_id=project_id, scenario=scenario, competencia=competencia
+    )
     return [EmployeeAllocationRead.model_validate(r) for r in rows]
 
 
@@ -67,7 +79,11 @@ async def create_project_allocation(
 ) -> EmployeeAllocationRead:
     if payload.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="project_id do corpo deve coincidir com a URL.")
-    row = await EmployeesService(db).create_allocation(actor_user_id=actor.id, data=payload.model_dump())
+    data = payload.model_dump()
+    sc = parse_scenario(data.get("scenario"), default=default_scenario_for_create(actor))
+    await assert_may_write_scenario(user=actor, scenario=sc, db=db, project_id=project_id)
+    data["scenario"] = sc
+    row = await EmployeesService(db).create_allocation(actor_user_id=actor.id, data=data)
     return EmployeeAllocationRead.model_validate(row)
 
 

@@ -9,11 +9,14 @@ from app.api.deps import (
     ROLE_ADMIN,
     ROLE_CONSULTA,
     ROLE_GESTOR,
+    assert_may_write_scenario,
+    default_scenario_for_create,
     ensure_project_access,
     get_current_user,
     require_admin,
     require_roles,
 )
+from app.core.scenario import parse_scenario
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.fleet import VehicleCreate, VehicleRead, VehicleUpdate, VehicleUsageCreate, VehicleUsageRead
@@ -76,5 +79,11 @@ async def create_usage(
     actor: User = Depends(get_current_user),
 ) -> VehicleUsageRead:
     await ensure_project_access(user=actor, project_id=payload.project_id, db=db)
-    row = await FleetService(db).create_usage(actor_user_id=actor.id, data=payload.model_dump())
+    data = payload.model_dump()
+    sc = parse_scenario(data.get("scenario"), default=default_scenario_for_create(actor))
+    await assert_may_write_scenario(
+        user=actor, scenario=sc, db=db, project_id=payload.project_id
+    )
+    data["scenario"] = sc
+    row = await FleetService(db).create_usage(actor_user_id=actor.id, data=data)
     return VehicleUsageRead.model_validate(row)

@@ -3,23 +3,32 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ROLE_ADMIN, ROLE_CONSULTA, ROLE_GESTOR, get_current_user, require_admin, require_roles
+from app.core.scenario import DEFAULT_SCENARIO, Scenario, coerce_scenario
 from app.database.session import get_db
+from app.models.company_staff_cost import CompanyStaffCost
 from app.models.user import User
+from app.repositories.company_staff_cost import CompanyStaffCostRepository
 from app.schemas.employees import (
     CLTCostPreviewRequest,
     CLTCostPreviewResponse,
+    CompanyStaffCostCreate,
+    CompanyStaffCostRead,
+    CompanyStaffCostUpdate,
     EmployeeCreate,
     EmployeeRead,
     EmployeeUpdate,
+    PayrollResponse,
 )
 from app.services.employee_cost_service import calculate_clt_cost_fields
 from app.services.employees_service import EmployeesService, default_cost_reference
+from app.services.payroll_service import PayrollService
 from app.services.settings_service import SettingsService
-from app.utils.date_utils import get_business_days
+from app.utils.date_utils import get_business_days, normalize_competencia
 
 
 _read = [Depends(require_roles(ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA))]
@@ -53,6 +62,116 @@ async def preview_clt_cost(
         business_days=bd,
         reference_month=date(payload.year, payload.month, 1),
     )
+
+
+def _scenario_str(sv: Scenario | str) -> str:
+    return sv.value if isinstance(sv, Scenario) else str(sv)
+
+
+def _staff_row_to_read(row: CompanyStaffCost) -> CompanyStaffCostRead:
+    emp = getattr(row, "employee", None)
+    return CompanyStaffCostRead(
+        id=row.id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        employee_id=row.employee_id,
+        competencia=normalize_competencia(row.competencia),
+        scenario=_scenario_str(row.scenario),
+        valor=float(row.valor),
+        employee_full_name=emp.full_name if emp else None,
+    )
+
+
+@router.get("/payroll", response_model=PayrollResponse, dependencies=_read)
+async def get_payroll(
+    competencia: date = Query(..., description="Primeiro dia do mês"),
+    scenario_param: str | None = Query(
+        default=None, alias="scenario", description="PREVISTO ou REALIZADO; omitir = REALIZADO"
+    ),
+    project_id: UUID | None = Query(default=None, description="Filtrar alocações a um projeto (custos adm. mantidos)"),
+    db: AsyncSession = Depends(get_db),
+) -> PayrollResponse:
+    sc = coerce_scenario(scenario_param)
+    return await PayrollService(db).build_payroll(
+        competencia=competencia, scenario=sc, project_id=project_id
+    )
+
+
+@router.get("/staff-costs", response_model=list[CompanyStaffCostRead], dependencies=_read)
+async def list_staff_costs(
+    competencia: date = Query(..., description="Primeiro dia do mês"),
+    scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
+    db: AsyncSession = Depends(get_db),
+) -> list[CompanyStaffCostRead]:
+    sc = coerce_scenario(scenario_param)
+    rows = await CompanyStaffCostRepository(db).list_by_competencia_scenario(
+        competencia=competencia, scenario=sc
+    )
+    return [_staff_row_to_read(r) for r in rows]
+
+
+@router.post("/staff-costs", response_model=CompanyStaffCostRead, dependencies=[Depends(require_admin)])
+async def create_staff_cost(
+    payload: CompanyStaffCostCreate,
+    db: AsyncSession = Depends(get_db),
+) -> CompanyStaffCostRead:
+    sc = coerce_scenario(payload.scenario or DEFAULT_SCENARIO)
+    comp = normalize_competencia(payload.competencia)
+    row = CompanyStaffCost(
+        employee_id=payload.employee_id,
+        competencia=comp,
+        scenario=sc,
+        valor=float(payload.valor),
+    )
+    db.add(row)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Já existe custo administrativo para este colaborador, mês e cenário.",
+        ) from None
+    await db.refresh(row)
+    loaded = await CompanyStaffCostRepository(db).get_with_employee(row.id)
+    if not loaded:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Falha ao carregar registro.")
+    return _staff_row_to_read(loaded)
+
+
+@router.patch(
+    "/staff-costs/{cost_id}",
+    response_model=CompanyStaffCostRead,
+    dependencies=[Depends(require_admin)],
+)
+async def update_staff_cost(
+    cost_id: UUID,
+    payload: CompanyStaffCostUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> CompanyStaffCostRead:
+    repo = CompanyStaffCostRepository(db)
+    row = await repo.get_with_employee(cost_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+    row.valor = float(payload.valor)
+    await db.commit()
+    await db.refresh(row)
+    loaded = await repo.get_with_employee(cost_id)
+    assert loaded is not None
+    return _staff_row_to_read(loaded)
+
+
+@router.delete("/staff-costs/{cost_id}", status_code=204, dependencies=[Depends(require_admin)])
+async def delete_staff_cost(
+    cost_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    repo = CompanyStaffCostRepository(db)
+    row = await repo.get(cost_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+    await repo.delete(row)
+    await db.commit()
 
 
 @router.get("", response_model=list[EmployeeRead], dependencies=_read)

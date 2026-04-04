@@ -4,7 +4,9 @@ from datetime import date
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+from app.utils.date_utils import normalize_competencia
 
 from app.schemas.common import UUIDTimestampRead
 
@@ -90,6 +92,7 @@ class CLTCostPreviewResponse(BaseModel):
 class EmployeeAllocationRead(UUIDTimestampRead):
     employee_id: UUID
     project_id: UUID
+    scenario: str = "REALIZADO"
     start_date: date
     end_date: date | None = None
     allocation_percent: float
@@ -105,3 +108,69 @@ class EmployeeAllocationCreate(BaseModel):
     allocation_percent: float = Field(default=100, ge=0, le=100)
     monthly_cost: float | None = Field(default=None, ge=0)
     hours_allocated: float | None = Field(default=None, ge=0)
+    scenario: str | None = None
+
+
+# --- Folha mensal (project_labors + company_staff_costs) ---
+
+
+class PayrollProjectSlice(BaseModel):
+    project_id: UUID
+    project_name: str
+    labor_id: UUID
+    allocation_percentage: float
+    full_monthly_cost: float
+    allocated_cost: float
+
+
+class PayrollLineRead(BaseModel):
+    employee_id: UUID
+    full_name: str
+    employment_type: str
+    role_title: str | None = None
+    is_active: bool
+    by_project: list[PayrollProjectSlice]
+    projects_total: float
+    administrative_cost: float
+    grand_total: float
+
+
+class PayrollTotalsRead(BaseModel):
+    sum_projects: float
+    sum_administrative: float
+    grand_total: float
+
+
+class PayrollResponse(BaseModel):
+    competencia: date
+    scenario: str
+    project_id: UUID | None = None
+    lines: list[PayrollLineRead]
+    totals: PayrollTotalsRead
+
+
+# --- Custos administrativos (fora de projeto) ---
+
+
+class CompanyStaffCostRead(UUIDTimestampRead):
+    employee_id: UUID
+    competencia: date
+    scenario: str
+    valor: float
+    employee_full_name: str | None = None
+
+
+class CompanyStaffCostCreate(BaseModel):
+    employee_id: UUID
+    competencia: date
+    scenario: str | None = Field(default=None, description="PREVISTO ou REALIZADO; padrão REALIZADO")
+    valor: float = Field(ge=0)
+
+    @field_validator("competencia", mode="after")
+    @classmethod
+    def competencia_primeiro_dia(cls, v: date) -> date:
+        return normalize_competencia(v)
+
+
+class CompanyStaffCostUpdate(BaseModel):
+    valor: float = Field(ge=0)

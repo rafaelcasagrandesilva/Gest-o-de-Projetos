@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.scenario import Scenario
 from app.models.employee import Employee, EmployeeAllocation
 from app.repositories.employees import EmployeeAllocationRepository, EmployeeRepository
 from app.schemas.employees import EmployeeRead
@@ -94,10 +95,10 @@ class EmployeesService:
         employment_type = payload.get("employment_type") or "CLT"
         if employment_type == "CLT":
             sb = payload.get("salary_base")
-            if sb is None or float(sb) <= 0:
+            if sb is not None and float(sb) < 0:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="CLT exige salário base maior que zero.",
+                    detail="Salário base não pode ser negativo.",
                 )
 
         emp = Employee(
@@ -142,10 +143,10 @@ class EmployeesService:
 
         if emp.employment_type == "CLT":
             sb = emp.salary_base
-            if sb is None or float(sb) <= 0:
+            if sb is not None and float(sb) < 0:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="CLT exige salário base maior que zero.",
+                    detail="Salário base não pode ser negativo.",
                 )
 
         await self._compute_and_assign_total_cost(emp, reference=ref_date)
@@ -175,8 +176,16 @@ class EmployeesService:
         )
         await self.session.commit()
 
-    async def list_allocations_by_project(self, *, project_id: UUID) -> list[EmployeeAllocation]:
-        return await self.allocations.list_by_project(project_id=project_id)
+    async def list_allocations_by_project(
+        self,
+        *,
+        project_id: UUID,
+        scenario: str | Scenario | None = None,
+        competencia: date | None = None,
+    ) -> list[EmployeeAllocation]:
+        return await self.allocations.list_by_project(
+            project_id=project_id, scenario=scenario, competencia=competencia
+        )
 
     async def create_allocation(self, *, actor_user_id, data: dict) -> EmployeeAllocation:
         alloc = EmployeeAllocation(**data)

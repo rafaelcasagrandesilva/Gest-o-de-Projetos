@@ -7,6 +7,7 @@ from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, UniqueConstra
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.scenario import SCENARIO_KIND_DB, Scenario
 from app.database.base import Base, TimestampUUIDMixin
 
 
@@ -41,11 +42,14 @@ class Employee(TimestampUUIDMixin, Base):
 class EmployeeAllocation(TimestampUUIDMixin, Base):
     __tablename__ = "employee_allocations"
     __table_args__ = (
-        UniqueConstraint("employee_id", "project_id", "start_date", name="uq_employee_project_start"),
+        UniqueConstraint(
+            "employee_id", "project_id", "start_date", "scenario", name="uq_employee_project_start_scenario"
+        ),
     )
 
     employee_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"))
     project_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
+    scenario: Mapped[Scenario] = mapped_column(SCENARIO_KIND_DB, nullable=False, default=Scenario.REALIZADO)
     start_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     end_date: Mapped[date | None] = mapped_column(Date, index=True)
     allocation_percent: Mapped[float] = mapped_column(Numeric(5, 2), default=100, nullable=False)

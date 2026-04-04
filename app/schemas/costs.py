@@ -11,6 +11,7 @@ from app.schemas.common import UUIDTimestampRead
 class ProjectFixedCostRead(UUIDTimestampRead):
     project_id: UUID
     competencia: date
+    scenario: str = "REALIZADO"
     name: str
     amount_real: float
     amount_calculated: float
@@ -22,6 +23,7 @@ class ProjectFixedCostCreate(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     amount_real: float = Field(ge=0)
     amount_calculated: float = Field(default=0, ge=0)
+    scenario: str | None = None
 
 
 class CorporateCostRead(UUIDTimestampRead):

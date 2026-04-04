@@ -13,6 +13,7 @@ from app.services.financial_crud_service import revenue_retention_value
 class RevenueRead(UUIDTimestampRead):
     project_id: UUID
     competencia: date
+    scenario: str = "REALIZADO"
     amount: float
     description: str | None = None
     status: str
@@ -31,6 +32,7 @@ class RevenueCreate(BaseModel):
     description: str | None = Field(default=None, max_length=255)
     status: Literal["previsto", "recebido"] = "recebido"
     has_retention: bool = False
+    scenario: str | None = Field(default=None, description="PREVISTO ou REALIZADO")
 
 
 class RevenueUpdate(BaseModel):

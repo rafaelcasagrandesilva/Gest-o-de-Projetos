@@ -3,6 +3,7 @@ from app.models.audit import AuditLog
 from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment
 from app.models.costs import CorporateCost, CostAllocation, ProjectCost, ProjectFixedCost
 from app.models.dashboard import KPI, ProjectResult
+from app.models.company_staff_cost import CompanyStaffCost
 from app.models.employee import Employee, EmployeeAllocation
 from app.models.financial import Invoice, InvoiceAnticipation, Revenue
 from app.models.receivable import ReceivableInvoice, ReceivableInvoicePayment
@@ -28,6 +29,7 @@ __all__ = [
     "ProjectCost",
     "KPI",
     "ProjectResult",
+    "CompanyStaffCost",
     "Employee",
     "EmployeeAllocation",
     "ReceivableInvoice",

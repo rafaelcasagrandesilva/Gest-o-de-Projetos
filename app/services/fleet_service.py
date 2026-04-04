@@ -10,7 +10,7 @@ from app.models.project_operational import ProjectVehicle
 from app.repositories.fleet import VehicleRepository, VehicleUsageRepository
 from app.schemas.fleet import VehicleRead
 from app.services.audit_service import AuditService
-from app.services.operational_cost_calc import compute_vehicle_monthly_cost
+from app.services.operational_cost_calc import compute_project_vehicle_monthly_cost
 from app.services.settings_service import SettingsService
 from app.services.utils import model_to_dict
 
@@ -116,11 +116,13 @@ class FleetService:
         if not rows:
             return
         for row in rows:
-            row.monthly_cost = compute_vehicle_monthly_cost(
+            row.monthly_cost = compute_project_vehicle_monthly_cost(
+                scenario=row.scenario,
                 settings=settings,
                 vehicle_type=fv.vehicle_type,
                 fuel_type=row.fuel_type,
-                km_per_month=float(row.km_per_month),
+                km_per_month=float(row.km_per_month) if row.km_per_month is not None else None,
+                fuel_cost_realized=float(row.fuel_cost_realized) if row.fuel_cost_realized is not None else None,
                 fixed_monthly_cost=float(fv.monthly_cost),
             )
         await self.session.commit()

@@ -1,11 +1,14 @@
 import { api } from "./api";
 
+const DEFAULT_SCENARIO_QUERY = "REALIZADO";
+
 export interface EmployeeAllocation {
   id: string;
   created_at: string;
   updated_at: string;
   employee_id: string;
   project_id: string;
+  scenario?: string;
   start_date: string;
   end_date: string | null;
   allocation_percent: number;
@@ -23,8 +26,13 @@ export interface EmployeeAllocationCreate {
   hours_allocated?: number | null;
 }
 
-export async function listProjectAllocations(projectId: string): Promise<EmployeeAllocation[]> {
-  const { data } = await api.get<EmployeeAllocation[]>(`/projects/${projectId}/allocations`);
+export async function listProjectAllocations(
+  projectId: string,
+  scenario?: string
+): Promise<EmployeeAllocation[]> {
+  const { data } = await api.get<EmployeeAllocation[]>(`/projects/${projectId}/allocations`, {
+    params: { scenario: scenario ?? DEFAULT_SCENARIO_QUERY },
+  });
   return data;
 }
 

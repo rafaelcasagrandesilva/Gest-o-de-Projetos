@@ -47,6 +47,7 @@ class VehicleUpdate(BaseModel):
 class VehicleUsageRead(UUIDTimestampRead):
     vehicle_id: UUID
     project_id: UUID
+    scenario: str = "REALIZADO"
     usage_date: date
     competencia: date
     cost_amount: float
@@ -60,3 +61,4 @@ class VehicleUsageCreate(BaseModel):
     competencia: date
     cost_amount: float = Field(default=0, ge=0)
     notes: str | None = Field(default=None, max_length=255)
+    scenario: str | None = None

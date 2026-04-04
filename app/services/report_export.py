@@ -132,7 +132,11 @@ def render_company_summary_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes,
             _pct_br(0),
         ]
     title = "Resumo financeiro por projeto"
-    meta = [f"Competência: {competencia}", f"Projetos: {len(summaries)}"]
+    meta = [
+        f"Competência: {competencia}",
+        f"Projetos: {len(summaries)}",
+        f"Cenário: {data.get('scenario') or 'REALIZADO'}",
+    ]
     suffix = competencia
     if fmt == "xlsx":
         raw = build_projects_summary_xlsx_bytes(headers=headers, rows=xlsx_rows, totals_row=totals_xlsx)
@@ -170,11 +174,12 @@ def render_project_summary_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes,
         wb = Workbook()
         ws = wb.active
         ws.title = "Resumo"[:31]
-        ws.cell(row=1, column=1, value="Indicador")
-        ws.cell(row=1, column=2, value="Valor")
-        ws.cell(row=1, column=1).font = Font(bold=True)
-        ws.cell(row=1, column=2).font = Font(bold=True)
-        for i, (k, v) in enumerate(_summary_kpi_rows(s), start=2):
+        ws.cell(row=1, column=1, value=f"Cenário: {data.get('scenario') or 'REALIZADO'}")
+        ws.cell(row=2, column=1, value="Indicador")
+        ws.cell(row=2, column=2, value="Valor")
+        ws.cell(row=2, column=1).font = Font(bold=True)
+        ws.cell(row=2, column=2).font = Font(bold=True)
+        for i, (k, v) in enumerate(_summary_kpi_rows(s), start=3):
             ws.cell(row=i, column=1, value=k)
             ws.cell(row=i, column=2, value=v)
         ws.column_dimensions["A"].width = 32
@@ -246,6 +251,9 @@ def render_project_summary_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes,
     story: list[Any] = []
     story.append(Paragraph(f"<b>{escape('Projeto — resumo financeiro')}</b>", styles["Title"]))
     story.append(Paragraph(escape(f"{pname} · competência {comp}"), styles["Normal"]))
+    story.append(
+        Paragraph(escape(f"Cenário: {data.get('scenario') or 'REALIZADO'}"), styles["Normal"])
+    )
     gen = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
     story.append(Paragraph(f"Gerado em: {gen}", styles["Normal"]))
     story.append(Spacer(1, 0.3 * cm))
@@ -336,7 +344,10 @@ def render_employees_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, 
     comp_display = cref[:10] if len(cref) >= 10 else cref
     headers = ["Nome", "Tipo", "Custo mensal"]
     rows = [[r["nome"], r["tipo"], format_brl(r["custo"])] for r in data["rows"]]
-    meta = [f"Competência referência: {format_date_br(comp_display)}"]
+    meta = [
+        f"Competência referência: {format_date_br(comp_display)}",
+        f"Cenário: {data.get('scenario') or 'REALIZADO'}",
+    ]
     title = "Colaboradores"
     suffix = cref[:7] if len(cref) >= 7 else date.today().strftime("%Y-%m")
     if fmt == "xlsx":
@@ -482,7 +493,10 @@ def render_revenues_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, s
             ]
         )
     pf = data.get("filters") or {}
-    meta = [f"Projeto: {pf.get('project_id') or 'todos'}"]
+    meta = [
+        f"Projeto: {pf.get('project_id') or 'todos'}",
+        f"Cenário: {pf.get('scenario') or 'REALIZADO'}",
+    ]
     title = "Faturamento (receitas)"
     suffix = date.today().strftime("%Y-%m")
     if fmt == "xlsx":
@@ -509,9 +523,11 @@ def render_dashboard_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, 
             ]
         )
     sm = summary
+    scen = (data.get("summary") or {}).get("scenario") or "REALIZADO"
     meta = [
         f"Competência ref.: {format_date_br(sm['competencia'])}",
         f"Projeto: {data.get('project_id') or 'consolidado'}",
+        f"Cenário (série principal): {scen}",
         f"Série: últimos {months} meses",
         f"Receita: {format_brl(float(sm['total_revenue']))}; Custo: {format_brl(float(sm['total_cost']))}; "
         f"Lucro líq.: {format_brl(float(sm['net_profit']))}",

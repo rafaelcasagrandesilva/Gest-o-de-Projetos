@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { listProjects, type Project } from "@/services/projects";
 import { createRevenue, deleteRevenue, listRevenues, type Revenue } from "@/services/financial";
 import { isAxiosError } from "axios";
@@ -8,7 +9,14 @@ function monthStartInput(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
+function scenarioLabel(s: ScenarioKind): string {
+  return s === "PREVISTO" ? "PREVISTO" : "REALIZADO";
+}
+
 export function RevenuePage() {
+  const { globalScenario } = useScenario();
+  /** Cenário dos lançamentos nesta tela (independente do seletor global do header). */
+  const [pageScenario, setPageScenario] = useState<ScenarioKind>(globalScenario);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>("");
   const [items, setItems] = useState<Revenue[]>([]);
@@ -40,7 +48,7 @@ export function RevenuePage() {
     let cancelled = false;
     (async () => {
       try {
-        const rows = await listRevenues(projectId);
+        const rows = await listRevenues(projectId, pageScenario);
         if (!cancelled) {
           setItems(rows);
           setError(null);
@@ -58,11 +66,21 @@ export function RevenuePage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, pageScenario]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!projectId) return;
+    const scenLabel = scenarioLabel(pageScenario);
+    const scenHuman = pageScenario === "PREVISTO" ? "PREVISTO (previsão)" : "REALIZADO (efetivo)";
+    if (
+      !window.confirm(
+        `Confirmar lançamento no cenário ${scenHuman}?\n\n` +
+          `Os valores serão gravados como ${scenLabel}. Verifique antes de confirmar.`
+      )
+    ) {
+      return;
+    }
     setError(null);
     try {
       await createRevenue({
@@ -72,11 +90,12 @@ export function RevenuePage() {
         description: description.trim() || null,
         status,
         has_retention: hasRetention,
+        scenario: pageScenario,
       });
       setAmount("");
       setDescription("");
       setHasRetention(false);
-      setItems(await listRevenues(projectId));
+      setItems(await listRevenues(projectId, pageScenario));
     } catch {
       setError("Não foi possível lançar a receita.");
     }
@@ -86,7 +105,7 @@ export function RevenuePage() {
     if (!confirm("Excluir lançamento?")) return;
     try {
       await deleteRevenue(id);
-      if (projectId) setItems(await listRevenues(projectId));
+      if (projectId) setItems(await listRevenues(projectId, pageScenario));
     } catch {
       setError("Erro ao excluir.");
     }
@@ -96,11 +115,65 @@ export function RevenuePage() {
     return <div className="text-slate-500">Carregando…</div>;
   }
 
+  const isPrevisto = pageScenario === "PREVISTO";
+
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-slate-900">Faturamento</h2>
-        <p className="text-sm text-slate-500">Receitas por projeto (previsto / recebido)</p>
+        <p className="text-sm text-slate-500">
+          Receitas por projeto. O cenário abaixo define em qual visão (previsto ou realizado) você lista e lança —
+          independente do seletor global do cabeçalho.
+        </p>
+      </div>
+
+      <div
+        className={`rounded-xl border-2 px-4 py-3 shadow-sm ${
+          isPrevisto
+            ? "border-blue-300 bg-blue-50/90 text-blue-950"
+            : "border-emerald-300 bg-emerald-50/90 text-emerald-950"
+        }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm font-semibold">
+            Você está lançando em:{" "}
+            <span className="text-base tracking-wide">{scenarioLabel(pageScenario)}</span>
+            {isPrevisto ? (
+              <span className="ml-2 font-normal text-blue-800/90">— valores de previsão / planejamento</span>
+            ) : (
+              <span className="ml-2 font-normal text-emerald-800/90">— valores efetivos / realizados</span>
+            )}
+          </p>
+          <div
+            className="inline-flex rounded-lg border p-0.5 shadow-sm bg-white/70"
+            style={{
+              borderColor: isPrevisto ? "rgb(147 197 253)" : "rgb(134 239 172)",
+            }}
+            role="group"
+            aria-label="Cenário do faturamento"
+          >
+            {(["PREVISTO", "REALIZADO"] as const).map((s) => {
+              const active = pageScenario === s;
+              const prev = s === "PREVISTO";
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setPageScenario(s)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                    active
+                      ? prev
+                        ? "bg-blue-600 text-white shadow-sm"
+                        : "bg-emerald-600 text-white shadow-sm"
+                      : "text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  {prev ? "Previsto" : "Realizado"}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       {error && (
@@ -127,9 +200,20 @@ export function RevenuePage() {
         <>
           <form
             onSubmit={handleCreate}
-            className="max-w-2xl space-y-3 rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+            className={`max-w-2xl space-y-3 rounded-xl border-2 bg-white p-6 shadow-sm ${
+              isPrevisto ? "border-blue-200" : "border-emerald-200"
+            }`}
           >
-            <h3 className="font-medium text-slate-900">Novo faturamento</h3>
+            <h3 className="font-medium text-slate-900">
+              Novo faturamento
+              <span
+                className={`ml-2 inline-block rounded-md px-2 py-0.5 text-xs font-semibold ${
+                  isPrevisto ? "bg-blue-100 text-blue-900" : "bg-emerald-100 text-emerald-900"
+                }`}
+              >
+                {scenarioLabel(pageScenario)}
+              </span>
+            </h3>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <label className="mb-1 block text-xs text-slate-500">Competência (mês)</label>
@@ -187,13 +271,27 @@ export function RevenuePage() {
             </div>
             <button
               type="submit"
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+              className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm ${
+                isPrevisto ? "bg-blue-600 hover:bg-blue-500" : "bg-emerald-600 hover:bg-emerald-500"
+              }`}
             >
-              Lançar
+              Lançar ({scenarioLabel(pageScenario)})
             </button>
           </form>
 
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div
+            className={`overflow-hidden rounded-xl border-2 bg-white shadow-sm ${
+              isPrevisto ? "border-blue-100" : "border-emerald-100"
+            }`}
+          >
+            <div
+              className={`border-b px-4 py-2 text-xs font-medium ${
+                isPrevisto ? "border-blue-100 bg-blue-50/50 text-blue-900" : "border-emerald-100 bg-emerald-50/50 text-emerald-900"
+              }`}
+            >
+              Listagem no cenário <span className="font-bold">{scenarioLabel(pageScenario)}</span> — altere o toggle
+              acima para ver o outro.
+            </div>
             <table className="w-full text-left text-sm">
               <thead className="border-b border-slate-100 bg-slate-50/80">
                 <tr>

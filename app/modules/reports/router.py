@@ -15,6 +15,7 @@ from app.api.deps import (
     get_current_user,
     require_project_access,
 )
+from app.core.scenario import Scenario, coerce_scenario
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.reports import ReportGenerateRequest
@@ -37,6 +38,13 @@ _ROLES_INVOICES = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
 _ROLES_COMPANY_FINANCE = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
 _ROLES_DASHBOARD = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
 _ROLES_USERS = frozenset({ROLE_ADMIN})
+
+
+def _report_scenario(body: ReportGenerateRequest) -> Scenario:
+    """Corpo `scenario` tem prioridade sobre `filters.scenario`; omissão → REALIZADO."""
+    if body.scenario is not None and str(body.scenario).strip():
+        return coerce_scenario(str(body.scenario).strip())
+    return coerce_scenario(body.filters.get("scenario"))
 
 
 def _assert_roles(user: User, allowed: frozenset[str]) -> None:
@@ -73,7 +81,9 @@ async def generate_report(
         comp = _competencia_date(f, "competencia")
         if comp is None:
             raise HTTPException(status_code=400, detail="Informe competencia (YYYY-MM).")
-        payload = await svc.generate_project_summary(project_id=pid, competencia=comp)
+        payload = await svc.generate_project_summary(
+            project_id=pid, competencia=comp, scenario=_report_scenario(body)
+        )
         raw, name, media = render_report_bytes("project_summary", payload, fmt)
         return _stream(raw, name, media)
 
@@ -90,14 +100,16 @@ async def generate_report(
             pids = [pid]
         else:
             pids = await list_project_ids_for_user(db, user)
-        payload = await svc.generate_company_summary(competencia=comp, project_ids=pids)
+        payload = await svc.generate_company_summary(
+            competencia=comp, project_ids=pids, scenario=_report_scenario(body)
+        )
         raw, name, media = render_report_bytes("company_summary", payload, fmt)
         return _stream(raw, name, media)
 
     if body.type == "employees":
         _assert_roles(user, _ROLES_EMPLOYEES)
         comp = _competencia_date(f, "competencia")
-        payload = await svc.generate_employees_report(competencia=comp)
+        payload = await svc.generate_employees_report(competencia=comp, scenario=_report_scenario(body))
         raw, name, media = render_report_bytes("employees", payload, fmt)
         return _stream(raw, name, media)
 
@@ -155,7 +167,9 @@ async def generate_report(
     if body.type == "revenues":
         _assert_roles(user, _ROLES_INVOICES)
         project_id = _uuid(f, "project_id")
-        payload = await svc.generate_revenues_report(project_id=project_id)
+        payload = await svc.generate_revenues_report(
+            project_id=project_id, scenario=_report_scenario(body)
+        )
         raw, name, media = render_report_bytes("revenues", payload, fmt)
         return _stream(raw, name, media)
 
@@ -184,6 +198,7 @@ async def generate_report(
             competencia=comp_n,
             project_id=project_id,
             months=months,
+            scenario=_report_scenario(body),
         )
         raw, name, media = render_report_bytes("dashboard", payload, fmt)
         return _stream(raw, name, media)

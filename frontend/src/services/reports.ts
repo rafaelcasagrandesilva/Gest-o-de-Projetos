@@ -17,18 +17,28 @@ export type ReportFormat = "xlsx" | "pdf";
 
 export type ReportFilters = Record<string, string | number | boolean | undefined | null>;
 
+export type ReportScenario = "PREVISTO" | "REALIZADO";
+
 export async function generateReport(
   type: ReportType,
   format: ReportFormat,
   filters: ReportFilters,
+  scenario?: ReportScenario,
 ): Promise<void> {
   const clean: Record<string, string | number | boolean> = {};
   for (const [k, v] of Object.entries(filters)) {
     if (v === undefined || v === null || v === "") continue;
     clean[k] = v as string | number | boolean;
   }
+  const body: {
+    type: ReportType;
+    format: ReportFormat;
+    filters: typeof clean;
+    scenario?: ReportScenario;
+  } = { type, format, filters: clean };
+  if (scenario) body.scenario = scenario;
   try {
-    const res = await api.post("/reports/generate", { type, format, filters: clean }, { responseType: "blob" });
+    const res = await api.post("/reports/generate", body, { responseType: "blob" });
     const blob = res.data as Blob;
     const cd = res.headers["content-disposition"] as string | undefined;
     let name = `relatorio_${type}.${format}`;

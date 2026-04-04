@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import UUIDTimestampRead
 
@@ -130,10 +130,25 @@ class DirectorSummary(BaseModel):
 
 
 class FinancialDashboardSummary(BaseModel):
+    scenario: str = "REALIZADO"
     summary: DirectorSummary
     monthly_series: list[MonthlyPoint]
+    """Série alinhada ao cenário solicitado (compatibilidade)."""
+    monthly_series_previsto: list[MonthlyPoint] = Field(default_factory=list)
+    monthly_series_realizado: list[MonthlyPoint] = Field(default_factory=list)
+    period_start: date | None = None
+    period_end: date | None = None
+    month_count: int | None = None
+    # net_profit consolidado (mesma regra do card "Lucro líquido"), competência do summary
+    lucro_liquido_previsto: float = 0.0
+    lucro_liquido_realizado: float = 0.0
 
 
 class ProjectDashboardResponse(BaseModel):
     summary: ProjectSummary
     monthly_series: list[MonthlyPoint]
+    monthly_series_previsto: list[MonthlyPoint] = Field(default_factory=list)
+    monthly_series_realizado: list[MonthlyPoint] = Field(default_factory=list)
+    period_start: date | None = None
+    period_end: date | None = None
+    month_count: int | None = None

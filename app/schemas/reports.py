@@ -23,3 +23,7 @@ class ReportGenerateRequest(BaseModel):
     type: ReportType
     filters: dict[str, Any] = Field(default_factory=dict)
     format: Literal["xlsx", "pdf"]
+    scenario: str | None = Field(
+        default=None,
+        description="PREVISTO ou REALIZADO. Se omitido, usa filters.scenario; se ambos omitidos → REALIZADO.",
+    )

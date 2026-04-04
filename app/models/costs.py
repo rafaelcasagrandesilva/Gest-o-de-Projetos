@@ -7,15 +7,19 @@ from sqlalchemy import Date, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.scenario import SCENARIO_KIND_DB, Scenario
 from app.database.base import Base, TimestampUUIDMixin
 
 
 class ProjectFixedCost(TimestampUUIDMixin, Base):
     __tablename__ = "project_fixed_costs"
-    __table_args__ = (UniqueConstraint("project_id", "competencia", "name", name="uq_project_fixed_cost"),)
+    __table_args__ = (
+        UniqueConstraint("project_id", "competencia", "name", "scenario", name="uq_project_fixed_cost_scenario"),
+    )
 
     project_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
     competencia: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    scenario: Mapped[Scenario] = mapped_column(SCENARIO_KIND_DB, nullable=False, default=Scenario.REALIZADO)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     amount_real: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     amount_calculated: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)

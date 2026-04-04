@@ -9,11 +9,14 @@ from app.api.deps import (
     ROLE_ADMIN,
     ROLE_CONSULTA,
     ROLE_GESTOR,
+    assert_may_write_scenario,
+    default_scenario_for_create,
     ensure_project_access,
     get_current_user,
     require_admin,
     require_roles,
 )
+from app.core.scenario import parse_scenario
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.employees import (
@@ -92,5 +95,11 @@ async def create_allocation(
     actor: User = Depends(get_current_user),
 ) -> EmployeeAllocationRead:
     await ensure_project_access(user=actor, project_id=payload.project_id, db=db)
-    row = await EmployeesService(db).create_allocation(actor_user_id=actor.id, data=payload.model_dump())
+    data = payload.model_dump()
+    sc = parse_scenario(data.get("scenario"), default=default_scenario_for_create(actor))
+    await assert_may_write_scenario(
+        user=actor, scenario=sc, db=db, project_id=payload.project_id
+    )
+    data["scenario"] = sc
+    row = await EmployeesService(db).create_allocation(actor_user_id=actor.id, data=data)
     return EmployeeAllocationRead.model_validate(row)

@@ -10,11 +10,14 @@ from app.api.deps import (
     ROLE_CONSULTA,
     ROLE_GESTOR,
     _user_role_names,
+    assert_may_write_scenario,
+    default_scenario_for_create,
     ensure_project_access,
     get_current_user,
     get_user_projects,
     require_roles,
 )
+from app.core.scenario import coerce_scenario, parse_scenario
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.financial import (
@@ -41,7 +44,9 @@ async def list_revenues(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     project_id: UUID | None = Query(default=None),
+    scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
 ) -> list[RevenueRead]:
+    sc = coerce_scenario(scenario_param)
     names = _user_role_names(user)
     svc = FinancialCrudService(db)
     if ROLE_GESTOR in names and ROLE_ADMIN not in names:
@@ -49,11 +54,15 @@ async def list_revenues(
         if project_id is not None:
             if project_id not in allowed:
                 raise HTTPException(status_code=403, detail="Sem permissão.")
-            rows = await svc.list_revenues(offset=offset, limit=limit, project_id=project_id)
+            rows = await svc.list_revenues(
+                offset=offset, limit=limit, project_id=project_id, scenario=sc
+            )
         else:
-            rows = await svc.list_revenues(offset=offset, limit=limit, project_ids=allowed)
+            rows = await svc.list_revenues(
+                offset=offset, limit=limit, project_ids=allowed, scenario=sc
+            )
     else:
-        rows = await svc.list_revenues(offset=offset, limit=limit, project_id=project_id)
+        rows = await svc.list_revenues(offset=offset, limit=limit, project_id=project_id, scenario=sc)
     return [RevenueRead.model_validate(r) for r in rows]
 
 
@@ -64,7 +73,13 @@ async def create_revenue(
     actor: User = Depends(get_current_user),
 ) -> RevenueRead:
     await ensure_project_access(user=actor, project_id=payload.project_id, db=db)
-    row = await FinancialCrudService(db).create_revenue(actor_user_id=actor.id, data=payload.model_dump())
+    data = payload.model_dump()
+    sc = parse_scenario(data.get("scenario"), default=default_scenario_for_create(actor))
+    await assert_may_write_scenario(
+        user=actor, scenario=sc, db=db, project_id=payload.project_id
+    )
+    data["scenario"] = sc
+    row = await FinancialCrudService(db).create_revenue(actor_user_id=actor.id, data=data)
     return RevenueRead.model_validate(row)
 
 
@@ -80,6 +95,9 @@ async def update_revenue(
     if not row:
         raise HTTPException(status_code=404, detail="Receita não encontrada.")
     await ensure_project_access(user=actor, project_id=row.project_id, db=db)
+    await assert_may_write_scenario(
+        user=actor, scenario=row.scenario, db=db, project_id=row.project_id
+    )
     row = await svc.update_revenue(
         actor_user_id=actor.id, revenue_id=revenue_id, data=payload.model_dump(exclude_unset=True)
     )
@@ -97,6 +115,9 @@ async def delete_revenue(
     if not row:
         raise HTTPException(status_code=404, detail="Receita não encontrada.")
     await ensure_project_access(user=actor, project_id=row.project_id, db=db)
+    await assert_may_write_scenario(
+        user=actor, scenario=row.scenario, db=db, project_id=row.project_id
+    )
     await svc.delete_revenue(actor_user_id=actor.id, revenue_id=revenue_id)
 
 

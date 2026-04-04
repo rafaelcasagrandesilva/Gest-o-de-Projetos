@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.scenario import coerce_scenario, scenario_pg_rhs
 from app.models.financial import Invoice, InvoiceAnticipation, Revenue
 from app.repositories.base import Repository
 
@@ -20,8 +21,11 @@ class RevenueRepository(Repository[Revenue]):
         limit: int = 50,
         project_id: UUID | None = None,
         project_ids: list[UUID] | None = None,
+        scenario: str | None = None,
     ) -> list[Revenue]:
+        eff = coerce_scenario(scenario)
         stmt = select(Revenue).order_by(Revenue.competencia.desc()).offset(offset).limit(limit)
+        stmt = stmt.where(Revenue.scenario == scenario_pg_rhs(eff))
         if project_id is not None:
             stmt = stmt.where(Revenue.project_id == project_id)
         elif project_ids is not None:
