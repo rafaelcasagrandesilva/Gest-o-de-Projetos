@@ -5,7 +5,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.middleware import AuthStateMiddleware
+from app.api.middleware import AuthStateMiddleware, ForwardedProtoMiddleware
 from app.api.router import api_router
 from app.core.bootstrap import seed_admin
 from app.core.config import settings
@@ -23,6 +23,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(AuthStateMiddleware)
+# Por último = executa primeiro: corrige scheme antes de CORS/auth/redirect_slashes.
+app.add_middleware(ForwardedProtoMiddleware)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 
