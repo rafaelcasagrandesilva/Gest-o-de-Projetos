@@ -16,5 +16,6 @@ export default defineConfig({
   preview: {
     host: true,
     port: 3000,
+    allowedHosts: ["artistic-connection-production-21ce.up.railway.app"],
   },
 });
