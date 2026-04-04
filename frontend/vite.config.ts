@@ -11,11 +11,11 @@ export default defineConfig({
   },
   server: {
     host: true,
-    port: 3000,
+    port: Number(process.env.PORT) || 3000,
   },
   preview: {
     host: true,
-    port: 3000,
-    allowedHosts: ["artistic-connection-production-21ce.up.railway.app"],
+    port: Number(process.env.PORT) || 3000,
+    allowedHosts: true,
   },
 });
