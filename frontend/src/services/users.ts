@@ -12,7 +12,7 @@ export interface UserRow {
 }
 
 export async function listUsers(): Promise<UserRow[]> {
-  const { data } = await api.get<UserRow[]>("/users");
+  const { data } = await api.get<UserRow[]>("/users/");
   return data;
 }
 
@@ -24,7 +24,7 @@ export async function createUser(payload: {
   role_name: "ADMIN" | "GESTOR" | "CONSULTA";
   project_ids?: string[];
 }): Promise<UserRow> {
-  const { data } = await api.post<UserRow>("/users", {
+  const { data } = await api.post<UserRow>("/users/", {
     email: payload.email,
     full_name: payload.full_name,
     password: payload.password,
@@ -44,10 +44,10 @@ export async function patchUser(
     project_ids?: string[];
   },
 ): Promise<UserRow> {
-  const { data } = await api.patch<UserRow>(`/users/${userId}`, body);
+  const { data } = await api.patch<UserRow>(`/users/${userId}/`, body);
   return data;
 }
 
 export async function resetUserPassword(userId: string, newPassword: string): Promise<void> {
-  await api.post(`/users/${userId}/reset-password`, { new_password: newPassword });
+  await api.post(`/users/${userId}/reset-password/`, { new_password: newPassword });
 }

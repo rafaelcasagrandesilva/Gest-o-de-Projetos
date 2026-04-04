@@ -44,7 +44,7 @@ export async function listCompanyFinanceItems(
   tipo: TipoFinanceiro,
   competencia: string,
 ): Promise<CompanyFinancialItem[]> {
-  const { data } = await api.get<CompanyFinancialItem[]>("/company-finance/items", {
+  const { data } = await api.get<CompanyFinancialItem[]>("/company-finance/items/", {
     params: { tipo, competencia },
   });
   return data;
@@ -55,7 +55,7 @@ export async function createCompanyFinanceItem(payload: {
   nome: string;
   valor_referencia: number;
 }): Promise<CompanyFinancialItem> {
-  const { data } = await api.post<CompanyFinancialItem>("/company-finance/items", payload);
+  const { data } = await api.post<CompanyFinancialItem>("/company-finance/items/", payload);
   return data;
 }
 
@@ -64,14 +64,14 @@ export async function updateCompanyFinanceItem(
   payload: { nome?: string; valor_referencia?: number },
   competencia: string,
 ): Promise<CompanyFinancialItem> {
-  const { data } = await api.patch<CompanyFinancialItem>(`/company-finance/items/${id}`, payload, {
+  const { data } = await api.patch<CompanyFinancialItem>(`/company-finance/items/${id}/`, payload, {
     params: { competencia },
   });
   return data;
 }
 
 export async function deleteCompanyFinanceItem(id: string): Promise<void> {
-  await api.delete(`/company-finance/items/${id}`);
+  await api.delete(`/company-finance/items/${id}/`);
 }
 
 export async function replaceCompanyFinancePayments(
@@ -80,7 +80,7 @@ export async function replaceCompanyFinancePayments(
   competencia: string,
 ): Promise<CompanyFinancialItem> {
   const { data } = await api.put<CompanyFinancialItem>(
-    `/company-finance/items/${id}/payments`,
+    `/company-finance/items/${id}/payments/`,
     { pagamentos },
     { params: { competencia } },
   );
@@ -88,14 +88,14 @@ export async function replaceCompanyFinancePayments(
 }
 
 export async function fetchKpiEndividamento(competencia: string): Promise<KpiEndividamento> {
-  const { data } = await api.get<KpiEndividamento>("/company-finance/kpis/endividamento", {
+  const { data } = await api.get<KpiEndividamento>("/company-finance/kpis/endividamento/", {
     params: { competencia },
   });
   return data;
 }
 
 export async function fetchKpiCustosFixos(competencia: string): Promise<KpiCustosFixos> {
-  const { data } = await api.get<KpiCustosFixos>("/company-finance/kpis/custos-fixos", {
+  const { data } = await api.get<KpiCustosFixos>("/company-finance/kpis/custos-fixos/", {
     params: { competencia },
   });
   return data;
@@ -106,7 +106,7 @@ export async function fetchChartSeries(
   mes_inicio?: string,
   mes_fim?: string,
 ): Promise<{ points: ChartPoint[] }> {
-  const { data } = await api.get<{ points: ChartPoint[] }>("/company-finance/chart-series", {
+  const { data } = await api.get<{ points: ChartPoint[] }>("/company-finance/chart-series/", {
     params: { tipo, mes_inicio, mes_fim },
   });
   return data;

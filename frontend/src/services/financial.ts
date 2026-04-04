@@ -29,12 +29,12 @@ export interface RevenueCreate {
 export async function listRevenues(projectId?: string, scenario?: string): Promise<Revenue[]> {
   const params: Record<string, string> = { scenario: scenario ?? DEFAULT_SCENARIO_QUERY };
   if (projectId) params.project_id = projectId;
-  const { data } = await api.get<Revenue[]>("/financial/revenues", { params });
+  const { data } = await api.get<Revenue[]>("/financial/revenues/", { params });
   return data;
 }
 
 export async function createRevenue(payload: RevenueCreate): Promise<Revenue> {
-  const { data } = await api.post<Revenue>("/financial/revenues", payload);
+  const { data } = await api.post<Revenue>("/financial/revenues/", payload);
   return data;
 }
 
@@ -48,10 +48,10 @@ export async function updateRevenue(
     has_retention: boolean;
   }>
 ): Promise<Revenue> {
-  const { data } = await api.patch<Revenue>(`/financial/revenues/${id}`, payload);
+  const { data } = await api.patch<Revenue>(`/financial/revenues/${id}/`, payload);
   return data;
 }
 
 export async function deleteRevenue(id: string): Promise<void> {
-  await api.delete(`/financial/revenues/${id}`);
+  await api.delete(`/financial/revenues/${id}/`);
 }

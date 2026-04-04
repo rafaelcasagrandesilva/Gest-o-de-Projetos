@@ -30,7 +30,7 @@ export async function listProjectAllocations(
   projectId: string,
   scenario?: string
 ): Promise<EmployeeAllocation[]> {
-  const { data } = await api.get<EmployeeAllocation[]>(`/projects/${projectId}/allocations`, {
+  const { data } = await api.get<EmployeeAllocation[]>(`/projects/${projectId}/allocations/`, {
     params: { scenario: scenario ?? DEFAULT_SCENARIO_QUERY },
   });
   return data;
@@ -40,7 +40,7 @@ export async function createProjectAllocation(
   projectId: string,
   payload: Omit<EmployeeAllocationCreate, "project_id">
 ): Promise<EmployeeAllocation> {
-  const { data } = await api.post<EmployeeAllocation>(`/projects/${projectId}/allocations`, {
+  const { data } = await api.post<EmployeeAllocation>(`/projects/${projectId}/allocations/`, {
     ...payload,
     project_id: projectId,
   });

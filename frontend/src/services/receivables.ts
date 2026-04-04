@@ -44,7 +44,7 @@ export async function fetchReceivableInvoices(params: {
   year?: number;
   month?: number;
 }): Promise<ReceivableInvoice[]> {
-  const { data } = await api.get<ReceivableInvoice[]>("/invoices", { params });
+  const { data } = await api.get<ReceivableInvoice[]>("/invoices/", { params });
   return data;
 }
 
@@ -53,7 +53,7 @@ export async function fetchReceivableKpis(params: {
   year?: number;
   month?: number;
 }): Promise<ReceivableKpis> {
-  const { data } = await api.get<ReceivableKpis>("/invoices/kpis", { params });
+  const { data } = await api.get<ReceivableKpis>("/invoices/kpis/", { params });
   return data;
 }
 
@@ -71,16 +71,16 @@ export async function createReceivableInvoice(payload: {
   instituicao?: string | null;
   taxa_juros_mensal?: number | null;
 }): Promise<ReceivableInvoice> {
-  const { data } = await api.post<ReceivableInvoice>("/invoices", payload);
+  const { data } = await api.post<ReceivableInvoice>("/invoices/", payload);
   return data;
 }
 
 export async function deleteReceivableInvoice(id: string): Promise<void> {
-  await api.delete(`/invoices/${id}`);
+  await api.delete(`/invoices/${id}/`);
 }
 
 export async function fetchInvoicePayments(invoiceId: string): Promise<ReceivablePayment[]> {
-  const { data } = await api.get<ReceivablePayment[]>(`/invoices/${invoiceId}/payments`);
+  const { data } = await api.get<ReceivablePayment[]>(`/invoices/${invoiceId}/payments/`);
   return data;
 }
 
@@ -88,10 +88,10 @@ export async function addInvoicePayment(
   invoiceId: string,
   payload: { data_recebimento: string; valor: number },
 ): Promise<ReceivablePayment> {
-  const { data } = await api.post<ReceivablePayment>(`/invoices/${invoiceId}/payments`, payload);
+  const { data } = await api.post<ReceivablePayment>(`/invoices/${invoiceId}/payments/`, payload);
   return data;
 }
 
 export async function deleteInvoicePayment(paymentId: string): Promise<void> {
-  await api.delete(`/payments/${paymentId}`);
+  await api.delete(`/payments/${paymentId}/`);
 }

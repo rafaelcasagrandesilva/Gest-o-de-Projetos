@@ -15,13 +15,13 @@ export interface UserMe {
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
-  const { data } = await api.post<LoginResponse>("/auth/login", { email, password });
+  const { data } = await api.post<LoginResponse>("/auth/login/", { email, password });
   setStoredToken(data.access_token);
   return data;
 }
 
 export async function fetchMe(): Promise<UserMe> {
-  const { data } = await api.get<UserMe>("/users/me");
+  const { data } = await api.get<UserMe>("/users/me/");
   return data;
 }
 

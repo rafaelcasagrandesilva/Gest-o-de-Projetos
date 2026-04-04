@@ -44,7 +44,7 @@ export async function listFleetVehicles(options?: {
   offset?: number;
   limit?: number;
 }): Promise<FleetVehicle[]> {
-  const { data } = await api.get<FleetVehicle[]>("/vehicles", {
+  const { data } = await api.get<FleetVehicle[]>("/vehicles/", {
     params: {
       active_only: options?.active_only ?? false,
       offset: options?.offset ?? 0,
@@ -55,15 +55,15 @@ export async function listFleetVehicles(options?: {
 }
 
 export async function createFleetVehicle(body: FleetVehicleCreate): Promise<FleetVehicle> {
-  const { data } = await api.post<FleetVehicle>("/vehicles", body);
+  const { data } = await api.post<FleetVehicle>("/vehicles/", body);
   return data;
 }
 
 export async function updateFleetVehicle(id: string, body: FleetVehicleUpdate): Promise<FleetVehicle> {
-  const { data } = await api.patch<FleetVehicle>(`/vehicles/${id}`, body);
+  const { data } = await api.patch<FleetVehicle>(`/vehicles/${id}/`, body);
   return data;
 }
 
 export async function deleteFleetVehicle(id: string): Promise<void> {
-  await api.delete(`/vehicles/${id}`);
+  await api.delete(`/vehicles/${id}/`);
 }

@@ -21,11 +21,11 @@ export interface SystemSettings {
 }
 
 export async function fetchSettings(): Promise<SystemSettings> {
-  const { data } = await api.get<SystemSettings>("/settings");
+  const { data } = await api.get<SystemSettings>("/settings/");
   return data;
 }
 
 export async function updateSettings(payload: Partial<SystemSettings>): Promise<SystemSettings> {
-  const { data } = await api.put<SystemSettings>("/settings", payload);
+  const { data } = await api.put<SystemSettings>("/settings/", payload);
   return data;
 }

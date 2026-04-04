@@ -63,22 +63,22 @@ export async function listEmployees(params?: {
   offset?: number;
   limit?: number;
 }): Promise<Employee[]> {
-  const { data } = await api.get<Employee[]>("/employees", { params });
+  const { data } = await api.get<Employee[]>("/employees/", { params });
   return data;
 }
 
 export async function createEmployee(payload: EmployeeCreate): Promise<Employee> {
-  const { data } = await api.post<Employee>("/employees", payload);
+  const { data } = await api.post<Employee>("/employees/", payload);
   return data;
 }
 
 export async function updateEmployee(id: string, payload: Partial<EmployeeCreate>): Promise<Employee> {
-  const { data } = await api.patch<Employee>(`/employees/${id}`, payload);
+  const { data } = await api.patch<Employee>(`/employees/${id}/`, payload);
   return data;
 }
 
 export async function deleteEmployee(id: string): Promise<void> {
-  await api.delete(`/employees/${id}`);
+  await api.delete(`/employees/${id}/`);
 }
 
 const DEFAULT_SCENARIO_QUERY = "REALIZADO";
@@ -123,7 +123,7 @@ export async function fetchPayroll(params: {
   scenario?: string;
   project_id?: string;
 }): Promise<PayrollResponse> {
-  const { data } = await api.get<PayrollResponse>("/employees/payroll", {
+  const { data } = await api.get<PayrollResponse>("/employees/payroll/", {
     params: {
       competencia: params.competencia,
       scenario: params.scenario ?? DEFAULT_SCENARIO_QUERY,
@@ -148,7 +148,7 @@ export async function listStaffCosts(params: {
   competencia: string;
   scenario?: string;
 }): Promise<CompanyStaffCost[]> {
-  const { data } = await api.get<CompanyStaffCost[]>("/employees/staff-costs", {
+  const { data } = await api.get<CompanyStaffCost[]>("/employees/staff-costs/", {
     params: {
       competencia: params.competencia,
       scenario: params.scenario ?? DEFAULT_SCENARIO_QUERY,
@@ -163,21 +163,21 @@ export async function createStaffCost(body: {
   valor: number;
   scenario?: string;
 }): Promise<CompanyStaffCost> {
-  const { data } = await api.post<CompanyStaffCost>("/employees/staff-costs", body);
+  const { data } = await api.post<CompanyStaffCost>("/employees/staff-costs/", body);
   return data;
 }
 
 export async function updateStaffCost(id: string, valor: number): Promise<CompanyStaffCost> {
-  const { data } = await api.patch<CompanyStaffCost>(`/employees/staff-costs/${id}`, { valor });
+  const { data } = await api.patch<CompanyStaffCost>(`/employees/staff-costs/${id}/`, { valor });
   return data;
 }
 
 export async function deleteStaffCost(id: string): Promise<void> {
-  await api.delete(`/employees/staff-costs/${id}`);
+  await api.delete(`/employees/staff-costs/${id}/`);
 }
 
 export async function previewCltCost(payload: CLTCostPreviewPayload): Promise<CLTCostPreviewResponse> {
-  const { data } = await api.post<CLTCostPreviewResponse>("/employees/preview-clt-cost", payload);
+  const { data } = await api.post<CLTCostPreviewResponse>("/employees/preview-clt-cost/", payload);
   return data;
 }
 

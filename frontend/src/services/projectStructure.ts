@@ -122,7 +122,7 @@ export async function listLabors(
   scenario?: string
 ): Promise<ProjectLabor[]> {
   const { data } = await api.get<ProjectLabor[]>(
-    `/projects/${projectId}/structure/labors`,
+    `/projects/${projectId}/structure/labors/`,
     qc(competencia, scenario)
   );
   return data;
@@ -134,7 +134,7 @@ export async function fetchLaborDetails(
   scenario?: string
 ): Promise<ProjectLaborDetail[]> {
   const { data } = await api.get<ProjectLaborDetail[]>(
-    `/projects/${projectId}/labor-details`,
+    `/projects/${projectId}/labor-details/`,
     qc(competencia, scenario)
   );
   return data;
@@ -144,7 +144,7 @@ export async function createLabor(
   projectId: string,
   body: { competencia: string; employee_id: string; allocation_percentage?: number; scenario?: string }
 ): Promise<ProjectLabor> {
-  const { data } = await api.post<ProjectLabor>(`/projects/${projectId}/structure/labors`, body);
+  const { data } = await api.post<ProjectLabor>(`/projects/${projectId}/structure/labors/`, body);
   return data;
 }
 
@@ -159,14 +159,14 @@ export async function copyLaborsFromPrevious(
   body: { competencia: string; scenario?: string }
 ): Promise<CopyLaborsFromPreviousResult> {
   const { data } = await api.post<CopyLaborsFromPreviousResult>(
-    `/projects/${projectId}/structure/labors/copy-from-previous`,
+    `/projects/${projectId}/structure/labors/copy-from-previous/`,
     body
   );
   return data;
 }
 
 export async function deleteLabor(projectId: string, laborId: string): Promise<void> {
-  await api.delete(`/projects/${projectId}/structure/labors/${laborId}`);
+  await api.delete(`/projects/${projectId}/structure/labors/${laborId}/`);
 }
 
 export async function updateLaborCosts(
@@ -175,7 +175,7 @@ export async function updateLaborCosts(
   body: LaborCostPatch
 ): Promise<ProjectLabor> {
   const { data } = await api.patch<ProjectLabor>(
-    `/projects/${projectId}/structure/labors/${laborId}`,
+    `/projects/${projectId}/structure/labors/${laborId}/`,
     body
   );
   return data;
@@ -187,7 +187,7 @@ export async function listVehicles(
   scenario?: string
 ): Promise<ProjectVehicle[]> {
   const { data } = await api.get<ProjectVehicle[]>(
-    `/projects/${projectId}/structure/vehicles`,
+    `/projects/${projectId}/structure/vehicles/`,
     qc(competencia, scenario)
   );
   return data;
@@ -204,7 +204,7 @@ export async function createVehicle(
     fuel_cost_realized?: number;
   }
 ): Promise<ProjectVehicle> {
-  const { data } = await api.post<ProjectVehicle>(`/projects/${projectId}/structure/vehicles`, body);
+  const { data } = await api.post<ProjectVehicle>(`/projects/${projectId}/structure/vehicles/`, body);
   return data;
 }
 
@@ -219,14 +219,14 @@ export async function updateVehicle(
   }
 ): Promise<ProjectVehicle> {
   const { data } = await api.patch<ProjectVehicle>(
-    `/projects/${projectId}/structure/vehicles/${allocationId}`,
+    `/projects/${projectId}/structure/vehicles/${allocationId}/`,
     body
   );
   return data;
 }
 
 export async function deleteVehicle(projectId: string, allocationId: string): Promise<void> {
-  await api.delete(`/projects/${projectId}/structure/vehicles/${allocationId}`);
+  await api.delete(`/projects/${projectId}/structure/vehicles/${allocationId}/`);
 }
 
 export async function listSystems(
@@ -235,7 +235,7 @@ export async function listSystems(
   scenario?: string
 ): Promise<ProjectSystemCost[]> {
   const { data } = await api.get<ProjectSystemCost[]>(
-    `/projects/${projectId}/structure/systems`,
+    `/projects/${projectId}/structure/systems/`,
     qc(competencia, scenario)
   );
   return data;
@@ -245,12 +245,12 @@ export async function createSystem(
   projectId: string,
   body: { competencia: string; name: string; value: number; scenario?: string }
 ): Promise<ProjectSystemCost> {
-  const { data } = await api.post<ProjectSystemCost>(`/projects/${projectId}/structure/systems`, body);
+  const { data } = await api.post<ProjectSystemCost>(`/projects/${projectId}/structure/systems/`, body);
   return data;
 }
 
 export async function deleteSystem(projectId: string, systemId: string): Promise<void> {
-  await api.delete(`/projects/${projectId}/structure/systems/${systemId}`);
+  await api.delete(`/projects/${projectId}/structure/systems/${systemId}/`);
 }
 
 export async function listFixedOperational(
@@ -259,7 +259,7 @@ export async function listFixedOperational(
   scenario?: string
 ): Promise<ProjectOperationalFixed[]> {
   const { data } = await api.get<ProjectOperationalFixed[]>(
-    `/projects/${projectId}/structure/fixed-operational`,
+    `/projects/${projectId}/structure/fixed-operational/`,
     qc(competencia, scenario)
   );
   return data;
@@ -270,12 +270,12 @@ export async function createFixedOperational(
   body: { competencia: string; name: string; value: number; scenario?: string }
 ): Promise<ProjectOperationalFixed> {
   const { data } = await api.post<ProjectOperationalFixed>(
-    `/projects/${projectId}/structure/fixed-operational`,
+    `/projects/${projectId}/structure/fixed-operational/`,
     body
   );
   return data;
 }
 
 export async function deleteFixedOperational(projectId: string, fixedId: string): Promise<void> {
-  await api.delete(`/projects/${projectId}/structure/fixed-operational/${fixedId}`);
+  await api.delete(`/projects/${projectId}/structure/fixed-operational/${fixedId}/`);
 }

@@ -106,7 +106,7 @@ export async function fetchFinancialSummary(params: {
   if (params.months != null) q.months = params.months;
   if (params.project_id) q.project_id = params.project_id;
   q.scenario = params.scenario ?? DEFAULT_SCENARIO_QUERY;
-  const { data } = await api.get<FinancialDashboardSummary>("/dashboard/summary", { params: q });
+  const { data } = await api.get<FinancialDashboardSummary>("/dashboard/summary/", { params: q });
   return data;
 }
 
@@ -169,6 +169,6 @@ export async function fetchProjectFinancialDashboard(
   if (params?.start_date != null) q.start_date = params.start_date;
   if (params?.end_date != null) q.end_date = params.end_date;
   if (params?.months != null) q.months = params.months;
-  const { data } = await api.get<ProjectDashboardResponse>(`/dashboard/project/${projectId}`, { params: q });
+  const { data } = await api.get<ProjectDashboardResponse>(`/dashboard/project/${projectId}/`, { params: q });
   return data;
 }

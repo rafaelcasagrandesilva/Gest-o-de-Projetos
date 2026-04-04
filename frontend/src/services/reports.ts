@@ -38,7 +38,7 @@ export async function generateReport(
   } = { type, format, filters: clean };
   if (scenario) body.scenario = scenario;
   try {
-    const res = await api.post("/reports/generate", body, { responseType: "blob" });
+    const res = await api.post("/reports/generate/", body, { responseType: "blob" });
     const blob = res.data as Blob;
     const cd = res.headers["content-disposition"] as string | undefined;
     let name = `relatorio_${type}.${format}`;
