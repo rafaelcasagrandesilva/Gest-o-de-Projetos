@@ -1,6 +1,6 @@
 import axios from "axios";
 
-export const API_BASE = "https://gest-o-de-projetos-production.up.railway.app/api/v1";
+export const API_BASE = "https://celebrated-nature-production.up.railway.app/api/v1";
 
 export const TOKEN_KEY = "sgp_access_token";
 
