@@ -10,7 +10,7 @@ export interface Project {
 }
 
 export async function listProjects(): Promise<Project[]> {
-  const { data } = await api.get<Project[]>("/projects");
+  const { data } = await api.get<Project[]>("/projects/");
   return data;
 }
 
@@ -18,7 +18,7 @@ export async function createProject(payload: {
   name: string;
   description?: string | null;
 }): Promise<Project> {
-  const { data } = await api.post<Project>("/projects", {
+  const { data } = await api.post<Project>("/projects/", {
     name: payload.name,
     description: payload.description || null,
   });
@@ -26,6 +26,6 @@ export async function createProject(payload: {
 }
 
 export async function getProject(id: string): Promise<Project> {
-  const { data } = await api.get<Project>(`/projects/${id}`);
+  const { data } = await api.get<Project>(`/projects/${id}/`);
   return data;
 }
