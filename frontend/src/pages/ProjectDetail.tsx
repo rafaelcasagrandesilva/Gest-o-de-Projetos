@@ -187,7 +187,10 @@ function LaborCostEditor({
 
   return (
     <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/40 p-4">
-      <p className="text-xs font-medium text-indigo-900">Custos deste mês neste projeto (não altera o cadastro RH)</p>
+      <p className="text-xs font-medium text-indigo-900">
+        Overrides opcionais neste projeto (cadastro RH não é alterado). Por padrão o custo usa o cadastro do
+        colaborador.
+      </p>
       {detail.uses_cost_total_override ? (
         <p className="mt-1 text-xs text-amber-800">
           Custo total fixo ativo — demais campos de composição são ignorados no cálculo.
@@ -464,9 +467,10 @@ export function ProjectDetail() {
           </Link>
           <h2 className="mt-2 text-xl font-semibold text-slate-900">{project.name}</h2>
           <p className="text-sm text-slate-500">
-            Estrutura por competência e cenário. Mão de obra: custos mensais editáveis aqui; cadastro global do
-            colaborador não é alterado. Na aba Mão de obra, use o botão para copiar colaboradores do mês anterior
-            (mesmo cenário) quando quiser preencher a competência.
+            Estrutura por competência e cenário. Em <strong>Mão de obra</strong>, o custo mensal vem do{" "}
+            <strong>cadastro do colaborador</strong> (salário, adicionais e encargos) aplicado ao percentual do
+            projeto; use os campos de override só quando precisar de excessão. Copie colaboradores do mês anterior pelo
+            botão na aba quando quiser preencher a competência.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-4">

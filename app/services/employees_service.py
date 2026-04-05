@@ -143,10 +143,10 @@ class EmployeesService:
 
         if emp.employment_type == "CLT":
             sb = emp.salary_base
-            if sb is not None and float(sb) < 0:
+            if sb is None or float(sb) <= 0:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Salário base não pode ser negativo.",
+                    detail="Colaborador CLT exige salário base maior que zero.",
                 )
 
         await self._compute_and_assign_total_cost(emp, reference=ref_date)

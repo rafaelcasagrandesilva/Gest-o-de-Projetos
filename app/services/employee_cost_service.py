@@ -8,6 +8,12 @@ from app.utils.date_utils import get_business_days
 DIRIGIDA_MONTHLY_AMOUNT = 209.24
 CLT_MONTHLY_HOURS_REFERENCE = 220
 
+# Custo CLT mensal (persistido em Employee.total_cost ao salvar; recalculado na listagem por competência):
+# - Base: salário + 30% (periculosidade) + R$ 209,24 (adicional de função dirigida, quando marcado)
+# - Horas extras (50/70/100%) sobre valor-hora derivado do salário / 220h
+# - Encargos: (base + adicionais de folha) × clt_charges_rate (Configurações)
+# - VR (dias úteis × vr_value) e custos adicionais (cadastro) somam ao total
+
 
 def clt_cost_breakdown(employee: Any, settings: Any, year: int, month: int) -> dict[str, float]:
     salary_base = float(employee.salary_base or 0)

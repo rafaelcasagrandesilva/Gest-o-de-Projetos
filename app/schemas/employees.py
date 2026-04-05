@@ -4,7 +4,7 @@ from datetime import date
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from app.utils.date_utils import normalize_competencia
 
@@ -48,6 +48,15 @@ class EmployeeCreate(BaseModel):
         default=None,
         description="Primeiro dia do mês usado ao persistir custo CLT (VR e dias úteis). Padrão: mês corrente.",
     )
+
+    @model_validator(mode="after")
+    def clt_requires_salary_base(self) -> "EmployeeCreate":
+        if self.employment_type == "CLT":
+            if self.salary_base is None:
+                raise ValueError("Colaborador CLT exige salário base.")
+            if float(self.salary_base) <= 0:
+                raise ValueError("Salário base deve ser maior que zero.")
+        return self
 
 
 class EmployeeUpdate(BaseModel):

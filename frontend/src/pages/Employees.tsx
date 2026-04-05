@@ -1,4 +1,12 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { useAuth } from "@/context/AuthContext";
 import {
   createEmployee,
@@ -8,6 +16,8 @@ import {
   fetchPayroll,
   listEmployees,
   listStaffCosts,
+  parseCompetenciaYm,
+  previewCltCost,
   updateEmployee,
   type CompanyStaffCost,
   type Employee,
@@ -31,6 +41,15 @@ type FormState = {
   role_title: string | null;
   employment_type: "CLT" | "PJ";
   is_active: boolean;
+  salary_base: string;
+  has_periculosidade: boolean;
+  has_adicional_dirigida: boolean;
+  additional_costs: string;
+  extra_hours_50: string;
+  extra_hours_70: string;
+  extra_hours_100: string;
+  pj_hours_per_month: string;
+  pj_additional_cost: string;
 };
 
 const emptyForm: FormState = {
@@ -39,7 +58,29 @@ const emptyForm: FormState = {
   role_title: null,
   employment_type: "CLT",
   is_active: true,
+  salary_base: "",
+  has_periculosidade: false,
+  has_adicional_dirigida: false,
+  additional_costs: "",
+  extra_hours_50: "0",
+  extra_hours_70: "0",
+  extra_hours_100: "0",
+  pj_hours_per_month: "",
+  pj_additional_cost: "0",
 };
+
+function parseOptionalMoney(s: string): number | null {
+  const t = s.trim().replace(",", ".");
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseNonNegativeMoney(s: string, fallback: number): number {
+  const n = parseOptionalMoney(s);
+  if (n === null || n < 0) return fallback;
+  return n;
+}
 
 function employeeToForm(emp: Employee): FormState {
   return {
@@ -48,37 +89,60 @@ function employeeToForm(emp: Employee): FormState {
     role_title: emp.role_title,
     employment_type: emp.employment_type === "PJ" ? "PJ" : "CLT",
     is_active: emp.is_active,
+    salary_base: emp.salary_base != null ? String(emp.salary_base) : "",
+    has_periculosidade: emp.has_periculosidade,
+    has_adicional_dirigida: emp.has_adicional_dirigida,
+    additional_costs: emp.additional_costs != null ? String(emp.additional_costs) : "",
+    extra_hours_50: String(emp.extra_hours_50 ?? 0),
+    extra_hours_70: String(emp.extra_hours_70 ?? 0),
+    extra_hours_100: String(emp.extra_hours_100 ?? 0),
+    pj_hours_per_month: emp.pj_hours_per_month != null ? String(emp.pj_hours_per_month) : "",
+    pj_additional_cost: String(emp.pj_additional_cost ?? 0),
   };
 }
 
-/** Cadastro: parâmetros de custo vêm dos projetos (mão de obra) e da folha administrativa. */
 function formToCreatePayload(form: FormState, referenceCompetencia: string): EmployeeCreate {
+  const add = parseOptionalMoney(form.additional_costs);
+  const pjH = parseOptionalMoney(form.pj_hours_per_month);
+  const salary = parseOptionalMoney(form.salary_base);
   return {
     full_name: form.full_name.trim(),
     email: form.email?.trim() || null,
     role_title: form.role_title?.trim() || null,
     employment_type: form.employment_type,
     is_active: form.is_active,
-    salary_base: null,
-    additional_costs: null,
-    has_periculosidade: false,
-    has_adicional_dirigida: false,
-    extra_hours_50: 0,
-    extra_hours_70: 0,
-    extra_hours_100: 0,
-    pj_hours_per_month: null,
-    pj_additional_cost: 0,
+    salary_base: salary,
+    additional_costs: add,
+    has_periculosidade: form.has_periculosidade,
+    has_adicional_dirigida: form.has_adicional_dirigida,
+    extra_hours_50: parseNonNegativeMoney(form.extra_hours_50, 0),
+    extra_hours_70: parseNonNegativeMoney(form.extra_hours_70, 0),
+    extra_hours_100: parseNonNegativeMoney(form.extra_hours_100, 0),
+    pj_hours_per_month: pjH,
+    pj_additional_cost: parseNonNegativeMoney(form.pj_additional_cost, 0),
     cost_reference_competencia: referenceCompetencia,
   };
 }
 
 function formToUpdatePayload(form: FormState): Partial<EmployeeCreate> {
+  const add = parseOptionalMoney(form.additional_costs);
+  const pjH = parseOptionalMoney(form.pj_hours_per_month);
+  const salary = parseOptionalMoney(form.salary_base);
   return {
     full_name: form.full_name.trim(),
     email: form.email?.trim() || null,
     role_title: form.role_title?.trim() || null,
     employment_type: form.employment_type,
     is_active: form.is_active,
+    salary_base: salary,
+    additional_costs: add,
+    has_periculosidade: form.has_periculosidade,
+    has_adicional_dirigida: form.has_adicional_dirigida,
+    extra_hours_50: parseNonNegativeMoney(form.extra_hours_50, 0),
+    extra_hours_70: parseNonNegativeMoney(form.extra_hours_70, 0),
+    extra_hours_100: parseNonNegativeMoney(form.extra_hours_100, 0),
+    pj_hours_per_month: pjH,
+    pj_additional_cost: parseNonNegativeMoney(form.pj_additional_cost, 0),
   };
 }
 
@@ -100,14 +164,95 @@ function formatDeltaPrevReal(prevT: number, realT: number): string {
 
 type ScenarioKind = "PREVISTO" | "REALIZADO";
 
+function CltCostLivePreview({
+  form,
+  referenceCompetencia,
+}: {
+  form: FormState;
+  referenceCompetencia: string;
+}) {
+  const [total, setTotal] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (form.employment_type !== "CLT") {
+      setTotal(null);
+      return;
+    }
+    const salary = parseOptionalMoney(form.salary_base);
+    if (salary === null || salary <= 0) {
+      setTotal(null);
+      return;
+    }
+    const { year, month } = parseCompetenciaYm(referenceCompetencia);
+    let cancelled = false;
+    const t = window.setTimeout(() => {
+      setLoading(true);
+      void previewCltCost({
+        salary_base: salary,
+        has_periculosidade: form.has_periculosidade,
+        has_adicional_dirigida: form.has_adicional_dirigida,
+        extra_hours_50: parseNonNegativeMoney(form.extra_hours_50, 0),
+        extra_hours_70: parseNonNegativeMoney(form.extra_hours_70, 0),
+        extra_hours_100: parseNonNegativeMoney(form.extra_hours_100, 0),
+        additional_costs: parseOptionalMoney(form.additional_costs),
+        year,
+        month,
+      })
+        .then((r) => {
+          if (!cancelled) {
+            setTotal(r.total_cost);
+            setLoading(false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setTotal(null);
+            setLoading(false);
+          }
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [
+    form.employment_type,
+    form.salary_base,
+    form.has_periculosidade,
+    form.has_adicional_dirigida,
+    form.extra_hours_50,
+    form.extra_hours_70,
+    form.extra_hours_100,
+    form.additional_costs,
+    referenceCompetencia,
+  ]);
+
+  if (form.employment_type !== "CLT") return null;
+  return (
+    <div className="sm:col-span-2 rounded-lg border border-indigo-100 bg-indigo-50/50 px-4 py-3 text-sm">
+      <p className="text-xs font-medium text-indigo-900">Custo mensal estimado (CLT)</p>
+      <p className="mt-1 text-xs text-slate-600">
+        Salário + 30% se periculosidade + R$ 209,24 se função dirigida + horas extras + encargos (Configurações) + VR
+        (dias úteis) + custos adicionais opcionais. O valor é gravado no cadastro ao salvar.
+      </p>
+      <p className="mt-2 text-lg font-semibold tabular-nums text-slate-900">
+        {loading ? "Calculando…" : total != null ? formatMoney(total) : "Informe o salário base"}
+      </p>
+    </div>
+  );
+}
+
 function CadastroColaboradorFields({
   form,
   setForm,
   idPrefix,
+  referenceCompetencia,
 }: {
   form: FormState;
   setForm: Dispatch<SetStateAction<FormState>>;
   idPrefix: string;
+  referenceCompetencia: string;
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -160,6 +305,133 @@ function CadastroColaboradorFields({
           className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
         />
       </div>
+
+      {form.employment_type === "CLT" ? (
+        <>
+          <div>
+            <label htmlFor={`${idPrefix}-salary`} className="mb-1 block text-sm text-slate-600">
+              Salário base (R$) <span className="text-red-600">*</span>
+            </label>
+            <input
+              id={`${idPrefix}-salary`}
+              required
+              inputMode="decimal"
+              value={form.salary_base}
+              onChange={(e) => setForm((f) => ({ ...f, salary_base: e.target.value }))}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
+              placeholder="0,00"
+            />
+          </div>
+          <div className="flex flex-col justify-end gap-3 sm:flex-row sm:items-center">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={form.has_periculosidade}
+                onChange={(e) => setForm((f) => ({ ...f, has_periculosidade: e.target.checked }))}
+                className="rounded border-slate-300"
+              />
+              Periculosidade (+30% sobre salário)
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={form.has_adicional_dirigida}
+                onChange={(e) => setForm((f) => ({ ...f, has_adicional_dirigida: e.target.checked }))}
+                className="rounded border-slate-300"
+              />
+              Função dirigida (+R$ 209,24)
+            </label>
+          </div>
+          <div className="sm:col-span-2">
+            <p className="mb-2 text-xs font-medium text-slate-500">Opcional — horas extras no mês (referência 220h)</p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="block text-xs text-slate-600">
+                Horas 50%
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={form.extra_hours_50}
+                  onChange={(e) => setForm((f) => ({ ...f, extra_hours_50: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
+                />
+              </label>
+              <label className="block text-xs text-slate-600">
+                Horas 70%
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={form.extra_hours_70}
+                  onChange={(e) => setForm((f) => ({ ...f, extra_hours_70: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
+                />
+              </label>
+              <label className="block text-xs text-slate-600">
+                Horas 100%
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={form.extra_hours_100}
+                  onChange={(e) => setForm((f) => ({ ...f, extra_hours_100: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
+                />
+              </label>
+            </div>
+          </div>
+          <div className="sm:col-span-2">
+            <label htmlFor={`${idPrefix}-addcost`} className="mb-1 block text-sm text-slate-600">
+              Custos adicionais mensais (R$, opcional)
+            </label>
+            <input
+              id={`${idPrefix}-addcost`}
+              inputMode="decimal"
+              value={form.additional_costs}
+              onChange={(e) => setForm((f) => ({ ...f, additional_costs: e.target.value }))}
+              className="w-full max-w-xs rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
+              placeholder="0"
+            />
+          </div>
+          <CltCostLivePreview form={form} referenceCompetencia={referenceCompetencia} />
+        </>
+      ) : (
+        <>
+          <div>
+            <label htmlFor={`${idPrefix}-pj-base`} className="mb-1 block text-sm text-slate-600">
+              Valor base (R$) — mensal fixo ou valor/hora conforme horas abaixo
+            </label>
+            <input
+              id={`${idPrefix}-pj-base`}
+              inputMode="decimal"
+              value={form.salary_base}
+              onChange={(e) => setForm((f) => ({ ...f, salary_base: e.target.value }))}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
+            />
+          </div>
+          <div>
+            <label htmlFor={`${idPrefix}-pj-h`} className="mb-1 block text-sm text-slate-600">
+              Horas/mês (opcional — se preenchido, base × horas)
+            </label>
+            <input
+              id={`${idPrefix}-pj-h`}
+              inputMode="decimal"
+              value={form.pj_hours_per_month}
+              onChange={(e) => setForm((f) => ({ ...f, pj_hours_per_month: e.target.value }))}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label htmlFor={`${idPrefix}-pj-add`} className="mb-1 block text-sm text-slate-600">
+              Ajuda de custo / adicional PJ (R$)
+            </label>
+            <input
+              id={`${idPrefix}-pj-add`}
+              inputMode="decimal"
+              value={form.pj_additional_cost}
+              onChange={(e) => setForm((f) => ({ ...f, pj_additional_cost: e.target.value }))}
+              className="w-full max-w-xs rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -273,6 +545,13 @@ export function Employees() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
+    if (form.employment_type === "CLT") {
+      const sb = parseOptionalMoney(form.salary_base);
+      if (sb === null || sb <= 0) {
+        setError("CLT: informe salário base maior que zero.");
+        return;
+      }
+    }
     setCreating(true);
     setError(null);
     try {
@@ -394,9 +673,10 @@ export function Employees() {
       <div>
         <h2 className="text-xl font-semibold text-slate-900">Colaboradores — folha mensal</h2>
         <p className="text-sm text-slate-500">
-          A folha consolidada soma as alocações em <strong>projetos</strong> (aba Mão de obra) e os{" "}
-          <strong>custos administrativos</strong> cadastrados abaixo. O valor exibido não usa salário fixo do cadastro
-          como custo real — apenas como base de cálculo quando não há override na linha do projeto.
+          O <strong>custo mensal CLT</strong> é calculado no cadastro (salário, periculosidade, função dirigida,
+          encargos das Configurações, VR e opcionais) e gravado no colaborador. A folha soma as alocações em{" "}
+          <strong>projetos</strong> (usa esse custo automaticamente; overrides ficam na aba Mão de obra) e os{" "}
+          <strong>custos administrativos</strong> abaixo.
         </p>
       </div>
 
@@ -457,7 +737,12 @@ export function Employees() {
           className="max-w-2xl space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
         >
           <h3 className="font-medium text-slate-900">Novo colaborador</h3>
-          <CadastroColaboradorFields form={form} setForm={setForm} idPrefix="new" />
+          <CadastroColaboradorFields
+            form={form}
+            setForm={setForm}
+            idPrefix="new"
+            referenceCompetencia={referenceCompetencia}
+          />
           <button
             type="submit"
             disabled={creating}
@@ -717,6 +1002,8 @@ export function Employees() {
                     <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
                     <th className="px-4 py-3 font-medium text-slate-600">Cargo</th>
                     <th className="px-4 py-3 font-medium text-slate-600">Tipo</th>
+                    <th className="px-4 py-3 text-right font-medium text-slate-600">Salário base</th>
+                    <th className="px-4 py-3 text-right font-medium text-slate-600">Custo mês</th>
                     <th className="px-4 py-3 font-medium text-slate-600">Ativo</th>
                     {!readOnly && <th className="px-4 py-3" />}
                   </tr>
@@ -727,6 +1014,12 @@ export function Employees() {
                       <td className="px-4 py-3">{emp.full_name}</td>
                       <td className="px-4 py-3 text-slate-600">{emp.role_title ?? "—"}</td>
                       <td className="px-4 py-3">{emp.employment_type}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+                        {emp.salary_base != null ? formatMoney(emp.salary_base) : "—"}
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium tabular-nums text-slate-900">
+                        {formatMoney(emp.total_cost)}
+                      </td>
                       <td className="px-4 py-3">
                         {readOnly ? (
                           <span>{emp.is_active ? "Sim" : "Não"}</span>
@@ -769,6 +1062,7 @@ export function Employees() {
       {editingId && !readOnly && (
         <EditEmployeePanel
           emp={items.find((e) => e.id === editingId)!}
+          referenceCompetencia={referenceCompetencia}
           onCancel={() => setEditingId(null)}
           onSaved={async () => {
             setEditingId(null);
@@ -784,10 +1078,12 @@ export function Employees() {
 
 function EditEmployeePanel({
   emp,
+  referenceCompetencia,
   onCancel,
   onSaved,
 }: {
   emp: Employee;
+  referenceCompetencia: string;
   onCancel: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -795,12 +1091,26 @@ function EditEmployeePanel({
   const [saving, setSaving] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
+  useEffect(() => {
+    setForm(employeeToForm(emp));
+  }, [emp]);
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (form.employment_type === "CLT") {
+      const sb = parseOptionalMoney(form.salary_base);
+      if (sb === null || sb <= 0) {
+        setLocalError("CLT: informe salário base maior que zero.");
+        return;
+      }
+    }
     setSaving(true);
     setLocalError(null);
     try {
-      await updateEmployee(emp.id, formToUpdatePayload(form));
+      await updateEmployee(emp.id, {
+        ...formToUpdatePayload(form),
+        cost_reference_competencia: referenceCompetencia,
+      });
       await onSaved();
     } catch (err) {
       if (isAxiosError(err) && err.response?.data?.detail) {
@@ -823,7 +1133,12 @@ function EditEmployeePanel({
         </div>
       )}
       <form onSubmit={save} className="mt-4 space-y-4">
-        <CadastroColaboradorFields form={form} setForm={setForm} idPrefix={`edit-${emp.id}`} />
+        <CadastroColaboradorFields
+          form={form}
+          setForm={setForm}
+          idPrefix={`edit-${emp.id}`}
+          referenceCompetencia={referenceCompetencia}
+        />
         <div className="flex flex-wrap gap-2">
           <button
             type="submit"
