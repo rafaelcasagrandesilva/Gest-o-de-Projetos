@@ -133,38 +133,84 @@ function laborBaseLabel(src: string | undefined): string {
   return "Base: cadastro";
 }
 
+/** Valor exibido no input: override da linha ou fallback do cadastro do colaborador. */
+function strOverrideOrCadastro(
+  overrideVal: number | null | undefined,
+  cadastroVal: number | null | undefined,
+): string {
+  const v = overrideVal ?? cadastroVal;
+  return v == null ? "" : String(v);
+}
+
+const _MONEY_EPS = 0.01;
+
+/**
+ * Converte o texto do input em valor de API para override de salário/horas.
+ * - Vazio → null (sem override, usa cadastro no backend).
+ * - Igual ao cadastro (com tolerância) → null (não persiste override redundante).
+ */
+function parseSalaryOrPjHoursOverride(input: string, cadastroVal: number | null): number | null {
+  const t = input.trim();
+  if (t === "") return null;
+  const n = Number(t.replace(",", "."));
+  if (!Number.isFinite(n)) return null;
+  if (cadastroVal != null && Math.abs(n - cadastroVal) < _MONEY_EPS) return null;
+  return n;
+}
+
+function SourceBadge({ overrideActive }: { overrideActive: boolean }) {
+  return (
+    <span
+      className={`ml-1.5 align-middle rounded px-1.5 py-0.5 text-[10px] font-medium ${
+        overrideActive ? "bg-indigo-100 text-indigo-800" : "bg-slate-100 text-slate-600"
+      }`}
+    >
+      {overrideActive ? "Override aplicado" : "Base: cadastro"}
+    </span>
+  );
+}
+
 function LaborCostEditor({
   projectId,
   detail,
+  cadastroSalaryBase,
+  cadastroPjHoursPerMonth,
   onSaved,
 }: {
   projectId: string;
   detail: ProjectLaborDetail;
+  /** Do cadastro RH (Employee); usado só como fallback visual e para não gravar override redundante. */
+  cadastroSalaryBase: number | null;
+  cadastroPjHoursPerMonth: number | null;
   onSaved: () => void | Promise<void>;
 }) {
   const isClt = (detail.tipo || "").toUpperCase() === "CLT";
-  const [salary, setSalary] = useState(() => strOrEmpty(detail.cost_salary_base));
+  const [salary, setSalary] = useState(() =>
+    strOverrideOrCadastro(detail.cost_salary_base, cadastroSalaryBase),
+  );
   const [add, setAdd] = useState(() => strOrEmpty(detail.cost_additional_costs));
   const [h50, setH50] = useState(() => strOrEmpty(detail.cost_extra_hours_50));
   const [h70, setH70] = useState(() => strOrEmpty(detail.cost_extra_hours_70));
   const [h100, setH100] = useState(() => strOrEmpty(detail.cost_extra_hours_100));
-  const [pjH, setPjH] = useState(() => strOrEmpty(detail.cost_pj_hours_per_month));
+  const [pjH, setPjH] = useState(() =>
+    strOverrideOrCadastro(detail.cost_pj_hours_per_month, cadastroPjHoursPerMonth),
+  );
   const [pjAdd, setPjAdd] = useState(() => strOrEmpty(detail.cost_pj_additional_cost));
   const [totalOv, setTotalOv] = useState(() => strOrEmpty(detail.cost_total_override));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    setSalary(strOrEmpty(detail.cost_salary_base));
+    setSalary(strOverrideOrCadastro(detail.cost_salary_base, cadastroSalaryBase));
     setAdd(strOrEmpty(detail.cost_additional_costs));
     setH50(strOrEmpty(detail.cost_extra_hours_50));
     setH70(strOrEmpty(detail.cost_extra_hours_70));
     setH100(strOrEmpty(detail.cost_extra_hours_100));
-    setPjH(strOrEmpty(detail.cost_pj_hours_per_month));
+    setPjH(strOverrideOrCadastro(detail.cost_pj_hours_per_month, cadastroPjHoursPerMonth));
     setPjAdd(strOrEmpty(detail.cost_pj_additional_cost));
     setTotalOv(strOrEmpty(detail.cost_total_override));
     setErr(null);
-  }, [detail]);
+  }, [detail, cadastroSalaryBase, cadastroPjHoursPerMonth]);
 
   function parseNum(s: string): number | null {
     if (s.trim() === "") return null;
@@ -217,7 +263,10 @@ function LaborCostEditor({
           />
         </label>
         <label className="block text-xs text-slate-600">
-          Salário base (override)
+          <span className="inline-flex flex-wrap items-center gap-x-1">
+            Salário base (override)
+            <SourceBadge overrideActive={detail.cost_salary_base != null} />
+          </span>
           <input
             type="number"
             step="0.01"
@@ -225,7 +274,7 @@ function LaborCostEditor({
             value={salary}
             onChange={(e) => setSalary(e.target.value)}
             className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
-            placeholder="Vazio = cadastro"
+            placeholder={cadastroSalaryBase != null ? `Cadastro: ${cadastroSalaryBase}` : "Vazio = sem override"}
           />
         </label>
         {isClt ? (
@@ -278,7 +327,10 @@ function LaborCostEditor({
         ) : (
           <>
             <label className="block text-xs text-slate-600">
-              Horas/mês PJ (override)
+              <span className="inline-flex flex-wrap items-center gap-x-1">
+                Horas/mês PJ (override)
+                <SourceBadge overrideActive={detail.cost_pj_hours_per_month != null} />
+              </span>
               <input
                 type="number"
                 step="0.01"
@@ -286,6 +338,9 @@ function LaborCostEditor({
                 value={pjH}
                 onChange={(e) => setPjH(e.target.value)}
                 className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+                placeholder={
+                  cadastroPjHoursPerMonth != null ? `Cadastro: ${cadastroPjHoursPerMonth}` : "Vazio = sem override"
+                }
               />
             </label>
             <label className="block text-xs text-slate-600">
@@ -309,12 +364,12 @@ function LaborCostEditor({
           onClick={() =>
             submit({
               cost_total_override: parseNum(totalOv),
-              cost_salary_base: parseNum(salary),
+              cost_salary_base: parseSalaryOrPjHoursOverride(salary, cadastroSalaryBase),
               cost_additional_costs: parseNum(add),
               cost_extra_hours_50: parseNum(h50),
               cost_extra_hours_70: parseNum(h70),
               cost_extra_hours_100: parseNum(h100),
-              cost_pj_hours_per_month: parseNum(pjH),
+              cost_pj_hours_per_month: parseSalaryOrPjHoursOverride(pjH, cadastroPjHoursPerMonth),
               cost_pj_additional_cost: parseNum(pjAdd),
             })
           }
@@ -845,6 +900,7 @@ function LaborTab({
               rows.map((r) => {
                 const open = openDetailId === r.labor_id;
                 const b = r.breakdown;
+                const rowEmp = employees.find((e) => e.id === r.employee_id);
                 return (
                   <Fragment key={r.labor_id}>
                     <tr className="border-b border-slate-100">
@@ -932,7 +988,13 @@ function LaborTab({
                               <dd className="font-medium tabular-nums">{money(b.ajuda_custo)}</dd>
                             </div>
                           </dl>
-                          <LaborCostEditor projectId={projectId} detail={r} onSaved={onRefresh} />
+                          <LaborCostEditor
+                            projectId={projectId}
+                            detail={r}
+                            cadastroSalaryBase={rowEmp?.salary_base ?? null}
+                            cadastroPjHoursPerMonth={rowEmp?.pj_hours_per_month ?? null}
+                            onSaved={onRefresh}
+                          />
                           <div className="mt-3 flex justify-end border-t border-slate-200 pt-3">
                             <button
                               type="button"
