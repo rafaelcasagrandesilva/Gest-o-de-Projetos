@@ -30,7 +30,7 @@ export function Sidebar() {
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white">
       <div className="border-b border-slate-100 px-4 py-5">
-        <div className="text-lg font-semibold tracking-tight text-indigo-600">SGP</div>
+        <div className="text-lg font-semibold tracking-tight text-indigo-600">SGC</div>
         <p className="mt-0.5 text-xs text-slate-500">Gestão de projetos</p>
       </div>
       <nav className="flex flex-1 flex-col gap-0.5 p-3">

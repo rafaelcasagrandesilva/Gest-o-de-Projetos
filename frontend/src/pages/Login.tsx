@@ -50,7 +50,9 @@ export function Login() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-100 to-indigo-50 p-4">
       <div className="w-full max-w-md rounded-2xl border border-slate-200/80 bg-white p-8 shadow-xl shadow-slate-200/50">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">SGP</h1>
+          <h1 className="text-xl font-semibold leading-snug tracking-tight text-slate-900 sm:text-2xl">
+            Sistema de Gestão de Contratos
+          </h1>
           <p className="mt-1 text-sm text-slate-500">Entre com sua conta</p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-5">
