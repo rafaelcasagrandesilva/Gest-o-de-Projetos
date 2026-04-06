@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ROLE_ADMIN, ROLE_CONSULTA, ROLE_GESTOR
-from app.core.permission_codes import ALL_PERMISSION_CODES, PRESET_CONSULTA, ROLE_PRESET
+from app.core.permission_codes import PRESET_CONSULTA, ROLE_PRESET
 from app.core.security import PasswordHashingError, hash_password
 from app.models.user import ProjectUser, Role, User, UserRole
 from app.repositories.permissions import PermissionRepository
@@ -179,12 +179,6 @@ class UsersService:
                     detail="permission_names deve ser uma lista de strings.",
                 )
             perm_set = {str(x).strip() for x in permission_names_raw if str(x).strip()}
-            unknown_codes = perm_set - set(ALL_PERMISSION_CODES)
-            if unknown_codes:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Códigos de permissão não reconhecidos pelo sistema: {sorted(unknown_codes)}",
-                )
             perm_repo = PermissionRepository(self.session)
             missing_db = await perm_repo.missing_permission_names(perm_set)
             if missing_db:
@@ -227,6 +221,7 @@ class UsersService:
                     apply_permission_preset=not skip_preset,
                 )
             if perm_set is not None:
+                print("Updating permissions:", permission_names_raw)
                 try:
                     await PermissionRepository(self.session).replace_user_permissions(user_id, perm_set)
                 except ValueError as e:
