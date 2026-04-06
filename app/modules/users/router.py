@@ -28,9 +28,17 @@ router = APIRouter()
 
 def _user_payload(user: User, *, project_ids: list[UUID]) -> dict:
     role_names = [link.role.name for link in (getattr(user, "roles", []) or []) if getattr(link, "role", None)]
-    perm_names = sorted(
-        {up.permission.name for up in (getattr(user, "user_permissions", []) or []) if getattr(up, "permission", None)}
-    )
+    perm_names: list[str] = []
+    try:
+        perm_names = sorted(
+            {
+                up.permission.name
+                for up in (getattr(user, "user_permissions", []) or [])
+                if getattr(up, "permission", None)
+            }
+        )
+    except Exception:
+        perm_names = []
     skip = {"roles", "project_links", "audit_logs", "user_permissions"}
     d = {k: v for k, v in user.__dict__.items() if not k.startswith("_") and k not in skip}
     return {**d, "role_names": role_names, "project_ids": project_ids, "permission_names": perm_names}

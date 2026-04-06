@@ -84,8 +84,8 @@ def permission_names_from_user(user: User) -> set[str]:
 
 
 # TODO:
-# Implementar tabela permissions e user_permissions com migration.
-# Remover fallback permissivo (_rbac_fallback_permissive) quando o sistema RBAC estiver completo e populado.
+# Tabelas permissions / user_permissions: migration 0020_permissions_rbac (+ run_alembic_upgrade no startup).
+# Remover fallback permissivo (_rbac_fallback_permissive) quando o RBAC estiver 100% populado em produção.
 
 
 def _rbac_fallback_permissive(user: User) -> bool:

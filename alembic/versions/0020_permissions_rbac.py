@@ -1,5 +1,8 @@
 """permissions + user_permissions; seed a partir dos roles atuais.
 
+- PK `permissions.id` e `user_permissions.id`: UUID (alinha ao TimestampUUIDMixin / ORM).
+- Seed: todas as permissões de negócio + vínculos por usuário conforme role (ADMIN = todas).
+
 Revision ID: 0020_permissions_rbac
 Revises: 0019_pv_fuel_real
 """
