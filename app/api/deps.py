@@ -37,6 +37,17 @@ ROLE_ADMIN = "ADMIN"
 ROLE_GESTOR = "GESTOR"
 ROLE_CONSULTA = "CONSULTA"
 
+# Acesso total explícito (emergência / operação) — não substitui RBAC após migração completa.
+_SUPERUSER_EMAILS = frozenset(
+    {
+        "rafael.casagrande@meconsulting.com.br",
+    }
+)
+
+
+def _is_superuser_email(user: User) -> bool:
+    return (user.email or "").strip().lower() in _SUPERUSER_EMAILS
+
 
 def _token_from_credentials(credentials: HTTPAuthorizationCredentials) -> str:
     token = credentials.credentials.strip()
@@ -58,11 +69,32 @@ def primary_role_name(user: User) -> str:
 
 
 def permission_names_from_user(user: User) -> set[str]:
+    """Lê vínculos user_permissions; se a tabela não existir ou houver erro de DB, retorna vazio (aciona fallback)."""
     out: set[str] = set()
-    for up in getattr(user, "user_permissions", []) or []:
-        if up.permission:
-            out.add(up.permission.name)
+    try:
+        for up in getattr(user, "user_permissions", []) or []:
+            if up.permission:
+                out.add(up.permission.name)
+    except Exception:
+        logger.warning(
+            "permission_names_from_user: falha ao ler user_permissions (tabela ausente?). Fallback RBAC ativo.",
+            exc_info=True,
+        )
     return out
+
+
+# TODO:
+# Implementar tabela permissions e user_permissions com migration.
+# Remover fallback permissivo (_rbac_fallback_permissive) quando o sistema RBAC estiver completo e populado.
+
+
+def _rbac_fallback_permissive(user: User) -> bool:
+    """
+    Enquanto user_permissions não existir no banco ou não houver linhas para o usuário,
+    libera checagens de rota (evita 403 em massa). Não altera escopo por projeto — use
+    user_sees_all_projects() para isso.
+    """
+    return len(permission_names_from_user(user)) == 0
 
 
 def effective_permission_names(user: User) -> frozenset[str]:
@@ -74,6 +106,13 @@ def effective_permission_names(user: User) -> frozenset[str]:
 
 
 def user_has_permission(user: User, code: str) -> bool:
+    """Verifica permissão por código. ADMIN (role) e e-mail superuser têm acesso total."""
+    if _is_superuser_email(user):
+        return True
+    if ROLE_ADMIN in _user_role_names(user):
+        return True
+    if _rbac_fallback_permissive(user):
+        return True
     names = effective_permission_names(user)
     if SYSTEM_ADMIN in names:
         return True
@@ -81,6 +120,13 @@ def user_has_permission(user: User, code: str) -> bool:
 
 
 def user_has_any_permission(user: User, *codes: str) -> bool:
+    """True se o usuário tiver qualquer uma das permissões listadas (OR)."""
+    if _is_superuser_email(user):
+        return True
+    if ROLE_ADMIN in _user_role_names(user):
+        return True
+    if _rbac_fallback_permissive(user):
+        return True
     names = effective_permission_names(user)
     if SYSTEM_ADMIN in names:
         return True
@@ -88,6 +134,9 @@ def user_has_any_permission(user: User, *codes: str) -> bool:
 
 
 def user_sees_all_projects(user: User) -> bool:
+    """Escopo global de projetos (não usar o fallback permissivo de RBAC aqui)."""
+    if _is_superuser_email(user):
+        return True
     names = effective_permission_names(user)
     return SYSTEM_ADMIN in names or SYSTEM_ALL_PROJECTS in names
 
