@@ -81,6 +81,20 @@ function progressBarClass(ratio: number): string {
   return "bg-red-500";
 }
 
+/** Eixo Y com zoom na faixa dos dados (+10% margem), para variações pequenas não virarem linha reta. */
+function yAxisDomainFromValues(values: number[]): [number, number] | undefined {
+  const finite = values.filter((v) => Number.isFinite(v));
+  if (finite.length === 0) return undefined;
+  let min = Math.min(...finite);
+  let max = Math.max(...finite);
+  if (min === max) {
+    const pad = Math.max(Math.abs(min) * 0.01, 1);
+    return [min - pad, max + pad];
+  }
+  const padding = (max - min) * 0.1;
+  return [min - padding, max + padding];
+}
+
 type Props = {
   tipo: TipoFinanceiro;
   title: string;
@@ -150,6 +164,19 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       return { mes: mesLabel(p.mes), acumulado: cum };
     });
   }, [chartPoints, tipo]);
+
+  const saldoLineYDomain = useMemo(() => {
+    if (tipo !== "endividamento") return undefined;
+    const rows = lineData as { mes: string; saldo: number }[];
+    return yAxisDomainFromValues(rows.map((d) => d.saldo));
+  }, [tipo, lineData]);
+
+  /** Variação do saldo entre o primeiro e o último ponto da série exibida. */
+  const saldoPeriodDelta = useMemo(() => {
+    if (tipo !== "endividamento" || lineData.length < 2) return null;
+    const rows = lineData as { mes: string; saldo: number }[];
+    return rows[rows.length - 1].saldo - rows[0].saldo;
+  }, [tipo, lineData]);
 
   const barData = useMemo(
     () => chartPoints.map((p) => ({ mes: mesLabel(p.mes), pagamentos: p.pagamentos_mes })),
@@ -244,14 +271,31 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       {/* Gráficos */}
       <section className="grid gap-6 lg:grid-cols-2">
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h2 className="text-sm font-medium text-slate-800">
-            {tipo === "endividamento" ? "Evolução do saldo restante" : "Pagamentos acumulados"}
-          </h2>
-          <p className="text-xs text-slate-500">
-            {tipo === "endividamento"
-              ? "Soma do saldo devedor ao fim de cada mês"
-              : "Soma acumulada dos pagamentos registrados"}
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-medium text-slate-800">
+                {tipo === "endividamento" ? "Evolução do saldo restante" : "Pagamentos acumulados"}
+              </h2>
+              <p className="text-xs text-slate-500">
+                {tipo === "endividamento"
+                  ? "Soma do saldo devedor ao fim de cada mês (eixo Y ajustado à faixa dos valores para destacar variações)"
+                  : "Soma acumulada dos pagamentos registrados"}
+              </p>
+            </div>
+            {tipo === "endividamento" && saldoPeriodDelta != null && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-right">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Variação no período</p>
+                <p
+                  className={`text-sm font-semibold tabular-nums ${
+                    saldoPeriodDelta < 0 ? "text-emerald-700" : saldoPeriodDelta > 0 ? "text-amber-800" : "text-slate-700"
+                  }`}
+                >
+                  {saldoPeriodDelta > 0 ? "+" : ""}
+                  {formatBRL(saldoPeriodDelta)}
+                </p>
+              </div>
+            )}
+          </div>
           <div className="mt-3 h-[260px]">
             {lineData.length === 0 ? (
               <p className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados.</p>
@@ -265,12 +309,24 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                     tickFormatter={(v) =>
                       Math.abs(v) >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : `${(v / 1000).toFixed(0)}k`
                     }
-                    width={40}
+                    width={48}
+                    domain={tipo === "endividamento" && saldoLineYDomain ? saldoLineYDomain : undefined}
+                    allowDataOverflow
                   />
                   <Tooltip formatter={(v: number) => formatBRL(v)} />
                   <Legend />
                   {tipo === "endividamento" ? (
-                    <Line type="monotone" dataKey="saldo" name="Saldo restante" stroke="#4F46E5" strokeWidth={2} dot={false} />
+                    <Line
+                      type="monotone"
+                      dataKey="saldo"
+                      name="Saldo restante"
+                      stroke="#4F46E5"
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      dot={{ r: 3, fill: "#4F46E5", strokeWidth: 0 }}
+                      activeDot={{ r: 5, stroke: "#fff", strokeWidth: 2 }}
+                    />
                   ) : (
                     <Line type="monotone" dataKey="acumulado" name="Acumulado" stroke="#059669" strokeWidth={2} dot={false} />
                   )}
