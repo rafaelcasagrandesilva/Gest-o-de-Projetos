@@ -17,6 +17,15 @@ class PermissionRepository(Repository[Permission]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, Permission)
 
+    async def missing_permission_names(self, names: set[str]) -> set[str]:
+        """Nomes que não existem na tabela `permissions`."""
+        if not names:
+            return set()
+        stmt = select(Permission.name).where(Permission.name.in_(names))
+        res = await self.session.execute(stmt)
+        found = {row[0] for row in res.all()}
+        return names - found
+
     async def replace_user_permissions(self, user_id: UUID, names: set[str]) -> None:
         try:
             await self.session.execute(delete(UserPermission).where(UserPermission.user_id == user_id))

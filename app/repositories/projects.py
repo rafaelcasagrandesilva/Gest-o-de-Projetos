@@ -40,3 +40,13 @@ class ProjectRepository(Repository[Project]):
         res = await self.session.execute(stmt)
         return res.first() is not None
 
+    async def missing_project_ids(self, ids: list[UUID]) -> list[UUID]:
+        """IDs que não existem na tabela `projects` (ordem preservada, sem duplicar)."""
+        if not ids:
+            return []
+        uniq = list(dict.fromkeys(ids))
+        stmt = select(Project.id).where(Project.id.in_(uniq))
+        res = await self.session.execute(stmt)
+        found = {row[0] for row in res.all()}
+        return [pid for pid in uniq if pid not in found]
+

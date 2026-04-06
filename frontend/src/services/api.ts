@@ -11,6 +11,16 @@ export const api = axios.create({
   },
 });
 
+/** Alinha com FastAPI `redirect_slashes=True`: evita 307 em POST/PUT/PATCH (corpo pode se perder no redirect). */
+function ensureTrailingSlashPath(url: string): string {
+  if (!url || !url.startsWith("/")) return url;
+  const q = url.indexOf("?");
+  const path = q === -1 ? url : url.slice(0, q);
+  const query = q === -1 ? "" : url.slice(q);
+  if (path.endsWith("/")) return url;
+  return `${path}/${query}`;
+}
+
 export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -24,6 +34,14 @@ export function setStoredToken(token: string | null): void {
 }
 
 api.interceptors.request.use((config) => {
+  const method = (config.method || "get").toLowerCase();
+  if (
+    ["post", "put", "patch", "delete"].includes(method) &&
+    typeof config.url === "string" &&
+    config.url.length > 0
+  ) {
+    config.url = ensureTrailingSlashPath(config.url);
+  }
   const token = getStoredToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;

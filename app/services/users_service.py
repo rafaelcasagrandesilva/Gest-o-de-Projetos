@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ROLE_ADMIN, ROLE_CONSULTA, ROLE_GESTOR
@@ -17,6 +19,8 @@ from app.services.audit_service import AuditService
 from app.services.utils import model_to_dict
 
 _VALID_ROLES = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
+
+logger = logging.getLogger(__name__)
 
 _HASH_FAIL = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,
@@ -60,6 +64,7 @@ class UsersService:
         user_id: UUID,
         role_name: str,
         project_ids: list[UUID] | None,
+        apply_permission_preset: bool = True,
     ) -> None:
         if role_name not in _VALID_ROLES:
             raise HTTPException(
@@ -76,8 +81,12 @@ class UsersService:
             for pid in project_ids:
                 self.session.add(ProjectUser(project_id=pid, user_id=user_id, access_level="member"))
         await self.session.flush()
-        preset = ROLE_PRESET.get(role_name, PRESET_CONSULTA)
-        await PermissionRepository(self.session).replace_user_permissions(user_id, set(preset))
+        if apply_permission_preset:
+            preset = ROLE_PRESET.get(role_name, PRESET_CONSULTA)
+            try:
+                await PermissionRepository(self.session).replace_user_permissions(user_id, set(preset))
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
     async def create_user(
         self,
@@ -99,7 +108,9 @@ class UsersService:
             pids: list[UUID] | None = list(project_ids or [])
         else:
             pids = None
-        await self._apply_role_and_projects(user_id=user.id, role_name=role_name, project_ids=pids)
+        await self._apply_role_and_projects(
+            user_id=user.id, role_name=role_name, project_ids=pids, apply_permission_preset=True
+        )
         await self.audit.log(
             actor_user_id=actor_user_id,
             action="create",
@@ -117,46 +128,146 @@ class UsersService:
     async def update_user(self, *, actor_user_id, user_id, data: dict) -> User:
         role_name = data.pop("role_name", None)
         project_ids = data.pop("project_ids", None)
-        permission_names = data.pop("permission_names", None)
+        permission_names_raw = data.pop("permission_names", None)
+
+        def _payload_log() -> dict:
+            out = {
+                "role_name": role_name,
+                "project_ids": [str(x) for x in project_ids] if project_ids is not None else None,
+                "permission_names": permission_names_raw,
+                "other_keys": sorted(k for k in data if k != "password"),
+            }
+            if "password" in data:
+                out["password"] = "[omitted]"
+            return out
+
+        logger.info("update_user recebido user_id=%s payload=%s", user_id, _payload_log())
+
         user = await self.users.get(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
+
+        if role_name is not None:
+            rn = (role_name or "").strip()
+            if not rn:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="role_name não pode ser vazio.",
+                )
+            if rn not in _VALID_ROLES:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"role_name inválido: {rn!r}. Use ADMIN, GESTOR ou CONSULTA.",
+                )
+            role_name = rn
+
+        pids: list[UUID] | None = None
+        if project_ids is not None:
+            pids = list(dict.fromkeys(project_ids))
+            missing_proj = await ProjectRepository(self.session).missing_project_ids(pids)
+            if missing_proj:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"project_ids inexistentes ou inválidos: {[str(x) for x in missing_proj]}",
+                )
+
+        perm_set: set[str] | None = None
+        if permission_names_raw is not None:
+            if not isinstance(permission_names_raw, list):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="permission_names deve ser uma lista de strings.",
+                )
+            perm_set = {str(x).strip() for x in permission_names_raw if str(x).strip()}
+            unknown_codes = perm_set - set(ALL_PERMISSION_CODES)
+            if unknown_codes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Códigos de permissão não reconhecidos pelo sistema: {sorted(unknown_codes)}",
+                )
+            perm_repo = PermissionRepository(self.session)
+            missing_db = await perm_repo.missing_permission_names(perm_set)
+            if missing_db:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Permissões ainda não cadastradas no banco (rode as migrations): "
+                        f"{sorted(missing_db)}"
+                    ),
+                )
+
+        if (project_ids is not None or permission_names_raw is not None) and role_name is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Informe role_name ao atualizar project_ids ou permission_names.",
+            )
+
         before = model_to_dict(user)
         if "password" in data and data["password"]:
             user.password_hash = _hash_password_or_http(data.pop("password"))
         self.users.apply_updates(user, data)
-        if role_name is not None or project_ids is not None:
-            u_roles = await self.users.get_with_roles(user_id)
-            if not u_roles:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
-            rn = role_name if role_name is not None else _primary_role_name(u_roles)
-            if project_ids is not None:
-                pids = project_ids
-            elif rn == ROLE_GESTOR:
-                pids = await ProjectRepository(self.session).list_project_ids_for_user(user_id=user_id)
-            else:
-                pids = None
-            await self._apply_role_and_projects(user_id=user_id, role_name=rn, project_ids=pids)
-        if permission_names is not None:
-            unknown = set(permission_names) - set(ALL_PERMISSION_CODES)
-            if unknown:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Permissões inválidas: {sorted(unknown)}",
+
+        try:
+            if role_name is not None or project_ids is not None:
+                u_roles = await self.users.get_with_roles(user_id)
+                if not u_roles:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
+                rn = role_name if role_name is not None else _primary_role_name(u_roles)
+                if pids is not None:
+                    pids_apply = pids
+                elif rn == ROLE_GESTOR:
+                    pids_apply = await ProjectRepository(self.session).list_project_ids_for_user(user_id=user_id)
+                else:
+                    pids_apply = None
+                skip_preset = perm_set is not None
+                await self._apply_role_and_projects(
+                    user_id=user_id,
+                    role_name=rn,
+                    project_ids=pids_apply,
+                    apply_permission_preset=not skip_preset,
                 )
-            try:
-                await PermissionRepository(self.session).replace_user_permissions(user_id, set(permission_names))
-            except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-        await self.audit.log(
-            actor_user_id=actor_user_id,
-            action="update",
-            entity="User",
-            entity_id=user.id,
-            before=before,
-            after=model_to_dict(user),
-        )
-        await self.session.commit()
+            if perm_set is not None:
+                try:
+                    await PermissionRepository(self.session).replace_user_permissions(user_id, perm_set)
+                except ValueError as e:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+            await self.audit.log(
+                actor_user_id=actor_user_id,
+                action="update",
+                entity="User",
+                entity_id=user.id,
+                before=before,
+                after=model_to_dict(user),
+            )
+            await self.session.commit()
+        except HTTPException:
+            await self.session.rollback()
+            raise
+        except IntegrityError as e:
+            await self.session.rollback()
+            logger.exception(
+                "update_user IntegrityError user_id=%s payload=%s",
+                user_id,
+                _payload_log(),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Dados inconsistentes (ex.: projeto ou permissão inválida). Verifique project_ids e FKs.",
+            ) from e
+        except Exception as e:
+            await self.session.rollback()
+            logger.exception(
+                "update_user erro inesperado user_id=%s payload=%s err=%s",
+                user_id,
+                _payload_log(),
+                e,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Erro ao atualizar usuário. Consulte os logs do servidor.",
+            ) from e
+
         reloaded = await self.users.get_with_roles(user_id)
         if not reloaded:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
@@ -236,7 +347,9 @@ class UsersService:
             pids = list(project_ids or [])
         else:
             pids = None
-        await self._apply_role_and_projects(user_id=user.id, role_name=role_name, project_ids=pids)
+        await self._apply_role_and_projects(
+            user_id=user.id, role_name=role_name, project_ids=pids, apply_permission_preset=True
+        )
         await self.audit.log(
             actor_user_id=actor_user_id,
             action="assign_role",
