@@ -8,12 +8,21 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    ROLE_ADMIN,
-    ROLE_CONSULTA,
-    ROLE_GESTOR,
-    _user_role_names,
     get_current_user,
     require_project_access,
+    user_has_any_permission,
+    user_sees_all_projects,
+)
+from app.core.permission_codes import (
+    BILLING_VIEW,
+    COMPANY_FINANCE_VIEW,
+    DEBTS_VIEW,
+    EMPLOYEES_VIEW,
+    INVOICES_VIEW,
+    REPORTS_EXPORT,
+    REPORTS_VIEW,
+    USERS_MANAGE,
+    VEHICLES_VIEW,
 )
 from app.core.scenario import Scenario, coerce_scenario
 from app.database.session import get_db
@@ -30,15 +39,6 @@ from app.utils.date_utils import normalize_competencia
 
 router = APIRouter(tags=["reports"])
 
-_ROLES_PROJECT_FIN = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
-_ROLES_COMPANY_SUMMARY = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
-_ROLES_EMPLOYEES = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
-_ROLES_VEHICLES = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
-_ROLES_INVOICES = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
-_ROLES_COMPANY_FINANCE = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
-_ROLES_DASHBOARD = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
-_ROLES_USERS = frozenset({ROLE_ADMIN})
-
 
 def _report_scenario(body: ReportGenerateRequest) -> Scenario:
     """Corpo `scenario` tem prioridade sobre `filters.scenario`; omissão → REALIZADO."""
@@ -47,9 +47,8 @@ def _report_scenario(body: ReportGenerateRequest) -> Scenario:
     return coerce_scenario(body.filters.get("scenario"))
 
 
-def _assert_roles(user: User, allowed: frozenset[str]) -> None:
-    roles = _user_role_names(user)
-    if not roles.intersection(allowed):
+def _assert_report_access(user: User) -> None:
+    if not user_has_any_permission(user, REPORTS_VIEW, REPORTS_EXPORT):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
 
 
@@ -73,7 +72,7 @@ async def generate_report(
     svc = ReportService(db)
 
     if body.type == "project_summary":
-        _assert_roles(user, _ROLES_PROJECT_FIN)
+        _assert_report_access(user)
         pid = _uuid(f, "project_id")
         if pid is None:
             raise HTTPException(status_code=400, detail="Informe project_id.")
@@ -88,11 +87,10 @@ async def generate_report(
         return _stream(raw, name, media)
 
     if body.type == "company_summary":
-        _assert_roles(user, _ROLES_COMPANY_SUMMARY)
+        _assert_report_access(user)
         comp = _competencia_date(f, "competencia")
         if comp is None:
             raise HTTPException(status_code=400, detail="Informe competencia (YYYY-MM).")
-        roles = _user_role_names(user)
         if _uuid(f, "project_id") is not None:
             pid = _uuid(f, "project_id")
             assert pid is not None
@@ -107,21 +105,27 @@ async def generate_report(
         return _stream(raw, name, media)
 
     if body.type == "employees":
-        _assert_roles(user, _ROLES_EMPLOYEES)
+        _assert_report_access(user)
+        if not user_has_any_permission(user, EMPLOYEES_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         comp = _competencia_date(f, "competencia")
         payload = await svc.generate_employees_report(competencia=comp, scenario=_report_scenario(body))
         raw, name, media = render_report_bytes("employees", payload, fmt)
         return _stream(raw, name, media)
 
     if body.type == "vehicles":
-        _assert_roles(user, _ROLES_VEHICLES)
+        _assert_report_access(user)
+        if not user_has_any_permission(user, VEHICLES_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         active_only = bool(f.get("active_only", False))
         payload = await svc.generate_vehicles_report(active_only=active_only)
         raw, name, media = render_report_bytes("vehicles", payload, fmt)
         return _stream(raw, name, media)
 
     if body.type == "invoices":
-        _assert_roles(user, _ROLES_INVOICES)
+        _assert_report_access(user)
+        if not user_has_any_permission(user, INVOICES_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         project_id = _uuid(f, "project_id")
         st = f.get("status")
         if st is not None and str(st).strip() != "" and str(st) not in ("PAGA", "PENDENTE", "ATRASADA"):
@@ -141,7 +145,9 @@ async def generate_report(
         return _stream(raw, name, media)
 
     if body.type == "debt":
-        _assert_roles(user, _ROLES_COMPANY_FINANCE)
+        _assert_report_access(user)
+        if not user_has_any_permission(user, DEBTS_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         comp = f.get("competencia")
         if not comp or not str(comp).strip():
             raise HTTPException(status_code=400, detail="Informe competencia (YYYY-MM).")
@@ -150,7 +156,9 @@ async def generate_report(
         return _stream(raw, name, media)
 
     if body.type == "fixed_costs":
-        _assert_roles(user, _ROLES_COMPANY_FINANCE)
+        _assert_report_access(user)
+        if not user_has_any_permission(user, COMPANY_FINANCE_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         comp = f.get("competencia")
         if not comp or not str(comp).strip():
             raise HTTPException(status_code=400, detail="Informe competencia (YYYY-MM).")
@@ -159,13 +167,17 @@ async def generate_report(
         return _stream(raw, name, media)
 
     if body.type == "users":
-        _assert_roles(user, _ROLES_USERS)
+        _assert_report_access(user)
+        if not user_has_any_permission(user, USERS_MANAGE):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         payload = await svc.generate_users_report()
         raw, name, media = render_report_bytes("users", payload, fmt)
         return _stream(raw, name, media)
 
     if body.type == "revenues":
-        _assert_roles(user, _ROLES_INVOICES)
+        _assert_report_access(user)
+        if not user_has_any_permission(user, BILLING_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         project_id = _uuid(f, "project_id")
         payload = await svc.generate_revenues_report(
             project_id=project_id, scenario=_report_scenario(body)
@@ -174,9 +186,8 @@ async def generate_report(
         return _stream(raw, name, media)
 
     if body.type == "dashboard":
-        _assert_roles(user, _ROLES_DASHBOARD)
-        roles = _user_role_names(user)
-        can_global = ROLE_ADMIN in roles or ROLE_CONSULTA in roles
+        _assert_report_access(user)
+        can_global = user_sees_all_projects(user)
         project_id = _uuid(f, "project_id")
         if project_id is None and not can_global:
             raise HTTPException(status_code=400, detail="Informe project_id para exportar o dashboard.")

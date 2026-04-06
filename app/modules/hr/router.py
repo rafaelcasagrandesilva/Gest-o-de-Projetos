@@ -6,16 +6,13 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    ROLE_ADMIN,
-    ROLE_CONSULTA,
-    ROLE_GESTOR,
     assert_may_write_scenario,
     default_scenario_for_create,
     ensure_project_access,
     get_current_user,
-    require_admin,
-    require_roles,
+    require_permission,
 )
+from app.core.permission_codes import EMPLOYEES_EDIT, EMPLOYEES_VIEW
 from app.core.scenario import parse_scenario
 from app.database.session import get_db
 from app.models.user import User
@@ -29,7 +26,7 @@ from app.schemas.employees import (
 from app.services.employees_service import EmployeesService, default_cost_reference
 
 
-_read = [Depends(require_roles(ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA))]
+_read = [Depends(require_permission(EMPLOYEES_VIEW))]
 
 router = APIRouter()
 
@@ -48,7 +45,7 @@ async def list_employees(
     return await EmployeesService(db).list_employees_as_read(offset=offset, limit=limit, competencia=comp)
 
 
-@router.post("/employees", response_model=EmployeeRead, dependencies=[Depends(require_admin)])
+@router.post("/employees", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def create_employee(
     payload: EmployeeCreate,
     db: AsyncSession = Depends(get_db),
@@ -60,7 +57,7 @@ async def create_employee(
     return await svc.employee_to_read(row, competencia=comp)
 
 
-@router.patch("/employees/{employee_id}", response_model=EmployeeRead, dependencies=[Depends(require_admin)])
+@router.patch("/employees/{employee_id}", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def update_employee(
     employee_id,
     payload: EmployeeUpdate,
@@ -79,7 +76,7 @@ async def update_employee(
     return await svc.employee_to_read(row, competencia=comp)
 
 
-@router.delete("/employees/{employee_id}", status_code=204, dependencies=[Depends(require_admin)])
+@router.delete("/employees/{employee_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def delete_employee(
     employee_id,
     db: AsyncSession = Depends(get_db),
@@ -88,7 +85,7 @@ async def delete_employee(
     await EmployeesService(db).delete_employee(actor_user_id=actor.id, employee_id=employee_id)
 
 
-@router.post("/allocations", response_model=EmployeeAllocationRead, dependencies=_read)
+@router.post("/allocations", response_model=EmployeeAllocationRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def create_allocation(
     payload: EmployeeAllocationCreate,
     db: AsyncSession = Depends(get_db),

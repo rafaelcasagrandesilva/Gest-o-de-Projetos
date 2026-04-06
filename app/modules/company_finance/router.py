@@ -8,14 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import (
-    ROLE_ADMIN,
-    ROLE_CONSULTA,
-    ROLE_GESTOR,
-    get_current_user,
-    require_admin,
-    require_roles,
-)
+from app.api.deps import get_current_user, require_permission
+from app.core.permission_codes import COMPANY_FINANCE_EDIT, COMPANY_FINANCE_VIEW
 from app.database.session import get_db
 from app.models.company_finance import CompanyFinancialItem
 from app.models.user import User
@@ -32,7 +26,7 @@ from app.schemas.company_finance import (
 from app.services.company_finance_service import CompanyFinanceService, parse_month
 
 
-_read = [Depends(require_roles(ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA))]
+_read = [Depends(require_permission(COMPANY_FINANCE_VIEW))]
 
 router = APIRouter()
 
@@ -77,7 +71,7 @@ async def list_items(
     return [CompanyFinancialItemRead.model_validate(r) for r in rows]
 
 
-@router.post("/items", response_model=CompanyFinancialItemRead, dependencies=[Depends(require_admin)])
+@router.post("/items", response_model=CompanyFinancialItemRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_EDIT))])
 async def create_item(
     payload: CompanyFinancialItemCreate,
     db: AsyncSession = Depends(get_db),
@@ -94,7 +88,7 @@ async def create_item(
     return CompanyFinancialItemRead.model_validate(read)
 
 
-@router.patch("/items/{item_id}", response_model=CompanyFinancialItemRead, dependencies=[Depends(require_admin)])
+@router.patch("/items/{item_id}", response_model=CompanyFinancialItemRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_EDIT))])
 async def update_item(
     item_id: UUID,
     payload: CompanyFinancialItemUpdate,
@@ -116,7 +110,7 @@ async def update_item(
     return CompanyFinancialItemRead.model_validate(read)
 
 
-@router.delete("/items/{item_id}", status_code=204, dependencies=[Depends(require_admin)])
+@router.delete("/items/{item_id}", status_code=204, dependencies=[Depends(require_permission(COMPANY_FINANCE_EDIT))])
 async def delete_item(
     item_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -130,7 +124,7 @@ async def delete_item(
     await db.commit()
 
 
-@router.put("/items/{item_id}/payments", response_model=CompanyFinancialItemRead, dependencies=[Depends(require_admin)])
+@router.put("/items/{item_id}/payments", response_model=CompanyFinancialItemRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_EDIT))])
 async def replace_payments(
     item_id: UUID,
     payload: PagamentosReplace,

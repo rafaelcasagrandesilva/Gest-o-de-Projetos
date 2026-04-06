@@ -7,14 +7,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    ROLE_ADMIN,
-    ROLE_CONSULTA,
     assert_may_write_scenario,
     default_scenario_for_create,
     get_current_user,
-    require_gestor_or_admin,
+    require_permission,
     require_project_access,
-    require_roles,
+    user_sees_all_projects,
+)
+from app.core.permission_codes import (
+    EMPLOYEES_EDIT,
+    EMPLOYEES_VIEW,
+    PROJECTS_CREATE,
+    PROJECTS_DELETE,
+    PROJECTS_EDIT,
+    PROJECTS_VIEW,
+    USERS_MANAGE,
 )
 from app.core.scenario import coerce_scenario, parse_scenario
 from app.database.session import get_db
@@ -28,11 +35,7 @@ from app.services.projects_service import ProjectsService
 router = APIRouter()
 
 
-def _has_role(user: User, role: str) -> bool:
-    return any(link.role and link.role.name == role for link in (user.roles or []))
-
-
-@router.get("/", response_model=list[ProjectRead])
+@router.get("/", response_model=list[ProjectRead], dependencies=[Depends(require_permission(PROJECTS_VIEW))])
 async def list_projects(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -40,14 +43,18 @@ async def list_projects(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[ProjectRead]:
     svc = ProjectsService(db)
-    if _has_role(user, ROLE_ADMIN) or _has_role(user, ROLE_CONSULTA):
+    if user_sees_all_projects(user):
         rows = await svc.list_projects(offset=offset, limit=limit)
     else:
         rows = await svc.list_projects_for_user(user_id=user.id, offset=offset, limit=limit)
     return [ProjectRead.model_validate(p) for p in rows]
 
 
-@router.get("/{project_id}/allocations", response_model=list[EmployeeAllocationRead])
+@router.get(
+    "/{project_id}/allocations",
+    response_model=list[EmployeeAllocationRead],
+    dependencies=[Depends(require_permission(EMPLOYEES_VIEW))],
+)
 async def list_project_allocations(
     project_id: UUID,
     scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
@@ -68,7 +75,7 @@ async def list_project_allocations(
 @router.post(
     "/{project_id}/allocations",
     response_model=EmployeeAllocationRead,
-    dependencies=[Depends(require_gestor_or_admin)],
+    dependencies=[Depends(require_permission(EMPLOYEES_EDIT))],
 )
 async def create_project_allocation(
     project_id: UUID,
@@ -87,7 +94,7 @@ async def create_project_allocation(
     return EmployeeAllocationRead.model_validate(row)
 
 
-@router.get("/{project_id}", response_model=ProjectRead)
+@router.get("/{project_id}", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_VIEW))])
 async def get_project(
     project_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -97,7 +104,7 @@ async def get_project(
     return ProjectRead.model_validate(proj)
 
 
-@router.post("/", response_model=ProjectRead, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.post("/", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_CREATE))])
 async def create_project(
     payload: ProjectCreate,
     db: AsyncSession = Depends(get_db),
@@ -107,7 +114,7 @@ async def create_project(
     return ProjectRead.model_validate(proj)
 
 
-@router.patch("/{project_id}", response_model=ProjectRead, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.patch("/{project_id}", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_EDIT))])
 async def update_project(
     project_id: UUID,
     payload: ProjectUpdate,
@@ -118,7 +125,7 @@ async def update_project(
     return ProjectRead.model_validate(proj)
 
 
-@router.delete("/{project_id}", status_code=204, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.delete("/{project_id}", status_code=204, dependencies=[Depends(require_permission(PROJECTS_DELETE))])
 async def delete_project(
     project_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -127,7 +134,7 @@ async def delete_project(
     await ProjectsService(db).delete_project(actor_user_id=actor.id, project_id=project_id)
 
 
-@router.post("/{project_id}/users/{user_id}", status_code=204, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.post("/{project_id}/users/{user_id}", status_code=204, dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def add_user_to_project(
     project_id: UUID,
     user_id: UUID,

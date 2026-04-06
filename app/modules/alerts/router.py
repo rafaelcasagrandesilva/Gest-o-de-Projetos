@@ -5,19 +5,14 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import (
-    ROLE_ADMIN,
-    ROLE_CONSULTA,
-    ROLE_GESTOR,
-    require_admin,
-    require_roles,
-)
+from app.api.deps import require_permission
+from app.core.permission_codes import ALERTS_VIEW, SYSTEM_ADMIN
 from app.database.session import get_db
 from app.schemas.alerts import AlertRead, AlertResolveRequest
 from app.services.alerts_service import AlertsService
 
 
-_read = [Depends(require_roles(ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA))]
+_read = [Depends(require_permission(ALERTS_VIEW))]
 
 router = APIRouter()
 
@@ -32,7 +27,7 @@ async def list_alerts(
     return [AlertRead.model_validate(r) for r in rows]
 
 
-@router.post("/checks/invoices-due", response_model=list[AlertRead], dependencies=[Depends(require_admin)])
+@router.post("/checks/invoices-due", response_model=list[AlertRead], dependencies=[Depends(require_permission(SYSTEM_ADMIN))])
 async def check_invoices_due(
     today: date,
     days_ahead: int = Query(default=7, ge=1, le=60),
@@ -42,17 +37,16 @@ async def check_invoices_due(
     return [AlertRead.model_validate(r) for r in rows]
 
 
-@router.post("/checks/negative-margin", response_model=list[AlertRead], dependencies=[Depends(require_admin)])
+@router.post("/checks/negative-margin", response_model=list[AlertRead], dependencies=[Depends(require_permission(SYSTEM_ADMIN))])
 async def check_negative_margin(competencia: date, db: AsyncSession = Depends(get_db)) -> list[AlertRead]:
     rows = await AlertsService(db).check_margem_negativa(competencia=competencia)
     return [AlertRead.model_validate(r) for r in rows]
 
 
-@router.patch("/{alert_id}", response_model=AlertRead, dependencies=[Depends(require_admin)])
+@router.patch("/{alert_id}", response_model=AlertRead, dependencies=[Depends(require_permission(SYSTEM_ADMIN))])
 async def resolve_alert(alert_id, payload: AlertResolveRequest, db: AsyncSession = Depends(get_db)) -> AlertRead:
     try:
         row = await AlertsService(db).resolve_alert(alert_id=alert_id, is_resolved=payload.is_resolved)
     except ValueError:
         raise HTTPException(status_code=404, detail="Alerta não encontrado.")
     return AlertRead.model_validate(row)
-

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from uuid import UUID
 
 from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
@@ -7,6 +9,9 @@ from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, TimestampUUIDMixin
+
+if TYPE_CHECKING:
+    from app.models.permission import UserPermission
 
 
 class User(TimestampUUIDMixin, Base):
@@ -18,6 +23,9 @@ class User(TimestampUUIDMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     roles: Mapped[list["UserRole"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    user_permissions: Mapped[list["UserPermission"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
     project_links: Mapped[list["ProjectUser"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="actor_user")
 

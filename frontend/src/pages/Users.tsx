@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import { createUser, listUsers, patchUser, resetUserPassword, type UserRow } from "@/services/users";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
+import {
+  ALL_PERMISSION_CODES,
+  PERMISSION_LABELS,
+  ROLE_PERMISSION_PRESET,
+} from "@/permissions";
 
 const ROLES = ["ADMIN", "GESTOR", "CONSULTA"] as const;
 type RoleName = (typeof ROLES)[number];
@@ -24,6 +29,7 @@ export function Users() {
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [editRole, setEditRole] = useState<RoleName>("CONSULTA");
   const [editProjectIds, setEditProjectIds] = useState<Set<string>>(new Set());
+  const [editPerms, setEditPerms] = useState<Set<string>>(new Set());
   const [savingEdit, setSavingEdit] = useState(false);
 
   async function loadProjects() {
@@ -42,7 +48,7 @@ export function Users() {
       setItems(data);
     } catch (e) {
       if (isAxiosError(e) && e.response?.status === 403) {
-        setError("Sem permissão para listar usuários (apenas ADMIN).");
+        setError("Sem permissão para listar usuários.");
       } else {
         setError("Erro ao listar usuários.");
       }
@@ -79,11 +85,24 @@ export function Users() {
     });
   }
 
+  function toggleEditPerm(code: string) {
+    setEditPerms((prev) => {
+      const n = new Set(prev);
+      if (n.has(code)) n.delete(code);
+      else n.add(code);
+      return n;
+    });
+  }
+
   function openEdit(u: UserRow) {
     setEditing(u);
     const r = (u.role_names?.[0] as RoleName) || "CONSULTA";
-    setEditRole(ROLES.includes(r) ? r : "CONSULTA");
+    const rn = ROLES.includes(r) ? r : "CONSULTA";
+    setEditRole(rn);
     setEditProjectIds(new Set(u.project_ids || []));
+    const perms =
+      u.permission_names?.length > 0 ? u.permission_names : [...ROLE_PERMISSION_PRESET[rn]];
+    setEditPerms(new Set(perms));
     setError(null);
   }
 
@@ -124,11 +143,11 @@ export function Users() {
     setSavingEdit(true);
     setError(null);
     try {
-      const body: Parameters<typeof patchUser>[1] = { role_name: editRole };
-      if (editRole === "GESTOR") {
-        body.project_ids = Array.from(editProjectIds);
-      }
-      await patchUser(editing.id, body);
+      await patchUser(editing.id, {
+        role_name: editRole,
+        project_ids: editRole === "GESTOR" ? Array.from(editProjectIds) : [],
+        permission_names: Array.from(editPerms),
+      });
       setEditing(null);
       await load();
     } catch (err) {
@@ -173,7 +192,7 @@ export function Users() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Usuários</h2>
-          <p className="text-sm text-slate-500">Lista e cadastro (perfil e projetos do gestor)</p>
+          <p className="text-sm text-slate-500">Perfis, permissões e projetos (gestor)</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -195,7 +214,7 @@ export function Users() {
           <div
             role="dialog"
             aria-modal="true"
-            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-lg"
+            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-lg"
           >
             <h3 className="text-lg font-semibold text-slate-900">Editar usuário</h3>
             <p className="mt-1 text-sm text-slate-500">
@@ -203,10 +222,14 @@ export function Users() {
             </p>
             <form onSubmit={handleSaveEdit} className="mt-4 space-y-4">
               <div>
-                <label className="mb-1 block text-sm text-slate-600">Perfil</label>
+                <label className="mb-1 block text-sm text-slate-600">Perfil (preset)</label>
                 <select
                   value={editRole}
-                  onChange={(e) => setEditRole(e.target.value as RoleName)}
+                  onChange={(e) => {
+                    const r = e.target.value as RoleName;
+                    setEditRole(r);
+                    setEditPerms(new Set(ROLE_PERMISSION_PRESET[r]));
+                  }}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
                 >
                   {ROLES.map((r) => (
@@ -215,6 +238,10 @@ export function Users() {
                     </option>
                   ))}
                 </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  Ao mudar o perfil, as permissões são preenchidas com o padrão; ajuste os itens abaixo se
+                  necessário.
+                </p>
               </div>
               {editRole === "GESTOR" && (
                 <div>
@@ -237,9 +264,27 @@ export function Users() {
                   </div>
                 </div>
               )}
-              {editRole === "CONSULTA" && (
-                <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">Acesso somente leitura</p>
-              )}
+              <div>
+                <p className="mb-2 text-sm font-medium text-slate-700">Permissões</p>
+                <div className="max-h-64 space-y-2 overflow-y-auto rounded-lg border border-slate-100 p-3">
+                  {ALL_PERMISSION_CODES.map((code) => (
+                    <label key={code} className="flex cursor-pointer items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={editPerms.has(code)}
+                        onChange={() => toggleEditPerm(code)}
+                      />
+                      <span>
+                        <span className="font-mono text-xs text-slate-500">{code}</span>
+                        <span className="ml-2 text-slate-700">
+                          {PERMISSION_LABELS[code] ?? code}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
@@ -350,7 +395,7 @@ export function Users() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm text-slate-600">Perfil</label>
+            <label className="mb-1 block text-sm text-slate-600">Perfil inicial</label>
             <select
               value={roleName}
               onChange={(e) => setRoleName(e.target.value as RoleName)}
@@ -362,6 +407,9 @@ export function Users() {
                 </option>
               ))}
             </select>
+            <p className="mt-1 text-xs text-slate-500">
+              As permissões são definidas automaticamente pelo perfil; edite o usuário depois para ajustar.
+            </p>
           </div>
           {roleName === "GESTOR" && (
             <div>
@@ -381,7 +429,7 @@ export function Users() {
             </div>
           )}
           {roleName === "CONSULTA" && (
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">Acesso somente leitura</p>
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">Preset: acesso majoritariamente leitura.</p>
           )}
           <button
             type="submit"
@@ -406,6 +454,7 @@ export function Users() {
                 <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
                 <th className="px-4 py-3 font-medium text-slate-600">Email</th>
                 <th className="px-4 py-3 font-medium text-slate-600">Perfil</th>
+                <th className="px-4 py-3 font-medium text-slate-600">Permissões</th>
                 <th className="px-4 py-3 font-medium text-slate-600">Projetos (gestor)</th>
                 <th className="px-4 py-3 font-medium text-slate-600">Ativo</th>
                 <th className="px-4 py-3 font-medium text-slate-600 w-44" />
@@ -414,13 +463,14 @@ export function Users() {
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                     Nenhum usuário ou sem permissão para listar.
                   </td>
                 </tr>
               ) : (
                 items.map((u) => {
                   const primaryRole = u.role_names?.[0] || "—";
+                  const nPerms = u.permission_names?.length ?? 0;
                   return (
                     <tr key={u.id} className="border-b border-slate-50 last:border-0">
                       <td className="px-4 py-3 font-medium text-slate-900">{u.full_name}</td>
@@ -429,10 +479,11 @@ export function Users() {
                         <span className="inline-flex flex-wrap items-center gap-1">
                           {primaryRole}
                           {primaryRole === "CONSULTA" && (
-                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900">somente leitura</span>
+                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900">leitura</span>
                           )}
                         </span>
                       </td>
+                      <td className="px-4 py-3 text-slate-600">{nPerms ? `${nPerms} permissões` : "—"}</td>
                       <td className="px-4 py-3 text-slate-600">
                         {primaryRole === "GESTOR" ? (u.project_ids?.length ? `${u.project_ids.length} vínculo(s)` : "—") : "—"}
                       </td>

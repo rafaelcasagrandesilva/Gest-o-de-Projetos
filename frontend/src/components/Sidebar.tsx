@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { hasPermission } from "@/permissions";
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
@@ -8,24 +9,24 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
       : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
   }`;
 
-const items: { to: string; label: string; end: boolean; adminOnly?: boolean }[] = [
-  { to: "/", label: "Dashboard financeiro", end: true },
-  { to: "/reports", label: "Relatórios", end: false },
-  { to: "/projects", label: "Projetos", end: false },
-  { to: "/users", label: "Usuários", end: false, adminOnly: true },
-  { to: "/employees", label: "Colaboradores", end: false },
-  { to: "/vehicles", label: "Veículos", end: false },
-  { to: "/revenue", label: "Faturamento", end: false },
-  { to: "/invoices", label: "Notas fiscais", end: false },
-  { to: "/company-debt", label: "Endividamento", end: false },
-  { to: "/company-fixed-costs", label: "Custos fixos (empresa)", end: false },
-  { to: "/settings", label: "Configurações", end: false, adminOnly: true },
+const items: { to: string; label: string; end: boolean; perm: string }[] = [
+  { to: "/", label: "Dashboard financeiro", end: true, perm: "dashboard.view" },
+  { to: "/reports", label: "Relatórios", end: false, perm: "reports.view" },
+  { to: "/projects", label: "Projetos", end: false, perm: "projects.view" },
+  { to: "/users", label: "Usuários", end: false, perm: "users.manage" },
+  { to: "/employees", label: "Colaboradores", end: false, perm: "employees.view" },
+  { to: "/vehicles", label: "Veículos", end: false, perm: "vehicles.view" },
+  { to: "/revenue", label: "Faturamento", end: false, perm: "billing.view" },
+  { to: "/invoices", label: "Notas fiscais", end: false, perm: "invoices.view" },
+  { to: "/company-debt", label: "Endividamento", end: false, perm: "debts.view" },
+  { to: "/company-fixed-costs", label: "Custos fixos (empresa)", end: false, perm: "company_finance.view" },
+  { to: "/settings", label: "Configurações", end: false, perm: "settings.view" },
 ];
 
 export function Sidebar() {
   const { user } = useAuth();
-  const isAdmin = user?.role_names?.includes("ADMIN") ?? false;
-  const visible = items.filter((i) => !i.adminOnly || isAdmin);
+  const perms = user?.permission_names;
+  const visible = items.filter((i) => hasPermission(perms, i.perm));
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white">

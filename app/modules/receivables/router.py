@@ -7,15 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    ROLE_ADMIN,
-    ROLE_CONSULTA,
-    ROLE_GESTOR,
-    _user_role_names,
     ensure_project_access,
+    get_accessible_project_ids,
     get_current_user,
-    get_user_projects,
-    require_roles,
+    require_permission,
+    user_sees_all_projects,
 )
+from app.core.permission_codes import INVOICES_EDIT, INVOICES_VIEW
 from app.database.session import get_db
 from app.models.receivable import ReceivableInvoicePayment
 from app.models.user import User
@@ -30,13 +28,13 @@ from app.schemas.receivable import (
 from app.services.receivable_service import ReceivableService
 
 
-_read = [Depends(require_roles(ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA))]
+_read_view = [Depends(require_permission(INVOICES_VIEW))]
 
 invoices_router = APIRouter()
 payments_router = APIRouter()
 
 
-@invoices_router.get("", response_model=list[ReceivableInvoiceRead], dependencies=_read)
+@invoices_router.get("", response_model=list[ReceivableInvoiceRead], dependencies=_read_view)
 async def list_invoices(
     project_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None, pattern="^(PAGA|PENDENTE|ATRASADA)$"),
@@ -48,9 +46,8 @@ async def list_invoices(
     if (year is None) != (month is None):
         raise HTTPException(status_code=400, detail="Informe ano e mês juntos para o período, ou deixe ambos vazios.")
     svc = ReceivableService(db)
-    names = _user_role_names(user)
-    if ROLE_GESTOR in names and ROLE_ADMIN not in names:
-        allowed = await get_user_projects(user.id, db)
+    if not user_sees_all_projects(user):
+        allowed = await get_accessible_project_ids(user, db)
         if project_id is not None:
             if project_id not in allowed:
                 raise HTTPException(status_code=403, detail="Sem permissão.")
@@ -81,7 +78,7 @@ async def list_invoices(
     return [ReceivableInvoiceRead.model_validate(svc.invoice_to_read(r, today)) for r in rows]
 
 
-@invoices_router.get("/kpis", response_model=ReceivableKpisRead, dependencies=_read)
+@invoices_router.get("/kpis", response_model=ReceivableKpisRead, dependencies=_read_view)
 async def get_kpis(
     project_id: UUID | None = Query(default=None),
     year: int | None = Query(default=None, ge=2000, le=2100),
@@ -92,9 +89,8 @@ async def get_kpis(
     if (year is None) != (month is None):
         raise HTTPException(status_code=400, detail="Informe ano e mês juntos para o período, ou deixe ambos vazios.")
     svc = ReceivableService(db)
-    names = _user_role_names(user)
-    if ROLE_GESTOR in names and ROLE_ADMIN not in names:
-        allowed = await get_user_projects(user.id, db)
+    if not user_sees_all_projects(user):
+        allowed = await get_accessible_project_ids(user, db)
         if project_id is not None:
             if project_id not in allowed:
                 raise HTTPException(status_code=403, detail="Sem permissão.")
@@ -106,7 +102,7 @@ async def get_kpis(
     return ReceivableKpisRead.model_validate(data)
 
 
-@invoices_router.post("", response_model=ReceivableInvoiceRead, dependencies=_read)
+@invoices_router.post("", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
 async def create_invoice(
     payload: ReceivableInvoiceCreate,
     db: AsyncSession = Depends(get_db),
@@ -123,7 +119,7 @@ async def create_invoice(
     return ReceivableInvoiceRead.model_validate(svc.invoice_to_read(loaded, today))
 
 
-@invoices_router.patch("/{invoice_id}", response_model=ReceivableInvoiceRead, dependencies=_read)
+@invoices_router.patch("/{invoice_id}", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
 async def update_invoice(
     invoice_id: UUID,
     payload: ReceivableInvoiceUpdate,
@@ -147,7 +143,7 @@ async def update_invoice(
     return ReceivableInvoiceRead.model_validate(svc.invoice_to_read(loaded, today))
 
 
-@invoices_router.delete("/{invoice_id}", status_code=204, dependencies=_read)
+@invoices_router.delete("/{invoice_id}", status_code=204, dependencies=[Depends(require_permission(INVOICES_EDIT))])
 async def delete_invoice(
     invoice_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -164,20 +160,22 @@ async def delete_invoice(
     await db.commit()
 
 
-@invoices_router.get("/{invoice_id}/payments", response_model=list[ReceivableInvoicePaymentRead], dependencies=_read)
+@invoices_router.get("/{invoice_id}/payments", response_model=list[ReceivableInvoicePaymentRead], dependencies=_read_view)
 async def list_payments(
     invoice_id: UUID,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> list[ReceivableInvoicePaymentRead]:
     svc = ReceivableService(db)
     inv = await svc.get_invoice(invoice_id)
     if inv is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
+    await ensure_project_access(user=user, project_id=inv.project_id, db=db)
     pays = await svc.list_payments(invoice_id)
     return [ReceivableInvoicePaymentRead.model_validate(p) for p in pays]
 
 
-@invoices_router.post("/{invoice_id}/payments", response_model=ReceivableInvoicePaymentRead, dependencies=_read)
+@invoices_router.post("/{invoice_id}/payments", response_model=ReceivableInvoicePaymentRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
 async def add_payment(
     invoice_id: UUID,
     payload: ReceivableInvoicePaymentCreate,
@@ -197,7 +195,7 @@ async def add_payment(
     return ReceivableInvoicePaymentRead.model_validate(pay)
 
 
-@payments_router.delete("/{payment_id}", status_code=204, dependencies=_read)
+@payments_router.delete("/{payment_id}", status_code=204, dependencies=[Depends(require_permission(INVOICES_EDIT))])
 async def delete_payment(
     payment_id: UUID,
     db: AsyncSession = Depends(get_db),

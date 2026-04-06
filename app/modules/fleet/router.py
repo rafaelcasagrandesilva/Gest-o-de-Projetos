@@ -6,16 +6,13 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    ROLE_ADMIN,
-    ROLE_CONSULTA,
-    ROLE_GESTOR,
     assert_may_write_scenario,
     default_scenario_for_create,
     ensure_project_access,
     get_current_user,
-    require_admin,
-    require_roles,
+    require_permission,
 )
+from app.core.permission_codes import VEHICLES_EDIT, VEHICLES_VIEW
 from app.core.scenario import parse_scenario
 from app.database.session import get_db
 from app.models.user import User
@@ -23,7 +20,7 @@ from app.schemas.fleet import VehicleCreate, VehicleRead, VehicleUpdate, Vehicle
 from app.services.fleet_service import FleetService, fleet_vehicle_to_read
 
 
-_read = [Depends(require_roles(ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA))]
+_read = [Depends(require_permission(VEHICLES_VIEW))]
 
 router = APIRouter()
 
@@ -39,7 +36,7 @@ async def list_vehicles(
     return [fleet_vehicle_to_read(r) for r in rows]
 
 
-@router.post("", response_model=VehicleRead, dependencies=[Depends(require_admin)])
+@router.post("", response_model=VehicleRead, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
 async def create_vehicle(
     payload: VehicleCreate,
     db: AsyncSession = Depends(get_db),
@@ -49,7 +46,7 @@ async def create_vehicle(
     return fleet_vehicle_to_read(row)
 
 
-@router.patch("/{vehicle_id}", response_model=VehicleRead, dependencies=[Depends(require_admin)])
+@router.patch("/{vehicle_id}", response_model=VehicleRead, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
 async def update_vehicle(
     vehicle_id: UUID,
     payload: VehicleUpdate,
@@ -62,7 +59,7 @@ async def update_vehicle(
     return fleet_vehicle_to_read(row)
 
 
-@router.delete("/{vehicle_id}", status_code=204, dependencies=[Depends(require_admin)])
+@router.delete("/{vehicle_id}", status_code=204, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
 async def delete_vehicle(
     vehicle_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -72,7 +69,7 @@ async def delete_vehicle(
     await FleetService(db).delete_vehicle(actor_user_id=actor.id, vehicle_id=vehicle_id)
 
 
-@router.post("/usages", response_model=VehicleUsageRead, dependencies=_read)
+@router.post("/usages", response_model=VehicleUsageRead, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
 async def create_usage(
     payload: VehicleUsageCreate,
     db: AsyncSession = Depends(get_db),

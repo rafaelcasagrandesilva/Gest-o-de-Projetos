@@ -10,9 +10,10 @@ from app.api.deps import (
     assert_may_write_scenario,
     default_scenario_for_create,
     get_current_user,
-    require_gestor_or_admin,
+    require_permission,
     require_project_access,
 )
+from app.core.permission_codes import PROJECTS_EDIT
 from app.core.scenario import coerce_scenario, parse_scenario
 from app.database.session import get_db
 from app.models.user import User
@@ -37,7 +38,7 @@ from app.services.project_structure_service import ProjectStructureService
 
 
 router = APIRouter()
-_write = [Depends(require_gestor_or_admin)]
+_write = [Depends(require_permission(PROJECTS_EDIT))]
 
 
 def _svc(db: AsyncSession) -> ProjectStructureService:

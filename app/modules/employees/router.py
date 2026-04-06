@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import ROLE_ADMIN, ROLE_CONSULTA, ROLE_GESTOR, get_current_user, require_admin, require_roles
+from app.api.deps import get_current_user, require_permission
+from app.core.permission_codes import EMPLOYEES_EDIT, EMPLOYEES_VIEW
 from app.core.scenario import DEFAULT_SCENARIO, Scenario, coerce_scenario
 from app.database.session import get_db
 from app.models.company_staff_cost import CompanyStaffCost
@@ -31,7 +32,7 @@ from app.services.settings_service import SettingsService
 from app.utils.date_utils import get_business_days, normalize_competencia
 
 
-_read = [Depends(require_roles(ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA))]
+_read = [Depends(require_permission(EMPLOYEES_VIEW))]
 
 router = APIRouter()
 
@@ -110,7 +111,7 @@ async def list_staff_costs(
     return [_staff_row_to_read(r) for r in rows]
 
 
-@router.post("/staff-costs", response_model=CompanyStaffCostRead, dependencies=[Depends(require_admin)])
+@router.post("/staff-costs", response_model=CompanyStaffCostRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def create_staff_cost(
     payload: CompanyStaffCostCreate,
     db: AsyncSession = Depends(get_db),
@@ -142,7 +143,7 @@ async def create_staff_cost(
 @router.patch(
     "/staff-costs/{cost_id}",
     response_model=CompanyStaffCostRead,
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_permission(EMPLOYEES_EDIT))],
 )
 async def update_staff_cost(
     cost_id: UUID,
@@ -161,7 +162,7 @@ async def update_staff_cost(
     return _staff_row_to_read(loaded)
 
 
-@router.delete("/staff-costs/{cost_id}", status_code=204, dependencies=[Depends(require_admin)])
+@router.delete("/staff-costs/{cost_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def delete_staff_cost(
     cost_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -188,7 +189,7 @@ async def list_employees(
     return await EmployeesService(db).list_employees_as_read(offset=offset, limit=limit, competencia=comp)
 
 
-@router.post("", response_model=EmployeeRead, dependencies=[Depends(require_admin)])
+@router.post("", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def create_employee(
     payload: EmployeeCreate,
     db: AsyncSession = Depends(get_db),
@@ -200,7 +201,7 @@ async def create_employee(
     return await svc.employee_to_read(row, competencia=comp)
 
 
-@router.patch("/{employee_id}", response_model=EmployeeRead, dependencies=[Depends(require_admin)])
+@router.patch("/{employee_id}", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def update_employee(
     employee_id: UUID,
     payload: EmployeeUpdate,
@@ -221,7 +222,7 @@ async def update_employee(
     return await svc.employee_to_read(row, competencia=comp)
 
 
-@router.delete("/{employee_id}", status_code=204, dependencies=[Depends(require_admin)])
+@router.delete("/{employee_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def delete_employee(
     employee_id: UUID,
     db: AsyncSession = Depends(get_db),

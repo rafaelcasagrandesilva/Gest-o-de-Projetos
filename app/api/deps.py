@@ -11,6 +11,13 @@ from jose.exceptions import ExpiredSignatureError, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.permission_codes import (
+    PRESET_CONSULTA,
+    PROJECTS_EDIT,
+    ROLE_PRESET,
+    SYSTEM_ADMIN,
+    SYSTEM_ALL_PROJECTS,
+)
 from app.core.scenario import Scenario
 from app.core.security import decode_token, normalize_token
 from app.database.session import get_db
@@ -41,6 +48,56 @@ def _token_from_credentials(credentials: HTTPAuthorizationCredentials) -> str:
 def _debug_print(msg: str) -> None:
     if settings.auth_debug:
         print(f"[AUTH_DEBUG] {msg}", flush=True)
+
+
+def primary_role_name(user: User) -> str:
+    for link in getattr(user, "roles", []) or []:
+        if link.role:
+            return link.role.name
+    return ROLE_CONSULTA
+
+
+def permission_names_from_user(user: User) -> set[str]:
+    out: set[str] = set()
+    for up in getattr(user, "user_permissions", []) or []:
+        if up.permission:
+            out.add(up.permission.name)
+    return out
+
+
+def effective_permission_names(user: User) -> frozenset[str]:
+    raw = permission_names_from_user(user)
+    if raw:
+        return frozenset(raw)
+    preset = ROLE_PRESET.get(primary_role_name(user), PRESET_CONSULTA)
+    return frozenset(preset)
+
+
+def user_has_permission(user: User, code: str) -> bool:
+    names = effective_permission_names(user)
+    if SYSTEM_ADMIN in names:
+        return True
+    return code in names
+
+
+def user_has_any_permission(user: User, *codes: str) -> bool:
+    names = effective_permission_names(user)
+    if SYSTEM_ADMIN in names:
+        return True
+    return bool(names.intersection(codes))
+
+
+def user_sees_all_projects(user: User) -> bool:
+    names = effective_permission_names(user)
+    return SYSTEM_ADMIN in names or SYSTEM_ALL_PROJECTS in names
+
+
+def _user_role_names(user: User) -> set[str]:
+    names: set[str] = set()
+    for link in getattr(user, "roles", []) or []:
+        if link.role:
+            names.add(link.role.name)
+    return names
 
 
 async def get_current_user(
@@ -117,12 +174,13 @@ async def get_current_user(
     return user
 
 
-def _user_role_names(user: User) -> set[str]:
-    names: set[str] = set()
-    for link in getattr(user, "roles", []) or []:
-        if link.role:
-            names.add(link.role.name)
-    return names
+def require_permission(*codes: str) -> Callable:
+    async def _dep(user: User = Depends(get_current_user)) -> User:
+        if not user_has_any_permission(user, *codes):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
+        return user
+
+    return _dep
 
 
 def require_roles(*allowed: str) -> Callable:
@@ -140,29 +198,24 @@ def require_roles(*allowed: str) -> Callable:
 
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:
-    if ROLE_ADMIN not in _user_role_names(user):
+    if not user_has_permission(user, SYSTEM_ADMIN):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Apenas administradores.")
     return user
 
 
 async def require_gestor_or_admin(user: User = Depends(get_current_user)) -> User:
-    names = _user_role_names(user)
-    if not (names & {ROLE_ADMIN, ROLE_GESTOR}):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
-    return user
+    if user_has_any_permission(user, SYSTEM_ADMIN, PROJECTS_EDIT):
+        return user
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
 
 
 async def ensure_project_access(*, user: User, project_id: UUID, db: AsyncSession) -> None:
-    """ADMIN/CONSULTA: qualquer projeto; GESTOR: só com vínculo em project_users."""
-    role_names = _user_role_names(user)
-    if ROLE_ADMIN in role_names or ROLE_CONSULTA in role_names:
+    if user_sees_all_projects(user):
         return
-    if ROLE_GESTOR in role_names:
-        projects = ProjectRepository(db)
-        if await projects.user_has_access(user_id=user.id, project_id=project_id):
-            return
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso negado ao projeto.")
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
+    projects = ProjectRepository(db)
+    if await projects.user_has_access(user_id=user.id, project_id=project_id):
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso negado ao projeto.")
 
 
 async def require_project_access(
@@ -172,6 +225,12 @@ async def require_project_access(
 ) -> User:
     await ensure_project_access(user=user, project_id=project_id, db=db)
     return user
+
+
+async def get_accessible_project_ids(user: User, db: AsyncSession) -> list[UUID]:
+    if user_sees_all_projects(user):
+        return await ProjectRepository(db).list_all_project_ids()
+    return await ProjectRepository(db).list_project_ids_for_user(user_id=user.id)
 
 
 async def get_user_projects(user_id: UUID, db: AsyncSession) -> list[UUID]:
@@ -185,46 +244,18 @@ async def assert_may_write_scenario(
     db: AsyncSession,
     project_id: UUID | None = None,
 ) -> None:
-    """CONSULTA: bloqueia escrita. ADMIN: qualquer cenário (global ou projeto). GESTOR: PREVISTO e REALIZADO apenas com project_id e vínculo ao projeto."""
-    _ = scenario.value if isinstance(scenario, Scenario) else scenario  # reservado para regras futuras
-    names = _user_role_names(user)
-    if ROLE_CONSULTA in names and ROLE_ADMIN not in names:
+    _ = scenario.value if isinstance(scenario, Scenario) else scenario
+    if user_has_permission(user, SYSTEM_ADMIN):
+        return
+    if project_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Usuário somente leitura.",
+            detail="Informe um projeto para esta operação.",
         )
-    if ROLE_ADMIN in names:
-        return
-    if ROLE_GESTOR in names:
-        if project_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Gestores só podem alterar dados em projetos aos quais têm acesso.",
-            )
-        await ensure_project_access(user=user, project_id=project_id, db=db)
-        return
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
+    await ensure_project_access(user=user, project_id=project_id, db=db)
 
 
 def default_scenario_for_create(user: User) -> str:
-    """Padrão ao criar sem informar scenario: ADMIN → REALIZADO; demais (ex.: GESTOR) → PREVISTO."""
-    if ROLE_ADMIN in _user_role_names(user):
+    if user_has_permission(user, SYSTEM_ADMIN):
         return Scenario.REALIZADO.value
     return Scenario.PREVISTO.value
-
-
-async def block_consulta_writes(
-    request: Request,
-    user: User = Depends(get_current_user),
-) -> None:
-    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
-        return
-    if ROLE_CONSULTA not in _user_role_names(user):
-        return
-    path = request.url.path
-    if request.method == "POST" and "/reports/generate" in path:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Usuário somente leitura",
-    )

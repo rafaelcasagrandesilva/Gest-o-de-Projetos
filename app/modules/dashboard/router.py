@@ -8,14 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    ROLE_ADMIN,
-    ROLE_CONSULTA,
-    ROLE_GESTOR,
-    _user_role_names,
     get_current_user,
+    require_permission,
     require_project_access,
-    require_roles,
+    user_sees_all_projects,
 )
+from app.core.permission_codes import DASHBOARD_DIRECTOR, DASHBOARD_VIEW
 from app.core.scenario import Scenario, coerce_scenario
 from app.database.session import get_db
 from app.models.user import User
@@ -34,8 +32,6 @@ from app.utils.date_utils import iter_competencias_inclusive, normalize_competen
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-_DASHBOARD_SUMMARY_ROLES = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
 
 
 def _resolve_dashboard_period(
@@ -67,7 +63,11 @@ def _resolve_dashboard_period(
     return anchor, anchor
 
 
-@router.get("/projects/{project_id}/summary", response_model=ProjectSummary)
+@router.get(
+    "/projects/{project_id}/summary",
+    response_model=ProjectSummary,
+    dependencies=[Depends(require_permission(DASHBOARD_VIEW))],
+)
 async def project_summary(
     project_id: UUID,
     competencia: date,
@@ -88,7 +88,7 @@ async def project_summary(
         raise
 
 
-@router.get("/summary", response_model=FinancialDashboardSummary)
+@router.get("/summary", response_model=FinancialDashboardSummary, dependencies=[Depends(require_permission(DASHBOARD_VIEW))])
 async def financial_summary(
     competencia: date | None = None,
     start_date: date | None = Query(default=None, description="Início do período (1º do mês)"),
@@ -106,10 +106,7 @@ async def financial_summary(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> FinancialDashboardSummary:
-    roles = _user_role_names(user)
-    if not roles.intersection(_DASHBOARD_SUMMARY_ROLES):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
-    can_global = ROLE_ADMIN in roles or ROLE_CONSULTA in roles
+    can_global = user_sees_all_projects(user)
     if project_id is None and not can_global:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -168,7 +165,11 @@ async def financial_summary(
         raise
 
 
-@router.get("/project/{project_id}", response_model=ProjectDashboardResponse)
+@router.get(
+    "/project/{project_id}",
+    response_model=ProjectDashboardResponse,
+    dependencies=[Depends(require_permission(DASHBOARD_VIEW))],
+)
 async def project_financial_dashboard(
     project_id: UUID,
     competencia: date | None = None,
@@ -226,7 +227,7 @@ async def project_financial_dashboard(
         raise
 
 
-@router.get("/director/summary", response_model=DirectorSummary, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.get("/director/summary", response_model=DirectorSummary, dependencies=[Depends(require_permission(DASHBOARD_DIRECTOR))])
 async def director_summary(
     competencia: date,
     scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
@@ -241,17 +242,14 @@ async def director_summary(
         raise
 
 
-@router.get("/kpis", response_model=list[KPIRead])
+@router.get("/kpis", response_model=list[KPIRead], dependencies=[Depends(require_permission(DASHBOARD_VIEW))])
 async def kpis(
     competencia: date,
     project_id: UUID | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[KPIRead]:
-    roles = _user_role_names(user)
-    if not roles.intersection(_DASHBOARD_SUMMARY_ROLES):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
-    if project_id is None and ROLE_GESTOR in roles:
+    if project_id is None and not user_sees_all_projects(user):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Informe project_id para visualizar KPIs.",

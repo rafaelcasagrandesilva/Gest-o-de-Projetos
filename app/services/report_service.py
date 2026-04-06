@@ -288,12 +288,6 @@ class ReportService:
 
 
 async def list_project_ids_for_user(session: AsyncSession, user: User) -> list[UUID]:
-    from app.api.deps import ROLE_ADMIN, ROLE_CONSULTA, _user_role_names
+    from app.api.deps import get_accessible_project_ids
 
-    roles = _user_role_names(user)
-    svc = ProjectsService(session)
-    if ROLE_ADMIN in roles or ROLE_CONSULTA in roles:
-        plist = await svc.list_projects(offset=0, limit=10_000)
-    else:
-        plist = await svc.list_projects_for_user(user_id=user.id, offset=0, limit=10_000)
-    return [p.id for p in plist]
+    return await get_accessible_project_ids(user, session)

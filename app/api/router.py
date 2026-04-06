@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from app.api.deps import block_consulta_writes
 from app.modules.auth.router import router as auth_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.employees.router import router as employees_router
@@ -23,7 +22,7 @@ from app.modules.reports.router import router as reports_router
 api_router = APIRouter()
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
 
-protected = APIRouter(dependencies=[Depends(block_consulta_writes)])
+protected = APIRouter()
 protected.include_router(users_router, prefix="/users", tags=["users"])
 protected.include_router(projects_router, prefix="/projects", tags=["projects"])
 protected.include_router(project_structure_router, prefix="/projects", tags=["project-structure"])

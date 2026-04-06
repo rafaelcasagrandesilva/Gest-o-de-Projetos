@@ -5,7 +5,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import ROLE_ADMIN, get_current_user, require_roles
+from app.api.deps import get_current_user, require_permission
+from app.core.permission_codes import USERS_MANAGE
 from app.database.session import get_db
 from app.models.user import User
 from app.repositories.projects import ProjectRepository
@@ -27,9 +28,12 @@ router = APIRouter()
 
 def _user_payload(user: User, *, project_ids: list[UUID]) -> dict:
     role_names = [link.role.name for link in (getattr(user, "roles", []) or []) if getattr(link, "role", None)]
-    skip = {"roles", "project_links", "audit_logs"}
+    perm_names = sorted(
+        {up.permission.name for up in (getattr(user, "user_permissions", []) or []) if getattr(up, "permission", None)}
+    )
+    skip = {"roles", "project_links", "audit_logs", "user_permissions"}
     d = {k: v for k, v in user.__dict__.items() if not k.startswith("_") and k not in skip}
-    return {**d, "role_names": role_names, "project_ids": project_ids}
+    return {**d, "role_names": role_names, "project_ids": project_ids, "permission_names": perm_names}
 
 
 async def _to_user_read(db: AsyncSession, user: User) -> UserRead:
@@ -42,7 +46,7 @@ async def me(user: User = Depends(get_current_user), db: AsyncSession = Depends(
     return await _to_user_read(db, user)
 
 
-@router.get("/", response_model=list[UserRead], dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.get("/", response_model=list[UserRead], dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def list_users(
     db: AsyncSession = Depends(get_db),
     offset: int = Query(default=0, ge=0),
@@ -55,7 +59,7 @@ async def list_users(
     return out
 
 
-@router.post("/", response_model=UserRead, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.post("/", response_model=UserRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def create_user(
     payload: UserCreate,
     db: AsyncSession = Depends(get_db),
@@ -76,7 +80,7 @@ async def create_user(
 @router.post(
     "/{user_id}/reset-password",
     response_model=PasswordResetResponse,
-    dependencies=[Depends(require_roles(ROLE_ADMIN))],
+    dependencies=[Depends(require_permission(USERS_MANAGE))],
 )
 async def reset_user_password(
     user_id: UUID,
@@ -90,7 +94,7 @@ async def reset_user_password(
     return PasswordResetResponse(detail="Senha atualizada com sucesso.")
 
 
-@router.patch("/{user_id}", response_model=UserRead, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.patch("/{user_id}", response_model=UserRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def update_user(
     user_id: UUID,
     payload: UserUpdate,
@@ -105,7 +109,7 @@ async def update_user(
     return await _to_user_read(db, user)
 
 
-@router.delete("/{user_id}", status_code=204, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.delete("/{user_id}", status_code=204, dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def delete_user(
     user_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -114,7 +118,7 @@ async def delete_user(
     await UsersService(db).delete_user(actor_user_id=actor.id, user_id=user_id)
 
 
-@router.post("/roles", response_model=RoleRead, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.post("/roles", response_model=RoleRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def create_role(
     payload: RoleCreate,
     db: AsyncSession = Depends(get_db),
@@ -124,7 +128,7 @@ async def create_role(
     return RoleRead.model_validate(role)
 
 
-@router.post("/{user_id}/roles", status_code=204, dependencies=[Depends(require_roles(ROLE_ADMIN))])
+@router.post("/{user_id}/roles", status_code=204, dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def assign_role(
     user_id: UUID,
     payload: AssignRoleRequest,

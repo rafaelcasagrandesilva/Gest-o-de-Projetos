@@ -18,6 +18,7 @@ class UserRead(UUIDTimestampRead):
     is_active: bool
     role_names: list[str] = []
     project_ids: list[UUID] = []
+    permission_names: list[str] = []
 
 
 class UserCreate(BaseModel):
@@ -35,6 +36,7 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
     role_name: str | None = Field(default=None, min_length=3, max_length=50)
     project_ids: list[UUID] | None = None
+    permission_names: list[str] | None = None
 
 
 class RoleCreate(BaseModel):

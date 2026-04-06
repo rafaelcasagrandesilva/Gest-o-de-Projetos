@@ -7,6 +7,7 @@ export interface UserRow {
   is_active: boolean;
   role_names: string[];
   project_ids: string[];
+  permission_names: string[];
   created_at: string;
   updated_at: string;
 }
@@ -42,6 +43,7 @@ export async function patchUser(
     is_active?: boolean;
     role_name?: "ADMIN" | "GESTOR" | "CONSULTA";
     project_ids?: string[];
+    permission_names?: string[];
   },
 ): Promise<UserRow> {
   const { data } = await api.patch<UserRow>(`/users/${userId}/`, body);

@@ -14,6 +14,11 @@ class ProjectRepository(Repository[Project]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, Project)
 
+    async def list_all_project_ids(self) -> list[UUID]:
+        stmt = select(Project.id)
+        res = await self.session.execute(stmt)
+        return [row[0] for row in res.all()]
+
     async def list_project_ids_for_user(self, *, user_id: UUID) -> list[UUID]:
         stmt = select(ProjectUser.project_id).where(ProjectUser.user_id == user_id)
         res = await self.session.execute(stmt)

@@ -12,6 +12,8 @@ export interface UserMe {
   is_active: boolean;
   role_names: string[];
   project_ids?: string[];
+  /** Códigos de permissão efetivos (ex.: projects.edit). */
+  permission_names?: string[];
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {

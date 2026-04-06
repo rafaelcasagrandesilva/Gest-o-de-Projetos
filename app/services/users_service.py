@@ -7,8 +7,10 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ROLE_ADMIN, ROLE_CONSULTA, ROLE_GESTOR
+from app.core.permission_codes import ALL_PERMISSION_CODES, PRESET_CONSULTA, ROLE_PRESET
 from app.core.security import PasswordHashingError, hash_password
 from app.models.user import ProjectUser, Role, User, UserRole
+from app.repositories.permissions import PermissionRepository
 from app.repositories.projects import ProjectRepository
 from app.repositories.users import RoleRepository, UserRepository
 from app.services.audit_service import AuditService
@@ -74,6 +76,8 @@ class UsersService:
             for pid in project_ids:
                 self.session.add(ProjectUser(project_id=pid, user_id=user_id, access_level="member"))
         await self.session.flush()
+        preset = ROLE_PRESET.get(role_name, PRESET_CONSULTA)
+        await PermissionRepository(self.session).replace_user_permissions(user_id, set(preset))
 
     async def create_user(
         self,
@@ -113,6 +117,7 @@ class UsersService:
     async def update_user(self, *, actor_user_id, user_id, data: dict) -> User:
         role_name = data.pop("role_name", None)
         project_ids = data.pop("project_ids", None)
+        permission_names = data.pop("permission_names", None)
         user = await self.users.get(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
@@ -132,6 +137,17 @@ class UsersService:
             else:
                 pids = None
             await self._apply_role_and_projects(user_id=user_id, role_name=rn, project_ids=pids)
+        if permission_names is not None:
+            unknown = set(permission_names) - set(ALL_PERMISSION_CODES)
+            if unknown:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Permissões inválidas: {sorted(unknown)}",
+                )
+            try:
+                await PermissionRepository(self.session).replace_user_permissions(user_id, set(permission_names))
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
         await self.audit.log(
             actor_user_id=actor_user_id,
             action="update",

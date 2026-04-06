@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models.permission import UserPermission
 from app.models.user import Role, User, UserRole
 from app.repositories.base import Repository
 
@@ -17,7 +18,10 @@ class UserRepository(Repository[User]):
     async def list(self, *, offset: int = 0, limit: int = 50) -> list[User]:
         stmt = (
             select(User)
-            .options(selectinload(User.roles).selectinload(UserRole.role))
+            .options(
+                selectinload(User.roles).selectinload(UserRole.role),
+                selectinload(User.user_permissions).selectinload(UserPermission.permission),
+            )
             .offset(offset)
             .limit(limit)
         )
@@ -25,7 +29,14 @@ class UserRepository(Repository[User]):
         return list(res.scalars().all())
 
     async def get_with_roles(self, user_id: UUID) -> User | None:
-        stmt = select(User).options(selectinload(User.roles).selectinload(UserRole.role)).where(User.id == user_id)
+        stmt = (
+            select(User)
+            .options(
+                selectinload(User.roles).selectinload(UserRole.role),
+                selectinload(User.user_permissions).selectinload(UserPermission.permission),
+            )
+            .where(User.id == user_id)
+        )
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
 
