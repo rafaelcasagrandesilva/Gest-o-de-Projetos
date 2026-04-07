@@ -5,6 +5,8 @@ export const ALL_PERMISSION_CODES: string[] = [
   "dashboard.view",
   "dashboard.director",
   "projects.view",
+  "projects.view_list",
+  "projects.view_detail",
   "projects.create",
   "projects.edit",
   "projects.delete",
@@ -35,6 +37,8 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "dashboard.view": "Dashboard (visualizar)",
   "dashboard.director": "Dashboard diretoria",
   "projects.view": "Projetos (visualizar)",
+  "projects.view_list": "Projetos (listar)",
+  "projects.view_detail": "Projetos (detalhe)",
   "projects.create": "Projetos (criar)",
   "projects.edit": "Projetos (editar)",
   "projects.delete": "Projetos (excluir)",
@@ -62,7 +66,14 @@ export const PERMISSION_LABELS: Record<string, string> = {
 export function hasPermission(permissionNames: string[] | undefined, code: string): boolean {
   if (!permissionNames?.length) return false;
   if (permissionNames.includes("system.admin")) return true;
-  return permissionNames.includes(code);
+  if (permissionNames.includes(code)) return true;
+  if (
+    (code === "projects.view_list" || code === "projects.view_detail") &&
+    permissionNames.includes("projects.view")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /** Presets alinhados a `app/core/permission_codes.ROLE_PRESET` (para aplicar ao mudar perfil na UI). */
@@ -74,6 +85,8 @@ export const ROLE_PERMISSION_PRESET: Record<"ADMIN" | "GESTOR" | "CONSULTA", str
   CONSULTA: [
     "dashboard.view",
     "projects.view",
+    "projects.view_list",
+    "projects.view_detail",
     "employees.view",
     "vehicles.view",
     "billing.view",

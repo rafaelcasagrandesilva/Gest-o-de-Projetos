@@ -26,6 +26,7 @@ import {
   type ProjectVehicle,
 } from "@/services/projectStructure";
 import { listEmployees, type Employee } from "@/services/employees";
+import { usePermission } from "@/hooks/usePermission";
 import { isAxiosError } from "axios";
 import {
   Bar,
@@ -176,6 +177,7 @@ function LaborCostEditor({
   cadastroSalaryBase,
   cadastroPjHoursPerMonth,
   onSaved,
+  readOnly = false,
 }: {
   projectId: string;
   detail: ProjectLaborDetail;
@@ -183,6 +185,7 @@ function LaborCostEditor({
   cadastroSalaryBase: number | null;
   cadastroPjHoursPerMonth: number | null;
   onSaved: () => void | Promise<void>;
+  readOnly?: boolean;
 }) {
   const isClt = (detail.tipo || "").toUpperCase() === "CLT";
   const [salary, setSalary] = useState(() =>
@@ -219,6 +222,7 @@ function LaborCostEditor({
   }
 
   async function submit(patch: LaborCostPatch) {
+    if (readOnly) return;
     setSaving(true);
     setErr(null);
     try {
@@ -232,6 +236,7 @@ function LaborCostEditor({
   }
 
   return (
+    <fieldset disabled={readOnly} className="m-0 min-w-0 border-0 p-0">
     <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/40 p-4">
       <p className="text-xs font-medium text-indigo-900">
         Overrides opcionais neste projeto (cadastro RH não é alterado). Por padrão o custo usa o cadastro do
@@ -360,7 +365,7 @@ function LaborCostEditor({
       <div className="mt-3 flex flex-wrap gap-2">
         <button
           type="button"
-          disabled={saving}
+          disabled={saving || readOnly}
           onClick={() =>
             submit({
               cost_total_override: parseNum(totalOv),
@@ -379,7 +384,7 @@ function LaborCostEditor({
         </button>
         <button
           type="button"
-          disabled={saving}
+          disabled={saving || readOnly}
           onClick={() =>
             submit({
               cost_salary_base: null,
@@ -398,12 +403,15 @@ function LaborCostEditor({
         </button>
       </div>
     </div>
+    </fieldset>
   );
 }
 
 export function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
   const { globalScenario } = useScenario();
+  const canEditProjectStructure = usePermission("projects.edit");
+  const structureReadOnly = !canEditProjectStructure;
   const [editScenario, setEditScenario] = useState<ScenarioKind>(globalScenario);
   const [project, setProject] = useState<Project | null>(null);
   const [competencia, setCompetencia] = useState(() => normalizeCompetencia(monthStart()));
@@ -586,6 +594,7 @@ export function ProjectDetail() {
           editScenario={editScenario}
           employees={employees}
           rows={laborDetails}
+          structureReadOnly={structureReadOnly}
           onRefresh={reloadTab}
         />
       )}
@@ -597,6 +606,7 @@ export function ProjectDetail() {
           rows={vehicleRowsByScenario[editScenario]}
           rowsPrevisto={vehicleRowsByScenario.PREVISTO}
           rowsRealizado={vehicleRowsByScenario.REALIZADO}
+          structureReadOnly={structureReadOnly}
           onRefresh={reloadTab}
         />
       )}
@@ -606,6 +616,7 @@ export function ProjectDetail() {
           competencia={competenciaApi}
           editScenario={editScenario}
           rows={systems}
+          structureReadOnly={structureReadOnly}
           onRefresh={reloadTab}
         />
       )}
@@ -615,6 +626,7 @@ export function ProjectDetail() {
           competencia={competenciaApi}
           editScenario={editScenario}
           rows={fixed}
+          structureReadOnly={structureReadOnly}
           onRefresh={reloadTab}
         />
       )}
@@ -628,6 +640,7 @@ function LaborTab({
   editScenario,
   employees,
   rows,
+  structureReadOnly,
   onRefresh,
 }: {
   projectId: string;
@@ -635,6 +648,7 @@ function LaborTab({
   editScenario: ScenarioKind;
   employees: Employee[];
   rows: ProjectLaborDetail[];
+  structureReadOnly: boolean;
   onRefresh: () => void;
 }) {
   const [employeeId, setEmployeeId] = useState("");
@@ -663,6 +677,7 @@ function LaborTab({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (structureReadOnly) return;
     setFormError(null);
     if (!employeeId) {
       setFormError("Selecione um colaborador.");
@@ -696,6 +711,7 @@ function LaborTab({
   }
 
   async function copyFromPrevious() {
+    if (structureReadOnly) return;
     if (
       !window.confirm(
         "Isso irá copiar os colaboradores do mês anterior para este mês. Deseja continuar?"
@@ -739,6 +755,7 @@ function LaborTab({
 
   return (
     <div className="space-y-6">
+      <fieldset disabled={structureReadOnly} className="m-0 min-w-0 border-0 p-0">
       <form onSubmit={submit} className="max-w-xl space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="font-medium text-slate-900">Vincular colaborador ao projeto</h3>
         <p className="text-xs text-slate-500">
@@ -780,6 +797,7 @@ function LaborTab({
           Adicionar
         </button>
       </form>
+      </fieldset>
 
       {rows.length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50/60 p-6 text-center shadow-sm">
@@ -788,7 +806,7 @@ function LaborTab({
           </p>
           <button
             type="button"
-            disabled={copyBusy}
+            disabled={copyBusy || structureReadOnly}
             onClick={copyFromPrevious}
             className="mt-4 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
           >
@@ -811,7 +829,7 @@ function LaborTab({
           {rows.length > 0 ? (
             <button
               type="button"
-              disabled={copyBusy}
+              disabled={copyBusy || structureReadOnly}
               onClick={copyFromPrevious}
               className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
             >
@@ -993,17 +1011,19 @@ function LaborTab({
                             detail={r}
                             cadastroSalaryBase={rowEmp?.salary_base ?? null}
                             cadastroPjHoursPerMonth={rowEmp?.pj_hours_per_month ?? null}
+                            readOnly={structureReadOnly}
                             onSaved={onRefresh}
                           />
                           <div className="mt-3 flex justify-end border-t border-slate-200 pt-3">
                             <button
                               type="button"
+                              disabled={structureReadOnly}
                               onClick={async () => {
                                 await deleteLabor(projectId, r.labor_id);
                                 setOpenDetailId(null);
                                 onRefresh();
                               }}
-                              className="text-red-600 hover:underline"
+                              className="text-red-600 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               Excluir vínculo
                             </button>
@@ -1029,6 +1049,7 @@ function VehiclesTab({
   rows,
   rowsPrevisto,
   rowsRealizado,
+  structureReadOnly,
   onRefresh,
 }: {
   projectId: string;
@@ -1037,6 +1058,7 @@ function VehiclesTab({
   rows: ProjectVehicle[];
   rowsPrevisto: ProjectVehicle[];
   rowsRealizado: ProjectVehicle[];
+  structureReadOnly: boolean;
   onRefresh: () => void;
 }) {
   const isPrevisto = editScenario === "PREVISTO";
@@ -1081,6 +1103,7 @@ function VehiclesTab({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (structureReadOnly) return;
     if (!fleetVid) return;
     if (isPrevisto) {
       if (km.trim() === "" || Number(km) < 0) return;
@@ -1116,6 +1139,7 @@ function VehiclesTab({
   }
 
   async function saveEdit() {
+    if (structureReadOnly) return;
     if (!editingId) return;
     if (isPrevisto) {
       if (editKm.trim() === "" || Number(editKm) < 0) return;
@@ -1161,11 +1185,13 @@ function VehiclesTab({
     : "Informe o valor real gasto com combustível no mês. O custo da linha é custo fixo da frota (locação) + esse valor; km e tipo de combustível não entram no cálculo (km pode ser só referência).";
 
   const addDisabled =
+    structureReadOnly ||
     !fleetVid ||
     (isPrevisto ? km.trim() === "" || Number(km) < 0 : fuelRealized.trim() === "" || Number(fuelRealized) < 0);
 
   return (
     <div className="space-y-6">
+      <fieldset disabled={structureReadOnly} className="m-0 min-w-0 border-0 p-0">
       <form onSubmit={submit} className="max-w-xl space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="font-medium text-slate-900">Alocar veículo da frota</h3>
         <p className="rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-950">
@@ -1242,6 +1268,7 @@ function VehiclesTab({
           Adicionar
         </button>
       </form>
+      </fieldset>
 
       <div className="space-y-4">
         <h3 className="text-lg font-semibold text-slate-900">Resumo dos veículos no projeto</h3>
@@ -1378,13 +1405,14 @@ function VehiclesTab({
                         <td className="px-4 py-3 text-slate-400">—</td>
                         <td className="px-4 py-3 align-top text-right">
                           <div className="flex flex-col gap-1">
-                            <button
-                              type="button"
-                              onClick={() => void saveEdit()}
-                              className="text-sm text-indigo-600 hover:underline"
-                            >
-                              Salvar
-                            </button>
+                          <button
+                            type="button"
+                            disabled={structureReadOnly}
+                            onClick={() => void saveEdit()}
+                            className="text-sm text-indigo-600 hover:underline disabled:opacity-50"
+                          >
+                            Salvar
+                          </button>
                             <button
                               type="button"
                               onClick={() => setEditingId(null)}
@@ -1422,18 +1450,20 @@ function VehiclesTab({
                         <td className="px-4 py-3 text-right">
                           <button
                             type="button"
+                            disabled={structureReadOnly}
                             onClick={() => startEdit(r)}
-                            className="text-sm text-slate-600 hover:underline"
+                            className="text-sm text-slate-600 hover:underline disabled:opacity-50"
                           >
                             Editar
                           </button>
                           <button
                             type="button"
+                            disabled={structureReadOnly}
                             onClick={async () => {
                               await deleteVehicle(projectId, r.id);
                               onRefresh();
                             }}
-                            className="ml-3 text-sm text-red-600 hover:underline"
+                            className="ml-3 text-sm text-red-600 hover:underline disabled:opacity-50"
                           >
                             Excluir
                           </button>
@@ -1464,12 +1494,14 @@ function SystemsTab({
   competencia,
   editScenario,
   rows,
+  structureReadOnly,
   onRefresh,
 }: {
   projectId: string;
   competencia: string;
   editScenario: ScenarioKind;
   rows: ProjectSystemCost[];
+  structureReadOnly: boolean;
   onRefresh: () => void;
 }) {
   const [name, setName] = useState("");
@@ -1482,6 +1514,7 @@ function SystemsTab({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (structureReadOnly) return;
     await createSystem(projectId, {
       competencia,
       name: name.trim(),
@@ -1495,6 +1528,7 @@ function SystemsTab({
 
   return (
     <div className="space-y-6">
+      <fieldset disabled={structureReadOnly} className="m-0 min-w-0 border-0 p-0">
       <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3 max-w-xl">
         <h3 className="font-medium text-slate-900">Sistema / licença</h3>
         <input
@@ -1518,6 +1552,7 @@ function SystemsTab({
           Adicionar
         </button>
       </form>
+      </fieldset>
 
       <div className="space-y-4">
         <h3 className="text-lg font-semibold text-slate-900">Resumo de sistemas</h3>
@@ -1547,11 +1582,12 @@ function SystemsTab({
             </span>
             <button
               type="button"
+              disabled={structureReadOnly}
               onClick={async () => {
                 await deleteSystem(projectId, r.id);
                 onRefresh();
               }}
-              className="text-red-600 hover:underline"
+              className="text-red-600 hover:underline disabled:opacity-50"
             >
               Excluir
             </button>
@@ -1567,12 +1603,14 @@ function FixedTab({
   competencia,
   editScenario,
   rows,
+  structureReadOnly,
   onRefresh,
 }: {
   projectId: string;
   competencia: string;
   editScenario: ScenarioKind;
   rows: ProjectOperationalFixed[];
+  structureReadOnly: boolean;
   onRefresh: () => void;
 }) {
   const [name, setName] = useState("");
@@ -1585,6 +1623,7 @@ function FixedTab({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (structureReadOnly) return;
     await createFixedOperational(projectId, {
       competencia,
       name: name.trim(),
@@ -1598,6 +1637,7 @@ function FixedTab({
 
   return (
     <div className="space-y-6">
+      <fieldset disabled={structureReadOnly} className="m-0 min-w-0 border-0 p-0">
       <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3 max-w-xl">
         <h3 className="font-medium text-slate-900">Custo fixo operacional</h3>
         <input
@@ -1621,6 +1661,7 @@ function FixedTab({
           Adicionar
         </button>
       </form>
+      </fieldset>
 
       <div className="space-y-4">
         <h3 className="text-lg font-semibold text-slate-900">Resumo de custos fixos</h3>
@@ -1650,11 +1691,12 @@ function FixedTab({
             </span>
             <button
               type="button"
+              disabled={structureReadOnly}
               onClick={async () => {
                 await deleteFixedOperational(projectId, r.id);
                 onRefresh();
               }}
-              className="text-red-600 hover:underline"
+              className="text-red-600 hover:underline disabled:opacity-50"
             >
               Excluir
             </button>

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
+    ensure_user_has_linked_projects,
     get_current_user,
     require_permission,
     require_project_access,
@@ -107,11 +108,13 @@ async def financial_summary(
     user: User = Depends(get_current_user),
 ) -> FinancialDashboardSummary:
     can_global = user_sees_all_projects(user)
-    if project_id is None and not can_global:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Selecione um projeto para visualizar o dashboard.",
-        )
+    if not can_global:
+        await ensure_user_has_linked_projects(user=user, db=db)
+        if project_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selecione um projeto para visualizar o dashboard.",
+            )
     if project_id is not None:
         await require_project_access(project_id=project_id, user=user, db=db)
 
@@ -232,7 +235,13 @@ async def director_summary(
     competencia: date,
     scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> DirectorSummary:
+    if not user_sees_all_projects(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Visão diretoria disponível apenas para usuários com acesso global a projetos.",
+        )
     sc = coerce_scenario(scenario_param)
     try:
         data = await DashboardService(db).resumo_geral_diretor(competencia=competencia, scenario=sc)
@@ -249,11 +258,13 @@ async def kpis(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[KPIRead]:
-    if project_id is None and not user_sees_all_projects(user):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Informe project_id para visualizar KPIs.",
-        )
+    if not user_sees_all_projects(user):
+        await ensure_user_has_linked_projects(user=user, db=db)
+        if project_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Informe project_id para visualizar KPIs.",
+            )
     if project_id is not None:
         _ = await require_project_access(project_id=project_id, user=user, db=db)
     rows = await DashboardService(db).kpis_por_mes(competencia=competencia, project_id=project_id)

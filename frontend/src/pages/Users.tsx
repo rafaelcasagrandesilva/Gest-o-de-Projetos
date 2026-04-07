@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createUser, listUsers, patchUser, resetUserPassword, type UserRow } from "@/services/users";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
+import { usePermission } from "@/hooks/usePermission";
 import {
   ALL_PERMISSION_CODES,
   PERMISSION_LABELS,
@@ -12,6 +13,7 @@ const ROLES = ["ADMIN", "GESTOR", "CONSULTA"] as const;
 type RoleName = (typeof ROLES)[number];
 
 export function Users() {
+  const canManageUsers = usePermission("users.manage");
   const [items, setItems] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +118,7 @@ export function Users() {
         full_name: fullName.trim(),
         password,
         role_name: roleName,
-        project_ids: roleName === "GESTOR" ? Array.from(projectIds) : undefined,
+        project_ids: Array.from(projectIds),
       });
       setEmail("");
       setFullName("");
@@ -145,7 +147,7 @@ export function Users() {
     try {
       await patchUser(editing.id, {
         role_name: editRole,
-        project_ids: editRole === "GESTOR" ? Array.from(editProjectIds) : [],
+        project_ids: Array.from(editProjectIds),
         permission_names: Array.from(editPerms),
       });
       setEditing(null);
@@ -192,13 +194,14 @@ export function Users() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Usuários</h2>
-          <p className="text-sm text-slate-500">Perfis, permissões e projetos (gestor)</p>
+          <p className="text-sm text-slate-500">Perfis, permissões e escopo por projetos vinculados</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
+            disabled={!canManageUsers}
             onClick={() => setShowForm((v) => !v)}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {showForm ? "Fechar formulário" : "Novo usuário"}
           </button>
@@ -225,12 +228,13 @@ export function Users() {
                 <label className="mb-1 block text-sm text-slate-600">Perfil (preset)</label>
                 <select
                   value={editRole}
+                  disabled={!canManageUsers}
                   onChange={(e) => {
                     const r = e.target.value as RoleName;
                     setEditRole(r);
                     setEditPerms(new Set(ROLE_PERMISSION_PRESET[r]));
                   }}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
                 >
                   {ROLES.map((r) => (
                     <option key={r} value={r}>
@@ -243,9 +247,8 @@ export function Users() {
                   necessário.
                 </p>
               </div>
-              {editRole === "GESTOR" && (
-                <div>
-                  <p className="mb-2 text-sm font-medium text-slate-700">Projetos permitidos</p>
+              <div>
+                  <p className="mb-2 text-sm font-medium text-slate-700">Projetos vinculados (escopo de dados)</p>
                   <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-slate-100 p-3">
                     {allProjects.length === 0 ? (
                       <p className="text-sm text-slate-500">Nenhum projeto listado.</p>
@@ -254,6 +257,7 @@ export function Users() {
                         <label key={p.id} className="flex cursor-pointer items-center gap-2 text-sm">
                           <input
                             type="checkbox"
+                            disabled={!canManageUsers}
                             checked={editProjectIds.has(p.id)}
                             onChange={() => toggleEditProject(p.id)}
                           />
@@ -263,7 +267,6 @@ export function Users() {
                     )}
                   </div>
                 </div>
-              )}
               <div>
                 <p className="mb-2 text-sm font-medium text-slate-700">Permissões</p>
                 <div className="max-h-64 space-y-2 overflow-y-auto rounded-lg border border-slate-100 p-3">
@@ -272,6 +275,7 @@ export function Users() {
                       <input
                         type="checkbox"
                         className="mt-0.5"
+                        disabled={!canManageUsers}
                         checked={editPerms.has(code)}
                         onChange={() => toggleEditPerm(code)}
                       />
@@ -295,7 +299,7 @@ export function Users() {
                 </button>
                 <button
                   type="submit"
-                  disabled={savingEdit}
+                  disabled={savingEdit || !canManageUsers}
                   className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
                 >
                   {savingEdit ? "Salvando…" : "Salvar"}
@@ -346,7 +350,7 @@ export function Users() {
                 </button>
                 <button
                   type="submit"
-                  disabled={resetting || resetPassword.length < 6}
+                  disabled={resetting || resetPassword.length < 6 || !canManageUsers}
                   className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
                 >
                   {resetting ? "Salvando…" : "Confirmar"}
@@ -398,8 +402,9 @@ export function Users() {
             <label className="mb-1 block text-sm text-slate-600">Perfil inicial</label>
             <select
               value={roleName}
+              disabled={!canManageUsers}
               onChange={(e) => setRoleName(e.target.value as RoleName)}
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
             >
               {ROLES.map((r) => (
                 <option key={r} value={r}>
@@ -411,29 +416,32 @@ export function Users() {
               As permissões são definidas automaticamente pelo perfil; edite o usuário depois para ajustar.
             </p>
           </div>
-          {roleName === "GESTOR" && (
-            <div>
-              <p className="mb-2 text-sm font-medium text-slate-700">Projetos permitidos</p>
+          <div>
+              <p className="mb-2 text-sm font-medium text-slate-700">Projetos vinculados (escopo de dados)</p>
               <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-slate-100 p-3">
                 {allProjects.length === 0 ? (
                   <p className="text-sm text-slate-500">Nenhum projeto listado.</p>
                 ) : (
                   allProjects.map((p) => (
                     <label key={p.id} className="flex cursor-pointer items-center gap-2 text-sm">
-                      <input type="checkbox" checked={projectIds.has(p.id)} onChange={() => toggleCreateProject(p.id)} />
+                      <input
+                        type="checkbox"
+                        disabled={!canManageUsers}
+                        checked={projectIds.has(p.id)}
+                        onChange={() => toggleCreateProject(p.id)}
+                      />
                       <span>{p.name}</span>
                     </label>
                   ))
                 )}
               </div>
             </div>
-          )}
           {roleName === "CONSULTA" && (
             <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">Preset: acesso majoritariamente leitura.</p>
           )}
           <button
             type="submit"
-            disabled={creating}
+            disabled={creating || !canManageUsers}
             className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
           >
             {creating ? "Salvando…" : "Salvar"}
@@ -455,7 +463,7 @@ export function Users() {
                 <th className="px-4 py-3 font-medium text-slate-600">Email</th>
                 <th className="px-4 py-3 font-medium text-slate-600">Perfil</th>
                 <th className="px-4 py-3 font-medium text-slate-600">Permissões</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Projetos (gestor)</th>
+                <th className="px-4 py-3 font-medium text-slate-600">Projetos</th>
                 <th className="px-4 py-3 font-medium text-slate-600">Ativo</th>
                 <th className="px-4 py-3 font-medium text-slate-600 w-44" />
               </tr>
@@ -485,25 +493,27 @@ export function Users() {
                       </td>
                       <td className="px-4 py-3 text-slate-600">{nPerms ? `${nPerms} permissões` : "—"}</td>
                       <td className="px-4 py-3 text-slate-600">
-                        {primaryRole === "GESTOR" ? (u.project_ids?.length ? `${u.project_ids.length} vínculo(s)` : "—") : "—"}
+                        {u.project_ids?.length ? `${u.project_ids.length} vínculo(s)` : "—"}
                       </td>
                       <td className="px-4 py-3">{u.is_active ? "Sim" : "Não"}</td>
                       <td className="px-4 py-3 flex flex-wrap gap-2">
                         <button
                           type="button"
+                          disabled={!canManageUsers}
                           onClick={() => openEdit(u)}
-                          className="text-sm font-medium text-slate-700 hover:underline"
+                          className="text-sm font-medium text-slate-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           Editar
                         </button>
                         <button
                           type="button"
+                          disabled={!canManageUsers}
                           onClick={() => {
                             setResetFor(u);
                             setResetPassword("");
                             setError(null);
                           }}
-                          className="text-sm font-medium text-indigo-600 hover:underline"
+                          className="text-sm font-medium text-indigo-600 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           Resetar senha
                         </button>

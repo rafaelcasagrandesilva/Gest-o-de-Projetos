@@ -11,6 +11,9 @@ DASHBOARD_VIEW = "dashboard.view"
 DASHBOARD_DIRECTOR = "dashboard.director"
 
 PROJECTS_VIEW = "projects.view"
+# Granularidade futura: listagem vs detalhe (hoje equivalentes a projects.view no backend).
+PROJECTS_VIEW_LIST = "projects.view_list"
+PROJECTS_VIEW_DETAIL = "projects.view_detail"
 PROJECTS_CREATE = "projects.create"
 PROJECTS_EDIT = "projects.edit"
 PROJECTS_DELETE = "projects.delete"
@@ -51,6 +54,8 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     DASHBOARD_VIEW,
     DASHBOARD_DIRECTOR,
     PROJECTS_VIEW,
+    PROJECTS_VIEW_LIST,
+    PROJECTS_VIEW_DETAIL,
     PROJECTS_CREATE,
     PROJECTS_EDIT,
     PROJECTS_DELETE,
@@ -83,6 +88,8 @@ PRESET_GESTOR = frozenset(
         DASHBOARD_VIEW,
         DASHBOARD_DIRECTOR,
         PROJECTS_VIEW,
+        PROJECTS_VIEW_LIST,
+        PROJECTS_VIEW_DETAIL,
         PROJECTS_CREATE,
         PROJECTS_EDIT,
         PROJECTS_DELETE,
@@ -111,6 +118,8 @@ PRESET_CONSULTA = frozenset(
     {
         DASHBOARD_VIEW,
         PROJECTS_VIEW,
+        PROJECTS_VIEW_LIST,
+        PROJECTS_VIEW_DETAIL,
         EMPLOYEES_VIEW,
         VEHICLES_VIEW,
         BILLING_VIEW,

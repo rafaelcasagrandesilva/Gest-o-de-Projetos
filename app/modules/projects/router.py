@@ -127,6 +127,7 @@ async def update_project(
     request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
+    _: User = Depends(require_project_access),
 ) -> ProjectRead:
     proj = await ProjectsService(db).update_project(
         actor_user_id=actor.id,
@@ -144,6 +145,7 @@ async def delete_project(
     request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
+    _: User = Depends(require_project_access),
 ) -> None:
     await ProjectsService(db).delete_project(
         actor_user_id=actor.id, project_id=project_id, actor=actor, request=request
@@ -155,6 +157,7 @@ async def add_user_to_project(
     project_id: UUID,
     user_id: UUID,
     db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_access),
 ) -> None:
     link = ProjectUser(project_id=project_id, user_id=user_id, access_level="member")
     db.add(link)

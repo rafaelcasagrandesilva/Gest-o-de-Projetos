@@ -14,6 +14,9 @@ from app.core.config import settings
 from app.core.permission_codes import (
     PRESET_CONSULTA,
     PROJECTS_EDIT,
+    PROJECTS_VIEW,
+    PROJECTS_VIEW_DETAIL,
+    PROJECTS_VIEW_LIST,
     ROLE_PRESET,
     SYSTEM_ADMIN,
     SYSTEM_ALL_PROJECTS,
@@ -69,7 +72,7 @@ def primary_role_name(user: User) -> str:
 
 
 def permission_names_from_user(user: User) -> set[str]:
-    """Lê vínculos user_permissions; se a tabela não existir ou houver erro de DB, retorna vazio (aciona fallback)."""
+    """Lê vínculos user_permissions; se a tabela não existir ou houver erro de DB, retorna vazio (usa preset da role)."""
     out: set[str] = set()
     try:
         for up in getattr(user, "user_permissions", []) or []:
@@ -77,24 +80,10 @@ def permission_names_from_user(user: User) -> set[str]:
                 out.add(up.permission.name)
     except Exception:
         logger.warning(
-            "permission_names_from_user: falha ao ler user_permissions (tabela ausente?). Fallback RBAC ativo.",
+            "permission_names_from_user: falha ao ler user_permissions (tabela ausente?).",
             exc_info=True,
         )
     return out
-
-
-# TODO:
-# Tabelas permissions / user_permissions: migration 0020_permissions_rbac (+ run_alembic_upgrade no startup).
-# Remover fallback permissivo (_rbac_fallback_permissive) quando o RBAC estiver 100% populado em produção.
-
-
-def _rbac_fallback_permissive(user: User) -> bool:
-    """
-    Enquanto user_permissions não existir no banco ou não houver linhas para o usuário,
-    libera checagens de rota (evita 403 em massa). Não altera escopo por projeto — use
-    user_sees_all_projects() para isso.
-    """
-    return len(permission_names_from_user(user)) == 0
 
 
 def effective_permission_names(user: User) -> frozenset[str]:
@@ -106,36 +95,31 @@ def effective_permission_names(user: User) -> frozenset[str]:
 
 
 def user_has_permission(user: User, code: str) -> bool:
-    """Verifica permissão por código. ADMIN (role) e e-mail superuser têm acesso total."""
+    """Verifica permissão por código. Role ADMIN e e-mail superuser têm acesso total às ações."""
     if _is_superuser_email(user):
         return True
     if ROLE_ADMIN in _user_role_names(user):
         return True
-    if _rbac_fallback_permissive(user):
-        return True
     names = effective_permission_names(user)
     if SYSTEM_ADMIN in names:
         return True
-    return code in names
+    if code in names:
+        return True
+    if code in (PROJECTS_VIEW_LIST, PROJECTS_VIEW_DETAIL) and PROJECTS_VIEW in names:
+        return True
+    return False
 
 
 def user_has_any_permission(user: User, *codes: str) -> bool:
     """True se o usuário tiver qualquer uma das permissões listadas (OR)."""
-    if _is_superuser_email(user):
-        return True
-    if ROLE_ADMIN in _user_role_names(user):
-        return True
-    if _rbac_fallback_permissive(user):
-        return True
-    names = effective_permission_names(user)
-    if SYSTEM_ADMIN in names:
-        return True
-    return bool(names.intersection(codes))
+    return any(user_has_permission(user, c) for c in codes)
 
 
 def user_sees_all_projects(user: User) -> bool:
-    """Escopo global de projetos (não usar o fallback permissivo de RBAC aqui)."""
+    """Escopo global de projetos (independente de project_users)."""
     if _is_superuser_email(user):
+        return True
+    if ROLE_ADMIN in _user_role_names(user):
         return True
     names = effective_permission_names(user)
     return SYSTEM_ADMIN in names or SYSTEM_ALL_PROJECTS in names
@@ -287,6 +271,18 @@ async def get_accessible_project_ids(user: User, db: AsyncSession) -> list[UUID]
     if user_sees_all_projects(user):
         return await ProjectRepository(db).list_all_project_ids()
     return await ProjectRepository(db).list_project_ids_for_user(user_id=user.id)
+
+
+async def ensure_user_has_linked_projects(*, user: User, db: AsyncSession) -> None:
+    """Usuários sem visão global precisam de ao menos um projeto em project_users para dados escopados."""
+    if user_sees_all_projects(user):
+        return
+    pids = await ProjectRepository(db).list_project_ids_for_user(user_id=user.id)
+    if not pids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário sem projetos vinculados. Solicite a um administrador o acesso aos projetos necessários.",
+        )
 
 
 async def get_user_projects(user_id: UUID, db: AsyncSession) -> list[UUID]:

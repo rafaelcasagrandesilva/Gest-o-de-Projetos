@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { FinancialDashboardCharts } from "@/components/FinancialDashboardCharts";
-import { useAuth } from "@/context/AuthContext";
+import { useSeesAllProjects } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { fetchFinancialSummary, type FinancialDashboardSummary } from "@/services/dashboard";
 import { listProjects, type Project } from "@/services/projects";
@@ -43,15 +43,11 @@ function formatMoneyVsRevenue(money: number, pctOfRevenue: number): string {
 }
 
 export function Dashboard() {
-  const { user } = useAuth();
   const { globalScenario } = useScenario();
   const [dashboardScenario, setDashboardScenario] = useState<ScenarioKind>(globalScenario);
 
-  /** Alinhado ao backend: visão consolidada sem project_id para ADMIN e CONSULTA. */
-  const canViewGlobal = useMemo(
-    () => Boolean(user?.role_names?.some((r) => r === "ADMIN" || r === "CONSULTA")),
-    [user]
-  );
+  /** Alinhado ao backend `user_sees_all_projects`: ADMIN (role), system.admin ou system.all_projects. */
+  const canViewGlobal = useSeesAllProjects();
 
   const [periodMode, setPeriodMode] = useState<PeriodMode>("single");
   const [competencia, setCompetencia] = useState(() => monthStart(new Date()));
@@ -96,7 +92,9 @@ export function Dashboard() {
       if (!canViewGlobal) {
         if (!projectsLoaded) return;
         if (projects.length === 0) {
-          setError("Nenhum projeto vinculado ao seu usuário.");
+          setError(
+            "Usuário sem projetos vinculados. Solicite a um administrador o acesso aos projetos necessários."
+          );
           setDataPrevisto(null);
           setDataRealizado(null);
           setLoading(false);

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { usePermission } from "@/hooks/usePermission";
 import { fetchSettings, updateSettings, type SystemSettings } from "@/services/settings";
 import { isAxiosError } from "axios";
 
@@ -7,11 +8,13 @@ function NumInput({
   value,
   onChange,
   step = "0.0001",
+  disabled,
 }: {
   label: string;
   value: number;
   onChange: (n: number) => void;
   step?: string;
+  disabled?: boolean;
 }) {
   return (
     <div>
@@ -19,15 +22,17 @@ function NumInput({
       <input
         type="number"
         step={step}
+        disabled={disabled}
         value={Number.isFinite(value) ? value : 0}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
       />
     </div>
   );
 }
 
 export function Settings() {
+  const canEditSettings = usePermission("settings.edit");
   const [s, setS] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -59,6 +64,7 @@ export function Settings() {
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
+    if (!canEditSettings) return;
     if (!s) return;
     setSaving(true);
     setError(null);
@@ -120,20 +126,28 @@ export function Settings() {
           <h3 className="text-sm font-semibold text-slate-800">Percentuais (0–1)</h3>
           <p className="mb-4 text-xs text-slate-500">Ex.: 9% imposto → 0,09</p>
           <div className="grid gap-4 sm:grid-cols-2">
-            <NumInput label="Impostos (tax_rate)" value={s.tax_rate} onChange={(v) => setS({ ...s, tax_rate: v })} />
+            <NumInput
+              label="Impostos (tax_rate)"
+              value={s.tax_rate}
+              disabled={!canEditSettings}
+              onChange={(v) => setS({ ...s, tax_rate: v })}
+            />
             <NumInput
               label="Rateio / overhead (overhead_rate)"
               value={s.overhead_rate}
+              disabled={!canEditSettings}
               onChange={(v) => setS({ ...s, overhead_rate: v })}
             />
             <NumInput
               label="Antecipação (anticipation_rate)"
               value={s.anticipation_rate}
+              disabled={!canEditSettings}
               onChange={(v) => setS({ ...s, anticipation_rate: v })}
             />
             <NumInput
               label="Encargos CLT (clt_charges_rate) — reserva"
               value={s.clt_charges_rate}
+              disabled={!canEditSettings}
               onChange={(v) => setS({ ...s, clt_charges_rate: v })}
             />
           </div>
@@ -145,18 +159,21 @@ export function Settings() {
             <NumInput
               label="Leve"
               value={s.vehicle_light_cost}
+              disabled={!canEditSettings}
               onChange={(v) => setS({ ...s, vehicle_light_cost: v })}
               step="0.01"
             />
             <NumInput
               label="Pickup"
               value={s.vehicle_pickup_cost}
+              disabled={!canEditSettings}
               onChange={(v) => setS({ ...s, vehicle_pickup_cost: v })}
               step="0.01"
             />
             <NumInput
               label="Sedan"
               value={s.vehicle_sedan_cost}
+              disabled={!canEditSettings}
               onChange={(v) => setS({ ...s, vehicle_sedan_cost: v })}
               step="0.01"
             />
@@ -166,9 +183,24 @@ export function Settings() {
         <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <h3 className="text-sm font-semibold text-slate-800">Combustível (R$/L)</h3>
           <div className="mt-4 grid gap-4 sm:grid-cols-3">
-            <NumInput label="Etanol" value={s.fuel_ethanol} onChange={(v) => setS({ ...s, fuel_ethanol: v })} />
-            <NumInput label="Gasolina" value={s.fuel_gasoline} onChange={(v) => setS({ ...s, fuel_gasoline: v })} />
-            <NumInput label="Diesel" value={s.fuel_diesel} onChange={(v) => setS({ ...s, fuel_diesel: v })} />
+            <NumInput
+              label="Etanol"
+              value={s.fuel_ethanol}
+              disabled={!canEditSettings}
+              onChange={(v) => setS({ ...s, fuel_ethanol: v })}
+            />
+            <NumInput
+              label="Gasolina"
+              value={s.fuel_gasoline}
+              disabled={!canEditSettings}
+              onChange={(v) => setS({ ...s, fuel_gasoline: v })}
+            />
+            <NumInput
+              label="Diesel"
+              value={s.fuel_diesel}
+              disabled={!canEditSettings}
+              onChange={(v) => setS({ ...s, fuel_diesel: v })}
+            />
           </div>
         </section>
 
@@ -178,16 +210,19 @@ export function Settings() {
             <NumInput
               label="Leve"
               value={s.consumption_light}
+              disabled={!canEditSettings}
               onChange={(v) => setS({ ...s, consumption_light: v })}
             />
             <NumInput
               label="Pickup"
               value={s.consumption_pickup}
+              disabled={!canEditSettings}
               onChange={(v) => setS({ ...s, consumption_pickup: v })}
             />
             <NumInput
               label="Sedan"
               value={s.consumption_sedan}
+              disabled={!canEditSettings}
               onChange={(v) => setS({ ...s, consumption_sedan: v })}
             />
           </div>
@@ -199,6 +234,7 @@ export function Settings() {
             <NumInput
               label="Vale refeição diário (R$)"
               value={s.vr_value}
+              disabled={!canEditSettings}
               onChange={(v) => setS({ ...s, vr_value: v })}
               step="0.01"
             />
@@ -207,7 +243,7 @@ export function Settings() {
 
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || !canEditSettings}
           className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
         >
           {saving ? "Salvando…" : "Salvar configurações"}

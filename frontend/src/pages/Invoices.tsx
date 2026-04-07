@@ -11,6 +11,7 @@ import {
   type ReceivableInvoice,
   type ReceivablePayment,
 } from "@/services/receivables";
+import { usePermission } from "@/hooks/usePermission";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
 
@@ -41,6 +42,7 @@ function monthToYm(d: Date): string {
 }
 
 export function Invoices() {
+  const canEditInvoices = usePermission("invoices.edit");
   const [projects, setProjects] = useState<Project[]>([]);
   const [period, setPeriod] = useState(() => monthToYm(new Date()));
   const [projectId, setProjectId] = useState("");
@@ -136,6 +138,7 @@ export function Invoices() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
+    if (!canEditInvoices) return;
     if (!form.project_id || !form.numero_nf || !form.data_emissao || !form.vencimento) return;
     const vb = parseMoneyInput(form.valor_bruto);
     if (vb <= 0) return;
@@ -183,6 +186,7 @@ export function Invoices() {
   }
 
   async function handleDelete(id: string) {
+    if (!canEditInvoices) return;
     if (!window.confirm("Excluir esta NF e todos os recebimentos?")) return;
     try {
       await deleteReceivableInvoice(id);
@@ -194,6 +198,7 @@ export function Invoices() {
   }
 
   async function handleAddPayment(invoiceId: string) {
+    if (!canEditInvoices) return;
     const valor = parseMoneyInput(payDraft.valor);
     if (!payDraft.data || valor <= 0) return;
     try {
@@ -207,6 +212,7 @@ export function Invoices() {
   }
 
   async function handleDeletePayment(paymentId: string, invoiceId: string) {
+    if (!canEditInvoices) return;
     if (!window.confirm("Remover este recebimento?")) return;
     try {
       await deleteInvoicePayment(paymentId);
@@ -289,14 +295,15 @@ export function Invoices() {
       <div className="flex justify-end">
         <button
           type="button"
+          disabled={!canEditInvoices}
           onClick={() => setShowForm((s) => !s)}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700"
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {showForm ? "Fechar formulário" : "+ Nova NF"}
         </button>
       </div>
 
-      {showForm && (
+      {showForm && canEditInvoices && (
         <form
           onSubmit={handleCreate}
           className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50/80 p-4 sm:grid-cols-2 lg:grid-cols-3"
@@ -409,7 +416,7 @@ export function Invoices() {
           <div className="sm:col-span-2 lg:col-span-3">
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || !canEditInvoices}
               className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
             >
               {saving ? "Salvando…" : "Cadastrar NF"}
@@ -473,7 +480,12 @@ export function Invoices() {
                       >
                         {expandedId === row.id ? "Ocultar" : "Detalhes"}
                       </button>
-                      <button type="button" onClick={() => void handleDelete(row.id)} className="text-red-700 hover:underline">
+                      <button
+                        type="button"
+                        disabled={!canEditInvoices}
+                        onClick={() => void handleDelete(row.id)}
+                        className="text-red-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                      >
                         Excluir
                       </button>
                     </td>
@@ -510,8 +522,9 @@ export function Invoices() {
                                         <td className="px-3 py-2 text-right">
                                           <button
                                             type="button"
+                                            disabled={!canEditInvoices}
                                             onClick={() => void handleDeletePayment(p.id, row.id)}
-                                            className="text-red-700 hover:underline"
+                                            className="text-red-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                                           >
                                             Remover
                                           </button>
@@ -544,8 +557,9 @@ export function Invoices() {
                             </label>
                             <button
                               type="button"
+                              disabled={!canEditInvoices}
                               onClick={() => void handleAddPayment(row.id)}
-                              className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+                              className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               + Adicionar recebimento
                             </button>

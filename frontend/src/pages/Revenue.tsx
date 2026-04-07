@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { usePermission } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { listProjects, type Project } from "@/services/projects";
 import { createRevenue, deleteRevenue, listRevenues, type Revenue } from "@/services/financial";
@@ -14,6 +15,7 @@ function scenarioLabel(s: ScenarioKind): string {
 }
 
 export function RevenuePage() {
+  const canEditBilling = usePermission("invoices.edit");
   const { globalScenario } = useScenario();
   /** Cenário dos lançamentos nesta tela (independente do seletor global do header). */
   const [pageScenario, setPageScenario] = useState<ScenarioKind>(globalScenario);
@@ -70,6 +72,7 @@ export function RevenuePage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
+    if (!canEditBilling) return;
     if (!projectId) return;
     const scenLabel = scenarioLabel(pageScenario);
     const scenHuman = pageScenario === "PREVISTO" ? "PREVISTO (previsão)" : "REALIZADO (efetivo)";
@@ -102,6 +105,7 @@ export function RevenuePage() {
   }
 
   async function handleDelete(id: string) {
+    if (!canEditBilling) return;
     if (!confirm("Excluir lançamento?")) return;
     try {
       await deleteRevenue(id);
@@ -220,9 +224,10 @@ export function RevenuePage() {
                 <input
                   type="date"
                   required
+                  disabled={!canEditBilling}
                   value={competencia}
                   onChange={(e) => setCompetencia(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
                 />
               </div>
               <div>
@@ -232,17 +237,19 @@ export function RevenuePage() {
                   type="number"
                   min={0}
                   step="0.01"
+                  disabled={!canEditBilling}
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
                 />
               </div>
               <div>
                 <label className="mb-1 block text-xs text-slate-500">Status</label>
                 <select
                   value={status}
+                  disabled={!canEditBilling}
                   onChange={(e) => setStatus(e.target.value as "previsto" | "recebido")}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
                 >
                   <option value="recebido">Recebido</option>
                   <option value="previsto">Previsto</option>
@@ -252,17 +259,19 @@ export function RevenuePage() {
                 <label className="mb-1 block text-xs text-slate-500">Descrição</label>
                 <input
                   value={description}
+                  disabled={!canEditBilling}
                   onChange={(e) => setDescription(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
                 />
               </div>
               <div className="flex items-center gap-2 sm:col-span-2">
                 <input
                   id="rev-retention"
                   type="checkbox"
+                  disabled={!canEditBilling}
                   checked={hasRetention}
                   onChange={(e) => setHasRetention(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60"
                 />
                 <label htmlFor="rev-retention" className="text-sm text-slate-700">
                   Possui retenção (10% sobre o valor — calculado automaticamente)
@@ -271,7 +280,8 @@ export function RevenuePage() {
             </div>
             <button
               type="submit"
-              className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm ${
+              disabled={!canEditBilling}
+              className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50 ${
                 isPrevisto ? "bg-blue-600 hover:bg-blue-500" : "bg-emerald-600 hover:bg-emerald-500"
               }`}
             >
@@ -318,7 +328,12 @@ export function RevenuePage() {
                       <td className="px-4 py-3">{r.status}</td>
                       <td className="px-4 py-3 text-slate-600">{r.description ?? "—"}</td>
                       <td className="px-4 py-3 text-right">
-                        <button type="button" onClick={() => handleDelete(r.id)} className="text-sm text-red-600">
+                        <button
+                          type="button"
+                          disabled={!canEditBilling}
+                          onClick={() => handleDelete(r.id)}
+                          className="text-sm text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
                           Excluir
                         </button>
                       </td>

@@ -77,7 +77,7 @@ class UsersService:
         await self.session.execute(delete(UserRole).where(UserRole.user_id == user_id))
         await self.session.execute(delete(ProjectUser).where(ProjectUser.user_id == user_id))
         self.session.add(UserRole(user_id=user_id, role_id=role.id))
-        if role_name == ROLE_GESTOR and project_ids is not None:
+        if project_ids is not None:
             for pid in project_ids:
                 self.session.add(ProjectUser(project_id=pid, user_id=user_id, access_level="member"))
         await self.session.flush()
@@ -106,10 +106,7 @@ class UsersService:
         user = User(email=email, full_name=full_name, password_hash=_hash_password_or_http(password), is_active=is_active)
         await self.users.add(user)
         await self.session.flush()
-        if role_name == ROLE_GESTOR:
-            pids: list[UUID] | None = list(project_ids or [])
-        else:
-            pids = None
+        pids: list[UUID] | None = list(dict.fromkeys(project_ids or [])) if project_ids is not None else None
         await self._apply_role_and_projects(
             user_id=user.id, role_name=role_name, project_ids=pids, apply_permission_preset=True
         )
@@ -225,10 +222,8 @@ class UsersService:
                 rn = role_name if role_name is not None else _primary_role_name(u_roles)
                 if pids is not None:
                     pids_apply = pids
-                elif rn == ROLE_GESTOR:
-                    pids_apply = await ProjectRepository(self.session).list_project_ids_for_user(user_id=user_id)
                 else:
-                    pids_apply = None
+                    pids_apply = await ProjectRepository(self.session).list_project_ids_for_user(user_id=user_id)
                 skip_preset = perm_set is not None
                 await self._apply_role_and_projects(
                     user_id=user_id,
@@ -399,11 +394,10 @@ class UsersService:
         user = await self.users.get(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
-        pids: list[UUID] | None
-        if role_name == ROLE_GESTOR:
-            pids = list(project_ids or [])
+        if project_ids is not None:
+            pids = list(dict.fromkeys(project_ids))
         else:
-            pids = None
+            pids = await ProjectRepository(self.session).list_project_ids_for_user(user_id=user_id)
         await self._apply_role_and_projects(
             user_id=user.id, role_name=role_name, project_ids=pids, apply_permission_preset=True
         )

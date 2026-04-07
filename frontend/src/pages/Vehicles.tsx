@@ -11,6 +11,7 @@ import { listEmployees, type Employee } from "@/services/employees";
 import { fetchSettings, type SystemSettings } from "@/services/settings";
 import { isAxiosError } from "axios";
 import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
+import { usePermission } from "@/hooks/usePermission";
 import { useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
 
 function monthStartIso(): string {
@@ -83,7 +84,8 @@ function vehicleToForm(v: FleetVehicle): FormState {
 }
 
 export function Vehicles() {
-  const readOnly = useConsultaReadOnly() || useGestorGlobalReadOnly();
+  const canEditVehicles = usePermission("vehicles.edit");
+  const readOnly = useConsultaReadOnly() || useGestorGlobalReadOnly() || !canEditVehicles;
   const [items, setItems] = useState<FleetVehicle[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [settings, setSettings] = useState<SystemSettings | null>(null);

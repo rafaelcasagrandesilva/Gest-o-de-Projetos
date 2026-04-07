@@ -28,6 +28,7 @@ import {
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
 import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
+import { usePermission } from "@/hooks/usePermission";
 import { useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
 
 function monthStartIso(): string {
@@ -439,7 +440,8 @@ function CadastroColaboradorFields({
 export function Employees() {
   const { user } = useAuth();
   const isAdmin = Boolean(user?.role_names?.includes("ADMIN"));
-  const readOnly = useConsultaReadOnly() || useGestorGlobalReadOnly();
+  const canEditEmployees = usePermission("employees.edit");
+  const readOnly = useConsultaReadOnly() || useGestorGlobalReadOnly() || !canEditEmployees;
   const [items, setItems] = useState<Employee[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);

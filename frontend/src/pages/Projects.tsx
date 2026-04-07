@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
+import { usePermission } from "@/hooks/usePermission";
 import { createProject, listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
 
 export function Projects() {
   const readOnly = useConsultaReadOnly();
+  const canCreateProject = usePermission("projects.create");
   const [items, setItems] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +61,7 @@ export function Projects() {
           <h2 className="text-xl font-semibold text-slate-900">Projetos</h2>
           <p className="text-sm text-slate-500">Lista e cadastro de projetos</p>
         </div>
-        {!readOnly && (
+        {!readOnly && canCreateProject && (
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -76,7 +78,7 @@ export function Projects() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
 
-      {showForm && !readOnly && (
+      {showForm && !readOnly && canCreateProject && (
         <form
           onSubmit={handleCreate}
           className="max-w-lg space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm"

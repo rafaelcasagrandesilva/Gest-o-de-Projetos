@@ -25,6 +25,7 @@ import {
 } from "@/services/companyFinance";
 import { isAxiosError } from "axios";
 import { GESTOR_GLOBAL_EDIT_TOOLTIP, useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
+import { usePermission } from "@/hooks/usePermission";
 
 const MONTH_SHORT = [
   "JAN",
@@ -103,6 +104,13 @@ type Props = {
 
 export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const gestorGlobalReadOnly = useGestorGlobalReadOnly();
+  const canEditCompanyFinance = usePermission("company_finance.edit");
+  const financeReadOnly = gestorGlobalReadOnly || !canEditCompanyFinance;
+  const financeReadOnlyTitle = financeReadOnly
+    ? gestorGlobalReadOnly
+      ? GESTOR_GLOBAL_EDIT_TOOLTIP
+      : "Sem permissão para editar (finanças da empresa)."
+    : undefined;
   const [competencia, setCompetencia] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -185,7 +193,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (gestorGlobalReadOnly) return;
+    if (financeReadOnly) return;
     const nome = draftName.trim();
     const ref = parseBRLInput(draftRef);
     if (!nome || ref < 0) return;
@@ -205,7 +213,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   }
 
   async function handleDelete(id: string) {
-    if (gestorGlobalReadOnly) return;
+    if (financeReadOnly) return;
     if (!window.confirm("Excluir este item e todo o histórico de pagamentos?")) return;
     try {
       await deleteCompanyFinanceItem(id);
@@ -374,7 +382,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               className="rounded-lg border border-slate-300 px-3 py-2"
               placeholder="Ex.: Financiamento veículos"
               required
-              disabled={gestorGlobalReadOnly}
+              disabled={financeReadOnly}
             />
           </label>
           <label className="flex w-full min-w-[160px] flex-col gap-1 text-sm sm:w-48">
@@ -387,13 +395,13 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               className="rounded-lg border border-slate-300 px-3 py-2"
               placeholder="0,00"
               inputMode="decimal"
-              disabled={gestorGlobalReadOnly}
+              disabled={financeReadOnly}
             />
           </label>
           <button
             type="submit"
-            disabled={saving || gestorGlobalReadOnly}
-            title={gestorGlobalReadOnly ? GESTOR_GLOBAL_EDIT_TOOLTIP : undefined}
+            disabled={saving || financeReadOnly}
+            title={financeReadOnlyTitle}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:opacity-50"
           >
             {saving ? "Salvando…" : "Adicionar"}
@@ -417,7 +425,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               competencia={competencia}
               expanded={expandedId === it.id}
               monthKeys={monthKeys}
-              readOnly={gestorGlobalReadOnly}
+              readOnly={financeReadOnly}
               onToggle={() => setExpandedId((prev) => (prev === it.id ? null : it.id))}
               onDelete={() => void handleDelete(it.id)}
               onSaved={loadAll}
