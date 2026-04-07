@@ -27,7 +27,7 @@ class User(TimestampUUIDMixin, Base):
         back_populates="user", cascade="all, delete-orphan"
     )
     project_links: Mapped[list["ProjectUser"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="actor_user")
+    audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
 
 
 class Role(TimestampUUIDMixin, Base):

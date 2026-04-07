@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -76,6 +76,7 @@ async def list_structure_labors(
 async def create_structure_labor(
     project_id: UUID,
     payload: ProjectLaborCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
     _: User = Depends(require_project_access),
@@ -84,7 +85,7 @@ async def create_structure_labor(
     sc = parse_scenario(data.get("scenario"), default=default_scenario_for_create(actor))
     await assert_may_write_scenario(user=actor, scenario=sc, db=db, project_id=project_id)
     data["scenario"] = sc
-    return await _svc(db).create_labor(project_id=project_id, data=data)
+    return await _svc(db).create_labor(project_id=project_id, data=data, actor=actor, request=request)
 
 
 @router.post(
@@ -116,6 +117,7 @@ async def patch_structure_labor_costs(
     project_id: UUID,
     labor_id: UUID,
     payload: ProjectLaborCostUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
     _: User = Depends(require_project_access),
@@ -126,13 +128,16 @@ async def patch_structure_labor_costs(
 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
     await assert_may_write_scenario(user=actor, scenario=row.scenario, db=db, project_id=project_id)
-    return await _svc(db).update_labor_costs(project_id=project_id, labor_id=labor_id, payload=payload)
+    return await _svc(db).update_labor_costs(
+        project_id=project_id, labor_id=labor_id, payload=payload, actor=actor, request=request
+    )
 
 
 @router.delete("/{project_id}/structure/labors/{labor_id}", status_code=204, dependencies=_write)
 async def delete_structure_labor(
     project_id: UUID,
     labor_id: UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
     _: User = Depends(require_project_access),
@@ -143,7 +148,7 @@ async def delete_structure_labor(
 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
     await assert_may_write_scenario(user=actor, scenario=row.scenario, db=db, project_id=project_id)
-    await _svc(db).delete_labor(labor_id=labor_id)
+    await _svc(db).delete_labor(labor_id=labor_id, actor=actor, request=request)
 
 
 # --- Veículos ---

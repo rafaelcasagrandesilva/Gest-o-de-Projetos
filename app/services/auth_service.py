@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import (
@@ -15,6 +15,7 @@ from app.models.user import User
 
 logger = logging.getLogger(__name__)
 from app.repositories.users import UserRepository
+from app.services.audit_service import AuditService
 
 
 class AuthService:
@@ -39,7 +40,7 @@ class AuthService:
         await self.session.refresh(user)
         return user
 
-    async def login(self, *, email: str, password: str) -> str:
+    async def login(self, *, email: str, password: str, request: Request | None = None) -> str:
         user = await self.users.get_by_email(email)
         if not user or not user.is_active:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciais inválidas.")
@@ -56,5 +57,17 @@ class AuthService:
             user.password_hash = new_hash
             await self.session.commit()
             await self.session.refresh(user)
+        await AuditService(self.session).log_action(
+            user=user,
+            action="login",
+            entity="user",
+            entity_id=user.id,
+            before=None,
+            after=None,
+            context={"descricao": "Login bem-sucedido", "email": user.email},
+            request=request,
+            force_log=True,
+        )
+        await self.session.commit()
         return create_access_token({"sub": str(user.id)})
 

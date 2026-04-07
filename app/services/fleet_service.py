@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fleet import Vehicle, VehicleUsage
+from app.models.user import User
 from app.models.project_operational import ProjectVehicle
 from app.repositories.fleet import VehicleRepository, VehicleUsageRepository
 from app.schemas.fleet import VehicleRead
@@ -53,18 +54,27 @@ class FleetService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Veículo não encontrado.")
         return v
 
-    async def create_vehicle(self, *, actor_user_id, data: dict) -> Vehicle:
+    async def create_vehicle(
+        self,
+        *,
+        actor_user_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> Vehicle:
         if "plate" in data and data.get("plate") is not None:
             data["plate"] = str(data["plate"]).strip().upper()
         v = Vehicle(**data)
         await self.vehicles.add(v)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="create",
-            entity="Vehicle",
+            entity="vehicle",
             entity_id=v.id,
             before=None,
             after=model_to_dict(v),
+            context={"descricao": "Cadastro de veículo"},
+            request=request,
         )
         try:
             await self.session.commit()
@@ -77,20 +87,30 @@ class FleetService:
         await self.session.refresh(v)
         return v
 
-    async def update_vehicle(self, *, actor_user_id, vehicle_id, data: dict) -> Vehicle:
+    async def update_vehicle(
+        self,
+        *,
+        actor_user_id,
+        vehicle_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> Vehicle:
         v = await self.get_vehicle(vehicle_id)
         before = model_to_dict(v)
         if "plate" in data and data.get("plate") is not None:
             data["plate"] = str(data["plate"]).strip().upper()
         for key, value in data.items():
             setattr(v, key, value)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="update",
-            entity="Vehicle",
+            entity="vehicle",
             entity_id=v.id,
             before=before,
             after=model_to_dict(v),
+            context={"descricao": "Atualização de veículo"},
+            request=request,
         )
         try:
             await self.session.commit()
@@ -127,31 +147,49 @@ class FleetService:
             )
         await self.session.commit()
 
-    async def delete_vehicle(self, *, actor_user_id, vehicle_id) -> None:
+    async def delete_vehicle(
+        self,
+        *,
+        actor_user_id,
+        vehicle_id,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> None:
         v = await self.get_vehicle(vehicle_id)
         before = model_to_dict(v)
         v.is_active = False
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="update",
-            entity="Vehicle",
+            entity="vehicle",
             entity_id=vehicle_id,
             before=before,
             after=model_to_dict(v),
+            context={"descricao": "Desativação de veículo"},
+            request=request,
         )
         await self.session.commit()
         await self.session.refresh(v)
 
-    async def create_usage(self, *, actor_user_id, data: dict) -> VehicleUsage:
+    async def create_usage(
+        self,
+        *,
+        actor_user_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> VehicleUsage:
         usage = VehicleUsage(**data)
         await self.usages.add(usage)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="create",
-            entity="VehicleUsage",
+            entity="vehicle_usage",
             entity_id=usage.id,
             before=None,
             after=model_to_dict(usage),
+            context={"descricao": "Uso de veículo"},
+            request=request,
         )
         await self.session.commit()
         await self.session.refresh(usage)

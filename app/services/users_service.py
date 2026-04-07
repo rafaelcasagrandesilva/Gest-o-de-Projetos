@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,6 +98,8 @@ class UsersService:
         is_active: bool,
         role_name: str = ROLE_CONSULTA,
         project_ids: list[UUID] | None = None,
+        actor: User | None = None,
+        request: Request | None = None,
     ) -> User:
         if await self.users.get_by_email(email):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email já cadastrado.")
@@ -111,13 +113,19 @@ class UsersService:
         await self._apply_role_and_projects(
             user_id=user.id, role_name=role_name, project_ids=pids, apply_permission_preset=True
         )
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="create",
-            entity="User",
+            entity="user",
             entity_id=user.id,
             before=None,
             after=model_to_dict(user),
+            context={
+                "descricao": "Cadastro de usuário e perfil",
+                "email": user.email,
+                "role_name": role_name,
+            },
+            request=request,
         )
         await self.session.commit()
         reloaded = await self.users.get_with_roles(user.id)
@@ -125,7 +133,15 @@ class UsersService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
         return reloaded
 
-    async def update_user(self, *, actor_user_id, user_id, data: dict) -> User:
+    async def update_user(
+        self,
+        *,
+        actor_user_id,
+        user_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> User:
         role_name = data.pop("role_name", None)
         project_ids = data.pop("project_ids", None)
         permission_names_raw = data.pop("permission_names", None)
@@ -221,19 +237,33 @@ class UsersService:
                     apply_permission_preset=not skip_preset,
                 )
             if perm_set is not None:
-                print("Updating permissions:", permission_names_raw)
                 try:
                     await PermissionRepository(self.session).replace_user_permissions(user_id, perm_set)
                 except ValueError as e:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
-            await self.audit.log(
-                actor_user_id=actor_user_id,
+            ctx: dict = {
+                "descricao": "Atualização de usuário (perfil, projetos e/ou permissões)",
+                "email_alvo": user.email,
+            }
+            if role_name is not None:
+                ctx["role_name"] = role_name
+            if project_ids is not None:
+                ctx["project_ids"] = [str(x) for x in pids]
+            if permission_names_raw is not None:
+                ctx["permission_names"] = sorted(perm_set)
+            await self.audit.log_action(
+                user=actor,
                 action="update",
-                entity="User",
+                entity="user",
                 entity_id=user.id,
                 before=before,
                 after=model_to_dict(user),
+                context=ctx,
+                request=request,
+                force_log=bool(
+                    role_name is not None or project_ids is not None or permission_names_raw is not None
+                ),
             )
             await self.session.commit()
         except HTTPException:
@@ -268,7 +298,15 @@ class UsersService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
         return reloaded
 
-    async def reset_password(self, *, actor_user_id, user_id, new_password: str) -> User:
+    async def reset_password(
+        self,
+        *,
+        actor_user_id,
+        user_id,
+        new_password: str,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> User:
         user = await self.users.get(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
@@ -278,13 +316,16 @@ class UsersService:
         await self.session.flush()
         after = model_to_dict(user)
         after["password_hash"] = "[redacted]"
-        await self.audit.log(
-            actor_user_id=actor_user_id,
-            action="reset_password",
-            entity="User",
+        await self.audit.log_action(
+            user=actor,
+            action="password_reset",
+            entity="user",
             entity_id=user.id,
             before=before,
             after=after,
+            context={"descricao": "Redefinição de senha pelo administrador"},
+            request=request,
+            force_log=True,
         )
         await self.session.commit()
         reloaded = await self.users.get_with_roles(user_id)
@@ -292,35 +333,54 @@ class UsersService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
         return reloaded
 
-    async def delete_user(self, *, actor_user_id, user_id) -> None:
+    async def delete_user(
+        self,
+        *,
+        actor_user_id,
+        user_id,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> None:
         user = await self.users.get(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
         before = model_to_dict(user)
         await self.users.delete(user)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="delete",
-            entity="User",
+            entity="user",
             entity_id=user_id,
             before=before,
             after=None,
+            context={"descricao": "Exclusão de usuário", "email": before.get("email")},
+            request=request,
         )
         await self.session.commit()
 
-    async def ensure_role(self, *, actor_user_id, name: str, description: str | None = None) -> Role:
+    async def ensure_role(
+        self,
+        *,
+        actor_user_id,
+        name: str,
+        description: str | None = None,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> Role:
         role = await self.roles.get_by_name(name)
         if role:
             return role
         role = Role(name=name, description=description)
         await self.roles.add(role)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="create",
-            entity="Role",
+            entity="role",
             entity_id=role.id,
             before=None,
             after=model_to_dict(role),
+            context={"descricao": "Criação de role", "name": name},
+            request=request,
         )
         await self.session.commit()
         await self.session.refresh(role)
@@ -333,6 +393,8 @@ class UsersService:
         user_id,
         role_name: str,
         project_ids: list[UUID] | None = None,
+        actor: User | None = None,
+        request: Request | None = None,
     ) -> None:
         user = await self.users.get(user_id)
         if not user:
@@ -345,12 +407,17 @@ class UsersService:
         await self._apply_role_and_projects(
             user_id=user.id, role_name=role_name, project_ids=pids, apply_permission_preset=True
         )
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="assign_role",
-            entity="User",
+            entity="user",
             entity_id=user.id,
             before=None,
-            after={"role_name": role_name, "project_ids": project_ids},
+            after={
+                "role_name": role_name,
+                "project_ids": [str(x) for x in (project_ids or [])],
+            },
+            context={"descricao": "Atribuição de perfil e projetos (GESTOR)"},
+            request=request,
         )
         await self.session.commit()

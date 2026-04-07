@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_permission
@@ -70,6 +70,7 @@ async def list_users(
 @router.post("/", response_model=UserRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def create_user(
     payload: UserCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> UserRead:
@@ -81,6 +82,8 @@ async def create_user(
         is_active=payload.is_active,
         role_name=payload.role_name,
         project_ids=payload.project_ids,
+        actor=actor,
+        request=request,
     )
     return await _to_user_read(db, user)
 
@@ -93,11 +96,16 @@ async def create_user(
 async def reset_user_password(
     user_id: UUID,
     payload: ResetPasswordRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> PasswordResetResponse:
     await UsersService(db).reset_password(
-        actor_user_id=actor.id, user_id=user_id, new_password=payload.new_password
+        actor_user_id=actor.id,
+        user_id=user_id,
+        new_password=payload.new_password,
+        actor=actor,
+        request=request,
     )
     return PasswordResetResponse(detail="Senha atualizada com sucesso.")
 
@@ -106,6 +114,7 @@ async def reset_user_password(
 async def update_user(
     user_id: UUID,
     payload: UserUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> UserRead:
@@ -113,6 +122,8 @@ async def update_user(
         actor_user_id=actor.id,
         user_id=user_id,
         data=payload.model_dump(exclude_unset=True),
+        actor=actor,
+        request=request,
     )
     return await _to_user_read(db, user)
 
@@ -120,19 +131,29 @@ async def update_user(
 @router.delete("/{user_id}", status_code=204, dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def delete_user(
     user_id: UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> None:
-    await UsersService(db).delete_user(actor_user_id=actor.id, user_id=user_id)
+    await UsersService(db).delete_user(
+        actor_user_id=actor.id, user_id=user_id, actor=actor, request=request
+    )
 
 
 @router.post("/roles", response_model=RoleRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def create_role(
     payload: RoleCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> RoleRead:
-    role = await UsersService(db).ensure_role(actor_user_id=actor.id, name=payload.name, description=payload.description)
+    role = await UsersService(db).ensure_role(
+        actor_user_id=actor.id,
+        name=payload.name,
+        description=payload.description,
+        actor=actor,
+        request=request,
+    )
     return RoleRead.model_validate(role)
 
 
@@ -140,6 +161,7 @@ async def create_role(
 async def assign_role(
     user_id: UUID,
     payload: AssignRoleRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> None:
@@ -148,4 +170,6 @@ async def assign_role(
         user_id=user_id,
         role_name=payload.role_name,
         project_ids=payload.project_ids,
+        actor=actor,
+        request=request,
     )

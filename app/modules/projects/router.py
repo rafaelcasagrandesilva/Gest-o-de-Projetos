@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -80,6 +80,7 @@ async def list_project_allocations(
 async def create_project_allocation(
     project_id: UUID,
     payload: EmployeeAllocationCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
     _: User = Depends(require_project_access),
@@ -90,7 +91,9 @@ async def create_project_allocation(
     sc = parse_scenario(data.get("scenario"), default=default_scenario_for_create(actor))
     await assert_may_write_scenario(user=actor, scenario=sc, db=db, project_id=project_id)
     data["scenario"] = sc
-    row = await EmployeesService(db).create_allocation(actor_user_id=actor.id, data=data)
+    row = await EmployeesService(db).create_allocation(
+        actor_user_id=actor.id, data=data, actor=actor, request=request
+    )
     return EmployeeAllocationRead.model_validate(row)
 
 
@@ -107,10 +110,13 @@ async def get_project(
 @router.post("/", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_CREATE))])
 async def create_project(
     payload: ProjectCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> ProjectRead:
-    proj = await ProjectsService(db).create_project(actor_user_id=actor.id, data=payload.model_dump())
+    proj = await ProjectsService(db).create_project(
+        actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
+    )
     return ProjectRead.model_validate(proj)
 
 
@@ -118,20 +124,30 @@ async def create_project(
 async def update_project(
     project_id: UUID,
     payload: ProjectUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> ProjectRead:
-    proj = await ProjectsService(db).update_project(actor_user_id=actor.id, project_id=project_id, data=payload.model_dump())
+    proj = await ProjectsService(db).update_project(
+        actor_user_id=actor.id,
+        project_id=project_id,
+        data=payload.model_dump(),
+        actor=actor,
+        request=request,
+    )
     return ProjectRead.model_validate(proj)
 
 
 @router.delete("/{project_id}", status_code=204, dependencies=[Depends(require_permission(PROJECTS_DELETE))])
 async def delete_project(
     project_id: UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> None:
-    await ProjectsService(db).delete_project(actor_user_id=actor.id, project_id=project_id)
+    await ProjectsService(db).delete_project(
+        actor_user_id=actor.id, project_id=project_id, actor=actor, request=request
+    )
 
 
 @router.post("/{project_id}/users/{user_id}", status_code=204, dependencies=[Depends(require_permission(USERS_MANAGE))])

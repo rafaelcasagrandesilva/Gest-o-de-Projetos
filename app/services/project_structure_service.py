@@ -4,11 +4,12 @@ import logging
 from typing import Literal
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project_operational import ProjectLabor, ProjectOperationalFixed, ProjectSystemCost, ProjectVehicle
+from app.models.user import User
 from app.repositories.employees import EmployeeRepository
 from app.repositories.projects import ProjectRepository
 from app.repositories.fleet import VehicleRepository as FleetVehicleRepository
@@ -37,7 +38,9 @@ from app.services.operational_cost_calc import (
     vehicle_fuel_only_estimate,
 )
 from app.core.scenario import DEFAULT_SCENARIO, Scenario, coerce_scenario, parse_scenario
+from app.services.audit_service import AuditService
 from app.services.settings_service import SettingsService
+from app.services.utils import model_to_dict
 from app.utils.date_utils import normalize_competencia, previous_competencia
 
 logger = logging.getLogger(__name__)
@@ -104,6 +107,7 @@ class ProjectStructureService:
         self.systems = ProjectSystemCostRepository(session)
         self.fixed = ProjectOperationalFixedRepository(session)
         self.employees = EmployeeRepository(session)
+        self.audit = AuditService(session)
 
     async def _settings(self):
         return await SettingsService(self.session).get_or_create()
@@ -289,7 +293,14 @@ class ProjectStructureService:
             )
         return out
 
-    async def create_labor(self, *, project_id: UUID, data: dict) -> ProjectLaborRead:
+    async def create_labor(
+        self,
+        *,
+        project_id: UUID,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> ProjectLaborRead:
         employee_id = data["employee_id"]
         competencia = normalize_competencia(data["competencia"])
         scenario = coerce_scenario(parse_scenario(data.get("scenario"), default=DEFAULT_SCENARIO))
@@ -333,6 +344,22 @@ class ProjectStructureService:
         )
         try:
             await self.labors.add(row)
+            await self.session.flush()
+            await self.audit.log_action(
+                user=actor,
+                action="create",
+                entity="project_labor",
+                entity_id=row.id,
+                before=None,
+                after=model_to_dict(row),
+                context={
+                    "descricao": "Vínculo de mão de obra ao projeto",
+                    "project_id": str(project_id),
+                    "competencia": competencia.isoformat(),
+                    "tipo": str(scenario),
+                },
+                request=request,
+            )
             await self.session.commit()
         except IntegrityError as e:
             await self.session.rollback()
@@ -376,14 +403,36 @@ class ProjectStructureService:
         return await self._labor_to_read(loaded)
 
     async def update_labor_costs(
-        self, *, project_id: UUID, labor_id: UUID, payload: ProjectLaborCostUpdate
+        self,
+        *,
+        project_id: UUID,
+        labor_id: UUID,
+        payload: ProjectLaborCostUpdate,
+        actor: User | None = None,
+        request: Request | None = None,
     ) -> ProjectLaborRead:
         row = await self.labors.get_with_employee(labor_id)
         if not row or row.project_id != project_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+        before = model_to_dict(row)
         for k, v in payload.model_dump(exclude_unset=True).items():
             setattr(row, k, v)
         await self.session.flush()
+        await self.audit.log_action(
+            user=actor,
+            action="update",
+            entity="project_labor",
+            entity_id=row.id,
+            before=before,
+            after=model_to_dict(row),
+            context={
+                "descricao": "Atualização de custos/overrides de mão de obra no projeto",
+                "project_id": str(project_id),
+                "competencia": row.competencia.isoformat() if row.competencia else None,
+                "tipo": str(row.scenario),
+            },
+            request=request,
+        )
         await self.session.commit()
         await self.session.refresh(row)
         loaded = await self.labors.get_with_employee(labor_id)
@@ -394,11 +443,31 @@ class ProjectStructureService:
             )
         return await self._labor_to_read(loaded)
 
-    async def delete_labor(self, *, labor_id: UUID) -> None:
+    async def delete_labor(
+        self,
+        *,
+        labor_id: UUID,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> None:
         row = await self.labors.get(labor_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+        before = model_to_dict(row)
         await self.labors.delete(row)
+        await self.audit.log_action(
+            user=actor,
+            action="delete",
+            entity="project_labor",
+            entity_id=labor_id,
+            before=before,
+            after=None,
+            context={
+                "descricao": "Remoção de vínculo de mão de obra",
+                "project_id": str(before.get("project_id", "")),
+            },
+            request=request,
+        )
         await self.session.commit()
 
     # --- Vehicle (alocação frota → projeto) ---

@@ -17,6 +17,7 @@ from app.modules.costs.router import router as costs_router
 from app.modules.company_finance.router import router as company_finance_router
 from app.modules.receivables.router import invoices_router, payments_router
 from app.modules.reports.router import router as reports_router
+from app.modules.admin.router import router as admin_router
 
 
 api_router = APIRouter()
@@ -40,3 +41,4 @@ protected.include_router(payments_router, prefix="/payments", tags=["accounts-re
 protected.include_router(reports_router, prefix="/reports")
 
 api_router.include_router(protected)
+api_router.include_router(admin_router, prefix="/admin", tags=["admin"])

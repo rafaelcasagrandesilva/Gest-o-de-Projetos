@@ -252,6 +252,13 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+async def require_admin_role(user: User = Depends(get_current_user)) -> User:
+    """Apenas usuário com role ADMIN (exportação de auditoria, operações restritas ao perfil)."""
+    if ROLE_ADMIN not in _user_role_names(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Apenas administradores.")
+    return user
+
+
 async def require_gestor_or_admin(user: User = Depends(get_current_user)) -> User:
     if user_has_any_permission(user, SYSTEM_ADMIN, PROJECTS_EDIT):
         return user

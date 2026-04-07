@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -36,6 +36,7 @@ router = APIRouter()
 @router.post("/project-fixed", response_model=ProjectFixedCostRead, dependencies=[Depends(require_permission(COSTS_EDIT))])
 async def create_project_fixed_cost(
     payload: ProjectFixedCostCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> ProjectFixedCostRead:
@@ -46,28 +47,36 @@ async def create_project_fixed_cost(
         user=actor, scenario=sc, db=db, project_id=payload.project_id
     )
     data["scenario"] = sc
-    row = await CostsService(db).create_project_fixed_cost(actor_user_id=actor.id, data=data)
+    row = await CostsService(db).create_project_fixed_cost(
+        actor_user_id=actor.id, data=data, actor=actor, request=request
+    )
     return ProjectFixedCostRead.model_validate(row)
 
 
 @router.post("/corporate", response_model=CorporateCostRead, dependencies=[Depends(require_permission(COSTS_EDIT))])
 async def create_corporate_cost(
     payload: CorporateCostCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> CorporateCostRead:
-    row = await CostsService(db).create_corporate_cost(actor_user_id=actor.id, data=payload.model_dump())
+    row = await CostsService(db).create_corporate_cost(
+        actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
+    )
     return CorporateCostRead.model_validate(row)
 
 
 @router.post("/allocations", response_model=CostAllocationRead, dependencies=[Depends(require_permission(COSTS_EDIT))])
 async def create_cost_allocation(
     payload: CostAllocationCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> CostAllocationRead:
     await ensure_project_access(user=actor, project_id=payload.project_id, db=db)
-    row = await CostsService(db).create_cost_allocation(actor_user_id=actor.id, data=payload.model_dump())
+    row = await CostsService(db).create_cost_allocation(
+        actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
+    )
     return CostAllocationRead.model_validate(row)
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -192,11 +192,14 @@ async def list_employees(
 @router.post("", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def create_employee(
     payload: EmployeeCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> EmployeeRead:
     svc = EmployeesService(db)
-    row = await svc.create_employee(actor_user_id=actor.id, data=payload.model_dump())
+    row = await svc.create_employee(
+        actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
+    )
     comp = payload.cost_reference_competencia or default_cost_reference()
     return await svc.employee_to_read(row, competencia=comp)
 
@@ -205,6 +208,7 @@ async def create_employee(
 async def update_employee(
     employee_id: UUID,
     payload: EmployeeUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> EmployeeRead:
@@ -214,6 +218,8 @@ async def update_employee(
         actor_user_id=actor.id,
         employee_id=employee_id,
         data=raw,
+        actor=actor,
+        request=request,
     )
     if "cost_reference_competencia" in raw:
         comp = raw["cost_reference_competencia"] or default_cost_reference()
@@ -225,7 +231,10 @@ async def update_employee(
 @router.delete("/{employee_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
 async def delete_employee(
     employee_id: UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> None:
-    await EmployeesService(db).delete_employee(actor_user_id=actor.id, employee_id=employee_id)
+    await EmployeesService(db).delete_employee(
+        actor_user_id=actor.id, employee_id=employee_id, actor=actor, request=request
+    )

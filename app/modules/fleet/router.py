@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -39,10 +39,13 @@ async def list_vehicles(
 @router.post("", response_model=VehicleRead, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
 async def create_vehicle(
     payload: VehicleCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> VehicleRead:
-    row = await FleetService(db).create_vehicle(actor_user_id=actor.id, data=payload.model_dump())
+    row = await FleetService(db).create_vehicle(
+        actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
+    )
     return fleet_vehicle_to_read(row)
 
 
@@ -50,11 +53,16 @@ async def create_vehicle(
 async def update_vehicle(
     vehicle_id: UUID,
     payload: VehicleUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> VehicleRead:
     row = await FleetService(db).update_vehicle(
-        actor_user_id=actor.id, vehicle_id=vehicle_id, data=payload.model_dump(exclude_unset=True)
+        actor_user_id=actor.id,
+        vehicle_id=vehicle_id,
+        data=payload.model_dump(exclude_unset=True),
+        actor=actor,
+        request=request,
     )
     return fleet_vehicle_to_read(row)
 
@@ -62,16 +70,20 @@ async def update_vehicle(
 @router.delete("/{vehicle_id}", status_code=204, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
 async def delete_vehicle(
     vehicle_id: UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> None:
     """Inativa o veículo (is_active=False); não remove o registro nem vínculos por ID."""
-    await FleetService(db).delete_vehicle(actor_user_id=actor.id, vehicle_id=vehicle_id)
+    await FleetService(db).delete_vehicle(
+        actor_user_id=actor.id, vehicle_id=vehicle_id, actor=actor, request=request
+    )
 
 
 @router.post("/usages", response_model=VehicleUsageRead, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
 async def create_usage(
     payload: VehicleUsageCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> VehicleUsageRead:
@@ -82,5 +94,7 @@ async def create_usage(
         user=actor, scenario=sc, db=db, project_id=payload.project_id
     )
     data["scenario"] = sc
-    row = await FleetService(db).create_usage(actor_user_id=actor.id, data=data)
+    row = await FleetService(db).create_usage(
+        actor_user_id=actor.id, data=data, actor=actor, request=request
+    )
     return VehicleUsageRead.model_validate(row)

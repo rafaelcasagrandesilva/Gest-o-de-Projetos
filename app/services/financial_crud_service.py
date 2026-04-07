@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.financial import Invoice, InvoiceAnticipation, Revenue
+from app.models.user import User
 from app.repositories.financial import InvoiceAnticipationRepository, InvoiceRepository, RevenueRepository
 from app.core.scenario import coerce_scenario
 from app.services.audit_service import AuditService
@@ -43,52 +44,97 @@ class FinancialCrudService:
             scenario=sc,
         )
 
-    async def create_revenue(self, *, actor_user_id, data: dict) -> Revenue:
+    async def create_revenue(
+        self,
+        *,
+        actor_user_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> Revenue:
         row = Revenue(**data)
         await self.revenues.add(row)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        sc = getattr(row, "scenario", None)
+        sc_val = sc.value if hasattr(sc, "value") else str(sc) if sc is not None else None
+        await self.audit.log_action(
+            user=actor,
             action="create",
-            entity="Revenue",
+            entity="revenue",
             entity_id=row.id,
             before=None,
             after=model_to_dict(row),
+            context={
+                "descricao": "Faturamento (receita)",
+                "tipo": sc_val or "",
+                "competencia": row.competencia.isoformat() if getattr(row, "competencia", None) else None,
+            },
+            request=request,
         )
         await self.session.commit()
         await self.session.refresh(row)
         return row
 
-    async def update_revenue(self, *, actor_user_id, revenue_id, data: dict) -> Revenue:
+    async def update_revenue(
+        self,
+        *,
+        actor_user_id,
+        revenue_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> Revenue:
         row = await self.revenues.get(revenue_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receita não encontrada.")
         before = model_to_dict(row)
         self.revenues.apply_updates(row, data)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        sc = getattr(row, "scenario", None)
+        sc_val = sc.value if hasattr(sc, "value") else str(sc) if sc is not None else None
+        await self.audit.log_action(
+            user=actor,
             action="update",
-            entity="Revenue",
+            entity="revenue",
             entity_id=row.id,
             before=before,
             after=model_to_dict(row),
+            context={
+                "descricao": "Atualização de faturamento (previsto/realizado)",
+                "tipo": sc_val or "",
+                "competencia": row.competencia.isoformat() if getattr(row, "competencia", None) else None,
+            },
+            request=request,
         )
         await self.session.commit()
         await self.session.refresh(row)
         return row
 
-    async def delete_revenue(self, *, actor_user_id, revenue_id) -> None:
+    async def delete_revenue(
+        self,
+        *,
+        actor_user_id,
+        revenue_id,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> None:
         row = await self.revenues.get(revenue_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receita não encontrada.")
         before = model_to_dict(row)
         await self.revenues.delete(row)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        sc = getattr(row, "scenario", None)
+        sc_val = sc.value if hasattr(sc, "value") else str(sc) if sc is not None else None
+        await self.audit.log_action(
+            user=actor,
             action="delete",
-            entity="Revenue",
+            entity="revenue",
             entity_id=revenue_id,
             before=before,
             after=None,
+            context={
+                "descricao": "Exclusão de receita/faturamento",
+                "tipo": sc_val or "",
+            },
+            request=request,
         )
         await self.session.commit()
 
@@ -104,31 +150,49 @@ class FinancialCrudService:
             offset=offset, limit=limit, project_id=project_id, project_ids=project_ids
         )
 
-    async def create_invoice(self, *, actor_user_id, data: dict) -> Invoice:
+    async def create_invoice(
+        self,
+        *,
+        actor_user_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> Invoice:
         row = Invoice(**data)
         await self.invoices.add(row)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="create",
-            entity="Invoice",
+            entity="invoice",
             entity_id=row.id,
             before=None,
             after=model_to_dict(row),
+            context={"descricao": "Cadastro de nota fiscal"},
+            request=request,
         )
         await self.session.commit()
         await self.session.refresh(row)
         return row
 
-    async def create_anticipation(self, *, actor_user_id, data: dict) -> InvoiceAnticipation:
+    async def create_anticipation(
+        self,
+        *,
+        actor_user_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> InvoiceAnticipation:
         row = InvoiceAnticipation(**data)
         await self.anticipations.add(row)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="create",
-            entity="InvoiceAnticipation",
+            entity="invoice_anticipation",
             entity_id=row.id,
             before=None,
             after=model_to_dict(row),
+            context={"descricao": "Antecipação de NF"},
+            request=request,
         )
         await self.session.commit()
         await self.session.refresh(row)

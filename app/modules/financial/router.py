@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -66,6 +66,7 @@ async def list_revenues(
 @router.post("/revenues", response_model=RevenueRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
 async def create_revenue(
     payload: RevenueCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> RevenueRead:
@@ -76,7 +77,9 @@ async def create_revenue(
         user=actor, scenario=sc, db=db, project_id=payload.project_id
     )
     data["scenario"] = sc
-    row = await FinancialCrudService(db).create_revenue(actor_user_id=actor.id, data=data)
+    row = await FinancialCrudService(db).create_revenue(
+        actor_user_id=actor.id, data=data, actor=actor, request=request
+    )
     return RevenueRead.model_validate(row)
 
 
@@ -84,6 +87,7 @@ async def create_revenue(
 async def update_revenue(
     revenue_id: UUID,
     payload: RevenueUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> RevenueRead:
@@ -96,7 +100,11 @@ async def update_revenue(
         user=actor, scenario=row.scenario, db=db, project_id=row.project_id
     )
     row = await svc.update_revenue(
-        actor_user_id=actor.id, revenue_id=revenue_id, data=payload.model_dump(exclude_unset=True)
+        actor_user_id=actor.id,
+        revenue_id=revenue_id,
+        data=payload.model_dump(exclude_unset=True),
+        actor=actor,
+        request=request,
     )
     return RevenueRead.model_validate(row)
 
@@ -104,6 +112,7 @@ async def update_revenue(
 @router.delete("/revenues/{revenue_id}", status_code=204, dependencies=[Depends(require_permission(INVOICES_EDIT))])
 async def delete_revenue(
     revenue_id: UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> None:
@@ -115,7 +124,7 @@ async def delete_revenue(
     await assert_may_write_scenario(
         user=actor, scenario=row.scenario, db=db, project_id=row.project_id
     )
-    await svc.delete_revenue(actor_user_id=actor.id, revenue_id=revenue_id)
+    await svc.delete_revenue(actor_user_id=actor.id, revenue_id=revenue_id, actor=actor, request=request)
 
 
 @router.get("/invoices", response_model=list[InvoiceRead], dependencies=[Depends(require_permission(INVOICES_VIEW))])
@@ -143,17 +152,21 @@ async def list_invoices(
 @router.post("/invoices", response_model=InvoiceRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
 async def create_invoice(
     payload: InvoiceCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> InvoiceRead:
     await ensure_project_access(user=actor, project_id=payload.project_id, db=db)
-    row = await FinancialCrudService(db).create_invoice(actor_user_id=actor.id, data=payload.model_dump())
+    row = await FinancialCrudService(db).create_invoice(
+        actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
+    )
     return InvoiceRead.model_validate(row)
 
 
 @router.post("/invoices/anticipations", response_model=InvoiceAnticipationRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
 async def create_anticipation(
     payload: InvoiceAnticipationCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> InvoiceAnticipationRead:
@@ -162,5 +175,7 @@ async def create_anticipation(
     if not inv:
         raise HTTPException(status_code=404, detail="Nota fiscal não encontrada.")
     await ensure_project_access(user=actor, project_id=inv.project_id, db=db)
-    row = await svc.create_anticipation(actor_user_id=actor.id, data=payload.model_dump())
+    row = await svc.create_anticipation(
+        actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
+    )
     return InvoiceAnticipationRead.model_validate(row)

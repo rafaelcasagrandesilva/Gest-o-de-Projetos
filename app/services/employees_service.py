@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.scenario import Scenario
 from app.models.employee import Employee, EmployeeAllocation
+from app.models.user import User
 from app.repositories.employees import EmployeeAllocationRepository, EmployeeRepository
 from app.schemas.employees import EmployeeRead
 from app.services.audit_service import AuditService
@@ -86,7 +87,14 @@ class EmployeesService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Colaborador não encontrado.")
         return emp
 
-    async def create_employee(self, *, actor_user_id, data: dict) -> Employee:
+    async def create_employee(
+        self,
+        *,
+        actor_user_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> Employee:
         payload = {**data}
         payload.pop("total_cost", None)
         ref = payload.pop("cost_reference_competencia", None)
@@ -119,19 +127,29 @@ class EmployeesService:
         )
         await self._compute_and_assign_total_cost(emp, reference=ref_date)
         await self.employees.add(emp)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="create",
-            entity="Employee",
+            entity="employee",
             entity_id=emp.id,
             before=None,
             after=model_to_dict(emp),
+            context={"employee_name": emp.full_name, "descricao": "Cadastro de colaborador"},
+            request=request,
         )
         await self.session.commit()
         await self.session.refresh(emp)
         return emp
 
-    async def update_employee(self, *, actor_user_id, employee_id, data: dict) -> Employee:
+    async def update_employee(
+        self,
+        *,
+        actor_user_id,
+        employee_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> Employee:
         emp = await self.get_employee(employee_id)
         before = model_to_dict(emp)
         data.pop("total_cost", None)
@@ -150,29 +168,43 @@ class EmployeesService:
                 )
 
         await self._compute_and_assign_total_cost(emp, reference=ref_date)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="update",
-            entity="Employee",
+            entity="employee",
             entity_id=emp.id,
             before=before,
             after=model_to_dict(emp),
+            context={"employee_name": emp.full_name, "descricao": "Atualização de colaborador"},
+            request=request,
         )
         await self.session.commit()
         await self.session.refresh(emp)
         return emp
 
-    async def delete_employee(self, *, actor_user_id, employee_id) -> None:
+    async def delete_employee(
+        self,
+        *,
+        actor_user_id,
+        employee_id,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> None:
         emp = await self.get_employee(employee_id)
         before = model_to_dict(emp)
         await self.employees.delete(emp)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="delete",
-            entity="Employee",
+            entity="employee",
             entity_id=employee_id,
             before=before,
             after=None,
+            context={
+                "employee_name": before.get("full_name"),
+                "descricao": "Exclusão de colaborador",
+            },
+            request=request,
         )
         await self.session.commit()
 
@@ -187,16 +219,28 @@ class EmployeesService:
             project_id=project_id, scenario=scenario, competencia=competencia
         )
 
-    async def create_allocation(self, *, actor_user_id, data: dict) -> EmployeeAllocation:
+    async def create_allocation(
+        self,
+        *,
+        actor_user_id,
+        data: dict,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> EmployeeAllocation:
         alloc = EmployeeAllocation(**data)
         await self.allocations.add(alloc)
-        await self.audit.log(
-            actor_user_id=actor_user_id,
+        await self.audit.log_action(
+            user=actor,
             action="create",
-            entity="EmployeeAllocation",
+            entity="employee_allocation",
             entity_id=alloc.id,
             before=None,
             after=model_to_dict(alloc),
+            context={
+                "descricao": "Alocação de colaborador em projeto",
+                "project_id": str(data.get("project_id", "")),
+            },
+            request=request,
         )
         await self.session.commit()
         await self.session.refresh(alloc)
