@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import text
 
@@ -22,12 +21,14 @@ def upgrade() -> None:
     conn = op.get_bind()
     now = datetime.now(timezone.utc)
     for name in ("projects.view_list", "projects.view_detail"):
+        # Um bind por parâmetro (:n só aparece uma vez) — evita AmbiguousParameterError no asyncpg.
+        # permissions.name é UNIQUE (0020_permissions_rbac); idempotente com ON CONFLICT.
         conn.execute(
             text(
                 """
                 INSERT INTO permissions (id, created_at, updated_at, name)
-                SELECT gen_random_uuid(), :c, :u, :n
-                WHERE NOT EXISTS (SELECT 1 FROM permissions WHERE name = :n)
+                VALUES (gen_random_uuid(), :c, :u, :n)
+                ON CONFLICT (name) DO NOTHING
                 """
             ),
             {"c": now, "u": now, "n": name},
