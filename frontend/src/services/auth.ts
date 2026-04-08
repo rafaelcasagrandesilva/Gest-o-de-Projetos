@@ -14,6 +14,8 @@ export interface UserMe {
   project_ids?: string[];
   /** Códigos de permissão efetivos (ex.: projects.edit). */
   permission_names?: string[];
+  /** Backend: set(project_ids) === todos os projetos do sistema (visão "Todos" no dashboard). */
+  has_all_projects_linked?: boolean;
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {

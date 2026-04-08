@@ -19,6 +19,10 @@ class UserRead(UUIDTimestampRead):
     role_names: list[str] = []
     project_ids: list[UUID] = []
     permission_names: list[str] = []
+    has_all_projects_linked: bool = Field(
+        default=False,
+        description="Vínculo cobre todos os projetos do sistema (visão consolidada no dashboard).",
+    )
 
 
 class UserCreate(BaseModel):

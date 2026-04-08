@@ -46,7 +46,7 @@ export function Dashboard() {
   const { globalScenario } = useScenario();
   const [dashboardScenario, setDashboardScenario] = useState<ScenarioKind>(globalScenario);
 
-  /** Alinhado ao backend `user_sees_all_projects`: ADMIN (role), system.admin ou system.all_projects. */
+  /** Visão "Todos": admin/global OU todos os projetos vinculados (has_all_projects_linked no /users/me). */
   const canViewGlobal = useSeesAllProjects();
 
   const [periodMode, setPeriodMode] = useState<PeriodMode>("single");

@@ -12,6 +12,7 @@ from app.api.deps import (
     get_current_user,
     require_permission,
     require_project_access,
+    user_may_use_dashboard_global,
     user_sees_all_projects,
 )
 from app.core.permission_codes import DASHBOARD_DIRECTOR, DASHBOARD_VIEW
@@ -107,7 +108,7 @@ async def financial_summary(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> FinancialDashboardSummary:
-    can_global = user_sees_all_projects(user)
+    can_global = await user_may_use_dashboard_global(user=user, db=db)
     if not can_global:
         await ensure_user_has_linked_projects(user=user, db=db)
         if project_id is None:
@@ -258,7 +259,8 @@ async def kpis(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[KPIRead]:
-    if not user_sees_all_projects(user):
+    can_global = await user_may_use_dashboard_global(user=user, db=db)
+    if not can_global:
         await ensure_user_has_linked_projects(user=user, db=db)
         if project_id is None:
             raise HTTPException(

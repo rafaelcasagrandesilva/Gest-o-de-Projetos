@@ -26,17 +26,37 @@ from app.services.users_service import UsersService
 router = APIRouter()
 
 
-def _user_payload(user: User, *, project_ids: list[UUID]) -> dict:
+def _user_payload(
+    user: User,
+    *,
+    project_ids: list[UUID],
+    has_all_projects_linked: bool,
+) -> dict:
     role_names = [link.role.name for link in (getattr(user, "roles", []) or []) if getattr(link, "role", None)]
     perm_names = sorted(effective_permission_names(user))
     skip = {"roles", "project_links", "audit_logs", "user_permissions"}
     d = {k: v for k, v in user.__dict__.items() if not k.startswith("_") and k not in skip}
-    return {**d, "role_names": role_names, "project_ids": project_ids, "permission_names": perm_names}
+    return {
+        **d,
+        "role_names": role_names,
+        "project_ids": project_ids,
+        "permission_names": perm_names,
+        "has_all_projects_linked": has_all_projects_linked,
+    }
 
 
-async def _to_user_read(db: AsyncSession, user: User) -> UserRead:
-    pids = await ProjectRepository(db).list_project_ids_for_user(user_id=user.id)
-    return UserRead.model_validate(_user_payload(user, project_ids=pids))
+async def _to_user_read(
+    db: AsyncSession,
+    user: User,
+    *,
+    all_project_ids: list[UUID] | None = None,
+) -> UserRead:
+    repo = ProjectRepository(db)
+    pids = await repo.list_project_ids_for_user(user_id=user.id)
+    if all_project_ids is None:
+        all_project_ids = await repo.list_all_project_ids()
+    has_all = len(all_project_ids) > 0 and set(pids) == set(all_project_ids)
+    return UserRead.model_validate(_user_payload(user, project_ids=pids, has_all_projects_linked=has_all))
 
 
 @router.get("/me", response_model=UserRead)
@@ -51,9 +71,10 @@ async def list_users(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[UserRead]:
     users = await UsersService(db).list_users(offset=offset, limit=limit)
+    all_pids = await ProjectRepository(db).list_all_project_ids()
     out: list[UserRead] = []
     for u in users:
-        out.append(await _to_user_read(db, u))
+        out.append(await _to_user_read(db, u, all_project_ids=all_pids))
     return out
 
 

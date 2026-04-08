@@ -125,6 +125,19 @@ def user_sees_all_projects(user: User) -> bool:
     return SYSTEM_ADMIN in names or SYSTEM_ALL_PROJECTS in names
 
 
+async def user_may_use_dashboard_global(*, user: User, db: AsyncSession) -> bool:
+    """
+    Pode agregar dashboard sem project_id (visão consolidada).
+    Inclui quem tem system.all_projects / ADMIN e quem tem vínculo com todos os projetos do sistema.
+    """
+    if user_sees_all_projects(user):
+        return True
+    repo = ProjectRepository(db)
+    all_ids = await repo.list_all_project_ids()
+    linked = await repo.list_project_ids_for_user(user_id=user.id)
+    return len(all_ids) > 0 and set(linked) == set(all_ids)
+
+
 def _user_role_names(user: User) -> set[str]:
     names: set[str] = set()
     for link in getattr(user, "roles", []) or []:
