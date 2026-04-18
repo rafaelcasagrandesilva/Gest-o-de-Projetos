@@ -149,22 +149,26 @@ class ReportService:
             )
         svc = ReceivableService(self.session)
         invs = await svc.list_invoices(
-            project_id=project_id, status_filter=status_filter, year=year, month=month
+            project_id=project_id,
+            status=status_filter,
+            year=year,
+            month=month,
+            period_field="issue",
         )
-        today = date.today()
         rows = []
         for inv in invs:
-            r = svc.invoice_to_read(inv, today)
+            r = svc.invoice_to_read(inv)
+            due = r["due_date"]
+            recv = float(r["received_amount"])
+            net = float(r["net_amount"])
             rows.append(
                 {
                     "projeto": r.get("project_name") or "",
-                    "numero_nf": r["numero_nf"],
-                    "valor_bruto": float(r["valor_bruto"]),
-                    "vencimento": r["vencimento"].isoformat()
-                    if isinstance(r["vencimento"], date)
-                    else str(r["vencimento"]),
-                    "total_recebido": float(r["total_recebido"]),
-                    "saldo": float(r["saldo"]),
+                    "numero_nf": r["number"],
+                    "valor_bruto": float(r["gross_amount"]),
+                    "vencimento": due.isoformat() if isinstance(due, date) else str(due),
+                    "total_recebido": recv,
+                    "saldo": max(0.0, net - recv),
                     "status": r["status"],
                 }
             )

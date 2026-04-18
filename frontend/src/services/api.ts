@@ -1,6 +1,7 @@
 import axios from "axios";
 
-export const API_BASE = "https://celebrated-nature-production.up.railway.app/api/v1";
+/** Base da API FastAPI (`/api/v1`). Em dev use localhost; em build de produção defina `VITE_API_BASE`. */
+export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000/api/v1";
 
 export const TOKEN_KEY = "sgp_access_token";
 

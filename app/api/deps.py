@@ -177,15 +177,18 @@ async def get_current_user(
     _debug_print(f"payload decodificado: {payload}")
 
     sub_raw = payload.get("sub")
-    if sub_raw is None:
-        _debug_print("claim 'sub' ausente")
+    if sub_raw is None or (isinstance(sub_raw, str) and not sub_raw.strip()):
+        _debug_print("claim 'sub' ausente ou vazio")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token sem identificador de usuário (sub).",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    sub_str = sub_raw.strip() if isinstance(sub_raw, str) else str(sub_raw).strip()
+    if isinstance(sub_raw, (bytes, bytearray)):
+        sub_str = sub_raw.decode("utf-8", errors="replace").strip()
+    else:
+        sub_str = sub_raw.strip() if isinstance(sub_raw, str) else str(sub_raw).strip()
     _debug_print(f"user_id (sub) extraído: {sub_str!r}")
 
     try:

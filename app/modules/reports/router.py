@@ -39,6 +39,8 @@ from app.utils.date_utils import normalize_competencia
 
 router = APIRouter(tags=["reports"])
 
+_INVOICE_REPORT_STATUSES = frozenset({"EMITIDA", "ANTECIPADA", "FINALIZADA", "CANCELADA"})
+
 
 def _report_scenario(body: ReportGenerateRequest) -> Scenario:
     """Corpo `scenario` tem prioridade sobre `filters.scenario`; omissão → REALIZADO."""
@@ -128,7 +130,7 @@ async def generate_report(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         project_id = _uuid(f, "project_id")
         st = f.get("status")
-        if st is not None and str(st).strip() != "" and str(st) not in ("PAGA", "PENDENTE", "ATRASADA"):
+        if st is not None and str(st).strip() != "" and str(st) not in _INVOICE_REPORT_STATUSES:
             raise HTTPException(status_code=400, detail="status inválido.")
         status_filter = str(st).strip() if st is not None and str(st).strip() != "" else None
         year = f.get("year")

@@ -69,5 +69,5 @@ class AuthService:
             force_log=True,
         )
         await self.session.commit()
-        return create_access_token({"sub": str(user.id)})
+        return create_access_token(data={"sub": str(user.id)})
 

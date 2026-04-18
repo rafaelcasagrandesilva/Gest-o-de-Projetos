@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 
-from jose import jwt, JWTError
+from jose import jwt
 from passlib.context import CryptContext
 from passlib.exc import UnknownHashError
 
@@ -95,21 +95,27 @@ def verify_password_and_maybe_rehash(password: str, hashed: str) -> tuple[bool, 
 
 
 def create_access_token(data: dict, expires_delta: int = 60 * 24) -> str:
+    """Gera JWT; o subject (`sub`) deve ser o identificador estável do usuário (UUID em string)."""
     to_encode = data.copy()
+    sub = to_encode.get("sub")
+    if sub is not None:
+        to_encode["sub"] = str(sub).strip()
     expire = datetime.utcnow() + timedelta(minutes=expires_delta)
     to_encode.update({"exp": int(expire.timestamp())})
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
 def decode_token(token: str) -> dict:
-    try:
-        return jwt.decode(
-            token,
-            settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm],
-        )
-    except JWTError:
-        return {}
+    """
+    Decodifica e valida o JWT. Propaga erros (assinatura, expiração, formato) para a dependency
+    poder responder com 401 adequado — não retorna dict vazio em falha (isso mascarava erros como
+    ausência de `sub`).
+    """
+    return jwt.decode(
+        token,
+        settings.jwt_secret_key,
+        algorithms=[settings.jwt_algorithm],
+    )
 
 
 def normalize_token(token: str) -> str:

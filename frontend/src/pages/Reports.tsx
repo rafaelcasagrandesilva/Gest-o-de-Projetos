@@ -349,9 +349,10 @@ export function Reports() {
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
               >
                 <option value="">Todos</option>
-                <option value="PAGA">Paga</option>
-                <option value="PENDENTE">Pendente</option>
-                <option value="ATRASADA">Atrasada</option>
+                <option value="EMITIDA">Emitida</option>
+                <option value="ANTECIPADA">Antecipada</option>
+                <option value="FINALIZADA">Finalizada</option>
+                <option value="CANCELADA">Cancelada</option>
               </select>
             </Field>
             <p className="text-xs text-slate-500">Período por emissão (opcional): informe ano e mês juntos.</p>

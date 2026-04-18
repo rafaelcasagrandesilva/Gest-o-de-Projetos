@@ -5,6 +5,7 @@ CLI de manutenção do SGP.
 Uso:
   python manage.py reset_db              # pede confirmação (digite o nome do banco)
   python manage.py reset_db --yes        # sem prompt (CI / automação)
+  python manage.py promote_admin         # promove usuário a ADMIN (RBAC + permissões)
 """
 from __future__ import annotations
 
@@ -38,6 +39,13 @@ def main() -> None:
         help="Não pedir confirmação interativa (use com cuidado).",
     )
 
+    p_promote = sub.add_parser("promote_admin", help="Atribui role ADMIN + permissões completas a um usuário")
+    p_promote.add_argument(
+        "--email",
+        default="admin@sgp.com",
+        help="E-mail do usuário (default: admin@sgp.com)",
+    )
+
     args = parser.parse_args()
     _configure_logging()
 
@@ -48,6 +56,19 @@ def main() -> None:
 
         asyncio.run(run_full_reset(skip_confirm=args.yes))
         logging.getLogger(__name__).info("reset_db concluído com sucesso.")
+        return
+
+    if args.command == "promote_admin":
+        import asyncio
+
+        from scripts.promote_user_admin import promote_user_to_admin
+
+        try:
+            asyncio.run(promote_user_to_admin(email=args.email))
+        except ValueError as e:
+            logging.getLogger(__name__).error("%s", e)
+            sys.exit(1)
+        logging.getLogger(__name__).info("promote_admin concluído.")
         return
 
     parser.error("Comando desconhecido.")

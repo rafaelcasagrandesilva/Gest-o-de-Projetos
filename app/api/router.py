@@ -15,7 +15,7 @@ from app.modules.users.router import router as users_router
 from app.modules.alerts.router import router as alerts_router
 from app.modules.costs.router import router as costs_router
 from app.modules.company_finance.router import router as company_finance_router
-from app.modules.receivables.router import invoices_router, payments_router
+from app.modules.receivables.router import invoices_router
 from app.modules.reports.router import router as reports_router
 from app.modules.admin.router import router as admin_router
 
@@ -37,7 +37,6 @@ protected.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard
 protected.include_router(alerts_router, prefix="/alerts", tags=["alerts"])
 protected.include_router(company_finance_router, prefix="/company-finance", tags=["company-finance"])
 protected.include_router(invoices_router, prefix="/invoices", tags=["accounts-receivable"])
-protected.include_router(payments_router, prefix="/payments", tags=["accounts-receivable"])
 protected.include_router(reports_router, prefix="/reports")
 
 api_router.include_router(protected)
