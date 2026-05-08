@@ -1,8 +1,32 @@
 import axios from "axios";
 import { getStoredWorkspaceForApi } from "@/context/WorkspaceContext";
 
-/** Base da API FastAPI (`/api/v1`). Em dev use localhost; em build de produção defina `VITE_API_BASE`. */
-export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000/api/v1";
+function normalizeApiBase(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+/**
+ * Base da API (`/api/v1`).
+ * 1) `window.__SGP_API_BASE__` — injetado em produção por GET `/sgp-runtime-config.js` (server.js + env Railway).
+ * 2) `import.meta.env.VITE_API_BASE` — build local / CI.
+ * 3) fallback desenvolvimento.
+ */
+function resolveApiBase(): string {
+  if (typeof window !== "undefined") {
+    const raw = window.__SGP_API_BASE__;
+    if (typeof raw === "string") {
+      const t = raw.trim();
+      if (t.length > 0) return normalizeApiBase(t);
+    }
+  }
+  const vite = import.meta.env.VITE_API_BASE;
+  if (typeof vite === "string" && vite.trim().length > 0) {
+    return normalizeApiBase(vite.trim());
+  }
+  return "http://localhost:8000/api/v1";
+}
+
+export const API_BASE = resolveApiBase();
 
 export const TOKEN_KEY = "sgp_access_token";
 

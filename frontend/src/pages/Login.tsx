@@ -43,7 +43,12 @@ export function Login() {
         const status = err.response?.status;
         const detail = (err.response?.data as { detail?: unknown } | undefined)?.detail;
         if (!err.response) {
-          setError(`Não foi possível conectar à API (${API_BASE}). Verifique se o backend está rodando e acessível.`);
+          let msg = `Não foi possível conectar à API (${API_BASE}). Verifique se o backend está rodando e acessível.`;
+          if (import.meta.env.PROD && API_BASE.includes("localhost")) {
+            msg +=
+              " Em produção, defina a variável VITE_API_BASE no painel do host com a URL HTTPS do backend e faça um novo build.";
+          }
+          setError(msg);
         } else if (typeof detail === "string" && detail.trim()) {
           setError(detail);
         } else if (status === 401) {

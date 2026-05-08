@@ -29,6 +29,18 @@ app.get("/healthz", (_req, res) => {
   res.status(200).type("text/plain").send("ok");
 });
 
+/**
+ * Injeta URL da API em runtime (Railway): não depende só do `vite build` embutindo VITE_*.
+ * Prioriza VITE_API_BASE; aceita PUBLIC_API_BASE como alias no painel.
+ * Registrar ANTES do express.static para prevalecer sobre arquivo em `dist/`.
+ */
+app.get("/sgp-runtime-config.js", (_req, res) => {
+  const base = String(process.env.VITE_API_BASE || process.env.PUBLIC_API_BASE || "").trim();
+  res.type("application/javascript");
+  res.setHeader("Cache-Control", "no-store");
+  res.send(`window.__SGP_API_BASE__=${JSON.stringify(base)};`);
+});
+
 app.use(express.static(distDir));
 
 app.use((req, res, next) => {
