@@ -441,15 +441,6 @@ export function Dashboard() {
         />
       </div>
 
-      <FinancialDashboardCharts
-        summary={s}
-        monthlySeries={activeData.monthly_series}
-        monthlySeriesPrevisto={activeData.monthly_series_previsto}
-        monthlySeriesRealizado={activeData.monthly_series_realizado}
-        multiMonth={multiMonth}
-        selectedScenario={dashboardScenario}
-      />
-
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
         <h3 className="text-sm font-medium text-slate-700">
           Custos operacionais por projeto ({scenarioLabelShort})
@@ -505,6 +496,15 @@ export function Dashboard() {
           </div>
         </dl>
       </div>
+
+      <FinancialDashboardCharts
+        summary={s}
+        monthlySeries={activeData.monthly_series}
+        monthlySeriesPrevisto={activeData.monthly_series_previsto}
+        monthlySeriesRealizado={activeData.monthly_series_realizado}
+        multiMonth={multiMonth}
+        selectedScenario={dashboardScenario}
+      />
     </div>
   );
 }

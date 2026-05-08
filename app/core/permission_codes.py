@@ -7,6 +7,9 @@ SYSTEM_ADMIN = "system.admin"
 SYSTEM_ALL_PROJECTS = "system.all_projects"
 
 # Módulos
+WORKSPACE_PROJECTS_ACCESS = "workspace.projects.access"
+WORKSPACE_FINANCE_ACCESS = "workspace.finance.access"
+
 DASHBOARD_VIEW = "dashboard.view"
 DASHBOARD_DIRECTOR = "dashboard.director"
 
@@ -25,6 +28,9 @@ VEHICLES_VIEW = "vehicles.view"
 VEHICLES_EDIT = "vehicles.edit"
 
 BILLING_VIEW = "billing.view"
+
+PAYABLES_VIEW = "payables.view"
+RECEIVABLES_VIEW = "receivables.view"
 
 INVOICES_VIEW = "invoices.view"
 INVOICES_EDIT = "invoices.edit"
@@ -51,6 +57,8 @@ COMPANY_FINANCE_EDIT = "company_finance.edit"
 ALL_PERMISSION_CODES: tuple[str, ...] = (
     SYSTEM_ADMIN,
     SYSTEM_ALL_PROJECTS,
+    WORKSPACE_PROJECTS_ACCESS,
+    WORKSPACE_FINANCE_ACCESS,
     DASHBOARD_VIEW,
     DASHBOARD_DIRECTOR,
     PROJECTS_VIEW,
@@ -64,6 +72,8 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     VEHICLES_VIEW,
     VEHICLES_EDIT,
     BILLING_VIEW,
+    PAYABLES_VIEW,
+    RECEIVABLES_VIEW,
     INVOICES_VIEW,
     INVOICES_EDIT,
     DEBTS_VIEW,
@@ -85,6 +95,8 @@ PRESET_ADMIN = frozenset(ALL_PERMISSION_CODES)
 
 PRESET_GESTOR = frozenset(
     {
+        WORKSPACE_PROJECTS_ACCESS,
+        WORKSPACE_FINANCE_ACCESS,
         DASHBOARD_VIEW,
         DASHBOARD_DIRECTOR,
         PROJECTS_VIEW,
@@ -98,6 +110,8 @@ PRESET_GESTOR = frozenset(
         VEHICLES_VIEW,
         VEHICLES_EDIT,
         BILLING_VIEW,
+        PAYABLES_VIEW,
+        RECEIVABLES_VIEW,
         INVOICES_VIEW,
         INVOICES_EDIT,
         DEBTS_VIEW,
@@ -116,6 +130,8 @@ PRESET_GESTOR = frozenset(
 
 PRESET_CONSULTA = frozenset(
     {
+        WORKSPACE_PROJECTS_ACCESS,
+        WORKSPACE_FINANCE_ACCESS,
         DASHBOARD_VIEW,
         PROJECTS_VIEW,
         PROJECTS_VIEW_LIST,
@@ -123,6 +139,8 @@ PRESET_CONSULTA = frozenset(
         EMPLOYEES_VIEW,
         VEHICLES_VIEW,
         BILLING_VIEW,
+        PAYABLES_VIEW,
+        RECEIVABLES_VIEW,
         INVOICES_VIEW,
         DEBTS_VIEW,
         COSTS_VIEW,

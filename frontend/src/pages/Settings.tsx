@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { usePermission } from "@/hooks/usePermission";
 import { fetchSettings, updateSettings, type SystemSettings } from "@/services/settings";
 import { isAxiosError } from "axios";
+import { formatApiError } from "@/utils/apiError";
 
 function NumInput({
   label,
@@ -88,8 +89,8 @@ export function Settings() {
       });
       setS(next);
       setOk(true);
-    } catch {
-      setError("Não foi possível salvar.");
+    } catch (e) {
+      setError(formatApiError(e));
     } finally {
       setSaving(false);
     }

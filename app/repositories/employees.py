@@ -17,6 +17,17 @@ class EmployeeRepository(Repository[Employee]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, Employee)
 
+    async def list(
+        self, *, offset: int = 0, limit: int = 50, search: str | None = None
+    ) -> list[Employee]:
+        stmt = select(Employee)
+        if search is not None:
+            q = str(search).strip()
+            if q:
+                stmt = stmt.where(Employee.full_name.ilike(f"%{q}%"))
+        stmt = stmt.order_by(Employee.full_name.asc()).offset(offset).limit(limit)
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def list_active_ordered(self, *, limit: int = 10_000) -> list[Employee]:
         stmt = (
             select(Employee)

@@ -16,6 +16,8 @@ export interface UserMe {
   permission_names?: string[];
   /** Backend: set(project_ids) === todos os projetos do sistema (visão "Todos" no dashboard). */
   has_all_projects_linked?: boolean;
+  /** Lista operacional de super usuário (e-mail); ações críticas no backend. */
+  is_superuser?: boolean;
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {

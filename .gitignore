@@ -1,26 +1,42 @@
+# ENV
+.env
+.env.*
+# Template versionado (exceção ao .env.*)
+!.env.example
+
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*.pyd
-*.db
-*.sqlite3
 
-# Ambiente virtual
+# Virtualenv
 .venv/
 venv/
-.env/
-
-# Node
-node_modules/
-dist/
-build/
 
 # Logs
 *.log
 
-# Sistema
+# Build
+dist/
+build/
+
+# Frontend
+node_modules/
+*.tsbuildinfo
+
+# Uploads
+var/
+uploads/
+
+# Mac
 .DS_Store
 
-# Backup banco
+# IDE
+.vscode/
+.idea/
+
+# --- legado / extras do projeto ---
+*.pyd
+*.db
+*.sqlite3
 backup_sgp.sql

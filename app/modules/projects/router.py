@@ -41,12 +41,13 @@ async def list_projects(
     user: User = Depends(get_current_user),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
+    status_filter: str = Query(default="ACTIVE", alias="status", pattern="^(ACTIVE|CLOSED|ALL)$"),
 ) -> list[ProjectRead]:
     svc = ProjectsService(db)
     if user_sees_all_projects(user):
-        rows = await svc.list_projects(offset=offset, limit=limit)
+        rows = await svc.list_projects(offset=offset, limit=limit, status_filter=status_filter)
     else:
-        rows = await svc.list_projects_for_user(user_id=user.id, offset=offset, limit=limit)
+        rows = await svc.list_projects_for_user(user_id=user.id, offset=offset, limit=limit, status_filter=status_filter)
     return [ProjectRead.model_validate(p) for p in rows]
 
 
@@ -150,6 +151,30 @@ async def delete_project(
     await ProjectsService(db).delete_project(
         actor_user_id=actor.id, project_id=project_id, actor=actor, request=request
     )
+
+
+@router.patch("/{project_id}/deactivate", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_EDIT))])
+async def deactivate_project(
+    project_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+    _: User = Depends(require_project_access),
+) -> ProjectRead:
+    proj = await ProjectsService(db).deactivate_project(project_id=project_id, actor=actor, request=request)
+    return ProjectRead.model_validate(proj)
+
+
+@router.patch("/{project_id}/activate", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_EDIT))])
+async def activate_project(
+    project_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+    _: User = Depends(require_project_access),
+) -> ProjectRead:
+    proj = await ProjectsService(db).activate_project(project_id=project_id, actor=actor, request=request)
+    return ProjectRead.model_validate(proj)
 
 
 @router.post("/{project_id}/users/{user_id}", status_code=204, dependencies=[Depends(require_permission(USERS_MANAGE))])

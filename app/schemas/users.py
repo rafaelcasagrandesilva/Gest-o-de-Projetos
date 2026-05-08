@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -16,12 +17,17 @@ class UserRead(UUIDTimestampRead):
     email: EmailStr
     full_name: str
     is_active: bool
+    deleted_at: datetime | None = None
     role_names: list[str] = []
     project_ids: list[UUID] = []
     permission_names: list[str] = []
     has_all_projects_linked: bool = Field(
         default=False,
         description="Vínculo cobre todos os projetos do sistema (visão consolidada no dashboard).",
+    )
+    is_superuser: bool = Field(
+        default=False,
+        description="Conta na lista operacional de super usuários (ações críticas; não é o mesmo que role ADMIN).",
     )
 
 

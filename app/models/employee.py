@@ -18,6 +18,8 @@ class Employee(TimestampUUIDMixin, Base):
     email: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
     role_title: Mapped[str | None] = mapped_column(String(255))
     employment_type: Mapped[str] = mapped_column(String(10), default="CLT", nullable=False)
+    pix_key_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    pix_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     salary_base: Mapped[float | None] = mapped_column(Numeric(14, 2))
     additional_costs: Mapped[float | None] = mapped_column(Numeric(14, 2))
     total_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0, nullable=False)

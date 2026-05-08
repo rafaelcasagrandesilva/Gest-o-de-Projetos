@@ -40,13 +40,29 @@ export interface FleetVehicleUpdate {
 }
 
 export async function listFleetVehicles(options?: {
+  /** Incluir inativos (admin). Deletados nunca retornam. */
+  include_inactive?: boolean;
+  /** LEGADO: quando true, equivale a listFleetVehiclesActive(). */
   active_only?: boolean;
   offset?: number;
   limit?: number;
 }): Promise<FleetVehicle[]> {
+  if (options?.active_only) {
+    return await listFleetVehiclesActive({ offset: options?.offset, limit: options?.limit });
+  }
   const { data } = await api.get<FleetVehicle[]>("/vehicles/", {
     params: {
-      active_only: options?.active_only ?? false,
+      include_inactive: options?.include_inactive ?? false,
+      offset: options?.offset ?? 0,
+      limit: options?.limit ?? 200,
+    },
+  });
+  return data;
+}
+
+export async function listFleetVehiclesActive(options?: { offset?: number; limit?: number }): Promise<FleetVehicle[]> {
+  const { data } = await api.get<FleetVehicle[]>("/vehicles/active", {
+    params: {
       offset: options?.offset ?? 0,
       limit: options?.limit ?? 200,
     },

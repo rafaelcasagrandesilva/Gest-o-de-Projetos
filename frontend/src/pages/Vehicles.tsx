@@ -13,6 +13,8 @@ import { isAxiosError } from "axios";
 import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
 import { usePermission } from "@/hooks/usePermission";
 import { useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
+import { CollaboratorSelect } from "@/components/CollaboratorSelect";
+import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 
 function monthStartIso(): string {
   const d = new Date();
@@ -98,7 +100,7 @@ export function Vehicles() {
 
   async function reload() {
     const [data, st] = await Promise.all([
-      listFleetVehicles({ active_only: false, limit: 200 }),
+      listFleetVehicles({ include_inactive: true, limit: 200 }),
       fetchSettings().catch(() => null),
     ]);
     setItems(data);
@@ -141,7 +143,7 @@ export function Vehicles() {
       setError(null);
       try {
         const [fleet, em, st] = await Promise.all([
-          listFleetVehicles({ active_only: false, limit: 200 }),
+          listFleetVehicles({ include_inactive: true, limit: 200 }),
           listEmployees({ competencia: referenceCompetencia }).catch(() => [] as Employee[]),
           fetchSettings().catch(() => null),
         ]);
@@ -213,12 +215,12 @@ export function Vehicles() {
   }
 
   async function handleSoftDelete(v: FleetVehicle) {
-    if (!confirm("Inativar este veículo? Ele deixará de aparecer nos projetos.")) return;
+    if (!confirm("Excluir este veículo? Ele deixará de aparecer nos projetos (histórico preservado).")) return;
     try {
       await deleteFleetVehicle(v.id);
       await reload();
     } catch {
-      setError("Erro ao inativar.");
+      setError("Erro ao excluir.");
     }
   }
 
@@ -303,21 +305,14 @@ export function Vehicles() {
             <p className="mt-1 text-xs text-slate-500">Padrão do tipo nas configurações; edite se necessário.</p>
           </div>
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm text-slate-600">Condutor</label>
-            <select
+            <CollaboratorSelect
+              label="Condutor"
               value={form.driver_employee_id}
-              onChange={(e) => setForm((f) => ({ ...f, driver_employee_id: e.target.value }))}
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            >
-              <option value="">—</option>
-              {employees
-                .filter((e) => e.is_active)
-                .map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.full_name}
-                  </option>
-                ))}
-            </select>
+              selectedName={employees.find((e) => e.id === form.driver_employee_id)?.full_name ?? null}
+              onChange={(id) => setForm((f) => ({ ...f, driver_employee_id: id }))}
+              disabled={readOnly}
+              placeholder="Digite para buscar…"
+            />
           </div>
         </div>
         <button
@@ -383,10 +378,16 @@ export function Vehicles() {
               {items.map((v) => (
                 <tr key={v.id} className="border-b border-slate-50">
                   <td className="px-4 py-3 font-medium tabular-nums">{v.plate}</td>
-                  <td className="px-4 py-3 text-slate-600">{v.model ?? "—"}</td>
+                  <td className="min-w-0 max-w-[280px] px-4 py-3 align-middle text-slate-600">
+                    <TruncatedCell value={v.model} maxWidthClass="max-w-[280px]" />
+                  </td>
                   <td className="px-4 py-3">{typeLabel(v.type)}</td>
                   <td className="px-4 py-3 font-medium tabular-nums">{formatCurrency(v.monthly_cost ?? 0)}</td>
-                  <td className="px-4 py-3">{v.driver_name ?? employeeName(v.driver_employee_id)}</td>
+                  <td className="min-w-0 max-w-[260px] px-4 py-3 align-middle">
+                    <TruncatedText maxWidthClass="max-w-[260px]">
+                      {v.driver_name ?? employeeName(v.driver_employee_id)}
+                    </TruncatedText>
+                  </td>
                   <td className="px-4 py-3">
                     {readOnly ? (
                       <span>{v.active ? "Sim" : "Não"}</span>
@@ -415,7 +416,7 @@ export function Vehicles() {
                           onClick={() => handleSoftDelete(v)}
                           className="ml-3 text-sm text-red-600 hover:underline"
                         >
-                          Inativar
+                          Excluir
                         </button>
                       )}
                     </td>
@@ -577,21 +578,14 @@ function EditVehiclePanel({
             />
           </div>
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm text-slate-600">Condutor</label>
-            <select
+            <CollaboratorSelect
+              label="Condutor"
               value={form.driver_employee_id}
-              onChange={(e) => setForm((f) => ({ ...f, driver_employee_id: e.target.value }))}
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            >
-              <option value="">—</option>
-              {employees
-                .filter((e) => e.is_active)
-                .map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.full_name}
-                  </option>
-                ))}
-            </select>
+              selectedName={employees.find((e) => e.id === form.driver_employee_id)?.full_name ?? null}
+              onChange={(id) => setForm((f) => ({ ...f, driver_employee_id: id }))}
+              disabled={saving}
+              placeholder="Digite para buscar…"
+            />
           </div>
         </div>
         <div className="flex flex-wrap gap-2">

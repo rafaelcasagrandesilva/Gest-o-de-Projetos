@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 import traceback
 from collections.abc import Callable
+from typing import Literal
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Header, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose.exceptions import ExpiredSignatureError, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,8 @@ from app.core.permission_codes import (
     ROLE_PRESET,
     SYSTEM_ADMIN,
     SYSTEM_ALL_PROJECTS,
+    WORKSPACE_FINANCE_ACCESS,
+    WORKSPACE_PROJECTS_ACCESS,
 )
 from app.core.scenario import Scenario
 from app.core.security import decode_token, normalize_token
@@ -41,15 +44,30 @@ ROLE_GESTOR = "GESTOR"
 ROLE_CONSULTA = "CONSULTA"
 
 # Acesso total explícito (emergência / operação) — não substitui RBAC após migração completa.
-_SUPERUSER_EMAILS = frozenset(
+_DEFAULT_SUPERUSER_EMAILS = frozenset(
     {
         "rafael.casagrande@meconsulting.com.br",
     }
 )
 
 
+def _configured_superuser_emails() -> frozenset[str]:
+    raw = (settings.app_superuser_emails or "").strip()
+    if raw:
+        return frozenset(x.strip().lower() for x in raw.split(",") if x.strip())
+    return _DEFAULT_SUPERUSER_EMAILS
+
+
 def _is_superuser_email(user: User) -> bool:
-    return (user.email or "").strip().lower() in _SUPERUSER_EMAILS
+    return (user.email or "").strip().lower() in _configured_superuser_emails()
+
+
+def is_app_superuser(user: User) -> bool:
+    """
+    Conta operacional com privilégios totais (lista explícita de e-mails em `_SUPERUSER_EMAILS`).
+    Não confundir com role ADMIN do RBAC — usado para ações destrutivas / emergência.
+    """
+    return _is_superuser_email(user)
 
 
 def _token_from_credentials(credentials: HTTPAuthorizationCredentials) -> str:
@@ -221,6 +239,46 @@ async def get_current_user(
 
     request.state.user = user
     return user
+
+
+WorkspaceName = Literal["projects", "finance"]
+
+
+async def get_current_workspace(
+    request: Request,
+    workspace: str | None = Query(default=None),
+    x_workspace: str | None = Header(default=None, alias="X-Workspace"),
+) -> WorkspaceName:
+    """
+    Identifica workspace atual sem impactar rotas existentes.
+
+    Ordem de resolução:
+    - Query param `?workspace=projects|finance`
+    - Header `X-Workspace: projects|finance`
+    - Default: finance
+    """
+    raw = (workspace or x_workspace or "").strip().lower()
+    if raw in ("projects", "finance"):
+        request.state.workspace = raw
+        return raw  # type: ignore[return-value]
+    request.state.workspace = "finance"
+    return "finance"
+
+
+def require_workspace_access(workspace: WorkspaceName) -> Callable:
+    """
+    Dependency opcional para proteger rotas por workspace.
+    Não é aplicada em endpoints existentes (migração incremental).
+    """
+
+    perm = WORKSPACE_PROJECTS_ACCESS if workspace == "projects" else WORKSPACE_FINANCE_ACCESS
+
+    async def _dep(user: User = Depends(get_current_user)) -> User:
+        if not user_has_any_permission(user, perm):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
+        return user
+
+    return _dep
 
 
 def require_permission(*codes: str) -> Callable:

@@ -43,6 +43,12 @@ alembic revision --autogenerate -m "descricao"
 alembic upgrade head
 ```
 
+### Política de nomenclatura (para evitar falhas)
+
+- **Revision ID**: prefira curto e estável (ex.: `0027_add_payables`, `0028_fix_invoice_flow`).
+- **Tamanho**: mantenha o `revision` com **até ~40 caracteres** (evita incompatibilidades em bancos antigos).
+- **Migração de compatibilidade**: o projeto possui a migration `0026_fix_alembic_version_column` que aumenta o tamanho de `alembic_version.version_num` quando necessário.
+
 ## Rodar o servidor
 
 ```bash

@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { createUser, listUsers, patchUser, resetUserPassword, type UserRow } from "@/services/users";
+import {
+  activateUser,
+  createUser,
+  deactivateUser,
+  listUsers,
+  patchUser,
+  resetUserPassword,
+  softDeleteUser,
+  type UserRow,
+} from "@/services/users";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
 import { usePermission } from "@/hooks/usePermission";
@@ -17,6 +26,7 @@ export function Users() {
   const [items, setItems] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
@@ -46,7 +56,7 @@ export function Users() {
   async function load() {
     setError(null);
     try {
-      const data = await listUsers();
+      const data = await listUsers({ include_deleted: showDeleted });
       setItems(data);
     } catch (e) {
       if (isAxiosError(e) && e.response?.status === 403) {
@@ -61,7 +71,38 @@ export function Users() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [showDeleted]);
+
+  function statusBadge(u: UserRow): { label: string; cls: string } {
+    if (u.deleted_at) return { label: "Removido", cls: "bg-red-100 text-red-900 ring-red-200" };
+    if (!u.is_active) return { label: "Inativo", cls: "bg-amber-100 text-amber-900 ring-amber-200" };
+    return { label: "Ativo", cls: "bg-emerald-100 text-emerald-900 ring-emerald-200" };
+  }
+
+  async function toggleActive(u: UserRow, next: boolean) {
+    if (!canManageUsers) return;
+    setError(null);
+    try {
+      const updated = next ? await activateUser(u.id) : await deactivateUser(u.id);
+      setItems((prev) => prev.map((x) => (x.id === u.id ? updated : x)));
+    } catch (e) {
+      if (isAxiosError(e)) setError(String(e.response?.data?.detail ?? e.message));
+      else setError("Não foi possível atualizar status.");
+    }
+  }
+
+  async function handleSoftDelete(u: UserRow) {
+    if (!canManageUsers) return;
+    if (!window.confirm("Deseja realmente remover este usuário?")) return;
+    setError(null);
+    try {
+      await softDeleteUser(u.id);
+      setItems((prev) => prev.filter((x) => x.id !== u.id));
+    } catch (e) {
+      if (isAxiosError(e)) setError(String(e.response?.data?.detail ?? e.message));
+      else setError("Não foi possível remover.");
+    }
+  }
 
   useEffect(() => {
     if (showForm || editing) {
@@ -197,6 +238,15 @@ export function Users() {
           <p className="text-sm text-slate-500">Perfis, permissões e escopo por projetos vinculados</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <label className="mr-2 flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={showDeleted}
+              onChange={(e) => setShowDeleted(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300"
+            />
+            Mostrar removidos
+          </label>
           <button
             type="button"
             disabled={!canManageUsers}
@@ -479,6 +529,7 @@ export function Users() {
                 items.map((u) => {
                   const primaryRole = u.role_names?.[0] || "—";
                   const nPerms = u.permission_names?.length ?? 0;
+                  const st = statusBadge(u);
                   return (
                     <tr key={u.id} className="border-b border-slate-50 last:border-0">
                       <td className="px-4 py-3 font-medium text-slate-900">{u.full_name}</td>
@@ -495,7 +546,30 @@ export function Users() {
                       <td className="px-4 py-3 text-slate-600">
                         {u.project_ids?.length ? `${u.project_ids.length} vínculo(s)` : "—"}
                       </td>
-                      <td className="px-4 py-3">{u.is_active ? "Sim" : "Não"}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${st.cls}`}>
+                            {st.label}
+                          </span>
+                          {!u.deleted_at && (
+                            <button
+                              type="button"
+                              disabled={!canManageUsers}
+                              onClick={() => void toggleActive(u, !u.is_active)}
+                              className={`relative inline-flex h-6 w-10 items-center rounded-full transition ${
+                                u.is_active ? "bg-emerald-600" : "bg-slate-300"
+                              } disabled:opacity-60`}
+                              title={!canManageUsers ? "Sem permissão." : undefined}
+                            >
+                              <span
+                                className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${
+                                  u.is_active ? "translate-x-5" : "translate-x-1"
+                                }`}
+                              />
+                            </button>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-4 py-3 flex flex-wrap gap-2">
                         <button
                           type="button"
@@ -517,6 +591,16 @@ export function Users() {
                         >
                           Resetar senha
                         </button>
+                        {!u.deleted_at && (
+                          <button
+                            type="button"
+                            disabled={!canManageUsers}
+                            onClick={() => void handleSoftDelete(u)}
+                            className="text-sm font-medium text-red-600 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Excluir
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );

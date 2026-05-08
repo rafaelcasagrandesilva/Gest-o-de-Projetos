@@ -5,6 +5,7 @@ export interface UserRow {
   email: string;
   full_name: string;
   is_active: boolean;
+  deleted_at?: string | null;
   role_names: string[];
   project_ids: string[];
   permission_names: string[];
@@ -12,8 +13,8 @@ export interface UserRow {
   updated_at: string;
 }
 
-export async function listUsers(): Promise<UserRow[]> {
-  const { data } = await api.get<UserRow[]>("/users/");
+export async function listUsers(params?: { include_deleted?: boolean }): Promise<UserRow[]> {
+  const { data } = await api.get<UserRow[]>("/users/", { params });
   return data;
 }
 
@@ -52,4 +53,18 @@ export async function patchUser(
 
 export async function resetUserPassword(userId: string, newPassword: string): Promise<void> {
   await api.post(`/users/${userId}/reset-password/`, { new_password: newPassword });
+}
+
+export async function activateUser(userId: string): Promise<UserRow> {
+  const { data } = await api.patch<UserRow>(`/users/${userId}/activate/`, {});
+  return data;
+}
+
+export async function deactivateUser(userId: string): Promise<UserRow> {
+  const { data } = await api.patch<UserRow>(`/users/${userId}/deactivate/`, {});
+  return data;
+}
+
+export async function softDeleteUser(userId: string): Promise<void> {
+  await api.delete(`/users/${userId}/`);
 }

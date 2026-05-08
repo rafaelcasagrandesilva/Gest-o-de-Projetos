@@ -11,6 +11,7 @@ from app.repositories.financial import InvoiceAnticipationRepository, InvoiceRep
 from app.core.scenario import coerce_scenario
 from app.services.audit_service import AuditService
 from app.services.utils import model_to_dict
+from app.utils.date_utils import normalize_competencia
 
 
 def revenue_retention_value(*, amount: float, has_retention: bool) -> float:
@@ -52,6 +53,9 @@ class FinancialCrudService:
         actor: User | None = None,
         request: Request | None = None,
     ) -> Revenue:
+        # Competência sempre como primeiro dia do mês (evita mismatch em dashboards/queries e unique).
+        if data.get("competencia") is not None:
+            data["competencia"] = normalize_competencia(data["competencia"])
         row = Revenue(**data)
         await self.revenues.add(row)
         sc = getattr(row, "scenario", None)
@@ -87,6 +91,8 @@ class FinancialCrudService:
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receita não encontrada.")
         before = model_to_dict(row)
+        if data.get("competencia") is not None:
+            data["competencia"] = normalize_competencia(data["competencia"])
         self.revenues.apply_updates(row, data)
         sc = getattr(row, "scenario", None)
         sc_val = sc.value if hasattr(sc, "value") else str(sc) if sc is not None else None

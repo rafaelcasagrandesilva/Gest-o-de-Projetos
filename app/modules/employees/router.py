@@ -178,6 +178,7 @@ async def delete_staff_cost(
 @router.get("", response_model=list[EmployeeRead], dependencies=_read)
 async def list_employees(
     db: AsyncSession = Depends(get_db),
+    search: str | None = Query(default=None, description="Busca por nome (ILIKE em full_name)."),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     competencia: date | None = Query(
@@ -186,7 +187,9 @@ async def list_employees(
     ),
 ) -> list[EmployeeRead]:
     comp = competencia or default_cost_reference()
-    return await EmployeesService(db).list_employees_as_read(offset=offset, limit=limit, competencia=comp)
+    return await EmployeesService(db).list_employees_as_read(
+        offset=offset, limit=limit, competencia=comp, search=search
+    )
 
 
 @router.post("", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])

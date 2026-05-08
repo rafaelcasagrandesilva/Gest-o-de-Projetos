@@ -8,6 +8,8 @@ export interface Employee {
   email: string | null;
   role_title: string | null;
   employment_type: string;
+  pix_key_type?: "CPF" | "CNPJ" | "EMAIL" | "TELEFONE" | "ALEATORIA" | null;
+  pix_key?: string | null;
   salary_base: number | null;
   additional_costs: number | null;
   total_cost: number;
@@ -26,6 +28,8 @@ export interface EmployeeCreate {
   email?: string | null;
   role_title?: string | null;
   employment_type?: "CLT" | "PJ";
+  pix_key_type?: "CPF" | "CNPJ" | "EMAIL" | "TELEFONE" | "ALEATORIA" | null;
+  pix_key?: string | null;
   salary_base?: number | null;
   additional_costs?: number | null;
   is_active?: boolean;
@@ -60,10 +64,20 @@ export interface CLTCostPreviewResponse {
 
 export async function listEmployees(params?: {
   competencia?: string;
+  search?: string;
   offset?: number;
   limit?: number;
 }): Promise<Employee[]> {
   const { data } = await api.get<Employee[]>("/employees/", { params });
+  return data;
+}
+
+export type CollaboratorSearchItem = { id: string; name: string };
+
+export async function searchCollaborators(params: { q: string; limit?: number }): Promise<CollaboratorSearchItem[]> {
+  const { data } = await api.get<CollaboratorSearchItem[]>("/collaborators/search", {
+    params: { q: params.q, limit: params.limit ?? 20 },
+  });
   return data;
 }
 

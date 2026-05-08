@@ -27,6 +27,8 @@ _EMPLOYEE_PATCHABLE = frozenset(
         "email",
         "role_title",
         "employment_type",
+        "pix_key_type",
+        "pix_key",
         "salary_base",
         "additional_costs",
         "is_active",
@@ -65,8 +67,15 @@ class EmployeesService:
         base = EmployeeRead.model_validate(emp)
         return base.model_copy(update={"total_cost": tc})
 
-    async def list_employees_as_read(self, *, offset: int = 0, limit: int = 50, competencia: date) -> list[EmployeeRead]:
-        rows = await self.employees.list(offset=offset, limit=limit)
+    async def list_employees_as_read(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        competencia: date,
+        search: str | None = None,
+    ) -> list[EmployeeRead]:
+        rows = await self.employees.list(offset=offset, limit=limit, search=search)
         settings = await SettingsService(self.session).get_or_create()
         y, m = competencia.year, competencia.month
         out: list[EmployeeRead] = []
@@ -78,8 +87,10 @@ class EmployeesService:
             out.append(EmployeeRead.model_validate(emp).model_copy(update={"total_cost": tc}))
         return out
 
-    async def list_employees(self, *, offset: int = 0, limit: int = 50) -> list[Employee]:
-        return await self.employees.list(offset=offset, limit=limit)
+    async def list_employees(
+        self, *, offset: int = 0, limit: int = 50, search: str | None = None
+    ) -> list[Employee]:
+        return await self.employees.list(offset=offset, limit=limit, search=search)
 
     async def get_employee(self, employee_id) -> Employee:
         emp = await self.employees.get(employee_id)

@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import effective_permission_names, get_current_user, require_permission
+from app.api.deps import effective_permission_names, get_current_user, is_app_superuser, require_permission
 from app.core.permission_codes import USERS_MANAGE
 from app.database.session import get_db
 from app.models.user import User
@@ -42,6 +42,7 @@ def _user_payload(
         "project_ids": project_ids,
         "permission_names": perm_names,
         "has_all_projects_linked": has_all_projects_linked,
+        "is_superuser": is_app_superuser(user),
     }
 
 
@@ -69,13 +70,36 @@ async def list_users(
     db: AsyncSession = Depends(get_db),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
+    include_deleted: bool = Query(default=False, description="Mostrar usuários removidos (soft delete)."),
 ) -> list[UserRead]:
-    users = await UsersService(db).list_users(offset=offset, limit=limit)
+    users = await UsersService(db).list_users(offset=offset, limit=limit, include_deleted=include_deleted)
     all_pids = await ProjectRepository(db).list_all_project_ids()
     out: list[UserRead] = []
     for u in users:
         out.append(await _to_user_read(db, u, all_project_ids=all_pids))
     return out
+
+
+@router.patch("/{user_id}/activate", response_model=UserRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
+async def activate_user(
+    user_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> UserRead:
+    u = await UsersService(db).set_active(actor_user_id=actor.id, user_id=user_id, active=True, actor=actor, request=request)
+    return await _to_user_read(db, u)
+
+
+@router.patch("/{user_id}/deactivate", response_model=UserRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
+async def deactivate_user(
+    user_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> UserRead:
+    u = await UsersService(db).set_active(actor_user_id=actor.id, user_id=user_id, active=False, actor=actor, request=request)
+    return await _to_user_read(db, u)
 
 
 @router.post("/", response_model=UserRead, dependencies=[Depends(require_permission(USERS_MANAGE))])

@@ -15,16 +15,14 @@ class UserRepository(Repository[User]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, User)
 
-    async def list(self, *, offset: int = 0, limit: int = 50) -> list[User]:
-        stmt = (
-            select(User)
-            .options(
-                selectinload(User.roles).selectinload(UserRole.role),
-                selectinload(User.user_permissions).selectinload(UserPermission.permission),
-            )
-            .offset(offset)
-            .limit(limit)
+    async def list(self, *, offset: int = 0, limit: int = 50, include_deleted: bool = False) -> list[User]:
+        stmt = select(User).options(
+            selectinload(User.roles).selectinload(UserRole.role),
+            selectinload(User.user_permissions).selectinload(UserPermission.permission),
         )
+        if not include_deleted:
+            stmt = stmt.where(User.deleted_at.is_(None))
+        stmt = stmt.offset(offset).limit(limit)
         res = await self.session.execute(stmt)
         return list(res.scalars().all())
 
@@ -40,10 +38,26 @@ class UserRepository(Repository[User]):
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
 
-    async def get_by_email(self, email: str) -> User | None:
+    async def get_by_email(self, email: str, *, include_deleted: bool = False) -> User | None:
         stmt = select(User).where(User.email == email)
+        if not include_deleted:
+            stmt = stmt.where(User.deleted_at.is_(None))
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
+
+    async def count_active_admins(self) -> int:
+        stmt = (
+            select(User.id)
+            .join(UserRole, UserRole.user_id == User.id)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(
+                Role.name == "ADMIN",
+                User.deleted_at.is_(None),
+                User.is_active.is_(True),
+            )
+        )
+        res = await self.session.execute(stmt)
+        return len(list(res.scalars().all()))
 
 
 class RoleRepository(Repository[Role]):

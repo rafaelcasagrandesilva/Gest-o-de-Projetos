@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
-import { listFleetVehicles, type FleetVehicle } from "@/services/vehicles";
+import { listFleetVehiclesActive, type FleetVehicle } from "@/services/vehicles";
 import { Link, useParams } from "react-router-dom";
 import { getProject, type Project } from "@/services/projects";
 import {
@@ -416,7 +416,6 @@ export function ProjectDetail() {
   const [project, setProject] = useState<Project | null>(null);
   const [competencia, setCompetencia] = useState(() => normalizeCompetencia(monthStart()));
   const [tab, setTab] = useState<Tab>("labor");
-  const [employees, setEmployees] = useState<Employee[]>([]);
   const [laborDetails, setLaborDetails] = useState<ProjectLaborDetail[]>([]);
   const [vehicleRowsByScenario, setVehicleRowsByScenario] = useState<{
     PREVISTO: ProjectVehicle[];
@@ -451,22 +450,6 @@ export function ProjectDetail() {
       c = true;
     };
   }, [projectId]);
-
-  useEffect(() => {
-    if (!projectId) return;
-    let c = false;
-    (async () => {
-      try {
-        const em = await listEmployees({ competencia: competenciaApi }).catch(() => []);
-        if (!c) setEmployees(em);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      c = true;
-    };
-  }, [projectId, competenciaApi]);
 
   const reloadTab = useCallback(async () => {
     if (!projectId) return;
@@ -507,7 +490,7 @@ export function ProjectDetail() {
     return (
       <div className="space-y-4">
         <p className="text-red-700">{error}</p>
-        <Link to="/projects" className="text-indigo-600 hover:underline">
+        <Link to="/projects/list" className="text-indigo-600 hover:underline">
           Voltar
         </Link>
       </div>
@@ -518,14 +501,14 @@ export function ProjectDetail() {
     { id: "labor", label: "Mão de obra" },
     { id: "vehicles", label: "Veículos" },
     { id: "systems", label: "Sistemas" },
-    { id: "fixed", label: "Custos fixos" },
+    { id: "fixed", label: "Custos diversos" },
   ];
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <Link to="/projects" className="text-sm text-indigo-600 hover:underline">
+          <Link to="/projects/list" className="text-sm text-indigo-600 hover:underline">
             ← Projetos
           </Link>
           <h2 className="mt-2 text-xl font-semibold text-slate-900">{project.name}</h2>
@@ -592,7 +575,6 @@ export function ProjectDetail() {
           projectId={projectId}
           competencia={competenciaApi}
           editScenario={editScenario}
-          employees={employees}
           rows={laborDetails}
           structureReadOnly={structureReadOnly}
           onRefresh={reloadTab}
@@ -638,7 +620,6 @@ function LaborTab({
   projectId,
   competencia,
   editScenario,
-  employees,
   rows,
   structureReadOnly,
   onRefresh,
@@ -646,20 +627,58 @@ function LaborTab({
   projectId: string;
   competencia: string;
   editScenario: ScenarioKind;
-  employees: Employee[];
   rows: ProjectLaborDetail[];
   structureReadOnly: boolean;
   onRefresh: () => void;
 }) {
   const [employeeId, setEmployeeId] = useState("");
+  const [employeeQuery, setEmployeeQuery] = useState("");
+  const [employeeOptions, setEmployeeOptions] = useState<Employee[]>([]);
+  const [employeeLoading, setEmployeeLoading] = useState(false);
+  const [employeeOpen, setEmployeeOpen] = useState(false);
   const [allocationPct, setAllocationPct] = useState("100");
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [copyBusy, setCopyBusy] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
-  const linkedIds = new Set(rows.map((r) => r.employee_id));
-  const availableEmployees = employees.filter((e) => !linkedIds.has(e.id));
+  const linkedIds = useMemo(() => new Set(rows.map((r) => r.employee_id)), [rows]);
+  const availableEmployees = useMemo(
+    () => employeeOptions.filter((e) => !linkedIds.has(e.id)),
+    [employeeOptions, linkedIds],
+  );
+
+  const selectedEmployee = useMemo(
+    () => employeeOptions.find((e) => e.id === employeeId) ?? null,
+    [employeeOptions, employeeId],
+  );
+
+  const loadEmployeeOptions = useCallback(
+    async (q: string) => {
+      setEmployeeLoading(true);
+      try {
+        const items = await listEmployees({
+          competencia,
+          search: q.trim() ? q.trim() : undefined,
+          limit: 20,
+          offset: 0,
+        }).catch(() => []);
+        setEmployeeOptions(items);
+      } finally {
+        setEmployeeLoading(false);
+      }
+    },
+    [competencia],
+  );
+
+  // Busca com debounce (300ms) ao digitar.
+  useEffect(() => {
+    if (!employeeOpen) return;
+    const t = window.setTimeout(() => {
+      void loadEmployeeOptions(employeeQuery);
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [employeeQuery, employeeOpen, loadEmployeeOptions]);
 
   const laborShare = useMemo(() => {
     const sorted = [...rows].sort((a, b) => b.allocated_cost - a.allocated_cost);
@@ -765,19 +784,61 @@ function LaborTab({
         <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
           <div>
             <label className="text-xs text-slate-500">Colaborador</label>
-            <select
-              required
-              value={employeeId}
-              onChange={(e) => setEmployeeId(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            >
-              <option value="">—</option>
-              {availableEmployees.map((em) => (
-                <option key={em.id} value={em.id}>
-                  {em.full_name} ({em.employment_type})
-                </option>
-              ))}
-            </select>
+            <div className="relative mt-1">
+              <input
+                value={employeeQuery}
+                onChange={(e) => {
+                  setEmployeeQuery(e.target.value);
+                  setEmployeeOpen(true);
+                }}
+                onFocus={() => setEmployeeOpen(true)}
+                onBlur={() => {
+                  // fecha após clique em opção (onMouseDown)
+                  window.setTimeout(() => setEmployeeOpen(false), 150);
+                }}
+                placeholder={selectedEmployee ? selectedEmployee.full_name : "Digite para buscar…"}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+              {employeeOpen ? (
+                <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                  <div className="px-3 py-2 text-xs text-slate-500">
+                    {employeeLoading
+                      ? "Buscando…"
+                      : availableEmployees.length === 0
+                        ? "Nenhum colaborador encontrado."
+                        : "Selecione um colaborador"}
+                  </div>
+                  <div className="max-h-56 overflow-auto">
+                    {availableEmployees.map((em) => (
+                      <button
+                        key={em.id}
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setEmployeeId(em.id);
+                          setEmployeeQuery("");
+                          setEmployeeOpen(false);
+                        }}
+                        className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50"
+                      >
+                        <span className="truncate text-slate-900">{em.full_name}</span>
+                        <span className="ml-2 shrink-0 rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+                          {em.employment_type}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            {employeeId ? (
+              <p className="mt-1 text-xs text-slate-600">
+                Selecionado:{" "}
+                <span className="font-medium text-slate-900">
+                  {selectedEmployee ? selectedEmployee.full_name : employeeId}
+                </span>
+              </p>
+            ) : null}
           </div>
           <div className="w-full sm:w-28">
             <label className="text-xs text-slate-500">Percentual (%)</label>
@@ -918,7 +979,6 @@ function LaborTab({
               rows.map((r) => {
                 const open = openDetailId === r.labor_id;
                 const b = r.breakdown;
-                const rowEmp = employees.find((e) => e.id === r.employee_id);
                 return (
                   <Fragment key={r.labor_id}>
                     <tr className="border-b border-slate-100">
@@ -1009,8 +1069,8 @@ function LaborTab({
                           <LaborCostEditor
                             projectId={projectId}
                             detail={r}
-                            cadastroSalaryBase={rowEmp?.salary_base ?? null}
-                            cadastroPjHoursPerMonth={rowEmp?.pj_hours_per_month ?? null}
+                            cadastroSalaryBase={null}
+                            cadastroPjHoursPerMonth={null}
                             readOnly={structureReadOnly}
                             onSaved={onRefresh}
                           />
@@ -1083,7 +1143,7 @@ function VehiclesTab({
 
   useEffect(() => {
     let c = false;
-    listFleetVehicles({ active_only: true, limit: 200 })
+    listFleetVehiclesActive({ limit: 200 })
       .then((list) => {
         if (!c) setFleet(list);
       })
@@ -1639,7 +1699,7 @@ function FixedTab({
     <div className="space-y-6">
       <fieldset disabled={structureReadOnly} className="m-0 min-w-0 border-0 p-0">
       <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3 max-w-xl">
-        <h3 className="font-medium text-slate-900">Custo fixo operacional</h3>
+        <h3 className="font-medium text-slate-900">Custos diversos</h3>
         <input
           placeholder="Nome"
           required
@@ -1664,11 +1724,11 @@ function FixedTab({
       </fieldset>
 
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold text-slate-900">Resumo de custos fixos</h3>
-        <p className="text-sm text-slate-500">Custos fixos operacionais nesta competência (valores mensais).</p>
+        <h3 className="text-lg font-semibold text-slate-900">Resumo de custos diversos</h3>
+        <p className="text-sm text-slate-500">Custos diversos nesta competência (valores mensais).</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-sm font-medium text-slate-500">Total de custos fixos</p>
+            <p className="text-sm font-medium text-slate-500">Total de custos diversos</p>
             <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{fixedSummary.count}</p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

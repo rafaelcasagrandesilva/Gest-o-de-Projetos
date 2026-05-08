@@ -10,16 +10,16 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
   }`;
 
 const items: { to: string; label: string; end: boolean; perm: string }[] = [
-  { to: "/", label: "Dashboard financeiro", end: true, perm: "dashboard.view" },
-  { to: "/reports", label: "Relatórios", end: false, perm: "reports.view" },
-  { to: "/projects", label: "Projetos", end: false, perm: "projects.view" },
-  { to: "/users", label: "Usuários", end: false, perm: "users.manage" },
-  { to: "/employees", label: "Colaboradores", end: false, perm: "employees.view" },
-  { to: "/vehicles", label: "Veículos", end: false, perm: "vehicles.view" },
-  { to: "/revenue", label: "Faturamento", end: false, perm: "billing.view" },
-  { to: "/invoices", label: "Notas fiscais", end: false, perm: "invoices.view" },
-  { to: "/company-debt", label: "Endividamento", end: false, perm: "debts.view" },
-  { to: "/company-fixed-costs", label: "Custos fixos (empresa)", end: false, perm: "company_finance.view" },
+  { to: "/finance/dashboard", label: "Dashboard financeiro", end: true, perm: "dashboard.view" },
+  { to: "/projects/reports", label: "Relatórios", end: false, perm: "reports.view" },
+  { to: "/projects/list", label: "Projetos", end: false, perm: "projects.view" },
+  { to: "/projects/users", label: "Usuários", end: false, perm: "users.manage" },
+  { to: "/projects/employees", label: "Colaboradores", end: false, perm: "employees.view" },
+  { to: "/projects/vehicles", label: "Veículos", end: false, perm: "vehicles.view" },
+  { to: "/projects/revenue", label: "Faturamento", end: false, perm: "billing.view" },
+  { to: "/finance/invoices", label: "Notas fiscais", end: false, perm: "invoices.view" },
+  { to: "/finance/debt", label: "Endividamento", end: false, perm: "debts.view" },
+  { to: "/finance/fixed-costs", label: "Custos fixos (empresa)", end: false, perm: "company_finance.view" },
   { to: "/settings", label: "Configurações", end: false, perm: "settings.view" },
 ];
 

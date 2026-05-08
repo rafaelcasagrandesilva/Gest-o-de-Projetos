@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -44,14 +46,24 @@ class FleetService:
         self.audit = AuditService(session)
 
     async def list_vehicles(
-        self, *, offset: int = 0, limit: int = 50, active_only: bool = False
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        include_inactive: bool = False,
     ) -> list[Vehicle]:
-        return await self.vehicles.list_ordered(offset=offset, limit=limit, active_only=active_only)
+        return await self.vehicles.list_ordered(offset=offset, limit=limit, include_inactive=include_inactive)
 
     async def get_vehicle(self, vehicle_id) -> Vehicle:
         v = await self.vehicles.get(vehicle_id)
-        if not v:
+        if not v or getattr(v, "deleted_at", None) is not None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Veículo não encontrado.")
+        return v
+
+    async def assert_vehicle_valid_for_new_usage(self, *, vehicle_id) -> Vehicle:
+        v = await self.vehicles.get(vehicle_id)
+        if not v or getattr(v, "deleted_at", None) is not None or not bool(getattr(v, "is_active", False)):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Veículo inválido")
         return v
 
     async def create_vehicle(
@@ -158,6 +170,7 @@ class FleetService:
         v = await self.get_vehicle(vehicle_id)
         before = model_to_dict(v)
         v.is_active = False
+        v.deleted_at = datetime.now(timezone.utc)
         await self.audit.log_action(
             user=actor,
             action="update",
@@ -165,7 +178,7 @@ class FleetService:
             entity_id=vehicle_id,
             before=before,
             after=model_to_dict(v),
-            context={"descricao": "Desativação de veículo"},
+            context={"descricao": "Exclusão (soft delete) de veículo"},
             request=request,
         )
         await self.session.commit()
@@ -179,6 +192,7 @@ class FleetService:
         actor: User | None = None,
         request: Request | None = None,
     ) -> VehicleUsage:
+        await self.assert_vehicle_valid_for_new_usage(vehicle_id=data.get("vehicle_id"))
         usage = VehicleUsage(**data)
         await self.usages.add(usage)
         await self.audit.log_action(

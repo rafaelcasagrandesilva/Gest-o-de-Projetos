@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import String, Text
+from datetime import datetime
+
+from sqlalchemy import DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, TimestampUUIDMixin
@@ -12,6 +14,11 @@ class Project(TimestampUUIDMixin, Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     code: Mapped[str | None] = mapped_column(String(50), unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text)
+    cost_center: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="true", index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
     user_links: Mapped[list["ProjectUser"]] = relationship(back_populates="project", cascade="all, delete-orphan")
 

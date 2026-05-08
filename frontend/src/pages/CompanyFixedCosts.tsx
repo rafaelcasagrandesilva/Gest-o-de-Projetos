@@ -4,7 +4,7 @@ export function CompanyFixedCosts() {
   return (
     <CompanyFinanceExecutive
       tipo="custo_fixo"
-      title="Custos fixos da empresa"
+      title="Custos Fixos - Matriz"
       subtitle="Custos recorrentes com valor mensal esperado e pagamentos por competência."
     />
   );

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Literal
+PixKeyType = Literal["CPF", "CNPJ", "EMAIL", "TELEFONE", "ALEATORIA"]
+
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -16,6 +18,8 @@ class EmployeeRead(UUIDTimestampRead):
     email: EmailStr | None = None
     role_title: str | None = None
     employment_type: str
+    pix_key_type: PixKeyType | None = None
+    pix_key: str | None = None
     salary_base: float | None = None
     additional_costs: float | None = None
     total_cost: float
@@ -34,6 +38,8 @@ class EmployeeCreate(BaseModel):
     email: EmailStr | None = None
     role_title: str | None = None
     employment_type: Literal["CLT", "PJ"] = "CLT"
+    pix_key_type: PixKeyType | None = None
+    pix_key: str | None = Field(default=None, max_length=255)
     salary_base: float | None = Field(default=None, ge=0)
     additional_costs: float | None = Field(default=None, ge=0)
     is_active: bool = True
@@ -58,12 +64,25 @@ class EmployeeCreate(BaseModel):
                 raise ValueError("Salário base deve ser maior que zero.")
         return self
 
+    @model_validator(mode="after")
+    def pix_fields_consistent(self) -> "EmployeeCreate":
+        k = (self.pix_key or "").strip() if self.pix_key is not None else ""
+        t = self.pix_key_type
+        if k and not t:
+            raise ValueError("Informe o tipo da chave PIX.")
+        if t and not k:
+            raise ValueError("Informe a chave PIX.")
+        self.pix_key = k or None
+        return self
+
 
 class EmployeeUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=255)
     email: EmailStr | None = None
     role_title: str | None = None
     employment_type: Literal["CLT", "PJ"] | None = None
+    pix_key_type: PixKeyType | None = None
+    pix_key: str | None = Field(default=None, max_length=255)
     salary_base: float | None = Field(default=None, ge=0)
     additional_costs: float | None = Field(default=None, ge=0)
     is_active: bool | None = None
@@ -78,6 +97,24 @@ class EmployeeUpdate(BaseModel):
         default=None,
         description="Mês ao salvar custo CLT no banco (primeiro dia). Padrão: mês corrente.",
     )
+
+    @model_validator(mode="after")
+    def pix_fields_consistent(self) -> "EmployeeUpdate":
+        # No update, manter regra: se um vier preenchido no payload, o outro também deve vir.
+        # Permite remoção enviando ambos como null/vazio.
+        k_raw = self.pix_key
+        t = self.pix_key_type
+        k = (k_raw or "").strip() if k_raw is not None else ""
+
+        any_sent = (k_raw is not None) or (t is not None)
+        if not any_sent:
+            return self
+        if k and not t:
+            raise ValueError("Informe o tipo da chave PIX.")
+        if t and not k:
+            raise ValueError("Informe a chave PIX.")
+        self.pix_key = k or None
+        return self
 
 
 class CLTCostPreviewRequest(BaseModel):

@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  addInvoiceAnticipation,
   createReceivableInvoice,
+  deleteInvoiceAnticipation,
   deleteReceivableInvoice,
   deleteInvoicePdf,
   downloadInvoicePdfBlob,
@@ -8,14 +10,31 @@ import {
   fetchReceivableKpis,
   openPdfBlobInNewTab,
   updateReceivableInvoice,
+  updateInvoiceAnticipation,
   uploadInvoicePdf,
   type InvoiceStatus,
+  type InvoiceAnticipation,
   type PeriodField,
   type ReceivableInvoice,
 } from "@/services/receivables";
 import { usePermission } from "@/hooks/usePermission";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
+import { PeriodFilter } from "@/components/PeriodFilter";
+
+function formatAxiosDetail(e: unknown): string {
+  if (!isAxiosError(e)) return "Erro inesperado.";
+  const detail = e.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (detail != null) {
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return String(detail);
+    }
+  }
+  return e.message || "Falha na requisição.";
+}
 
 function formatBRL(n: number): string {
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -25,6 +44,10 @@ function formatDateBr(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
   if (!y || !m || !d) return iso;
   return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`;
+}
+
+function formatPct2(n: number): string {
+  return `${n.toFixed(2).replace(".", ",")}%`;
 }
 
 function parseMoneyInput(raw: string): number {
@@ -53,13 +76,13 @@ function todayIsoLocal(): string {
 }
 
 function isOverdue(row: ReceivableInvoice): boolean {
-  if (row.status === "FINALIZADA" || row.status === "CANCELADA") return false;
+  if (row.status === "RECEBIDA" || row.status === "CANCELADA") return false;
   const due = row.due_date.slice(0, 10);
   return due < todayIsoLocal();
 }
 
 function statusBadgeClass(s: InvoiceStatus): string {
-  if (s === "FINALIZADA") return "bg-emerald-100 text-emerald-900 ring-emerald-200";
+  if (s === "RECEBIDA") return "bg-emerald-100 text-emerald-900 ring-emerald-200";
   if (s === "CANCELADA") return "bg-slate-200 text-slate-700 ring-slate-300";
   if (s === "ANTECIPADA") return "bg-amber-100 text-amber-900 ring-amber-200";
   return "bg-slate-100 text-slate-800 ring-slate-200";
@@ -68,7 +91,7 @@ function statusBadgeClass(s: InvoiceStatus): string {
 const STATUS_LABELS: Record<InvoiceStatus, string> = {
   EMITIDA: "Emitida",
   ANTECIPADA: "Antecipada",
-  FINALIZADA: "Finalizada",
+  RECEBIDA: "Recebida",
   CANCELADA: "Cancelada",
 };
 
@@ -86,10 +109,8 @@ type EditDraft = {
   net_amount: string;
   client_name: string;
   notes: string;
-  received_amount: string;
   received_date: string;
-  is_anticipated: boolean;
-  institution: string;
+  received: boolean;
 };
 
 function emptyEditDraft(): EditDraft {
@@ -101,16 +122,15 @@ function emptyEditDraft(): EditDraft {
     net_amount: "",
     client_name: "",
     notes: "",
-    received_amount: "",
     received_date: "",
-    is_anticipated: false,
-    institution: "",
+    received: false,
   };
 }
 
 export function Invoices() {
   const canEditInvoices = usePermission("invoices.edit");
   const [projects, setProjects] = useState<Project[]>([]);
+  const [periodMode, setPeriodMode] = useState<"MONTH" | "ALL">("MONTH");
   const [period, setPeriod] = useState(() => monthToYm(new Date()));
   const [periodField, setPeriodField] = useState<PeriodField>("issue");
   const [projectId, setProjectId] = useState("");
@@ -125,6 +145,15 @@ export function Invoices() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft>(emptyEditDraft);
   const [pdfUploading, setPdfUploading] = useState<string | null>(null);
+  const [antForm, setAntForm] = useState({
+    institution: "",
+    amount_received: "",
+    amount_to_repay: "",
+    data_recebimento: "",
+    due_date: "",
+  });
+  const [editingAnticipationId, setEditingAnticipationId] = useState<string | null>(null);
+  const [antBusy, setAntBusy] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -155,10 +184,12 @@ export function Invoices() {
     try {
       const params: Parameters<typeof fetchReceivableInvoices>[0] = {
         project_id: projectId || undefined,
-        year: ym.year,
-        month: ym.month,
         period_field: periodField,
       };
+      if (periodMode === "MONTH") {
+        params.year = ym.year;
+        params.month = ym.month;
+      }
       if (statusFilter) params.status = statusFilter;
       if (clienteFilter.trim()) params.client = clienteFilter.trim();
 
@@ -166,20 +197,19 @@ export function Invoices() {
         fetchReceivableInvoices(params),
         fetchReceivableKpis({
           project_id: projectId || undefined,
-          year: ym.year,
-          month: ym.month,
-          period_field: periodField,
+          year: periodMode === "MONTH" ? ym.year : undefined,
+          month: periodMode === "MONTH" ? ym.month : undefined,
+          period_field: periodMode === "MONTH" ? periodField : undefined,
         }),
       ]);
       setRows(list);
       setKpis(k);
     } catch (e) {
-      if (isAxiosError(e)) setError(String(e.response?.data?.detail ?? e.message));
-      else setError("Erro ao carregar.");
+      setError(formatAxiosDetail(e));
     } finally {
       setLoading(false);
     }
-  }, [projectId, statusFilter, clienteFilter, ym.year, ym.month, periodField]);
+  }, [projectId, statusFilter, clienteFilter, ym.year, ym.month, periodField, periodMode]);
 
   useEffect(() => {
     void listProjects()
@@ -194,6 +224,14 @@ export function Invoices() {
   useEffect(() => {
     if (!expandedId) {
       setEditDraft(emptyEditDraft());
+      setAntForm({
+        institution: "",
+        amount_received: "",
+        amount_to_repay: "",
+        data_recebimento: "",
+        due_date: "",
+      });
+      setEditingAnticipationId(null);
       return;
     }
     const row = rows.find((r) => r.id === expandedId);
@@ -212,13 +250,8 @@ export function Invoices() {
       }),
       client_name: row.client_name ?? "",
       notes: row.notes ?? "",
-      received_amount: row.received_amount.toLocaleString("pt-BR", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }),
       received_date: row.received_date ? row.received_date.slice(0, 10) : "",
-      is_anticipated: row.is_anticipated,
-      institution: row.institution ?? "",
+      received: row.status === "RECEBIDA",
     });
   }, [expandedId, rows]);
 
@@ -257,8 +290,7 @@ export function Invoices() {
       });
       await load();
     } catch (err) {
-      if (isAxiosError(err)) setError(String(err.response?.data?.detail ?? err.message));
-      else setError("Não foi possível cadastrar.");
+      setError(formatAxiosDetail(err));
     } finally {
       setSaving(false);
     }
@@ -283,25 +315,18 @@ export function Invoices() {
         await updateReceivableInvoice(invoiceId, { notes: editDraft.notes.trim() || null });
         await load();
       } catch (e) {
-        if (isAxiosError(e)) setError(String(e.response?.data?.detail ?? e.message));
-        else setError("Não foi possível salvar.");
+        setError(formatAxiosDetail(e));
       }
       return;
     }
 
     const gross = parseMoneyInput(editDraft.gross_amount);
     const net = parseMoneyInput(editDraft.net_amount);
-    const recv = parseMoneyInput(editDraft.received_amount);
     if (gross <= 0 || net <= 0) {
       setError("Valores bruto e líquido devem ser positivos.");
       return;
     }
-    const tol = 0.01;
-    if (recv > tol && Math.abs(recv - net) > tol) {
-      setError("Recebimento deve ser integral: informe 0 ou o valor líquido completo.");
-      return;
-    }
-    if (recv > 0 && !editDraft.received_date) {
+    if (editDraft.received && !editDraft.received_date) {
       setError("Informe a data do recebimento.");
       return;
     }
@@ -316,15 +341,93 @@ export function Invoices() {
         net_amount: net,
         client_name: editDraft.client_name.trim() || null,
         notes: editDraft.notes.trim() || null,
-        is_anticipated: editDraft.is_anticipated,
-        institution: editDraft.institution.trim() || null,
-        received_amount: recv,
-        received_date: recv > 0 ? editDraft.received_date : null,
+        received_amount: editDraft.received ? net : 0,
+        received_date: editDraft.received ? editDraft.received_date : null,
       });
       await load();
     } catch (e) {
-      if (isAxiosError(e)) setError(String(e.response?.data?.detail ?? e.message));
-      else setError("Não foi possível salvar.");
+      setError(formatAxiosDetail(e));
+    }
+  }
+
+  function sumAnticipationsReceived(ants: InvoiceAnticipation[] | undefined): number {
+    if (!ants || ants.length === 0) return 0;
+    let s = 0;
+    for (const a of ants) s += Number(a.amount_received ?? 0);
+    return Math.round(s * 100) / 100;
+  }
+
+  async function handleAddAnticipation(row: ReceivableInvoice) {
+    if (!canEditInvoices) return;
+    const inst = antForm.institution.trim();
+    const ar = parseMoneyInput(antForm.amount_received);
+    const ad = parseMoneyInput(antForm.amount_to_repay);
+    const recvDate = antForm.data_recebimento;
+    const due = antForm.due_date;
+    if (!inst) {
+      setError("Informe a instituição.");
+      return;
+    }
+    if (!recvDate) {
+      setError("Informe a data de recebimento.");
+      return;
+    }
+    if (!due) {
+      setError("Informe a data de devolução.");
+      return;
+    }
+    if (ar <= 0 || ad <= 0) {
+      setError("Valores devem ser maiores que zero.");
+      return;
+    }
+    if (ad + 0.01 < ar) {
+      setError("Valor a devolver deve ser maior ou igual ao valor recebido.");
+      return;
+    }
+    // Regra de negócio: permitir soma das antecipações exceder o valor líquido.
+    // Warning não-bloqueante fica na UI (ver abaixo no detalhe da NF).
+    setAntBusy(true);
+    setError(null);
+    try {
+      if (editingAnticipationId) {
+        await updateInvoiceAnticipation(row.id, editingAnticipationId, {
+          institution: inst,
+          amount_received: ar,
+          amount_to_repay: ad,
+          data_recebimento: recvDate,
+          due_date: due,
+        });
+      } else {
+        await addInvoiceAnticipation(row.id, {
+          institution: inst,
+          amount_received: ar,
+          amount_to_repay: ad,
+          data_recebimento: recvDate,
+          due_date: due,
+        });
+      }
+      setAntForm({ institution: "", amount_received: "", amount_to_repay: "", data_recebimento: "", due_date: "" });
+      setEditingAnticipationId(null);
+      await load();
+    } catch (e) {
+      setError(formatAxiosDetail(e));
+    } finally {
+      setAntBusy(false);
+    }
+  }
+
+  async function handleRemoveAnticipation(row: ReceivableInvoice, antId: string) {
+    if (!canEditInvoices) return;
+    if (!window.confirm("Remover esta antecipação?")) return;
+    setAntBusy(true);
+    setError(null);
+    try {
+      await deleteInvoiceAnticipation(row.id, antId);
+      await load();
+    } catch (e) {
+      setError(formatAxiosDetail(e));
+    } finally {
+      setAntBusy(false);
     }
   }
 
@@ -336,8 +439,7 @@ export function Invoices() {
       await updateReceivableInvoice(invoiceId, { status: "CANCELADA" });
       await load();
     } catch (e) {
-      if (isAxiosError(e)) setError(String(e.response?.data?.detail ?? e.message));
-      else setError("Não foi possível cancelar.");
+      setError(formatAxiosDetail(e));
     }
   }
 
@@ -353,8 +455,7 @@ export function Invoices() {
       await uploadInvoicePdf(invoiceId, file);
       await load();
     } catch (e) {
-      if (isAxiosError(e)) setError(String(e.response?.data?.detail ?? e.message));
-      else setError("Falha no upload do PDF.");
+      setError(formatAxiosDetail(e));
     } finally {
       setPdfUploading(null);
     }
@@ -392,8 +493,7 @@ export function Invoices() {
       await deleteInvoicePdf(invoiceId);
       await load();
     } catch (e) {
-      if (isAxiosError(e)) setError(String(e.response?.data?.detail ?? e.message));
-      else setError("Não foi possível remover o PDF.");
+      setError(formatAxiosDetail(e));
     }
   }
 
@@ -410,30 +510,27 @@ export function Invoices() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Kpi label="Total a receber" value={kpis ? formatBRL(kpis.total_a_receber) : "—"} />
-        <Kpi label="Recebido no mês" value={kpis ? formatBRL(kpis.recebido_no_mes) : "—"} />
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <Kpi label="Total Líquido a receber" value={kpis ? formatBRL(kpis.total_a_receber) : "—"} />
+        <Kpi label="Total Bruto a receber" value={kpis ? formatBRL(kpis.total_bruto_a_receber) : "—"} />
+        <Kpi
+          label={periodMode === "ALL" ? "Recebido (total)" : "Recebido no mês"}
+          value={kpis ? formatBRL(kpis.recebido_no_mes) : "—"}
+        />
         <Kpi label="Em atraso" value={kpis ? formatBRL(kpis.em_atraso_valor) : "—"} accent="text-red-800" />
         <Kpi label="Total de NFs" value={kpis ? String(kpis.total_nfs) : "—"} />
       </section>
 
       <section className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap gap-3">
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-slate-700">Período</span>
-            <input
-              type="month"
-              value={period}
-              onChange={(e) => setPeriod(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-2"
-            />
-          </label>
+          <PeriodFilter mode={periodMode} value={period} onModeChange={setPeriodMode} onChange={setPeriod} />
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium text-slate-700">Campo do período</span>
             <select
               value={periodField}
               onChange={(e) => setPeriodField(e.target.value as PeriodField)}
-              className="rounded-lg border border-slate-300 px-3 py-2"
+              disabled={periodMode === "ALL"}
+              className="rounded-lg border border-slate-300 px-3 py-2 disabled:opacity-60"
             >
               <option value="issue">Data de emissão</option>
               <option value="due">Data de vencimento</option>
@@ -627,7 +724,7 @@ export function Invoices() {
             ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
-                  Nenhuma NF no período.
+                  {periodMode === "ALL" ? "Nenhuma NF encontrada." : "Nenhuma NF no período."}
                 </td>
               </tr>
             ) : (
@@ -636,7 +733,7 @@ export function Invoices() {
                 const rowClass =
                   row.status === "CANCELADA"
                     ? "opacity-60"
-                    : row.status === "FINALIZADA"
+                    : row.status === "RECEBIDA"
                       ? "bg-emerald-50/40"
                       : overdue
                         ? "bg-red-50/50"
@@ -795,21 +892,25 @@ export function Invoices() {
                               </div>
 
                               <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Recebimento</p>
-                              <p className="text-xs text-slate-500">
-                                Informe 0 ou o valor líquido integral (pagamento parcial não é permitido).
-                              </p>
                               <div className="grid gap-3 sm:grid-cols-2">
                                 <label className="flex flex-col gap-1 text-xs">
-                                  <span className="font-medium text-slate-700">Valor recebido</span>
-                                  <input
-                                    value={editDraft.received_amount}
-                                    onChange={(e) =>
-                                      setEditDraft((d) => ({ ...d, received_amount: e.target.value }))
-                                    }
-                                    disabled={!canEditInvoices || row.status === "CANCELADA"}
-                                    className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                                    inputMode="decimal"
-                                  />
+                                  <span className="font-medium text-slate-700">Status</span>
+                                  <label className="flex items-center gap-2 text-xs">
+                                    <input
+                                      type="checkbox"
+                                      checked={editDraft.received}
+                                      onChange={(e) =>
+                                        setEditDraft((d) => ({
+                                          ...d,
+                                          received: e.target.checked,
+                                          received_date: e.target.checked ? (d.received_date || todayIsoLocal()) : "",
+                                        }))
+                                      }
+                                      disabled={!canEditInvoices || row.status === "CANCELADA"}
+                                      className="h-4 w-4 rounded border-slate-300"
+                                    />
+                                    <span>NF recebida</span>
+                                  </label>
                                 </label>
                                 <label className="flex flex-col gap-1 text-xs">
                                   <span className="font-medium text-slate-700">Data recebimento</span>
@@ -819,57 +920,183 @@ export function Invoices() {
                                     onChange={(e) =>
                                       setEditDraft((d) => ({ ...d, received_date: e.target.value }))
                                     }
-                                    disabled={!canEditInvoices || row.status === "CANCELADA"}
+                                    disabled={!canEditInvoices || row.status === "CANCELADA" || !editDraft.received}
                                     className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                                   />
                                 </label>
                               </div>
 
                               <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                                Antecipação
+                                Antecipações
                               </p>
-                              <div className="grid gap-3 sm:grid-cols-2">
-                                <label className="flex items-center gap-2 text-xs sm:col-span-2">
-                                  <input
-                                    type="checkbox"
-                                    checked={editDraft.is_anticipated}
-                                    onChange={(e) =>
-                                      setEditDraft((d) => ({ ...d, is_anticipated: e.target.checked }))
-                                    }
-                                    disabled={!canEditInvoices || row.status === "CANCELADA"}
-                                    className="h-4 w-4 rounded border-slate-300"
-                                  />
-                                  <span>Nota antecipada</span>
-                                </label>
-                                {editDraft.is_anticipated && (
-                                  <label className="flex flex-col gap-1 text-xs sm:col-span-2">
-                                    <span className="font-medium text-slate-700">Instituição</span>
-                                    <input
-                                      value={editDraft.institution}
-                                      onChange={(e) =>
-                                        setEditDraft((d) => ({ ...d, institution: e.target.value }))
-                                      }
-                                      disabled={!canEditInvoices || row.status === "CANCELADA"}
-                                      className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                                    />
-                                  </label>
+                              <div className="space-y-3">
+                                {(() => {
+                                  const net = Number(row.net_amount ?? 0);
+                                  const cur = sumAnticipationsReceived(row.anticipations);
+                                  if (cur > net + 0.01) {
+                                    return (
+                                      <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                                        Atenção: soma das antecipações excede o valor líquido da NF.
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+                                {(row.anticipations?.length ?? 0) === 0 ? (
+                                  <p className="text-xs text-slate-500">Nenhuma antecipação registrada.</p>
+                                ) : (
+                                  <ul className="space-y-2">
+                                    {row.anticipations?.map((a) => (
+                                      <li
+                                        key={a.id}
+                                        className={`flex flex-wrap items-center justify-between gap-2 rounded border bg-white px-3 py-2 text-xs ${
+                                          editingAnticipationId === a.id
+                                            ? "border-blue-300 ring-2 ring-blue-100"
+                                            : "border-slate-200"
+                                        }`}
+                                      >
+                                        <div className="min-w-0">
+                                          <p className="font-medium text-slate-800">{a.institution}</p>
+                                          <p className="text-slate-600">
+                                            {formatBRL(Number(a.amount_received ?? 0))} →{" "}
+                                            {formatBRL(Number(a.amount_to_repay ?? 0))}
+                                          </p>
+                                          {typeof a.juros_total === "number" &&
+                                          typeof a.taxa_percentual === "number" &&
+                                          typeof a.dias === "number" ? (
+                                            <p
+                                              className="text-slate-600"
+                                              title="Juros calculado com base no valor líquido da antecipação e prazo até o vencimento"
+                                            >
+                                              Juros: {formatBRL(a.juros_total)} ({formatPct2(a.taxa_percentual)})
+                                            </p>
+                                          ) : null}
+                                          <p className="text-slate-600">
+                                            Prazo:{" "}
+                                            {typeof a.dias === "number" ? `${a.dias} dias` : "—"} |{" "}
+                                            {typeof a.taxa_mensal === "number" ? `${formatPct2(a.taxa_mensal)} a.m.` : "—"} (
+                                            {formatDateBr(a.due_date)})
+                                          </p>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <button
+                                            type="button"
+                                            disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
+                                            onClick={() => {
+                                              setEditingAnticipationId(a.id);
+                                              setAntForm({
+                                                institution: a.institution || "",
+                                                amount_received: String(a.amount_received ?? ""),
+                                                amount_to_repay: String(a.amount_to_repay ?? ""),
+                                                data_recebimento: (a.data_recebimento || "").slice(0, 10),
+                                                due_date: (a.due_date || "").slice(0, 10),
+                                              });
+                                            }}
+                                            className="rounded px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                                          >
+                                            Editar
+                                          </button>
+                                          <button
+                                            type="button"
+                                            disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
+                                            onClick={() => void handleRemoveAnticipation(row, a.id)}
+                                            className="rounded px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                          >
+                                            Remover
+                                          </button>
+                                        </div>
+                                      </li>
+                                    ))}
+                                  </ul>
                                 )}
-                              </div>
 
-                              <div className="rounded border border-slate-200 bg-white p-3 text-xs text-slate-700">
-                                <p className="font-semibold text-slate-800">Indicadores</p>
-                                <p className="mt-1">
-                                  Taxa implícita mensal (bruto → líquido):{" "}
-                                  <span className="font-mono tabular-nums">
-                                    {row.implied_monthly_rate_percent != null
-                                      ? `${row.implied_monthly_rate_percent.toFixed(4)} %`
-                                      : "—"}
-                                  </span>
-                                </p>
-                                <p className="mt-1">
-                                  Juros / desconto (antecipação):{" "}
-                                  <span className="font-mono tabular-nums">{formatBRL(row.interest_amount)}</span>
-                                </p>
+                                <div className="rounded border border-slate-200 bg-white p-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                                    + Adicionar antecipação
+                                  </p>
+                                  <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                                    <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+                                      <span className="font-medium text-slate-700">Instituição</span>
+                                      <input
+                                        value={antForm.institution}
+                                        onChange={(e) => setAntForm((s) => ({ ...s, institution: e.target.value }))}
+                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
+                                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                                      />
+                                    </label>
+                                    <label className="flex flex-col gap-1 text-xs">
+                                      <span className="font-medium text-slate-700">Valor recebido</span>
+                                      <input
+                                        value={antForm.amount_received}
+                                        onChange={(e) => setAntForm((s) => ({ ...s, amount_received: e.target.value }))}
+                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
+                                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                                        inputMode="decimal"
+                                        placeholder="0,00"
+                                      />
+                                    </label>
+                                    <label className="flex flex-col gap-1 text-xs">
+                                      <span className="font-medium text-slate-700">Valor a devolver</span>
+                                      <input
+                                        value={antForm.amount_to_repay}
+                                        onChange={(e) => setAntForm((s) => ({ ...s, amount_to_repay: e.target.value }))}
+                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
+                                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                                        inputMode="decimal"
+                                        placeholder="0,00"
+                                      />
+                                    </label>
+                                    <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+                                      <span className="font-medium text-slate-700">Data de recebimento</span>
+                                      <input
+                                        type="date"
+                                        value={antForm.data_recebimento}
+                                        onChange={(e) => setAntForm((s) => ({ ...s, data_recebimento: e.target.value }))}
+                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
+                                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                                      />
+                                    </label>
+                                    <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+                                      <span className="font-medium text-slate-700">Data de devolução</span>
+                                      <input
+                                        type="date"
+                                        value={antForm.due_date}
+                                        onChange={(e) => setAntForm((s) => ({ ...s, due_date: e.target.value }))}
+                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
+                                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                                      />
+                                    </label>
+                                  </div>
+                                  <div className="mt-3 flex justify-end">
+                                    {editingAnticipationId && (
+                                      <button
+                                        type="button"
+                                        disabled={antBusy || !canEditInvoices}
+                                        onClick={() => {
+                                          setEditingAnticipationId(null);
+                                          setAntForm({
+                                            institution: "",
+                                            amount_received: "",
+                                            amount_to_repay: "",
+                                            data_recebimento: "",
+                                            due_date: "",
+                                          });
+                                        }}
+                                        className="mr-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                      >
+                                        Cancelar edição
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
+                                      onClick={() => void handleAddAnticipation(row)}
+                                      className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+                                    >
+                                      {antBusy ? "Salvando…" : editingAnticipationId ? "Salvar edição" : "Adicionar antecipação"}
+                                    </button>
+                                  </div>
+                                </div>
                               </div>
 
                               <div className="flex flex-wrap gap-2">

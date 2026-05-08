@@ -1,6 +1,7 @@
 import { api } from "./api";
 
 export type TipoFinanceiro = "endividamento" | "custo_fixo";
+export type RenegotiationType = "UNIQUE" | "INSTALLMENTS";
 
 export interface PagamentoMes {
   mes: string;
@@ -10,8 +11,19 @@ export interface PagamentoMes {
 export interface CompanyFinancialItem {
   id: string;
   tipo: string;
+  item_type?: "MANUAL" | "COLABORADOR_MATRIZ" | null;
+  employee_id?: string | null;
+  employee_name?: string | null;
+  employee_employment_type?: string | null;
+  percentual?: number | null;
   nome: string;
   valor_referencia: number;
+  has_legal_process?: boolean;
+  has_renegotiation?: boolean;
+  renegotiated_amount?: number | null;
+  renegotiation_type?: RenegotiationType | null;
+  installment_count?: number | null;
+  installment_value?: number | null;
   pagamentos: PagamentoMes[];
   total_pago: number;
   pago_mes: number;
@@ -54,6 +66,15 @@ export async function createCompanyFinanceItem(payload: {
   tipo: TipoFinanceiro;
   nome: string;
   valor_referencia: number;
+  item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
+  employee_id?: string | null;
+  percentual?: number | null;
+  has_legal_process?: boolean;
+  has_renegotiation?: boolean;
+  renegotiated_amount?: number | null;
+  renegotiation_type?: RenegotiationType | null;
+  installment_count?: number | null;
+  installment_value?: number | null;
 }): Promise<CompanyFinancialItem> {
   const { data } = await api.post<CompanyFinancialItem>("/company-finance/items/", payload);
   return data;
@@ -61,7 +82,19 @@ export async function createCompanyFinanceItem(payload: {
 
 export async function updateCompanyFinanceItem(
   id: string,
-  payload: { nome?: string; valor_referencia?: number },
+  payload: {
+    nome?: string;
+    valor_referencia?: number;
+    item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
+    employee_id?: string | null;
+    percentual?: number | null;
+    has_legal_process?: boolean;
+    has_renegotiation?: boolean;
+    renegotiated_amount?: number | null;
+    renegotiation_type?: RenegotiationType | null;
+    installment_count?: number | null;
+    installment_value?: number | null;
+  },
   competencia: string,
 ): Promise<CompanyFinancialItem> {
   const { data } = await api.patch<CompanyFinancialItem>(`/company-finance/items/${id}/`, payload, {

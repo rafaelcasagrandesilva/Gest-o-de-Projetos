@@ -7,19 +7,14 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
-import { useAuth } from "@/context/AuthContext";
 import {
   createEmployee,
-  createStaffCost,
   deleteEmployee,
-  deleteStaffCost,
   fetchPayroll,
   listEmployees,
-  listStaffCosts,
   parseCompetenciaYm,
   previewCltCost,
   updateEmployee,
-  type CompanyStaffCost,
   type Employee,
   type EmployeeCreate,
   type PayrollLine,
@@ -30,6 +25,7 @@ import { isAxiosError } from "axios";
 import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
 import { usePermission } from "@/hooks/usePermission";
 import { useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
+import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 
 function monthStartIso(): string {
   const d = new Date();
@@ -39,6 +35,8 @@ function monthStartIso(): string {
 type FormState = {
   full_name: string;
   email: string | null;
+  pix_key_type: "CPF" | "CNPJ" | "EMAIL" | "TELEFONE" | "ALEATORIA" | "";
+  pix_key: string;
   role_title: string | null;
   employment_type: "CLT" | "PJ";
   is_active: boolean;
@@ -56,6 +54,8 @@ type FormState = {
 const emptyForm: FormState = {
   full_name: "",
   email: null,
+  pix_key_type: "",
+  pix_key: "",
   role_title: null,
   employment_type: "CLT",
   is_active: true,
@@ -83,10 +83,38 @@ function parseNonNegativeMoney(s: string, fallback: number): number {
   return n;
 }
 
+function pixPlaceholder(t: FormState["pix_key_type"]): string {
+  switch (t) {
+    case "CPF":
+      return "000.000.000-00";
+    case "CNPJ":
+      return "00.000.000/0000-00";
+    case "TELEFONE":
+      return "(00) 00000-0000";
+    case "EMAIL":
+      return "exemplo@email.com";
+    case "ALEATORIA":
+      return "chave aleatória";
+    default:
+      return "Informe a chave";
+  }
+}
+
+function validatePix(form: FormState): string | null {
+  const key = form.pix_key.trim();
+  const type = form.pix_key_type;
+  if ((key && !type) || (!key && type)) {
+    return "PIX: informe o tipo e a chave (ou deixe ambos vazios).";
+  }
+  return null;
+}
+
 function employeeToForm(emp: Employee): FormState {
   return {
     full_name: emp.full_name,
     email: emp.email,
+    pix_key_type: (emp.pix_key_type as any) ?? "",
+    pix_key: emp.pix_key ?? "",
     role_title: emp.role_title,
     employment_type: emp.employment_type === "PJ" ? "PJ" : "CLT",
     is_active: emp.is_active,
@@ -106,9 +134,13 @@ function formToCreatePayload(form: FormState, referenceCompetencia: string): Emp
   const add = parseOptionalMoney(form.additional_costs);
   const pjH = parseOptionalMoney(form.pj_hours_per_month);
   const salary = parseOptionalMoney(form.salary_base);
+  const pixKey = form.pix_key.trim();
+  const pixType = form.pix_key_type || null;
   return {
     full_name: form.full_name.trim(),
     email: form.email?.trim() || null,
+    pix_key_type: pixKey ? pixType : null,
+    pix_key: pixKey || null,
     role_title: form.role_title?.trim() || null,
     employment_type: form.employment_type,
     is_active: form.is_active,
@@ -129,9 +161,13 @@ function formToUpdatePayload(form: FormState): Partial<EmployeeCreate> {
   const add = parseOptionalMoney(form.additional_costs);
   const pjH = parseOptionalMoney(form.pj_hours_per_month);
   const salary = parseOptionalMoney(form.salary_base);
+  const pixKey = form.pix_key.trim();
+  const pixType = form.pix_key_type || null;
   return {
     full_name: form.full_name.trim(),
     email: form.email?.trim() || null,
+    pix_key_type: pixKey ? pixType : null,
+    pix_key: pixKey || null,
     role_title: form.role_title?.trim() || null,
     employment_type: form.employment_type,
     is_active: form.is_active,
@@ -307,6 +343,50 @@ function CadastroColaboradorFields({
         />
       </div>
 
+      <div className="sm:col-span-2">
+        <label className="mb-1 block text-sm text-slate-600">PIX</label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor={`${idPrefix}-pix-type`} className="sr-only">
+              Tipo de chave PIX
+            </label>
+            <select
+              id={`${idPrefix}-pix-type`}
+              value={form.pix_key_type}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  pix_key_type: e.target.value as FormState["pix_key_type"],
+                }))
+              }
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            >
+              <option value="">Tipo de chave</option>
+              <option value="CPF">CPF</option>
+              <option value="CNPJ">CNPJ</option>
+              <option value="EMAIL">E-mail</option>
+              <option value="TELEFONE">Telefone</option>
+              <option value="ALEATORIA">Aleatória</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor={`${idPrefix}-pix-key`} className="sr-only">
+              Chave PIX
+            </label>
+            <input
+              id={`${idPrefix}-pix-key`}
+              value={form.pix_key}
+              onChange={(e) => setForm((f) => ({ ...f, pix_key: e.target.value }))}
+              placeholder={pixPlaceholder(form.pix_key_type)}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </div>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">
+          Opcional. Se preencher um campo, o outro também é obrigatório.
+        </p>
+      </div>
+
       {form.employment_type === "CLT" ? (
         <>
           <div>
@@ -438,8 +518,6 @@ function CadastroColaboradorFields({
 }
 
 export function Employees() {
-  const { user } = useAuth();
-  const isAdmin = Boolean(user?.role_names?.includes("ADMIN"));
   const canEditEmployees = usePermission("employees.edit");
   const readOnly = useConsultaReadOnly() || useGestorGlobalReadOnly() || !canEditEmployees;
   const [items, setItems] = useState<Employee[]>([]);
@@ -456,10 +534,6 @@ export function Employees() {
   const [payPrev, setPayPrev] = useState<PayrollResponse | null>(null);
   const [payReal, setPayReal] = useState<PayrollResponse | null>(null);
   const [expandedPayroll, setExpandedPayroll] = useState<Set<string>>(() => new Set());
-  const [staffCosts, setStaffCosts] = useState<CompanyStaffCost[]>([]);
-  const [staffEmpId, setStaffEmpId] = useState("");
-  const [staffValor, setStaffValor] = useState("");
-  const [staffSaving, setStaffSaving] = useState(false);
 
   const refreshPayroll = useCallback(async () => {
     setPayrollLoading(true);
@@ -529,22 +603,6 @@ export function Employees() {
     void refreshPayroll();
   }, [refreshPayroll]);
 
-  useEffect(() => {
-    if (!isAdmin) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const rows = await listStaffCosts({ competencia: referenceCompetencia, scenario });
-        if (!cancelled) setStaffCosts(rows);
-      } catch {
-        if (!cancelled) setStaffCosts([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isAdmin, referenceCompetencia, scenario]);
-
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (form.employment_type === "CLT") {
@@ -553,6 +611,11 @@ export function Employees() {
         setError("CLT: informe salário base maior que zero.");
         return;
       }
+    }
+    const pixErr = validatePix(form);
+    if (pixErr) {
+      setError(pixErr);
+      return;
     }
     setCreating(true);
     setError(null);
@@ -594,46 +657,6 @@ export function Employees() {
       await refreshPayroll();
     } catch {
       setError("Erro ao excluir.");
-    }
-  }
-
-  async function submitStaffCost(e: React.FormEvent) {
-    e.preventDefault();
-    if (!staffEmpId || !staffValor) return;
-    const v = Number(staffValor.replace(",", "."));
-    if (Number.isNaN(v) || v < 0) return;
-    setStaffSaving(true);
-    try {
-      await createStaffCost({
-        employee_id: staffEmpId,
-        competencia: referenceCompetencia,
-        valor: v,
-        scenario,
-      });
-      setStaffValor("");
-      setStaffEmpId("");
-      setStaffCosts(await listStaffCosts({ competencia: referenceCompetencia, scenario }));
-      await refreshPayroll();
-    } catch (err) {
-      if (isAxiosError(err) && err.response?.data?.detail) {
-        const d = err.response.data.detail;
-        setError(typeof d === "string" ? d : "Não foi possível salvar custo administrativo.");
-      } else {
-        setError("Não foi possível salvar custo administrativo.");
-      }
-    } finally {
-      setStaffSaving(false);
-    }
-  }
-
-  async function removeStaffCost(id: string) {
-    if (!confirm("Remover este custo administrativo?")) return;
-    try {
-      await deleteStaffCost(id);
-      setStaffCosts(await listStaffCosts({ competencia: referenceCompetencia, scenario }));
-      await refreshPayroll();
-    } catch {
-      setError("Erro ao excluir custo administrativo.");
     }
   }
 
@@ -877,8 +900,12 @@ export function Employees() {
                               <span className="text-slate-300">·</span>
                             )}
                           </td>
-                          <td className="px-4 py-3 font-medium text-slate-900">{line.full_name}</td>
-                          <td className="px-4 py-3 text-slate-600">{line.role_title ?? "—"}</td>
+                          <td className="min-w-0 max-w-[280px] px-4 py-3 align-middle font-medium text-slate-900">
+                            <TruncatedCell value={line.full_name} maxWidthClass="max-w-[280px]" />
+                          </td>
+                          <td className="min-w-0 max-w-[220px] px-4 py-3 align-middle text-slate-600">
+                            <TruncatedCell value={line.role_title} maxWidthClass="max-w-[220px]" />
+                          </td>
                           <td className="px-4 py-3">{line.employment_type}</td>
                           <td className="px-4 py-3 text-right tabular-nums">{formatMoney(line.projects_total)}</td>
                           <td className="px-4 py-3 text-right tabular-nums text-slate-600">
@@ -908,7 +935,9 @@ export function Employees() {
                                     key={s.labor_id}
                                     className="flex flex-wrap justify-between gap-2 border-b border-slate-100/80 py-1"
                                   >
-                                    <span>{s.project_name}</span>
+                                    <span className="min-w-0 flex-1">
+                                      <TruncatedText maxWidthClass="max-w-[240px]">{s.project_name}</TruncatedText>
+                                    </span>
                                     <span className="tabular-nums text-slate-600">
                                       {s.allocation_percentage}% → {formatMoney(s.allocated_cost)}
                                       <span className="ml-2 text-slate-400">
@@ -926,72 +955,6 @@ export function Employees() {
                   })}
                 </tbody>
               </table>
-            </div>
-          )}
-
-          {isAdmin && !readOnly && (
-            <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h3 className="font-medium text-slate-900">Custos administrativos (fora de projeto)</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Valor extra por colaborador no mês e cenário (soma na coluna Adm. da folha).
-              </p>
-              <form onSubmit={submitStaffCost} className="mt-4 flex flex-wrap items-end gap-3">
-                <div>
-                  <label className="mb-1 block text-xs text-slate-600">Colaborador</label>
-                  <select
-                    value={staffEmpId}
-                    onChange={(e) => setStaffEmpId(e.target.value)}
-                    className="min-w-[12rem] rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                    required
-                  >
-                    <option value="">—</option>
-                    {items.map((e) => (
-                      <option key={e.id} value={e.id}>
-                        {e.full_name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-slate-600">Valor (R$)</label>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={staffValor}
-                    onChange={(e) => setStaffValor(e.target.value)}
-                    className="w-32 rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
-                    placeholder="0"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={staffSaving}
-                  className="rounded-lg bg-slate-800 px-4 py-2 text-sm text-white disabled:opacity-50"
-                >
-                  {staffSaving ? "Salvando…" : "Adicionar"}
-                </button>
-              </form>
-              {staffCosts.length > 0 ? (
-                <ul className="mt-4 space-y-2 border-t border-slate-100 pt-4 text-sm">
-                  {staffCosts.map((c) => (
-                    <li
-                      key={c.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2"
-                    >
-                      <span>
-                        {c.employee_full_name ?? c.employee_id} — {formatMoney(c.valor)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => removeStaffCost(c.id)}
-                        className="text-xs text-red-600 hover:underline"
-                      >
-                        Remover
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
             </div>
           )}
 
@@ -1013,8 +976,12 @@ export function Employees() {
                 <tbody>
                   {items.map((emp) => (
                     <tr key={emp.id} className="border-b border-slate-50">
-                      <td className="px-4 py-3">{emp.full_name}</td>
-                      <td className="px-4 py-3 text-slate-600">{emp.role_title ?? "—"}</td>
+                      <td className="min-w-0 max-w-[280px] px-4 py-3 align-middle">
+                        <TruncatedCell value={emp.full_name} maxWidthClass="max-w-[280px]" />
+                      </td>
+                      <td className="min-w-0 max-w-[220px] px-4 py-3 align-middle text-slate-600">
+                        <TruncatedCell value={emp.role_title} maxWidthClass="max-w-[220px]" />
+                      </td>
                       <td className="px-4 py-3">{emp.employment_type}</td>
                       <td className="px-4 py-3 text-right tabular-nums text-slate-700">
                         {emp.salary_base != null ? formatMoney(emp.salary_base) : "—"}
@@ -1105,6 +1072,11 @@ function EditEmployeePanel({
         setLocalError("CLT: informe salário base maior que zero.");
         return;
       }
+    }
+    const pixErr = validatePix(form);
+    if (pixErr) {
+      setLocalError(pixErr);
+      return;
     }
     setSaving(true);
     setLocalError(null);

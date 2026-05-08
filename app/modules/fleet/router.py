@@ -30,9 +30,27 @@ async def list_vehicles(
     db: AsyncSession = Depends(get_db),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
-    active_only: bool = Query(default=False, description="Somente veículos ativos (para alocação em projetos)"),
+    include_inactive: bool = Query(default=False, description="Incluir veículos inativos (telas administrativas)"),
+    active_only: bool = Query(
+        default=False,
+        description="LEGADO: Somente veículos ativos. Use /vehicles/active ou include_inactive.",
+    ),
 ) -> list[VehicleRead]:
-    rows = await FleetService(db).list_vehicles(offset=offset, limit=limit, active_only=active_only)
+    # Compat: se active_only=true, força não incluir inativos.
+    eff_include_inactive = bool(include_inactive)
+    if active_only:
+        eff_include_inactive = False
+    rows = await FleetService(db).list_vehicles(offset=offset, limit=limit, include_inactive=eff_include_inactive)
+    return [fleet_vehicle_to_read(r) for r in rows]
+
+
+@router.get("/active", response_model=list[VehicleRead], dependencies=_read)
+async def list_active_vehicles(
+    db: AsyncSession = Depends(get_db),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[VehicleRead]:
+    rows = await FleetService(db).list_vehicles(offset=offset, limit=limit, include_inactive=False)
     return [fleet_vehicle_to_read(r) for r in rows]
 
 

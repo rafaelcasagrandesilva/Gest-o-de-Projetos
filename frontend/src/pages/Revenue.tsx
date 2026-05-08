@@ -7,7 +7,7 @@ import { isAxiosError } from "axios";
 
 function monthStartInput(): string {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function scenarioLabel(s: ScenarioKind): string {
@@ -88,7 +88,7 @@ export function RevenuePage() {
     try {
       await createRevenue({
         project_id: projectId,
-        competencia,
+        competencia: `${competencia}-01`,
         amount: Number(amount),
         description: description.trim() || null,
         status,
@@ -222,7 +222,7 @@ export function RevenuePage() {
               <div>
                 <label className="mb-1 block text-xs text-slate-500">Competência (mês)</label>
                 <input
-                  type="date"
+                  type="month"
                   required
                   disabled={!canEditBilling}
                   value={competencia}

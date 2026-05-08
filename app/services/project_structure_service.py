@@ -41,7 +41,8 @@ from app.core.scenario import DEFAULT_SCENARIO, Scenario, coerce_scenario, parse
 from app.services.audit_service import AuditService
 from app.services.settings_service import SettingsService
 from app.services.utils import model_to_dict
-from app.utils.date_utils import normalize_competencia, previous_competencia
+from app.services.payable_snapshot_service import PayableSnapshotService
+from app.utils.date_utils import next_competencia, normalize_competencia, previous_competencia
 
 logger = logging.getLogger(__name__)
 
@@ -400,6 +401,9 @@ class ProjectStructureService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erro ao carregar vínculo de mão de obra.",
             )
+        # Snapshot de payables do mês seguinte depende desta competência (source_month = competencia).
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(competencia)})
+        await self.session.commit()
         return await self._labor_to_read(loaded)
 
     async def update_labor_costs(
@@ -441,6 +445,8 @@ class ProjectStructureService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erro ao carregar vínculo de mão de obra.",
             )
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(normalize_competencia(row.competencia))})
+        await self.session.commit()
         return await self._labor_to_read(loaded)
 
     async def delete_labor(
@@ -469,6 +475,13 @@ class ProjectStructureService:
             request=request,
         )
         await self.session.commit()
+        comp = before.get("competencia")
+        if comp:
+            try:
+                await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(normalize_competencia(comp))})
+                await self.session.commit()
+            except Exception:
+                pass
 
     # --- Vehicle (alocação frota → projeto) ---
 
@@ -531,10 +544,10 @@ class ProjectStructureService:
         fleet_vid = data["vehicle_id"]
         fleet_repo = FleetVehicleRepository(self.session)
         fv = await fleet_repo.get(fleet_vid)
-        if not fv or not fv.is_active:
+        if not fv or getattr(fv, "deleted_at", None) is not None or not fv.is_active:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Veículo não encontrado ou inativo.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Veículo inválido",
             )
         dup = await self.vehicles.get_by_project_fleet_vehicle_competencia(
             project_id=project_id, vehicle_id=fleet_vid, competencia=competencia, scenario=scenario
@@ -588,20 +601,23 @@ class ProjectStructureService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erro ao carregar alocação de veículo.",
             )
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(competencia)})
+        await self.session.commit()
         return self.project_vehicle_to_read(loaded, settings)
 
     async def update_project_vehicle(self, *, allocation_id: UUID, data: dict) -> ProjectVehicleRead:
         row = await self.vehicles.get_with_vehicle_and_driver(allocation_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+        comp = normalize_competencia(row.competencia)
         fleet_repo = FleetVehicleRepository(self.session)
         patch = dict(data)
         if "vehicle_id" in patch:
             fv = await fleet_repo.get(patch["vehicle_id"])
-            if not fv or not fv.is_active:
+            if not fv or getattr(fv, "deleted_at", None) is not None or not fv.is_active:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Veículo não encontrado ou inativo.",
+                    detail="Veículo inválido",
                 )
             other = await self.vehicles.get_by_project_fleet_vehicle_competencia(
                 project_id=row.project_id,
@@ -620,8 +636,8 @@ class ProjectStructureService:
         if sc_en == Scenario.PREVISTO:
             row.fuel_cost_realized = None
         fv_row = await fleet_repo.get(row.vehicle_id)
-        if not fv_row:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Veículo da frota inválido.")
+        if not fv_row or getattr(fv_row, "deleted_at", None) is not None or not fv_row.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Veículo inválido")
         if sc_en == Scenario.PREVISTO:
             if not row.fuel_type or row.km_per_month is None:
                 raise HTTPException(
@@ -658,13 +674,18 @@ class ProjectStructureService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erro ao carregar alocação de veículo.",
             )
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(comp)})
+        await self.session.commit()
         return self.project_vehicle_to_read(loaded, settings)
 
     async def delete_project_vehicle(self, *, allocation_id: UUID) -> None:
         row = await self.vehicles.get(allocation_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+        comp = normalize_competencia(row.competencia)
         await self.vehicles.delete(row)
+        await self.session.commit()
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(comp)})
         await self.session.commit()
 
     # --- Systems ---
@@ -679,9 +700,10 @@ class ProjectStructureService:
 
     async def create_system(self, *, project_id: UUID, data: dict) -> ProjectSystemCost:
         scenario = parse_scenario(data.get("scenario"), default=DEFAULT_SCENARIO)
+        comp = normalize_competencia(data["competencia"])
         row = ProjectSystemCost(
             project_id=project_id,
-            competencia=data["competencia"],
+            competencia=comp,
             name=data["name"],
             value=data["value"],
             scenario=scenario,
@@ -689,22 +711,30 @@ class ProjectStructureService:
         await self.systems.add(row)
         await self.session.commit()
         await self.session.refresh(row)
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(comp)})
+        await self.session.commit()
         return row
 
     async def update_system(self, *, system_id: UUID, data: dict) -> ProjectSystemCost:
         row = await self.systems.get(system_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+        comp = normalize_competencia(row.competencia)
         self.systems.apply_updates(row, {k: v for k, v in data.items() if v is not None})
         await self.session.commit()
         await self.session.refresh(row)
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(comp)})
+        await self.session.commit()
         return row
 
     async def delete_system(self, *, system_id: UUID) -> None:
         row = await self.systems.get(system_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+        comp = normalize_competencia(row.competencia)
         await self.systems.delete(row)
+        await self.session.commit()
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(comp)})
         await self.session.commit()
 
     # --- Operational fixed ---
@@ -719,9 +749,10 @@ class ProjectStructureService:
 
     async def create_fixed(self, *, project_id: UUID, data: dict) -> ProjectOperationalFixed:
         scenario = parse_scenario(data.get("scenario"), default=DEFAULT_SCENARIO)
+        comp = normalize_competencia(data["competencia"])
         row = ProjectOperationalFixed(
             project_id=project_id,
-            competencia=data["competencia"],
+            competencia=comp,
             name=data["name"],
             value=data["value"],
             scenario=scenario,
@@ -729,20 +760,28 @@ class ProjectStructureService:
         await self.fixed.add(row)
         await self.session.commit()
         await self.session.refresh(row)
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(comp)})
+        await self.session.commit()
         return row
 
     async def update_fixed(self, *, fixed_id: UUID, data: dict) -> ProjectOperationalFixed:
         row = await self.fixed.get(fixed_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+        comp = normalize_competencia(row.competencia)
         self.fixed.apply_updates(row, {k: v for k, v in data.items() if v is not None})
         await self.session.commit()
         await self.session.refresh(row)
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(comp)})
+        await self.session.commit()
         return row
 
     async def delete_fixed(self, *, fixed_id: UUID) -> None:
         row = await self.fixed.get(fixed_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+        comp = normalize_competencia(row.competencia)
         await self.fixed.delete(row)
+        await self.session.commit()
+        await PayableSnapshotService(self.session).invalidate_months(months={next_competencia(comp)})
         await self.session.commit()

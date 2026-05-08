@@ -41,9 +41,13 @@ class AuthService:
         return user
 
     async def login(self, *, email: str, password: str, request: Request | None = None) -> str:
-        user = await self.users.get_by_email(email)
-        if not user or not user.is_active:
+        user = await self.users.get_by_email(email, include_deleted=True)
+        if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciais inválidas.")
+        if user.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuário removido.")
+        if not user.is_active:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuário desativado.")
         ok, new_hash = verify_password_and_maybe_rehash(password, user.password_hash)
         if not ok:
             logger.warning(

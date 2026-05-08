@@ -1,14 +1,18 @@
 import { useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { getStoredToken } from "@/services/api";
+import { useWorkspace } from "@/context/WorkspaceContext";
+import { API_BASE, getStoredToken } from "@/services/api";
 import { isAxiosError } from "axios";
 
 export function Login() {
   const { login, user, loading } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname ?? "/";
+  const { workspace } = useWorkspace();
+  const from = (location.state as { from?: { pathname: string } })?.from?.pathname ?? "";
+  const fallback = workspace === "projects" ? "/projects/dashboard" : "/finance/dashboard";
+  const target = from && from !== "/" ? from : fallback;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,7 +28,7 @@ export function Login() {
   }
 
   if (!loading && getStoredToken() && user) {
-    return <Navigate to={from} replace />;
+    return <Navigate to={target} replace />;
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -33,11 +37,20 @@ export function Login() {
     setSubmitting(true);
     try {
       await login(email.trim(), password);
-      navigate(from, { replace: true });
+      navigate(target, { replace: true });
     } catch (err) {
       if (isAxiosError(err)) {
-        const msg = err.response?.data?.detail;
-        setError(typeof msg === "string" ? msg : "Falha no login. Verifique email e senha.");
+        const status = err.response?.status;
+        const detail = (err.response?.data as { detail?: unknown } | undefined)?.detail;
+        if (!err.response) {
+          setError(`Não foi possível conectar à API (${API_BASE}). Verifique se o backend está rodando e acessível.`);
+        } else if (typeof detail === "string" && detail.trim()) {
+          setError(detail);
+        } else if (status === 401) {
+          setError("Credenciais inválidas. Verifique email e senha.");
+        } else {
+          setError(`Falha no login (HTTP ${status ?? "?"}).`);
+        }
       } else {
         setError("Erro inesperado.");
       }

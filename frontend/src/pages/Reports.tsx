@@ -95,7 +95,7 @@ export function Reports() {
   const loadProjects = useCallback(async () => {
     setLoadingProjects(true);
     try {
-      const data = await listProjects();
+      const data = await listProjects({ status: "ALL" });
       setProjects(data);
     } catch {
       setProjects([]);

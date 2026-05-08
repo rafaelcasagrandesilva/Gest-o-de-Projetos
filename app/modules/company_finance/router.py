@@ -54,7 +54,7 @@ async def _load_item(db: AsyncSession, item_id: UUID) -> CompanyFinancialItem | 
     q = (
         select(CompanyFinancialItem)
         .where(CompanyFinancialItem.id == item_id)
-        .options(selectinload(CompanyFinancialItem.payments))
+        .options(selectinload(CompanyFinancialItem.payments), selectinload(CompanyFinancialItem.employee))
     )
     return (await db.execute(q)).scalars().unique().one_or_none()
 
@@ -84,7 +84,7 @@ async def create_item(
     if loaded is None:
         raise HTTPException(status_code=500, detail="Falha ao carregar item")
     comp = _default_month()
-    read = svc._item_to_read(loaded, parse_month(comp))
+    read = await svc._item_to_read(loaded, parse_month(comp))
     return CompanyFinancialItemRead.model_validate(read)
 
 
@@ -106,7 +106,7 @@ async def update_item(
     if loaded is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")
     comp = competencia or _default_month()
-    read = svc._item_to_read(loaded, parse_month(comp))
+    read = await svc._item_to_read(loaded, parse_month(comp))
     return CompanyFinancialItemRead.model_validate(read)
 
 
@@ -143,7 +143,7 @@ async def replace_payments(
     if loaded is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")
     comp = competencia or _default_month()
-    read = svc._item_to_read(loaded, parse_month(comp))
+    read = await svc._item_to_read(loaded, parse_month(comp))
     return CompanyFinancialItemRead.model_validate(read)
 
 

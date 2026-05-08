@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
@@ -49,8 +50,44 @@ class UsersService:
         self.roles = RoleRepository(session)
         self.audit = AuditService(session)
 
-    async def list_users(self, *, offset: int = 0, limit: int = 50) -> list[User]:
-        return await self.users.list(offset=offset, limit=limit)
+    async def list_users(self, *, offset: int = 0, limit: int = 50, include_deleted: bool = False) -> list[User]:
+        return await self.users.list(offset=offset, limit=limit, include_deleted=include_deleted)
+
+    async def set_active(self, *, actor_user_id, user_id: UUID, active: bool, actor: User | None = None, request: Request | None = None) -> User:
+        _ = actor_user_id
+        u = await self.users.get_with_roles(user_id)
+        if not u:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
+        if u.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Usuário removido.")
+
+        role_names = [link.role.name for link in (getattr(u, "roles", []) or []) if getattr(link, "role", None)]
+        is_admin = "ADMIN" in role_names
+        if not active and is_admin and u.is_active:
+            # não permitir desativar o último ADMIN
+            if await self.users.count_active_admins() <= 1:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Não é permitido desativar o último ADMIN.")
+
+        before = model_to_dict(u)
+        u.is_active = bool(active)
+        u.updated_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        await self.audit.log_action(
+            user=actor,
+            action="activate" if active else "deactivate",
+            entity="user",
+            entity_id=u.id,
+            before=before,
+            after=model_to_dict(u),
+            context={"descricao": "Ativação de usuário" if active else "Desativação de usuário", "email": u.email},
+            request=request,
+            force_log=True,
+        )
+        await self.session.commit()
+        reloaded = await self.users.get_with_roles(u.id)
+        if not reloaded:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
+        return reloaded
 
     async def get_user(self, user_id) -> User:
         user = await self.users.get_with_roles(user_id)
@@ -336,19 +373,35 @@ class UsersService:
         actor: User | None = None,
         request: Request | None = None,
     ) -> None:
-        user = await self.users.get(user_id)
+        if actor is not None and str(actor.id) == str(user_id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Você não pode remover a si mesmo.")
+
+        user = await self.users.get_with_roles(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
+
+        if user.deleted_at is not None:
+            return
+
+        role_names = [link.role.name for link in (getattr(user, "roles", []) or []) if getattr(link, "role", None)]
+        is_admin = "ADMIN" in role_names
+        if is_admin and user.is_active:
+            if await self.users.count_active_admins() <= 1:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Não é permitido remover o último ADMIN.")
+
         before = model_to_dict(user)
-        await self.users.delete(user)
+        user.deleted_at = datetime.now(timezone.utc)
+        user.is_active = False
+        user.updated_at = datetime.now(timezone.utc)
+        await self.session.flush()
         await self.audit.log_action(
             user=actor,
             action="delete",
             entity="user",
             entity_id=user_id,
             before=before,
-            after=None,
-            context={"descricao": "Exclusão de usuário", "email": before.get("email")},
+            after=model_to_dict(user),
+            context={"descricao": "Remoção (soft delete) de usuário", "email": before.get("email")},
             request=request,
         )
         await self.session.commit()

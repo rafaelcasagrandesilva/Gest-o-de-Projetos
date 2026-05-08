@@ -1,13 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
 import { usePermission } from "@/hooks/usePermission";
-import { createProject, listProjects, type Project } from "@/services/projects";
+import {
+  activateProject,
+  createProject,
+  deactivateProject,
+  listProjects,
+  softDeleteProject,
+  type Project,
+  type ProjectStatusFilter,
+} from "@/services/projects";
 import { isAxiosError } from "axios";
+import { TruncatedCell } from "@/components/TruncatedText";
+
+function statusLabel(p: Project): { label: string; cls: string } {
+  if (p.is_active) return { label: "Ativo", cls: "bg-emerald-100 text-emerald-900 ring-emerald-200" };
+  return { label: "Encerrado", cls: "bg-slate-100 text-slate-800 ring-slate-200" };
+}
 
 export function Projects() {
   const readOnly = useConsultaReadOnly();
   const canCreateProject = usePermission("projects.create");
+  const canEditProject = usePermission("projects.edit");
+  const canDeleteProject = usePermission("projects.delete");
   const [items, setItems] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -15,11 +31,13 @@ export function Projects() {
   const [description, setDescription] = useState("");
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<ProjectStatusFilter>("ACTIVE");
+  const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
 
   async function load() {
     setError(null);
     try {
-      const data = await listProjects();
+      const data = await listProjects({ status: statusFilter });
       setItems(data);
     } catch (e) {
       setError(isAxiosError(e) ? "Erro ao listar projetos." : "Erro inesperado.");
@@ -30,7 +48,9 @@ export function Projects() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [statusFilter]);
+
+  const canManageAny = useMemo(() => !readOnly && (canEditProject || canDeleteProject), [readOnly, canEditProject, canDeleteProject]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -121,40 +141,132 @@ export function Projects() {
           Carregando…
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-slate-700">Filtro</span>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as ProjectStatusFilter)}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                <option value="ALL">Todos</option>
+                <option value="ACTIVE">Ativos</option>
+                <option value="CLOSED">Encerrados</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-slate-100 bg-slate-50/80">
               <tr>
                 <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
+                <th className="px-4 py-3 font-medium text-slate-600 w-32">Status</th>
                 <th className="px-4 py-3 font-medium text-slate-600">Descrição</th>
-                <th className="px-4 py-3 font-medium text-slate-600 w-32" />
+                <th className="px-4 py-3 font-medium text-slate-600 w-[260px]" />
               </tr>
             </thead>
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
                     Nenhum projeto encontrado.
                   </td>
                 </tr>
               ) : (
                 items.map((p) => (
                   <tr key={p.id} className="border-b border-slate-50 last:border-0">
-                    <td className="px-4 py-3 font-medium text-slate-900">{p.name}</td>
-                    <td className="px-4 py-3 text-slate-600">{p.description ?? "—"}</td>
+                    <td className="min-w-0 max-w-[300px] px-4 py-3 align-middle font-medium text-slate-900">
+                      <TruncatedCell value={p.name} maxWidthClass="max-w-[300px]" />
+                    </td>
                     <td className="px-4 py-3">
-                      <Link
-                        to={`/projects/${p.id}`}
-                        className="text-sm font-medium text-indigo-600 hover:underline"
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${statusLabel(p).cls}`}
                       >
-                        Custos
-                      </Link>
+                        {statusLabel(p).label}
+                      </span>
+                    </td>
+                    <td className="min-w-0 max-w-[360px] px-4 py-3 align-middle text-slate-600">
+                      <TruncatedCell value={p.description} empty="—" maxWidthClass="max-w-[360px]" />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Link
+                          to={`/projects/list/${p.id}`}
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-slate-50"
+                        >
+                          Custos
+                        </Link>
+
+                        {canManageAny && (
+                          <>
+                            {canEditProject && (
+                              <button
+                                type="button"
+                                disabled={busyProjectId === p.id}
+                                onClick={async () => {
+                                  setError(null);
+                                  if (p.is_active) {
+                                    const ok = window.confirm(
+                                      "Encerrar projeto? Ele não aparecerá mais para novos lançamentos."
+                                    );
+                                    if (!ok) return;
+                                  }
+                                  setBusyProjectId(p.id);
+                                  try {
+                                    if (p.is_active) await deactivateProject(p.id);
+                                    else await activateProject(p.id);
+                                    await load();
+                                  } catch (err) {
+                                    const d = isAxiosError(err) ? err.response?.data?.detail : null;
+                                    setError(typeof d === "string" ? d : "Não foi possível atualizar o status do projeto.");
+                                  } finally {
+                                    setBusyProjectId(null);
+                                  }
+                                }}
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-60"
+                              >
+                                {p.is_active ? "Encerrar" : "Reativar"}
+                              </button>
+                            )}
+
+                            {canDeleteProject && (
+                              <button
+                                type="button"
+                                disabled={busyProjectId === p.id}
+                                onClick={async () => {
+                                  const ok = window.confirm(
+                                    "Excluir projeto? Esta ação não remove dados financeiros existentes."
+                                  );
+                                  if (!ok) return;
+                                  setBusyProjectId(p.id);
+                                  setError(null);
+                                  try {
+                                    await softDeleteProject(p.id);
+                                    await load();
+                                  } catch (err) {
+                                    const d = isAxiosError(err) ? err.response?.data?.detail : null;
+                                    setError(typeof d === "string" ? d : "Não foi possível excluir o projeto.");
+                                  } finally {
+                                    setBusyProjectId(null);
+                                  }
+                                }}
+                                className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+                              >
+                                Excluir
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>

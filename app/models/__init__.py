@@ -6,7 +6,12 @@ from app.models.dashboard import KPI, ProjectResult
 from app.models.company_staff_cost import CompanyStaffCost
 from app.models.employee import Employee, EmployeeAllocation
 from app.models.financial import Invoice, InvoiceAnticipation, Revenue
+from app.models.chart_of_accounts import ChartOfAccounts
+from app.models.payable import Payable
+from app.models.payable_snapshot import PayableSnapshot
+from app.models.payable_snapshot_generation import PayableSnapshotGeneration
 from app.models.receivable import ReceivableInvoice
+from app.models.receivable_manual import ReceivableManualItem
 from app.models.fleet import Vehicle, VehicleUsage
 from app.models.project import Project
 from app.models.project_operational import (
@@ -34,9 +39,14 @@ __all__ = [
     "Employee",
     "EmployeeAllocation",
     "ReceivableInvoice",
+    "ReceivableManualItem",
     "Invoice",
     "InvoiceAnticipation",
     "Revenue",
+    "ChartOfAccounts",
+    "Payable",
+    "PayableSnapshot",
+    "PayableSnapshotGeneration",
     "Vehicle",
     "VehicleUsage",
     "Project",

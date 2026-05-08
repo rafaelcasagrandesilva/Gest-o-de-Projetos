@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 from datetime import date
+from enum import Enum
 from uuid import UUID
 
-from sqlalchemy import Date, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, Enum as SAEnum, ForeignKey, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, TimestampUUIDMixin
+from app.models.employee import Employee
+
+
+class RenegotiationType(str, Enum):
+    UNIQUE = "UNIQUE"
+    INSTALLMENTS = "INSTALLMENTS"
+
+
+class CompanyFinancialItemType(str, Enum):
+    MANUAL = "MANUAL"
+    COLABORADOR_MATRIZ = "COLABORADOR_MATRIZ"
 
 
 class CompanyFinancialItem(TimestampUUIDMixin, Base):
@@ -16,13 +28,36 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     __tablename__ = "company_financial_items"
 
     tipo: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    item_type: Mapped[CompanyFinancialItemType] = mapped_column(
+        SAEnum(CompanyFinancialItemType, name="company_financial_item_type"),
+        nullable=False,
+        default=CompanyFinancialItemType.MANUAL,
+        server_default=CompanyFinancialItemType.MANUAL.value,
+    )
+    employee_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    percentual: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
     nome: Mapped[str] = mapped_column(String(255), nullable=False)
     valor_referencia: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+
+    # Campos adicionais (endividamento)
+    has_legal_process: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    has_renegotiation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    renegotiated_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    renegotiation_type: Mapped[RenegotiationType | None] = mapped_column(
+        SAEnum(RenegotiationType, name="renegotiation_type"),
+        nullable=True,
+    )
+    installment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    installment_value: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
 
     payments: Mapped[list["CompanyFinancialPayment"]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",
     )
+
+    employee: Mapped[Employee | None] = relationship()
 
 
 class CompanyFinancialPayment(TimestampUUIDMixin, Base):

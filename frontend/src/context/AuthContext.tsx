@@ -31,6 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       return;
     }
+    console.log("[Auth] refreshUser: fetching /users/me");
     const me = await authApi.fetchMe();
     setUser(me);
   }, []);
@@ -44,6 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       try {
+        console.log("[Auth] bootstrap: fetching /users/me");
         const me = await authApi.fetchMe();
         if (!cancelled) setUser(me);
       } catch {
@@ -52,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null);
         }
       } finally {
+        console.log("[Auth] bootstrap: setLoading(false)");
         if (!cancelled) setLoading(false);
       }
     })();

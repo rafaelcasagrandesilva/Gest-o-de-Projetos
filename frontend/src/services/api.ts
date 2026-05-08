@@ -1,4 +1,5 @@
 import axios from "axios";
+import { getStoredWorkspaceForApi } from "@/context/WorkspaceContext";
 
 /** Base da API FastAPI (`/api/v1`). Em dev use localhost; em build de produção defina `VITE_API_BASE`. */
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000/api/v1";
@@ -7,19 +8,23 @@ export const TOKEN_KEY = "sgp_access_token";
 
 export const api = axios.create({
   baseURL: API_BASE,
-  headers: {
-    "Content-Type": "application/json",
-  },
+  // Evita "loading infinito" quando o backend não responde (ex.: API fora do ar).
+  timeout: 15_000,
 });
 
-/** Alinha com FastAPI `redirect_slashes=True`: evita 307 em POST/PUT/PATCH (corpo pode se perder no redirect). */
-function ensureTrailingSlashPath(url: string): string {
+/**
+ * Alinha com rotas FastAPI SEM barra final (padrão do projeto).
+ * Evita 307 em POST/PUT/PATCH/DELETE, que pode causar problemas com body.
+ */
+function ensureNoTrailingSlashPath(url: string): string {
   if (!url || !url.startsWith("/")) return url;
   const q = url.indexOf("?");
   const path = q === -1 ? url : url.slice(0, q);
   const query = q === -1 ? "" : url.slice(q);
-  if (path.endsWith("/")) return url;
-  return `${path}/${query}`;
+  if (path.length > 1 && path.endsWith("/")) {
+    return `${path.slice(0, -1)}${query}`;
+  }
+  return url;
 }
 
 export function getStoredToken(): string | null {
@@ -35,18 +40,21 @@ export function setStoredToken(token: string | null): void {
 }
 
 api.interceptors.request.use((config) => {
-  const method = (config.method || "get").toLowerCase();
-  if (
-    ["post", "put", "patch", "delete"].includes(method) &&
-    typeof config.url === "string" &&
-    config.url.length > 0
-  ) {
-    config.url = ensureTrailingSlashPath(config.url);
+  if (typeof config.url === "string" && config.url.length > 0) {
+    config.url = ensureNoTrailingSlashPath(config.url);
+  }
+  // Importante: quando enviamos `FormData`, NÃO podemos forçar `application/json`,
+  // senão o FastAPI não reconhece `multipart/form-data` e retorna 422 (file ausente).
+  if (typeof FormData !== "undefined" && config.data instanceof FormData) {
+    // Deixa o axios/browser setar o multipart boundary corretamente.
+    delete config.headers["Content-Type"];
   }
   const token = getStoredToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // Header opcional (não quebra backend). Usado para contextualizar workspace.
+  config.headers["X-Workspace"] = getStoredWorkspaceForApi();
   return config;
 });
 

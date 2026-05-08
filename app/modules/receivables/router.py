@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 
 from app.api.deps import (
     ensure_project_access,
@@ -19,12 +20,17 @@ from app.core.permission_codes import INVOICES_EDIT, INVOICES_VIEW
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.receivable import (
+    InvoiceAnticipationCreate,
+    InvoiceAnticipationRead,
+    InvoiceAnticipationUpdate,
     ReceivableInvoiceCreate,
     ReceivableInvoiceRead,
     ReceivableInvoiceUpdate,
     ReceivableKpisRead,
+    ReceivableInvoiceFileRead,
 )
 from app.services.receivable_service import ReceivableService
+from app.models.receivable import ReceivableInvoiceFile
 
 
 def _actor_email(user: User) -> str:
@@ -50,7 +56,7 @@ async def list_invoices(
     project_id: UUID | None = Query(default=None),
     status: str | None = Query(
         default=None,
-        pattern="^(EMITIDA|ANTECIPADA|FINALIZADA|CANCELADA)$",
+        pattern="^(EMITIDA|ANTECIPADA|RECEBIDA|CANCELADA)$",
     ),
     client: str | None = Query(default=None, max_length=255),
     period_field: str = Query(
@@ -188,6 +194,125 @@ async def delete_invoice(
     await db.commit()
 
 
+@invoices_router.post(
+    "/{invoice_id}/anticipations",
+    response_model=InvoiceAnticipationRead,
+    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+)
+async def add_anticipation(
+    invoice_id: UUID,
+    payload: InvoiceAnticipationCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> InvoiceAnticipationRead:
+    svc = ReceivableService(db)
+    inv = await svc.get_invoice(invoice_id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="NF não encontrada")
+    await ensure_project_access(user=actor, project_id=inv.project_id, db=db)
+    try:
+        row = await svc.add_anticipation(
+            invoice_id=invoice_id,
+            institution=payload.institution,
+            amount_received=payload.amount_received,
+            amount_to_repay=payload.amount_to_repay,
+            received_date=payload.data_recebimento,
+            due_date=payload.due_date,
+            log_user=_actor_email(actor),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    await db.commit()
+    # Resposta mapeada para expor `data_recebimento` (API).
+    return InvoiceAnticipationRead.model_validate(
+        {
+            "id": row.id,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "invoice_id": row.invoice_id,
+            "institution": row.institution,
+            "amount_received": float(row.amount_received or 0),
+            "amount_to_repay": float(row.amount_to_repay or 0),
+            "data_recebimento": getattr(row, "received_date", None),
+            "due_date": row.due_date,
+        }
+    )
+
+
+@invoices_router.delete(
+    "/{invoice_id}/anticipations/{anticipation_id}",
+    status_code=204,
+    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+)
+async def delete_anticipation(
+    invoice_id: UUID,
+    anticipation_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> None:
+    svc = ReceivableService(db)
+    inv = await svc.get_invoice(invoice_id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="NF não encontrada")
+    await ensure_project_access(user=actor, project_id=inv.project_id, db=db)
+    ok = await svc.delete_anticipation(
+        invoice_id=invoice_id,
+        anticipation_id=anticipation_id,
+        log_user=_actor_email(actor),
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Antecipação não encontrada")
+    await db.commit()
+
+
+@invoices_router.patch(
+    "/{invoice_id}/anticipations/{anticipation_id}",
+    response_model=InvoiceAnticipationRead,
+    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+)
+async def update_anticipation(
+    invoice_id: UUID,
+    anticipation_id: UUID,
+    payload: InvoiceAnticipationUpdate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> InvoiceAnticipationRead:
+    svc = ReceivableService(db)
+    inv = await svc.get_invoice(invoice_id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="NF não encontrada")
+    await ensure_project_access(user=actor, project_id=inv.project_id, db=db)
+    try:
+        row = await svc.update_anticipation(
+            invoice_id=invoice_id,
+            anticipation_id=anticipation_id,
+            institution=payload.institution,
+            amount_received=payload.amount_received,
+            amount_to_repay=payload.amount_to_repay,
+            received_date=payload.data_recebimento,
+            due_date=payload.due_date,
+            log_user=_actor_email(actor),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if row is None:
+        raise HTTPException(status_code=404, detail="Antecipação não encontrada")
+    await db.commit()
+    return InvoiceAnticipationRead.model_validate(
+        {
+            "id": row.id,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "invoice_id": row.invoice_id,
+            "institution": row.institution,
+            "amount_received": float(row.amount_received or 0),
+            "amount_to_repay": float(row.amount_to_repay or 0),
+            "data_recebimento": getattr(row, "received_date", None),
+            "due_date": row.due_date,
+        }
+    )
+
+
 @invoices_router.get("/{invoice_id}/pdf", dependencies=_read_view)
 async def download_invoice_pdf(
     invoice_id: UUID,
@@ -222,6 +347,20 @@ async def upload_invoice_pdf(
     if inv is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
     await ensure_project_access(user=actor, project_id=inv.project_id, db=db)
+    # Limite de 3 arquivos por NF.
+    existing_count = int(
+        (
+            await db.execute(
+                select(func.count()).select_from(ReceivableInvoiceFile).where(
+                    ReceivableInvoiceFile.invoice_id == invoice_id
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if existing_count >= 3:
+        raise HTTPException(status_code=409, detail="Limite de 3 PDFs por NF atingido.")
+
     body = await file.read()
     if len(body) > settings.receivable_pdf_max_bytes:
         raise HTTPException(
@@ -230,12 +369,29 @@ async def upload_invoice_pdf(
         )
     if not body.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="O arquivo não parece ser um PDF válido.")
-    base = Path(settings.receivable_upload_dir)
+    # Salva em disco: uploads/invoices/{invoice_id}/{file_id}.pdf
+    base = Path(settings.receivable_upload_dir) / "invoices" / str(invoice_id)
     base.mkdir(parents=True, exist_ok=True)
-    fname = f"{invoice_id}.pdf"
-    dest = base / fname
+    original_name = (file.filename or "documento.pdf").strip()[:255]
+    file_id = uuid4()
+    stored_name = f"{file_id}.pdf"
+    dest = (base / stored_name).resolve()
     dest.write_bytes(body)
-    row = await svc.set_pdf_path(invoice_id, fname, log_user=_actor_email(actor))
+    rel = str(dest.relative_to(Path(settings.receivable_upload_dir).resolve()))
+
+    db.add(
+        ReceivableInvoiceFile(
+            id=file_id,
+            invoice_id=invoice_id,
+            file_name=original_name,
+            stored_path=rel,
+            content_type=file.content_type or "application/pdf",
+            size_bytes=len(body),
+        )
+    )
+    await db.flush()
+    # Mantém compatibilidade: pdf_path aponta para o último anexado.
+    row = await svc.set_pdf_path(invoice_id, rel, log_user=_actor_email(actor))
     if row is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
     await db.commit()
@@ -244,6 +400,59 @@ async def upload_invoice_pdf(
         raise HTTPException(status_code=404, detail="NF não encontrada")
     prefix = settings.api_v1_prefix.rstrip("/")
     return ReceivableInvoiceRead.model_validate(svc.invoice_to_read(loaded, api_prefix=prefix))
+
+
+@invoices_router.get("/{invoice_id}/files", response_model=list[ReceivableInvoiceFileRead], dependencies=_read_view)
+async def list_invoice_files(
+    invoice_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[ReceivableInvoiceFileRead]:
+    svc = ReceivableService(db)
+    inv = await svc.get_invoice(invoice_id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="NF não encontrada")
+    await ensure_project_access(user=user, project_id=inv.project_id, db=db)
+    stmt = (
+        select(ReceivableInvoiceFile)
+        .where(ReceivableInvoiceFile.invoice_id == invoice_id)
+        .order_by(ReceivableInvoiceFile.created_at.asc())
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+    return [
+        ReceivableInvoiceFileRead(
+            id=r.id,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+            invoice_id=r.invoice_id,
+            file_name=r.file_name,
+            content_type=r.content_type,
+            size_bytes=int(r.size_bytes or 0),
+        )
+        for r in rows
+    ]
+
+
+@invoices_router.get("/{invoice_id}/files/{file_id}", dependencies=_read_view)
+async def download_invoice_file(
+    invoice_id: UUID,
+    file_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> FileResponse:
+    svc = ReceivableService(db)
+    inv = await svc.get_invoice(invoice_id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="NF não encontrada")
+    await ensure_project_access(user=user, project_id=inv.project_id, db=db)
+    row = await db.get(ReceivableInvoiceFile, file_id)
+    if row is None or row.invoice_id != invoice_id:
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
+    path = _pdf_disk_path(row.stored_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado no servidor.")
+    safe = (row.file_name or f"NF-{inv.nf_number.replace('/', '-')}.pdf").replace("/", "-")
+    return FileResponse(path, media_type=row.content_type or "application/pdf", filename=safe)
 
 
 @invoices_router.delete("/{invoice_id}/pdf", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
@@ -257,13 +466,24 @@ async def delete_invoice_pdf(
     if inv is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
     await ensure_project_access(user=actor, project_id=inv.project_id, db=db)
-    if inv.pdf_path:
-        p = _pdf_disk_path(inv.pdf_path)
-        if p.is_file():
-            try:
+    # Remove todos arquivos vinculados à NF (até 3) e o diretório.
+    stmt = select(ReceivableInvoiceFile).where(ReceivableInvoiceFile.invoice_id == invoice_id)
+    rows = list((await db.execute(stmt)).scalars().all())
+    for r in rows:
+        try:
+            p = _pdf_disk_path(r.stored_path)
+            if p.is_file():
                 p.unlink()
-            except OSError:
-                pass
+        except OSError:
+            pass
+        except HTTPException:
+            pass
+        await db.delete(r)
+    # tenta remover o diretório da NF (se vazio)
+    try:
+        (Path(settings.receivable_upload_dir) / "invoices" / str(invoice_id)).rmdir()
+    except OSError:
+        pass
     row = await svc.clear_pdf(invoice_id, log_user=_actor_email(actor))
     if row is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
