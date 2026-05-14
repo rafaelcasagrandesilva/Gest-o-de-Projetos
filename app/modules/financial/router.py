@@ -337,7 +337,7 @@ async def list_revenues(
     return [RevenueRead.model_validate(r) for r in rows]
 
 
-@router.post("/revenues", response_model=RevenueRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
+@router.post("/revenues", response_model=RevenueRead, dependencies=[Depends(require_permission(BILLING_VIEW))])
 async def create_revenue(
     payload: RevenueCreate,
     request: Request,
@@ -357,7 +357,7 @@ async def create_revenue(
     return RevenueRead.model_validate(row)
 
 
-@router.patch("/revenues/{revenue_id}", response_model=RevenueRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
+@router.patch("/revenues/{revenue_id}", response_model=RevenueRead, dependencies=[Depends(require_permission(BILLING_VIEW))])
 async def update_revenue(
     revenue_id: UUID,
     payload: RevenueUpdate,
@@ -383,7 +383,7 @@ async def update_revenue(
     return RevenueRead.model_validate(row)
 
 
-@router.delete("/revenues/{revenue_id}", status_code=204, dependencies=[Depends(require_permission(INVOICES_EDIT))])
+@router.delete("/revenues/{revenue_id}", status_code=204, dependencies=[Depends(require_permission(BILLING_VIEW))])
 async def delete_revenue(
     revenue_id: UUID,
     request: Request,

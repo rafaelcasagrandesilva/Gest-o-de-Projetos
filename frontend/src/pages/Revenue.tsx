@@ -15,7 +15,7 @@ function scenarioLabel(s: ScenarioKind): string {
 }
 
 export function RevenuePage() {
-  const canEditBilling = usePermission("invoices.edit");
+  const canEditBilling = usePermission("billing.view");
   const { globalScenario } = useScenario();
   /** Cenário dos lançamentos nesta tela (independente do seletor global do header). */
   const [pageScenario, setPageScenario] = useState<ScenarioKind>(globalScenario);
