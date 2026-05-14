@@ -11,6 +11,7 @@ from app.core.security import (
     hash_password,
     verify_password_and_maybe_rehash,
 )
+from app.core.session_context import build_session_claims
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -73,5 +74,7 @@ class AuthService:
             force_log=True,
         )
         await self.session.commit()
-        return create_access_token(data={"sub": str(user.id)})
+        user_with_context = await self.users.get_with_roles(user.id) or user
+        claims = await build_session_claims(user=user_with_context, db=self.session)
+        return create_access_token(data={"sub": str(user.id), **claims})
 

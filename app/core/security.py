@@ -6,6 +6,7 @@ from passlib.context import CryptContext
 from passlib.exc import UnknownHashError
 
 from app.core.config import settings
+from app.core.session_context import SESSION_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ def create_access_token(data: dict, expires_delta: int = 60 * 24) -> str:
     if sub is not None:
         to_encode["sub"] = str(sub).strip()
     expire = datetime.utcnow() + timedelta(minutes=expires_delta)
+    to_encode.setdefault("session_version", SESSION_VERSION)
     to_encode.update({"exp": int(expire.timestamp())})
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 

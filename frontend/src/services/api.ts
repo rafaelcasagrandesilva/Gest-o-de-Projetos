@@ -63,6 +63,16 @@ export function setStoredToken(token: string | null): void {
   }
 }
 
+export function clearStoredSessionContext(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem("sgp_workspace");
+  localStorage.removeItem("sgp_permissions");
+  localStorage.removeItem("sgp_user");
+  localStorage.removeItem("sgp_user_context");
+  localStorage.removeItem("sgp_linked_projects");
+  sessionStorage.clear();
+}
+
 api.interceptors.request.use((config) => {
   if (typeof config.url === "string" && config.url.length > 0) {
     config.url = ensureNoTrailingSlashPath(config.url);
@@ -87,7 +97,7 @@ api.interceptors.response.use(
   (err) => {
     const status = err.response?.status;
     if (status === 401 && !window.location.pathname.includes("/login")) {
-      setStoredToken(null);
+      clearStoredSessionContext();
       window.location.assign("/login");
     }
     return Promise.reject(err);

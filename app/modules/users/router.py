@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import effective_permission_names, get_current_user, is_app_superuser, require_permission
+from app.api.deps import get_current_user, is_app_superuser, require_permission
 from app.core.permission_codes import USERS_MANAGE
+from app.core.session_context import (
+    SESSION_VERSION,
+    default_workspace_for_user,
+    resolve_workspace_for_user,
+    session_permission_names,
+)
 from app.database.session import get_db
 from app.models.user import User
 from app.repositories.projects import ProjectRepository
@@ -31,18 +37,24 @@ def _user_payload(
     *,
     project_ids: list[UUID],
     has_all_projects_linked: bool,
+    default_workspace: str,
+    current_workspace: str,
 ) -> dict:
     role_names = [link.role.name for link in (getattr(user, "roles", []) or []) if getattr(link, "role", None)]
-    perm_names = sorted(effective_permission_names(user))
+    perm_names = session_permission_names(user, is_superuser=is_app_superuser(user))
     skip = {"roles", "project_links", "audit_logs", "user_permissions"}
     d = {k: v for k, v in user.__dict__.items() if not k.startswith("_") and k not in skip}
     return {
         **d,
         "role_names": role_names,
         "project_ids": project_ids,
+        "linked_projects": project_ids,
         "permission_names": perm_names,
         "has_all_projects_linked": has_all_projects_linked,
         "is_superuser": is_app_superuser(user),
+        "default_workspace": default_workspace,
+        "current_workspace": current_workspace,
+        "session_version": SESSION_VERSION,
     }
 
 
@@ -51,18 +63,39 @@ async def _to_user_read(
     user: User,
     *,
     all_project_ids: list[UUID] | None = None,
+    requested_workspace: str | None = None,
 ) -> UserRead:
     repo = ProjectRepository(db)
     pids = await repo.list_project_ids_for_user(user_id=user.id)
     if all_project_ids is None:
         all_project_ids = await repo.list_all_project_ids()
     has_all = len(all_project_ids) > 0 and set(pids) == set(all_project_ids)
-    return UserRead.model_validate(_user_payload(user, project_ids=pids, has_all_projects_linked=has_all))
+    superuser = is_app_superuser(user)
+    default_workspace = default_workspace_for_user(user, is_superuser=superuser)
+    current_workspace = resolve_workspace_for_user(
+        user,
+        requested_workspace or default_workspace,
+        is_superuser=superuser,
+    )
+    return UserRead.model_validate(
+        _user_payload(
+            user,
+            project_ids=pids,
+            has_all_projects_linked=has_all,
+            default_workspace=default_workspace,
+            current_workspace=current_workspace,
+        )
+    )
 
 
 @router.get("/me", response_model=UserRead)
-async def me(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> UserRead:
-    return await _to_user_read(db, user)
+async def me(
+    workspace: str | None = Query(default=None),
+    x_workspace: str | None = Header(default=None, alias="X-Workspace"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserRead:
+    return await _to_user_read(db, user, requested_workspace=workspace or x_workspace)
 
 
 @router.get("/", response_model=list[UserRead], dependencies=[Depends(require_permission(USERS_MANAGE))])

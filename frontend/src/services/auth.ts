@@ -12,8 +12,12 @@ export interface UserMe {
   is_active: boolean;
   role_names: string[];
   project_ids?: string[];
+  linked_projects?: string[];
   /** Códigos de permissão efetivos (ex.: projects.edit). */
   permission_names?: string[];
+  current_workspace?: "projects" | "finance";
+  default_workspace?: "projects" | "finance";
+  session_version?: number;
   /** Backend: set(project_ids) === todos os projetos do sistema (visão "Todos" no dashboard). */
   has_all_projects_linked?: boolean;
   /** Lista operacional de super usuário (e-mail); ações críticas no backend. */

@@ -9,12 +9,12 @@ import {
 } from "react";
 import * as authApi from "@/services/auth";
 import type { UserMe } from "@/services/auth";
-import { getStoredToken, setStoredToken } from "@/services/api";
+import { clearStoredSessionContext, getStoredToken, setStoredToken } from "@/services/api";
 
 interface AuthState {
   user: UserMe | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<UserMe>;
   logout: () => void;
   refreshUser: () => Promise<void>;
 }
@@ -69,6 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await authApi.login(email, password);
       const me = await authApi.fetchMe();
       setUser(me);
+      return me;
     } finally {
       setLoading(false);
     }
@@ -76,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     authApi.logout();
+    clearStoredSessionContext();
     setUser(null);
   }, []);
 

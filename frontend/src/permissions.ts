@@ -2,6 +2,8 @@
 export const ALL_PERMISSION_CODES: string[] = [
   "system.admin",
   "system.all_projects",
+  "workspace.projects.access",
+  "workspace.finance.access",
   "dashboard.view",
   "dashboard.director",
   "payables.view",
@@ -36,6 +38,8 @@ export const ALL_PERMISSION_CODES: string[] = [
 export const PERMISSION_LABELS: Record<string, string> = {
   "system.admin": "Administração total",
   "system.all_projects": "Ver todos os projetos",
+  "workspace.projects.access": "Workspace Projetos",
+  "workspace.finance.access": "Workspace Financeiro",
   "dashboard.view": "Dashboard (visualizar)",
   "dashboard.director": "Dashboard diretoria",
   "payables.view": "Contas a pagar (visualizar)",
@@ -77,6 +81,51 @@ export function hasPermission(permissionNames: string[] | undefined, code: strin
   ) {
     return true;
   }
+  if (code === "workspace.projects.access") {
+    return permissionNames.some((p) =>
+      [
+        "dashboard.view",
+        "dashboard.director",
+        "projects.view",
+        "projects.view_list",
+        "projects.view_detail",
+        "projects.create",
+        "projects.edit",
+        "projects.delete",
+        "employees.view",
+        "employees.edit",
+        "vehicles.view",
+        "vehicles.edit",
+        "billing.view",
+        "costs.view",
+        "costs.edit",
+        "reports.view",
+        "reports.export",
+        "alerts.view",
+        "settings.view",
+        "settings.edit",
+        "users.manage",
+      ].includes(p),
+    );
+  }
+  if (code === "workspace.finance.access") {
+    return permissionNames.some((p) =>
+      [
+        "payables.view",
+        "receivables.view",
+        "invoices.view",
+        "invoices.edit",
+        "debts.view",
+        "debts.edit",
+        "company_finance.view",
+        "company_finance.edit",
+        "reports.view",
+        "reports.export",
+        "settings.view",
+        "settings.edit",
+      ].includes(p),
+    );
+  }
   return false;
 }
 
@@ -87,6 +136,8 @@ export const ROLE_PERMISSION_PRESET: Record<"ADMIN" | "GESTOR" | "CONSULTA", str
     (c) => c !== "users.manage" && c !== "system.admin" && c !== "system.all_projects",
   ),
   CONSULTA: [
+    "workspace.projects.access",
+    "workspace.finance.access",
     "dashboard.view",
     "payables.view",
     "receivables.view",

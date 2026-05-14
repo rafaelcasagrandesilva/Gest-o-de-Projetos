@@ -9,7 +9,7 @@ export function Login() {
   const { login, user, loading } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const { workspace } = useWorkspace();
+  const { workspace, setWorkspace } = useWorkspace();
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname ?? "";
   const fallback = workspace === "projects" ? "/projects/dashboard" : "/finance/dashboard";
   const target = from && from !== "/" ? from : fallback;
@@ -36,8 +36,11 @@ export function Login() {
     setError(null);
     setSubmitting(true);
     try {
-      await login(email.trim(), password);
-      navigate(target, { replace: true });
+      const me = await login(email.trim(), password);
+      const loginWorkspace = me.current_workspace ?? me.default_workspace ?? workspace;
+      setWorkspace(loginWorkspace);
+      const workspaceTarget = loginWorkspace === "projects" ? "/projects/dashboard" : "/finance/dashboard";
+      navigate(from && from !== "/" ? target : workspaceTarget, { replace: true });
     } catch (err) {
       if (isAxiosError(err)) {
         const status = err.response?.status;

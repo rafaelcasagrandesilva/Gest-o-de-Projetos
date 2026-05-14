@@ -20,7 +20,14 @@ class UserRead(UUIDTimestampRead):
     deleted_at: datetime | None = None
     role_names: list[str] = []
     project_ids: list[UUID] = []
+    linked_projects: list[UUID] = Field(
+        default_factory=list,
+        description="Alias explícito dos projetos vinculados usado pelo contexto de sessão.",
+    )
     permission_names: list[str] = []
+    current_workspace: str = Field(default="projects", description="Workspace ativo saneado pelo backend.")
+    default_workspace: str = Field(default="projects", description="Workspace padrão permitido para o usuário.")
+    session_version: int = Field(default=2, description="Versão do contrato de sessão/token aceito pelo backend.")
     has_all_projects_linked: bool = Field(
         default=False,
         description="Vínculo cobre todos os projetos do sistema (visão consolidada no dashboard).",

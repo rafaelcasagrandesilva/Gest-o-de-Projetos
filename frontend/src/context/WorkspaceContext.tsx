@@ -6,7 +6,7 @@ const STORAGE_KEY = "sgp_workspace";
 
 function readStoredWorkspace(): WorkspaceName {
   const v = (localStorage.getItem(STORAGE_KEY) ?? "").toLowerCase();
-  return v === "projects" ? "projects" : "finance";
+  return v === "finance" ? "finance" : "projects";
 }
 
 function writeStoredWorkspace(w: WorkspaceName): void {

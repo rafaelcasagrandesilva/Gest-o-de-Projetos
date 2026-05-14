@@ -13,18 +13,44 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.permission_codes import (
+    ALERTS_VIEW,
+    BILLING_VIEW,
+    COMPANY_FINANCE_EDIT,
+    COMPANY_FINANCE_VIEW,
+    COSTS_EDIT,
+    COSTS_VIEW,
+    DASHBOARD_DIRECTOR,
+    DASHBOARD_VIEW,
+    DEBTS_EDIT,
+    DEBTS_VIEW,
+    EMPLOYEES_EDIT,
+    EMPLOYEES_VIEW,
+    INVOICES_EDIT,
+    INVOICES_VIEW,
+    PAYABLES_VIEW,
     PRESET_CONSULTA,
+    PROJECTS_CREATE,
+    PROJECTS_DELETE,
     PROJECTS_EDIT,
     PROJECTS_VIEW,
     PROJECTS_VIEW_DETAIL,
     PROJECTS_VIEW_LIST,
+    RECEIVABLES_VIEW,
+    REPORTS_EXPORT,
+    REPORTS_VIEW,
     ROLE_PRESET,
+    SETTINGS_EDIT,
+    SETTINGS_VIEW,
     SYSTEM_ADMIN,
     SYSTEM_ALL_PROJECTS,
+    USERS_MANAGE,
+    VEHICLES_EDIT,
+    VEHICLES_VIEW,
     WORKSPACE_FINANCE_ACCESS,
     WORKSPACE_PROJECTS_ACCESS,
 )
 from app.core.scenario import Scenario
+from app.core.session_context import SESSION_VERSION, resolve_workspace_for_user
 from app.core.security import decode_token, normalize_token
 from app.database.session import get_db
 from app.models.user import User
@@ -125,6 +151,49 @@ def user_has_permission(user: User, code: str) -> bool:
         return True
     if code in (PROJECTS_VIEW_LIST, PROJECTS_VIEW_DETAIL) and PROJECTS_VIEW in names:
         return True
+    if code == WORKSPACE_PROJECTS_ACCESS and names.intersection(
+        {
+            DASHBOARD_VIEW,
+            DASHBOARD_DIRECTOR,
+            PROJECTS_VIEW,
+            PROJECTS_VIEW_LIST,
+            PROJECTS_VIEW_DETAIL,
+            PROJECTS_CREATE,
+            PROJECTS_EDIT,
+            PROJECTS_DELETE,
+            EMPLOYEES_VIEW,
+            EMPLOYEES_EDIT,
+            VEHICLES_VIEW,
+            VEHICLES_EDIT,
+            BILLING_VIEW,
+            COSTS_VIEW,
+            COSTS_EDIT,
+            REPORTS_VIEW,
+            REPORTS_EXPORT,
+            ALERTS_VIEW,
+            SETTINGS_VIEW,
+            SETTINGS_EDIT,
+            USERS_MANAGE,
+        }
+    ):
+        return True
+    if code == WORKSPACE_FINANCE_ACCESS and names.intersection(
+        {
+            PAYABLES_VIEW,
+            RECEIVABLES_VIEW,
+            INVOICES_VIEW,
+            INVOICES_EDIT,
+            DEBTS_VIEW,
+            DEBTS_EDIT,
+            COMPANY_FINANCE_VIEW,
+            COMPANY_FINANCE_EDIT,
+            REPORTS_VIEW,
+            REPORTS_EXPORT,
+            SETTINGS_VIEW,
+            SETTINGS_EDIT,
+        }
+    ):
+        return True
     return False
 
 
@@ -194,6 +263,14 @@ async def get_current_user(
     _debug_print(f"token (parcial): {token[:24]}... (len={len(token)})")
     _debug_print(f"payload decodificado: {payload}")
 
+    if payload.get("session_version") != SESSION_VERSION:
+        _debug_print("token com versão de sessão incompatível")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Sessão expirada por atualização do sistema. Faça login novamente.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     sub_raw = payload.get("sub")
     if sub_raw is None or (isinstance(sub_raw, str) and not sub_raw.strip()):
         _debug_print("claim 'sub' ausente ou vazio")
@@ -248,6 +325,7 @@ async def get_current_workspace(
     request: Request,
     workspace: str | None = Query(default=None),
     x_workspace: str | None = Header(default=None, alias="X-Workspace"),
+    user: User = Depends(get_current_user),
 ) -> WorkspaceName:
     """
     Identifica workspace atual sem impactar rotas existentes.
@@ -255,14 +333,12 @@ async def get_current_workspace(
     Ordem de resolução:
     - Query param `?workspace=projects|finance`
     - Header `X-Workspace: projects|finance`
-    - Default: finance
+    - Fallback: workspace padrão permitido para o usuário
     """
     raw = (workspace or x_workspace or "").strip().lower()
-    if raw in ("projects", "finance"):
-        request.state.workspace = raw
-        return raw  # type: ignore[return-value]
-    request.state.workspace = "finance"
-    return "finance"
+    resolved = resolve_workspace_for_user(user, raw, is_superuser=is_app_superuser(user))
+    request.state.workspace = resolved
+    return resolved
 
 
 def require_workspace_access(workspace: WorkspaceName) -> Callable:

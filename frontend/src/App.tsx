@@ -1,8 +1,11 @@
 import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
+import { useEffect } from "react";
 import { AuthProvider } from "@/context/AuthContext";
+import { useAuth } from "@/context/AuthContext";
 import { WorkspaceProvider, useWorkspace } from "@/context/WorkspaceContext";
 import { Layout } from "@/components/Layout";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { hasPermission } from "@/permissions";
 import { Dashboard } from "@/pages/Dashboard";
 import { Employees } from "@/pages/Employees";
 import { Vehicles } from "@/pages/Vehicles";
@@ -30,11 +33,30 @@ function WorkspaceNotFoundRedirect() {
   return <Navigate to={workspace === "projects" ? "/projects/dashboard" : "/finance/dashboard"} replace />;
 }
 
+function WorkspaceSessionSync() {
+  const { user } = useAuth();
+  const { workspace, setWorkspace } = useWorkspace();
+
+  useEffect(() => {
+    if (!user) return;
+
+    const fallback = user.default_workspace ?? user.current_workspace ?? "projects";
+    const canCurrentWorkspace = hasPermission(user.permission_names, `workspace.${workspace}.access`);
+
+    if (!canCurrentWorkspace && workspace !== fallback) {
+      setWorkspace(fallback);
+    }
+  }, [setWorkspace, user, workspace]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <AuthProvider>
       <WorkspaceProvider>
         <BrowserRouter>
+          <WorkspaceSessionSync />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route
@@ -64,7 +86,7 @@ export default function App() {
               <Route path="finance/reports" element={<Reports />} />
 
               {/* Compat: rotas antigas (mantidas via redirect) */}
-              <Route index element={<Navigate to="/finance/dashboard" replace />} />
+              <Route index element={<WorkspaceNotFoundRedirect />} />
               <Route path="projects" element={<Navigate to="/projects/list" replace />} />
               <Route path="projects/:projectId" element={<LegacyProjectDetailRedirect />} />
               <Route path="reports" element={<Navigate to="/projects/reports" replace />} />
