@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ROLE_ADMIN, ROLE_CONSULTA, ROLE_GESTOR
-from app.core.permission_codes import PRESET_CONSULTA, ROLE_PRESET
+from app.core.permission_codes import ALL_PERMISSION_CODES, PRESET_CONSULTA, ROLE_PRESET
 from app.core.security import PasswordHashingError, hash_password
 from app.models.user import ProjectUser, Role, User, UserRole
 from app.repositories.permissions import PermissionRepository
@@ -120,6 +120,7 @@ class UsersService:
         await self.session.flush()
         if apply_permission_preset:
             preset = ROLE_PRESET.get(role_name, PRESET_CONSULTA)
+            await PermissionRepository(self.session).ensure_permission_names(set(ALL_PERMISSION_CODES))
             try:
                 await PermissionRepository(self.session).replace_user_permissions(user_id, set(preset))
             except ValueError as e:
@@ -230,6 +231,7 @@ class UsersService:
                 )
             perm_set = {str(x).strip() for x in permission_names_raw if str(x).strip()}
             perm_repo = PermissionRepository(self.session)
+            await perm_repo.ensure_permission_names(set(ALL_PERMISSION_CODES))
             missing_db = await perm_repo.missing_permission_names(perm_set)
             if missing_db:
                 raise HTTPException(

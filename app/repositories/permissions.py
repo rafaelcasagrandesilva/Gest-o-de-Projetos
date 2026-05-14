@@ -26,6 +26,14 @@ class PermissionRepository(Repository[Permission]):
         found = {row[0] for row in res.all()}
         return names - found
 
+    async def ensure_permission_names(self, names: set[str]) -> None:
+        """Insere permissões conhecidas que ainda não existem; operação idempotente."""
+        missing = await self.missing_permission_names(names)
+        for name in sorted(missing):
+            self.session.add(Permission(name=name))
+        if missing:
+            await self.session.flush()
+
     async def replace_user_permissions(self, user_id: UUID, names: set[str]) -> None:
         """DELETE vínculos antigos; INSERT novos (sem duplicar permission_id)."""
         try:
