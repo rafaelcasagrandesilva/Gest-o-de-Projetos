@@ -101,7 +101,7 @@ class CompanyFinanceService:
 
     async def _cost_center_fields(self, it: CompanyFinancialItem) -> dict[str, object]:
         cc_svc = CompanyFinanceCostCenterService(self.db)
-        label = await cc_svc.resolve_label(it, project=getattr(it, "cost_center_project", None))
+        label = await cc_svc.resolve_label(it)
         ref = await cc_svc.resolve_ref(it)
         it.cost_center = label
         return {

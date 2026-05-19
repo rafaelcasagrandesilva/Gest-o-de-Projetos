@@ -56,6 +56,13 @@ def payable_snapshot_payment_status(*, amount_paid: Decimal, amount_final: Decim
     return "PAGO"
 
 
+def _payable_row_is_protected_from_auto_delete(row: PayableSnapshot) -> bool:
+    """MANUAL ou já com pagamento registrado — nunca remover no sync corporativo."""
+    if row.type == PayableSnapshotType.MANUAL:
+        return True
+    return _money2(row.amount_paid) > 0
+
+
 def _sync_legacy_paid_fields(row: PayableSnapshot, *, anchor_date: date | None = None) -> None:
     """Mantém `paid` / `payment_date` coerentes com `amount_paid` (legado / relatórios)."""
     st = payable_snapshot_payment_status(
@@ -276,9 +283,19 @@ class PayableSnapshotService:
             logger.warning("payables company_finance manual entries backfill applied month=%s added=%d", comp, created)
         return created
 
+    async def _get_company_financial_item(self, item_id: UUID) -> CompanyFinancialItem | None:
+        """Carrega item sem lazy load async (cost_center_project via selectinload)."""
+        stmt = (
+            select(CompanyFinancialItem)
+            .where(CompanyFinancialItem.id == item_id)
+            .options(selectinload(CompanyFinancialItem.cost_center_project))
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def _company_finance_snapshot_meta(self, item: CompanyFinancialItem) -> tuple[PayableSnapshotType, str, str]:
         cc_svc = CompanyFinanceCostCenterService(self.session)
-        cost_center = await cc_svc.resolve_label(item, project=getattr(item, "cost_center_project", None))
+        # Nunca passar item.cost_center_project: acesso lazy quebra greenlet no async.
+        cost_center = await cc_svc.resolve_label(item)
         if item.tipo == "custo_fixo":
             category = str(getattr(item, "category", None) or "Custos diversos").strip()
             return PayableSnapshotType.FIXED_COST, cost_center, category
@@ -293,7 +310,7 @@ class PayableSnapshotService:
 
         Nunca apaga linhas nem altera valores (`amount_*`). Usado em edição estrutural.
         """
-        item = await self.session.get(CompanyFinancialItem, item_id)
+        item = await self._get_company_financial_item(item_id)
         if item is None:
             return 0
         _snap_type, cost_center, category = await self._company_finance_snapshot_meta(item)
@@ -317,14 +334,13 @@ class PayableSnapshotService:
         """
         Sincroniza valores de payables a partir de `company_financial_payments` (Salvar agora).
 
-        Não invalida nem recria o snapshot do mês inteiro. Linhas já pagas nunca são apagadas
-        e `amount_paid` é preservado ao atualizar valor/vencimento. **Nunca remove** linhas
-        existentes — exclusão automática foi desativada para evitar perda de histórico.
+        Não invalida nem recria o snapshot do mês inteiro. Remove linhas não pagas (exceto MANUAL)
+        quando o pagamento corporativo do mês zera. Linhas pagas nunca são apagadas.
         """
         if not months:
             return 0
 
-        item = await self.session.get(CompanyFinancialItem, item_id)
+        item = await self._get_company_financial_item(item_id)
         if item is None:
             return 0
         snap_type, cost_center, category = await self._company_finance_snapshot_meta(item)
@@ -366,18 +382,26 @@ class PayableSnapshotService:
             amount = payments_by_month.get(comp, Decimal("0.00"))
 
             if amount <= 0:
+                removed = 0
+                protected = 0
                 for row in existing:
-                    row.name = str(item.nome).strip()
-                    row.cost_center = cost_center
-                    row.category = category
-                    _sync_legacy_paid_fields(row)
+                    if _payable_row_is_protected_from_auto_delete(row):
+                        row.name = str(item.nome).strip()
+                        row.cost_center = cost_center
+                        row.category = category
+                        _sync_legacy_paid_fields(row)
+                        protected += 1
+                        changed += 1
+                        continue
+                    await self.session.delete(row)
+                    removed += 1
                     changed += 1
-                logger.warning(
-                    "payables company_finance sync skipped amount update item_id=%s month=%s "
-                    "(payment amount <= 0; preserving %d snapshot row(s))",
+                logger.info(
+                    "payables company_finance sync zero amount item_id=%s month=%s removed=%d protected=%d",
                     item_id,
                     comp,
-                    len(existing),
+                    removed,
+                    protected,
                 )
                 continue
 
@@ -417,17 +441,11 @@ class PayableSnapshotService:
             for row in existing:
                 if row.id == target.id:
                     continue
-                if _money2(row.amount_paid) > 0:
+                if _payable_row_is_protected_from_auto_delete(row):
                     _sync_legacy_paid_fields(row)
                     continue
-                logger.warning(
-                    "payables company_finance sync preserving duplicate unpaid row id=%s "
-                    "item_id=%s month=%s type=%s (auto-delete disabled)",
-                    row.id,
-                    item_id,
-                    comp,
-                    row.type,
-                )
+                await self.session.delete(row)
+                changed += 1
 
         await self.session.flush()
         return changed

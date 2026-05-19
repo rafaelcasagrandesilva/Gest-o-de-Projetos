@@ -107,10 +107,18 @@ class CompanyFinanceCostCenterService:
         *,
         project: Project | None = None,
     ) -> str:
+        """
+        Resolve rótulo do centro de custo.
+
+        `project` só deve ser passado se já estiver carregado via selectinload/joinedload.
+        Caso contrário, deixe None e o projeto será buscado por `cost_center_project_id`.
+        """
         pid = getattr(item, "cost_center_project_id", None)
         if pid is not None:
-            proj = project
-            if proj is None or proj.id != pid:
+            proj: Project | None = None
+            if project is not None and project.id == pid:
+                proj = project
+            else:
                 proj = await self.db.get(Project, pid)
             if proj is not None and getattr(proj, "deleted_at", None) is None:
                 name = str(proj.name).strip()
