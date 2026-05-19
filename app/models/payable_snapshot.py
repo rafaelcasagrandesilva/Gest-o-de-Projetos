@@ -15,6 +15,8 @@ class PayableSnapshotType(str, enum.Enum):
     COLLABORATOR = "COLLABORATOR"
     VEHICLE = "VEHICLE"
     FIXED_COST = "FIXED_COST"
+    ENDIVIDAMENTO = "ENDIVIDAMENTO"
+    # Legacy name kept so old databases/rows can still be read until migrated.
     FINANCIAL = "FINANCIAL"
     ANTECIPACAO = "ANTECIPACAO"
     MANUAL = "MANUAL"

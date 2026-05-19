@@ -58,6 +58,7 @@ function typeLabel(t: PayableSnapshotType): string {
   if (t === "COLLABORATOR") return "Colaborador";
   if (t === "VEHICLE") return "Veículos";
   if (t === "FIXED_COST") return "Custo diverso";
+  if (t === "ENDIVIDAMENTO" || t === "FINANCIAL") return "Endividamento";
   if (t === "ANTECIPACAO") return "Antecipação";
   return "Manual";
 }

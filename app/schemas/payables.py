@@ -15,6 +15,8 @@ PayableSnapshotType = Literal[
     "COLLABORATOR",
     "VEHICLE",
     "FIXED_COST",
+    "ENDIVIDAMENTO",
+    # Valor legado mantido para compatibilidade durante/antes da migration.
     "FINANCIAL",
     "MANUAL",
     "ANTECIPACAO",

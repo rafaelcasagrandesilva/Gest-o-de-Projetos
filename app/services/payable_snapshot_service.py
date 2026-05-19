@@ -41,6 +41,7 @@ def _money2(value: object) -> Decimal:
 
 # Contas a pagar — despesa manual (centros fixos + nome de projeto cadastrado)
 MANUAL_PAYABLE_FIXED_COST_CENTERS = frozenset({"Administrativo", "Financeiro"})
+PAYABLE_DEBT_TYPES = (PayableSnapshotType.ENDIVIDAMENTO, PayableSnapshotType.FINANCIAL)
 
 
 def payable_snapshot_payment_status(*, amount_paid: Decimal, amount_final: Decimal) -> str:
@@ -110,6 +111,23 @@ class PayableSnapshotService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def _count_paid_automatic_rows(self, *, month: date) -> int:
+        comp = normalize_competencia(month)
+        return int(
+            (
+                await self.session.scalar(
+                    select(func.count())
+                    .select_from(PayableSnapshot)
+                    .where(
+                        PayableSnapshot.month == comp,
+                        PayableSnapshot.type != PayableSnapshotType.MANUAL,
+                        PayableSnapshot.amount_paid > 0,
+                    )
+                )
+            )
+            or 0
+        )
+
     async def invalidate_months(self, *, months: set[date] | list[date] | tuple[date, ...]) -> int:
         """
         Invalida snapshots do(s) mês(es): remove linhas geradas automaticamente e o marcador.
@@ -123,7 +141,16 @@ class PayableSnapshotService:
         if not months:
             return 0
         comps = sorted({normalize_competencia(m) for m in months})
+        processed = 0
         for comp in comps:
+            paid_rows = await self._count_paid_automatic_rows(month=comp)
+            if paid_rows > 0:
+                logger.error(
+                    "refusing to invalidate payable snapshot month=%s because it has %d paid automatic rows",
+                    comp,
+                    paid_rows,
+                )
+                continue
             await self.session.execute(
                 delete(PayableSnapshot).where(
                     PayableSnapshot.month == comp,
@@ -131,8 +158,9 @@ class PayableSnapshotService:
                 )
             )
             await self.session.execute(text("DELETE FROM payable_snapshot_generations WHERE month = :m"), {"m": comp})
+            processed += 1
         await self.session.flush()
-        return len(comps)
+        return processed
 
     async def list_generated_months(self) -> list[date]:
         stmt = select(PayableSnapshotGeneration.month).order_by(PayableSnapshotGeneration.month.asc())
@@ -207,7 +235,7 @@ class PayableSnapshotService:
                 await self.session.execute(
                     select(PayableSnapshot.ref_id).where(
                         PayableSnapshot.month == comp,
-                        PayableSnapshot.type == PayableSnapshotType.FINANCIAL,
+                        PayableSnapshot.type.in_(PAYABLE_DEBT_TYPES),
                         PayableSnapshot.ref_id.in_(item_ids),
                     )
                 )
@@ -230,7 +258,7 @@ class PayableSnapshotService:
             else:
                 if it.id in existing_fin:
                     continue
-                snap_type = PayableSnapshotType.FINANCIAL
+                snap_type = PayableSnapshotType.ENDIVIDAMENTO
                 cost_center = "Financeiro"
                 category = "Endividamento"
 
@@ -257,6 +285,134 @@ class PayableSnapshotService:
         if created:
             logger.warning("payables company_finance manual entries backfill applied month=%s added=%d", comp, created)
         return created
+
+    def _company_finance_snapshot_meta(self, item: CompanyFinancialItem) -> tuple[PayableSnapshotType, str, str]:
+        if item.tipo == "custo_fixo":
+            return PayableSnapshotType.FIXED_COST, "Administrativo", "Custos diversos"
+        if item.tipo == "endividamento":
+            return PayableSnapshotType.ENDIVIDAMENTO, "Financeiro", "Endividamento"
+        raise ValueError("Tipo financeiro corporativo inválido para contas a pagar.")
+
+    async def sync_company_finance_item_months(self, *, item_id: UUID, months: set[date]) -> int:
+        """
+        Sincroniza somente as linhas de payables originadas de um item de Company Finance.
+
+        Não invalida nem recria o snapshot do mês inteiro. Linhas já pagas nunca são apagadas
+        e `amount_paid` é preservado ao atualizar valor/vencimento, evitando que histórico pago
+        volte para ABERTO por causa de uma edição em outro mês.
+        """
+        if not months:
+            return 0
+
+        item = await self.session.get(CompanyFinancialItem, item_id)
+        if item is None:
+            return 0
+        snap_type, cost_center, category = self._company_finance_snapshot_meta(item)
+        comps = sorted({normalize_competencia(m) for m in months})
+        pay_rows = (
+            await self.session.execute(
+                select(CompanyFinancialPayment).where(
+                    CompanyFinancialPayment.item_id == item_id,
+                    CompanyFinancialPayment.competencia.in_(comps),
+                )
+            )
+        ).scalars().all()
+        payments_by_month = {normalize_competencia(p.competencia): _money2(p.valor) for p in pay_rows}
+
+        changed = 0
+        for comp in comps:
+            # Se o snapshot ainda não existe, a geração futura usará company_financial_payments.
+            if not await self.is_generated(month=comp):
+                continue
+
+            existing = list(
+                (
+                    await self.session.execute(
+                        select(PayableSnapshot).where(
+                            PayableSnapshot.month == comp,
+                            PayableSnapshot.ref_id == item_id,
+                            PayableSnapshot.type.in_((PayableSnapshotType.FIXED_COST, *PAYABLE_DEBT_TYPES)),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            amount = payments_by_month.get(comp, Decimal("0.00"))
+
+            if amount <= 0:
+                for row in existing:
+                    if _money2(row.amount_paid) > 0:
+                        _sync_legacy_paid_fields(row)
+                        continue
+                    await self.session.delete(row)
+                    changed += 1
+                continue
+
+            target = next((row for row in existing if row.type == snap_type), None)
+            if target is None:
+                target = PayableSnapshot(
+                    month=comp,
+                    type=snap_type,
+                    ref_id=item.id,
+                    project_id=None,
+                    name=str(item.nome).strip(),
+                    cost_center=cost_center,
+                    category=category,
+                    amount_original=amount,
+                    amount_final=amount,
+                    amount_paid=Decimal("0"),
+                    due_date=_default_due_date(comp, day=10),
+                    paid=False,
+                    payment_date=None,
+                    observation=None,
+                )
+                self.session.add(target)
+                changed += 1
+
+            target.name = str(item.nome).strip()
+            target.cost_center = cost_center
+            target.category = category
+            if _money2(target.amount_paid) <= 0:
+                target.amount_original = amount
+                target.amount_final = amount
+                target.due_date = _default_due_date(comp, day=10)
+            _sync_legacy_paid_fields(target)
+
+            for row in existing:
+                if row.id == target.id:
+                    continue
+                if _money2(row.amount_paid) > 0:
+                    _sync_legacy_paid_fields(row)
+                    continue
+                await self.session.delete(row)
+                changed += 1
+
+        await self.session.flush()
+        return changed
+
+    async def preserve_or_remove_deleted_company_finance_item(self, *, item_id: UUID) -> int:
+        """
+        Remove snapshots corporativos órfãos de um item excluído, mas preserva qualquer linha
+        que já tenha pagamento registrado para manter o histórico financeiro.
+        """
+        rows = (
+            await self.session.execute(
+                select(PayableSnapshot).where(
+                    PayableSnapshot.ref_id == item_id,
+                    PayableSnapshot.type.in_((PayableSnapshotType.FIXED_COST, *PAYABLE_DEBT_TYPES)),
+                )
+            )
+        ).scalars().all()
+        removed = 0
+        for row in rows:
+            if _money2(row.amount_paid) > 0:
+                _sync_legacy_paid_fields(row)
+                continue
+            await self.session.delete(row)
+            removed += 1
+        await self.session.flush()
+        return removed
 
     async def _ensure_invoice_anticipation_obligations(
         self,
@@ -404,15 +560,11 @@ class PayableSnapshotService:
                         source_month,
                     )
                 else:
-                    # Auto-recuperação: se houver "fantasmas" (antecipação excluída), invalida e força regeneração.
+                    # Não recria snapshots gerados automaticamente aqui: isso apaga histórico financeiro
+                    # (amount_paid) de linhas automáticas. Inconsistências devem ser corrigidas de forma
+                    # pontual ou por regeneração explícita e auditável.
                     if await self._has_stale_invoice_anticipation_rows(month=comp):
-                        logger.warning(
-                            "payables snapshot month=%s has stale ANTECIPACAO rows; invalidating and regenerating.",
-                            comp,
-                        )
-                        await self.invalidate_months(months={comp})
-                        force_regenerate = True
-                        existing = []
+                        logger.error("payables snapshot month=%s has stale ANTECIPACAO rows; preserving snapshot.", comp)
                     if existing and not force_regenerate:
                         added_fixed = await self._ensure_company_finance_manual_entries(payment_month=comp)
                         added_ants = await self._ensure_invoice_anticipation_obligations(
@@ -431,13 +583,10 @@ class PayableSnapshotService:
                 existing = await self.list_for_month(month=comp)
                 if len(existing) > 0:
                     if await self._has_stale_invoice_anticipation_rows(month=comp):
-                        logger.warning(
-                            "payables snapshot month=%s has stale ANTECIPACAO rows (under lock); invalidating and regenerating.",
+                        logger.error(
+                            "payables snapshot month=%s has stale ANTECIPACAO rows (under lock); preserving snapshot.",
                             comp,
                         )
-                        await self.invalidate_months(months={comp})
-                        force_regenerate = True
-                        existing = []
                     if existing and not force_regenerate:
                         added_fixed = await self._ensure_company_finance_manual_entries(payment_month=comp)
                         added_ants = await self._ensure_invoice_anticipation_obligations(
@@ -464,6 +613,12 @@ class PayableSnapshotService:
                 await self.session.flush()
 
             if force_regenerate:
+                paid_rows = await self._count_paid_automatic_rows(month=comp)
+                if paid_rows > 0:
+                    raise ValueError(
+                        f"Snapshot de {comp:%Y-%m} possui {paid_rows} lançamento(s) automático(s) pago(s); "
+                        "regeração bloqueada para preservar o histórico financeiro."
+                    )
                 # Regeneração explícita: remove linhas automáticas + marcador. MANUAL preservado (como em invalidate).
                 logger.warning("force_regenerate payables snapshot month=%s source_month=%s", comp, source_month)
                 await self.session.execute(
@@ -686,7 +841,7 @@ class PayableSnapshotService:
                     cost_center = "Administrativo"
                     category = "Custos diversos"
                 else:
-                    snap_type = PayableSnapshotType.FINANCIAL
+                    snap_type = PayableSnapshotType.ENDIVIDAMENTO
                     cost_center = "Financeiro"
                     category = "Endividamento"
                 self.session.add(

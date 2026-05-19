@@ -27,7 +27,14 @@ export function payablesMonthToCompetenceIsoDate(ymOrIso: string): string {
 
 export type PayableSnapshotStatus = "ABERTO" | "PARCIAL" | "PAGO";
 
-export type PayableSnapshotType = "COLLABORATOR" | "VEHICLE" | "FIXED_COST" | "FINANCIAL" | "ANTECIPACAO" | "MANUAL";
+export type PayableSnapshotType =
+  | "COLLABORATOR"
+  | "VEHICLE"
+  | "FIXED_COST"
+  | "ENDIVIDAMENTO"
+  | "FINANCIAL"
+  | "ANTECIPACAO"
+  | "MANUAL";
 
 export interface PayableSnapshotRow {
   id: string;

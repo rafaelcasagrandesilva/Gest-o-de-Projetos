@@ -43,16 +43,17 @@ class CompanyFinanceService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def _invalidate_payables_snapshots_for_company_finance_change(self) -> None:
-        """
-        Company finance (custo fixo / endividamento) pode afetar múltiplos meses do snapshot de payables.
-        Regra conservadora: invalida todos os meses já "congelados" (markers em payable_snapshot_generations),
-        para que sejam recalculados na próxima visita (lazy).
-        """
-        svc = PayableSnapshotService(self.db)
-        months = await svc.list_generated_months()
+    async def _payment_months_for_item(self, *, item_id: UUID) -> set[date]:
+        rows = (
+            await self.db.execute(
+                select(CompanyFinancialPayment.competencia).where(CompanyFinancialPayment.item_id == item_id)
+            )
+        ).scalars().all()
+        return set(rows)
+
+    async def _sync_payables_for_company_finance_item(self, *, item_id: UUID, months: set[date]) -> None:
         if months:
-            await svc.invalidate_months(months=set(months))
+            await PayableSnapshotService(self.db).sync_company_finance_item_months(item_id=item_id, months=months)
 
     async def list_items(self, tipo: str, competencia: str | None) -> list[dict]:
         q = (
@@ -183,7 +184,6 @@ class CompanyFinanceService:
         self.db.add(row)
         await self.db.flush()
         await self.db.refresh(row)
-        await self._invalidate_payables_snapshots_for_company_finance_change()
         return row
 
     async def update_item(self, *, item_id: UUID, data: dict) -> CompanyFinancialItem | None:
@@ -234,27 +234,60 @@ class CompanyFinanceService:
         row.updated_at = datetime.now(timezone.utc)
         await self.db.flush()
         await self.db.refresh(row)
-        await self._invalidate_payables_snapshots_for_company_finance_change()
+        await self._sync_payables_for_company_finance_item(
+            item_id=item_id,
+            months=await self._payment_months_for_item(item_id=item_id),
+        )
         return row
 
     async def delete_item(self, *, item_id: UUID) -> bool:
         row = await self.db.get(CompanyFinancialItem, item_id)
         if row is None:
             return False
+        await PayableSnapshotService(self.db).preserve_or_remove_deleted_company_finance_item(item_id=item_id)
         await self.db.delete(row)
         await self.db.flush()
-        await self._invalidate_payables_snapshots_for_company_finance_change()
         return True
 
     async def replace_payments(self, *, item_id: UUID, pagamentos: list[dict]) -> CompanyFinancialItem | None:
         item = await self.db.get(CompanyFinancialItem, item_id)
         if item is None:
             return None
-        await self.db.execute(delete(CompanyFinancialPayment).where(CompanyFinancialPayment.item_id == item_id))
+
+        incoming: dict[date, float] = {}
         for p in pagamentos:
             mes = p["mes"]
             comp = parse_month(mes)
             val = max(0.0, float(p.get("valor") or 0))
+            incoming[comp] = val
+
+        if not incoming:
+            return item
+
+        existing_rows = (
+            await self.db.execute(
+                select(CompanyFinancialPayment).where(
+                    CompanyFinancialPayment.item_id == item_id,
+                    CompanyFinancialPayment.competencia.in_(sorted(incoming)),
+                )
+            )
+        ).scalars().all()
+        existing = {p.competencia: _f(p.valor) for p in existing_rows}
+        changed_months = {
+            comp
+            for comp, new_value in incoming.items()
+            if round(existing.get(comp, 0.0), 2) != round(new_value, 2)
+        }
+
+        # Substitui somente as competências presentes no payload. Isso preserva histórico fora
+        # da janela visível na tela e evita que uma edição em fevereiro apague pagamentos antigos.
+        await self.db.execute(
+            delete(CompanyFinancialPayment).where(
+                CompanyFinancialPayment.item_id == item_id,
+                CompanyFinancialPayment.competencia.in_(sorted(incoming)),
+            )
+        )
+        for comp, val in incoming.items():
             if val <= 0:
                 continue
             self.db.add(
@@ -267,7 +300,7 @@ class CompanyFinanceService:
         item.updated_at = datetime.now(timezone.utc)
         await self.db.flush()
         await self.db.refresh(item, attribute_names=["payments"])
-        await self._invalidate_payables_snapshots_for_company_finance_change()
+        await self._sync_payables_for_company_finance_item(item_id=item_id, months=changed_months)
         return item
 
     async def kpis_endividamento(self, competencia: str) -> dict:

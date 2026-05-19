@@ -578,7 +578,7 @@ def _snapshot_to_read(row) -> PayableSnapshotRead:
         created_at=row.created_at,
         updated_at=row.updated_at,
         month=row.month,
-        type=row.type.value,
+        type="ENDIVIDAMENTO" if row.type == PayableSnapshotType.FINANCIAL else row.type.value,
         ref_id=row.ref_id,
         project_id=row.project_id,
         name=row.name,
@@ -649,7 +649,13 @@ async def list_payables_snapshot(
     if not sees_all and allowed is not None:
         filtered = []
         for r in rows:
-            if r.type in (PayableSnapshotType.VEHICLE, PayableSnapshotType.FIXED_COST, PayableSnapshotType.MANUAL):
+            if r.type in (
+                PayableSnapshotType.VEHICLE,
+                PayableSnapshotType.FIXED_COST,
+                PayableSnapshotType.ENDIVIDAMENTO,
+                PayableSnapshotType.FINANCIAL,
+                PayableSnapshotType.MANUAL,
+            ):
                 filtered.append(r)
                 continue
             if r.type == PayableSnapshotType.COLLABORATOR and r.project_id in allowed:
