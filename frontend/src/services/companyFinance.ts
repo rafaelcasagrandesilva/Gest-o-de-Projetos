@@ -18,6 +18,10 @@ export interface CompanyFinancialItem {
   percentual?: number | null;
   nome: string;
   valor_referencia: number;
+  category?: string | null;
+  cost_center?: string | null;
+  description?: string | null;
+  recurrence?: string | null;
   has_legal_process?: boolean;
   has_renegotiation?: boolean;
   renegotiated_amount?: number | null;
@@ -66,6 +70,10 @@ export async function createCompanyFinanceItem(payload: {
   tipo: TipoFinanceiro;
   nome: string;
   valor_referencia: number;
+  category?: string | null;
+  cost_center?: string | null;
+  description?: string | null;
+  recurrence?: string | null;
   item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
   employee_id?: string | null;
   percentual?: number | null;
@@ -85,6 +93,10 @@ export async function updateCompanyFinanceItem(
   payload: {
     nome?: string;
     valor_referencia?: number;
+    category?: string | null;
+    cost_center?: string | null;
+    description?: string | null;
+    recurrence?: string | null;
     item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
     employee_id?: string | null;
     percentual?: number | null;

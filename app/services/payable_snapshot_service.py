@@ -247,14 +247,14 @@ class PayableSnapshotService:
                 if it.id in existing_fixed:
                     continue
                 snap_type = PayableSnapshotType.FIXED_COST
-                cost_center = "Administrativo"
-                category = "Custos diversos"
+                cost_center = str(getattr(it, "cost_center", None) or "Administrativo").strip()
+                category = str(getattr(it, "category", None) or "Custos diversos").strip()
             else:
                 if it.id in existing_fin:
                     continue
                 snap_type = PayableSnapshotType.ENDIVIDAMENTO
-                cost_center = "Financeiro"
-                category = "Endividamento"
+                cost_center = str(getattr(it, "cost_center", None) or "Financeiro").strip()
+                category = str(getattr(it, "category", None) or "Endividamento").strip()
 
             self.session.add(
                 PayableSnapshot(
@@ -282,9 +282,13 @@ class PayableSnapshotService:
 
     def _company_finance_snapshot_meta(self, item: CompanyFinancialItem) -> tuple[PayableSnapshotType, str, str]:
         if item.tipo == "custo_fixo":
-            return PayableSnapshotType.FIXED_COST, "Administrativo", "Custos diversos"
+            cost_center = str(getattr(item, "cost_center", None) or "Administrativo").strip()
+            category = str(getattr(item, "category", None) or "Custos diversos").strip()
+            return PayableSnapshotType.FIXED_COST, cost_center, category
         if item.tipo == "endividamento":
-            return PayableSnapshotType.ENDIVIDAMENTO, "Financeiro", "Endividamento"
+            cost_center = str(getattr(item, "cost_center", None) or "Financeiro").strip()
+            category = str(getattr(item, "category", None) or "Endividamento").strip()
+            return PayableSnapshotType.ENDIVIDAMENTO, cost_center, category
         raise ValueError("Tipo financeiro corporativo inválido para contas a pagar.")
 
     async def sync_company_finance_item_months(self, *, item_id: UUID, months: set[date]) -> int:
@@ -364,13 +368,16 @@ class PayableSnapshotService:
                 self.session.add(target)
                 changed += 1
 
+            if _money2(target.amount_paid) > 0:
+                _sync_legacy_paid_fields(target)
+                continue
+
             target.name = str(item.nome).strip()
             target.cost_center = cost_center
             target.category = category
-            if _money2(target.amount_paid) <= 0:
-                target.amount_original = amount
-                target.amount_final = amount
-                target.due_date = _default_due_date(comp, day=10)
+            target.amount_original = amount
+            target.amount_final = amount
+            target.due_date = _default_due_date(comp, day=10)
             _sync_legacy_paid_fields(target)
 
             for row in existing:
@@ -826,12 +833,12 @@ class PayableSnapshotService:
                     continue
                 if it.tipo == "custo_fixo":
                     snap_type = PayableSnapshotType.FIXED_COST
-                    cost_center = "Administrativo"
-                    category = "Custos diversos"
+                    cost_center = str(getattr(it, "cost_center", None) or "Administrativo").strip()
+                    category = str(getattr(it, "category", None) or "Custos diversos").strip()
                 else:
                     snap_type = PayableSnapshotType.ENDIVIDAMENTO
-                    cost_center = "Financeiro"
-                    category = "Endividamento"
+                    cost_center = str(getattr(it, "cost_center", None) or "Financeiro").strip()
+                    category = str(getattr(it, "category", None) or "Endividamento").strip()
                 self.session.add(
                     PayableSnapshot(
                         month=payment_month,

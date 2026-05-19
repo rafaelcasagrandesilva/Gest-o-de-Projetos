@@ -39,6 +39,18 @@ def _debt_base_amount(it: CompanyFinancialItem) -> float:
     return _f(it.valor_referencia)
 
 
+def _default_category(tipo: str) -> str:
+    return "Endividamento" if tipo == "endividamento" else "Custos diversos"
+
+
+def _default_cost_center(tipo: str) -> str:
+    return "Financeiro" if tipo == "endividamento" else "Administrativo"
+
+
+def _default_recurrence(tipo: str) -> str:
+    return "INSTALLMENTS" if tipo == "endividamento" else "MONTHLY"
+
+
 class CompanyFinanceService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -114,6 +126,10 @@ class CompanyFinanceService:
                 "percentual": percentual,
                 "nome": it.nome,
                 "valor_referencia": ref,
+                "category": getattr(it, "category", None) or _default_category(it.tipo),
+                "cost_center": getattr(it, "cost_center", None) or _default_cost_center(it.tipo),
+                "description": getattr(it, "description", None),
+                "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
                 "has_legal_process": bool(getattr(it, "has_legal_process", False)),
                 "has_renegotiation": bool(getattr(it, "has_renegotiation", False)),
                 "renegotiated_amount": _f(it.renegotiated_amount) if getattr(it, "renegotiated_amount", None) is not None else None,
@@ -142,6 +158,10 @@ class CompanyFinanceService:
             "percentual": percentual,
             "nome": it.nome,
             "valor_referencia": ref,
+            "category": getattr(it, "category", None) or _default_category(it.tipo),
+            "cost_center": getattr(it, "cost_center", None) or _default_cost_center(it.tipo),
+            "description": getattr(it, "description", None),
+            "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
             "has_legal_process": bool(getattr(it, "has_legal_process", False)),
             "has_renegotiation": bool(getattr(it, "has_renegotiation", False)),
             "renegotiated_amount": _f(it.renegotiated_amount) if getattr(it, "renegotiated_amount", None) is not None else None,
@@ -171,6 +191,10 @@ class CompanyFinanceService:
             tipo=data["tipo"],
             nome=data["nome"].strip(),
             valor_referencia=data["valor_referencia"],
+            category=(data.get("category") or _default_category(data["tipo"])).strip(),
+            cost_center=(data.get("cost_center") or _default_cost_center(data["tipo"])).strip(),
+            description=(data.get("description") or None),
+            recurrence=(data.get("recurrence") or _default_recurrence(data["tipo"])).strip(),
             item_type=item_type,
             employee_id=employee_id,
             percentual=percentual,
@@ -200,6 +224,15 @@ class CompanyFinanceService:
             row.nome = data["nome"].strip()
         if data.get("valor_referencia") is not None:
             row.valor_referencia = data["valor_referencia"]
+        if "category" in data:
+            row.category = (data.get("category") or _default_category(row.tipo)).strip()
+        if "cost_center" in data:
+            row.cost_center = (data.get("cost_center") or _default_cost_center(row.tipo)).strip()
+        if "description" in data:
+            raw = data.get("description")
+            row.description = str(raw).strip() if raw is not None and str(raw).strip() else None
+        if "recurrence" in data:
+            row.recurrence = (data.get("recurrence") or _default_recurrence(row.tipo)).strip()
         if data.get("has_legal_process") is not None:
             row.has_legal_process = bool(data["has_legal_process"])
         if data.get("has_renegotiation") is not None:

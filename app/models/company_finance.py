@@ -4,7 +4,7 @@ from datetime import date
 from enum import Enum
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, Enum as SAEnum, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, Enum as SAEnum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -40,6 +40,10 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     percentual: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
     nome: Mapped[str] = mapped_column(String(255), nullable=False)
     valor_referencia: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    cost_center: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recurrence: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # Campos adicionais (endividamento)
     has_legal_process: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")

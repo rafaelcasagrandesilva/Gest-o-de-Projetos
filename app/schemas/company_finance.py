@@ -41,6 +41,10 @@ class CompanyFinancialItemCreate(BaseModel):
     tipo: TipoFinanceiro
     nome: str = Field(..., min_length=1, max_length=255)
     valor_referencia: float = Field(..., ge=0)
+    category: str | None = Field(None, max_length=120)
+    cost_center: str | None = Field(None, max_length=255)
+    description: str | None = Field(None, max_length=4000)
+    recurrence: str | None = Field(None, max_length=32)
     item_type: CompanyFinancialItemType = "MANUAL"
     employee_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
@@ -87,6 +91,10 @@ class CompanyFinancialItemCreate(BaseModel):
 class CompanyFinancialItemUpdate(BaseModel):
     nome: str | None = Field(None, min_length=1, max_length=255)
     valor_referencia: float | None = Field(None, ge=0)
+    category: str | None = Field(None, max_length=120)
+    cost_center: str | None = Field(None, max_length=255)
+    description: str | None = Field(None, max_length=4000)
+    recurrence: str | None = Field(None, max_length=32)
     item_type: CompanyFinancialItemType | None = None
     employee_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
@@ -165,6 +173,10 @@ class CompanyFinancialItemRead(BaseModel):
     percentual: float | None = None
     nome: str
     valor_referencia: float
+    category: str | None = None
+    cost_center: str | None = None
+    description: str | None = None
+    recurrence: str | None = None
     has_legal_process: bool = False
     has_renegotiation: bool = False
     renegotiated_amount: float | None = None

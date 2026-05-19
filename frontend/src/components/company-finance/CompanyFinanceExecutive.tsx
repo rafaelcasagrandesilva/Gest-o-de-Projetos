@@ -19,6 +19,7 @@ import {
   fetchKpiEndividamento,
   listCompanyFinanceItems,
   replaceCompanyFinancePayments,
+  updateCompanyFinanceItem,
   type ChartPoint,
   type CompanyFinancialItem,
   type RenegotiationType,
@@ -84,6 +85,18 @@ function progressBarClass(ratio: number): string {
   return "bg-red-500";
 }
 
+function defaultCategory(tipo: TipoFinanceiro): string {
+  return tipo === "endividamento" ? "Endividamento" : "Custos diversos";
+}
+
+function defaultCostCenter(tipo: TipoFinanceiro): string {
+  return tipo === "endividamento" ? "Financeiro" : "Administrativo";
+}
+
+function defaultRecurrence(tipo: TipoFinanceiro): string {
+  return tipo === "endividamento" ? "INSTALLMENTS" : "MONTHLY";
+}
+
 /** Eixo Y com zoom na faixa dos dados (+10% margem), para variações pequenas não virarem linha reta. */
 function yAxisDomainFromValues(values: number[]): [number, number] | undefined {
   const finite = values.filter((v) => Number.isFinite(v));
@@ -134,6 +147,10 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [creditorFilter, setCreditorFilter] = useState<DebtCreditorFilter>("ALL");
   const [draftName, setDraftName] = useState("");
   const [draftRef, setDraftRef] = useState("");
+  const [draftCategory, setDraftCategory] = useState(() => defaultCategory(tipo));
+  const [draftCostCenter, setDraftCostCenter] = useState(() => defaultCostCenter(tipo));
+  const [draftDescription, setDraftDescription] = useState("");
+  const [draftRecurrence, setDraftRecurrence] = useState(() => defaultRecurrence(tipo));
   const [draftItemType, setDraftItemType] = useState<"MANUAL" | "COLABORADOR_MATRIZ">("MANUAL");
   const [draftEmployeeQuery, setDraftEmployeeQuery] = useState("");
   const [draftEmployeeOptions, setDraftEmployeeOptions] = useState<Employee[]>([]);
@@ -150,6 +167,12 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [saving, setSaving] = useState(false);
 
   const monthKeys = useMemo(() => rollingMonthKeys(competencia), [competencia]);
+
+  useEffect(() => {
+    setDraftCategory(defaultCategory(tipo));
+    setDraftCostCenter(defaultCostCenter(tipo));
+    setDraftRecurrence(defaultRecurrence(tipo));
+  }, [tipo]);
 
   const installmentCountN = useMemo(() => {
     const n = Number.parseInt(draftInstallmentCount || "0", 10);
@@ -341,6 +364,10 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         tipo,
         nome,
         valor_referencia: ref,
+        category: draftCategory.trim() || defaultCategory(tipo),
+        cost_center: draftCostCenter.trim() || defaultCostCenter(tipo),
+        description: draftDescription.trim() || null,
+        recurrence: draftRecurrence.trim() || defaultRecurrence(tipo),
         item_type: tipo === "custo_fixo" ? draftItemType : "MANUAL",
         employee_id: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? draftEmployeeId : null,
         percentual: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? percentualN : null,
@@ -360,6 +387,10 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       });
       setDraftName("");
       setDraftRef("");
+      setDraftCategory(defaultCategory(tipo));
+      setDraftCostCenter(defaultCostCenter(tipo));
+      setDraftDescription("");
+      setDraftRecurrence(defaultRecurrence(tipo));
       setDraftItemType("MANUAL");
       setDraftEmployeeQuery("");
       setDraftEmployeeOptions([]);
@@ -601,6 +632,48 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               placeholder="0,00"
               inputMode="decimal"
               disabled={financeReadOnly || (tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ")}
+            />
+          </label>
+          <label className="flex w-full min-w-[160px] flex-col gap-1 text-sm sm:w-48">
+            <span className="text-slate-600">Categoria</span>
+            <input
+              value={draftCategory}
+              onChange={(e) => setDraftCategory(e.target.value)}
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              disabled={financeReadOnly}
+            />
+          </label>
+          <label className="flex w-full min-w-[160px] flex-col gap-1 text-sm sm:w-48">
+            <span className="text-slate-600">Centro de custo</span>
+            <input
+              value={draftCostCenter}
+              onChange={(e) => setDraftCostCenter(e.target.value)}
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              disabled={financeReadOnly}
+            />
+          </label>
+          <label className="flex w-full min-w-[160px] flex-col gap-1 text-sm sm:w-48">
+            <span className="text-slate-600">Recorrência</span>
+            <select
+              value={draftRecurrence}
+              onChange={(e) => setDraftRecurrence(e.target.value)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2"
+              disabled={financeReadOnly}
+            >
+              <option value="MONTHLY">Mensal</option>
+              <option value="INSTALLMENTS">Parcelada</option>
+              <option value="UNIQUE">Única</option>
+              <option value="VARIABLE">Variável</option>
+            </select>
+          </label>
+          <label className="flex w-full flex-col gap-1 text-sm">
+            <span className="text-slate-600">Descrição</span>
+            <textarea
+              value={draftDescription}
+              onChange={(e) => setDraftDescription(e.target.value)}
+              rows={2}
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              disabled={financeReadOnly}
             />
           </label>
 
@@ -862,6 +935,31 @@ function FinanceItemCard({
     }
     return m;
   });
+  const [editingStructure, setEditingStructure] = useState(false);
+  const [structureSaving, setStructureSaving] = useState(false);
+  const [structureName, setStructureName] = useState(item.nome);
+  const [structureRef, setStructureRef] = useState(String(item.valor_referencia).replace(".", ","));
+  const [structureCategory, setStructureCategory] = useState(item.category ?? defaultCategory(tipo));
+  const [structureCostCenter, setStructureCostCenter] = useState(item.cost_center ?? defaultCostCenter(tipo));
+  const [structureDescription, setStructureDescription] = useState(item.description ?? "");
+  const [structureRecurrence, setStructureRecurrence] = useState(item.recurrence ?? defaultRecurrence(tipo));
+  const [structurePercentual, setStructurePercentual] = useState(
+    typeof item.percentual === "number" ? String(item.percentual).replace(".", ",") : "",
+  );
+  const [structureHasLegal, setStructureHasLegal] = useState(Boolean(item.has_legal_process));
+  const [structureHasReneg, setStructureHasReneg] = useState(Boolean(item.has_renegotiation));
+  const [structureRenegAmount, setStructureRenegAmount] = useState(
+    typeof item.renegotiated_amount === "number" ? String(item.renegotiated_amount).replace(".", ",") : "",
+  );
+  const [structureRenegType, setStructureRenegType] = useState<RenegotiationType>(
+    item.renegotiation_type ?? "UNIQUE",
+  );
+  const [structureInstallments, setStructureInstallments] = useState(
+    typeof item.installment_count === "number" ? String(item.installment_count) : "",
+  );
+  const [structureInstallmentValue, setStructureInstallmentValue] = useState(
+    typeof item.installment_value === "number" ? String(item.installment_value).replace(".", ",") : "",
+  );
 
   const paymentsSyncKey = JSON.stringify(
     item.pagamentos.map((p) => ({ mes: p.mes, valor: p.valor })).sort((a, b) => a.mes.localeCompare(b.mes)),
@@ -873,6 +971,26 @@ function FinanceItemCard({
     }
     setLocalPayments(m);
   }, [item.id, paymentsSyncKey]);
+
+  useEffect(() => {
+    setStructureName(item.nome);
+    setStructureRef(String(item.valor_referencia).replace(".", ","));
+    setStructureCategory(item.category ?? defaultCategory(tipo));
+    setStructureCostCenter(item.cost_center ?? defaultCostCenter(tipo));
+    setStructureDescription(item.description ?? "");
+    setStructureRecurrence(item.recurrence ?? defaultRecurrence(tipo));
+    setStructurePercentual(typeof item.percentual === "number" ? String(item.percentual).replace(".", ",") : "");
+    setStructureHasLegal(Boolean(item.has_legal_process));
+    setStructureHasReneg(Boolean(item.has_renegotiation));
+    setStructureRenegAmount(
+      typeof item.renegotiated_amount === "number" ? String(item.renegotiated_amount).replace(".", ",") : "",
+    );
+    setStructureRenegType(item.renegotiation_type ?? "UNIQUE");
+    setStructureInstallments(typeof item.installment_count === "number" ? String(item.installment_count) : "");
+    setStructureInstallmentValue(
+      typeof item.installment_value === "number" ? String(item.installment_value).replace(".", ",") : "",
+    );
+  }, [item, tipo]);
 
   const persist = useCallback(async () => {
     if (readOnly) return;
@@ -893,6 +1011,44 @@ function FinanceItemCard({
     setLocalPayments((prev) => ({ ...prev, [mes]: raw }));
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => void persistRef.current(), 450);
+  }
+
+  async function saveStructure() {
+    if (readOnly) return;
+    const nome = structureName.trim();
+    if (!nome) return;
+    setStructureSaving(true);
+    try {
+      await updateCompanyFinanceItem(
+        item.id,
+        {
+          nome,
+          valor_referencia: parseBRLInput(structureRef),
+          category: structureCategory.trim() || defaultCategory(tipo),
+          cost_center: structureCostCenter.trim() || defaultCostCenter(tipo),
+          description: structureDescription.trim() || null,
+          recurrence: structureRecurrence || defaultRecurrence(tipo),
+          percentual: isMatrixCollaborator ? Number(String(structurePercentual || "0").replace(",", ".")) : null,
+          has_legal_process: tipo === "endividamento" ? structureHasLegal : false,
+          has_renegotiation: tipo === "endividamento" ? structureHasReneg : false,
+          renegotiated_amount: tipo === "endividamento" && structureHasReneg ? parseBRLInput(structureRenegAmount) : null,
+          renegotiation_type: tipo === "endividamento" && structureHasReneg ? structureRenegType : null,
+          installment_count:
+            tipo === "endividamento" && structureHasReneg && structureRenegType === "INSTALLMENTS"
+              ? Number.parseInt(structureInstallments || "0", 10)
+              : null,
+          installment_value:
+            tipo === "endividamento" && structureHasReneg && structureRenegType === "INSTALLMENTS"
+              ? parseBRLInput(structureInstallmentValue)
+              : null,
+        },
+        competencia,
+      );
+      setEditingStructure(false);
+      await onSaved();
+    } finally {
+      setStructureSaving(false);
+    }
   }
 
   return (
@@ -965,6 +1121,212 @@ function FinanceItemCard({
 
       {expanded && (
         <div className="border-t border-slate-100 bg-slate-50/90 p-4">
+          <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Estrutura do item</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Alterações estruturais atualizam meses futuros e snapshots abertos; lançamentos já pagos ficam preservados.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingStructure((v) => !v)}
+                disabled={readOnly || structureSaving}
+                title={readOnly ? GESTOR_GLOBAL_EDIT_TOOLTIP : undefined}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50 disabled:opacity-50"
+              >
+                {editingStructure ? "Fechar edição" : "Editar estrutura"}
+              </button>
+            </div>
+            {!editingStructure ? (
+              <dl className="mt-3 grid gap-3 text-sm text-slate-700 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <dt className="text-xs text-slate-500">Categoria</dt>
+                  <dd className="font-medium text-slate-900">{item.category ?? defaultCategory(tipo)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Centro de custo</dt>
+                  <dd className="font-medium text-slate-900">{item.cost_center ?? defaultCostCenter(tipo)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Recorrência</dt>
+                  <dd className="font-medium text-slate-900">{item.recurrence ?? defaultRecurrence(tipo)}</dd>
+                </div>
+                <div className="sm:col-span-2 lg:col-span-4">
+                  <dt className="text-xs text-slate-500">Descrição</dt>
+                  <dd className="whitespace-pre-wrap text-slate-900">{item.description?.trim() || "—"}</dd>
+                </div>
+              </dl>
+            ) : (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-slate-600">Nome</span>
+                  <input
+                    value={structureName}
+                    onChange={(e) => setStructureName(e.target.value)}
+                    className="rounded border border-slate-300 px-2 py-1.5"
+                    disabled={readOnly || structureSaving}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-slate-600">Valor base</span>
+                  <input
+                    value={structureRef}
+                    onChange={(e) => setStructureRef(e.target.value)}
+                    className="rounded border border-slate-300 px-2 py-1.5"
+                    inputMode="decimal"
+                    disabled={readOnly || structureSaving}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-slate-600">Categoria</span>
+                  <input
+                    value={structureCategory}
+                    onChange={(e) => setStructureCategory(e.target.value)}
+                    className="rounded border border-slate-300 px-2 py-1.5"
+                    disabled={readOnly || structureSaving}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-slate-600">Centro de custo</span>
+                  <input
+                    value={structureCostCenter}
+                    onChange={(e) => setStructureCostCenter(e.target.value)}
+                    className="rounded border border-slate-300 px-2 py-1.5"
+                    disabled={readOnly || structureSaving}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-slate-600">Recorrência</span>
+                  <select
+                    value={structureRecurrence}
+                    onChange={(e) => setStructureRecurrence(e.target.value)}
+                    className="rounded border border-slate-300 bg-white px-2 py-1.5"
+                    disabled={readOnly || structureSaving}
+                  >
+                    <option value="MONTHLY">Mensal</option>
+                    <option value="INSTALLMENTS">Parcelada</option>
+                    <option value="UNIQUE">Única</option>
+                    <option value="VARIABLE">Variável</option>
+                  </select>
+                </label>
+                {isMatrixCollaborator && (
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-slate-600">Percentual (%)</span>
+                    <input
+                      value={structurePercentual}
+                      onChange={(e) => setStructurePercentual(e.target.value)}
+                      className="rounded border border-slate-300 px-2 py-1.5"
+                      inputMode="decimal"
+                      disabled={readOnly || structureSaving}
+                    />
+                  </label>
+                )}
+                {tipo === "endividamento" && (
+                  <>
+                    <label className="flex items-center gap-2 pt-6 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={structureHasLegal}
+                        onChange={(e) => setStructureHasLegal(e.target.checked)}
+                        disabled={readOnly || structureSaving}
+                      />
+                      <span>Processo judicial</span>
+                    </label>
+                    <label className="flex items-center gap-2 pt-6 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={structureHasReneg}
+                        onChange={(e) => setStructureHasReneg(e.target.checked)}
+                        disabled={readOnly || structureSaving}
+                      />
+                      <span>Renegociação</span>
+                    </label>
+                  </>
+                )}
+                {tipo === "endividamento" && structureHasReneg && (
+                  <>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Valor renegociado</span>
+                      <input
+                        value={structureRenegAmount}
+                        onChange={(e) => setStructureRenegAmount(e.target.value)}
+                        className="rounded border border-slate-300 px-2 py-1.5"
+                        inputMode="decimal"
+                        disabled={readOnly || structureSaving}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Tipo renegociação</span>
+                      <select
+                        value={structureRenegType}
+                        onChange={(e) => setStructureRenegType(e.target.value as RenegotiationType)}
+                        className="rounded border border-slate-300 bg-white px-2 py-1.5"
+                        disabled={readOnly || structureSaving}
+                      >
+                        <option value="UNIQUE">Única</option>
+                        <option value="INSTALLMENTS">Parcelada</option>
+                      </select>
+                    </label>
+                    {structureRenegType === "INSTALLMENTS" && (
+                      <>
+                        <label className="flex flex-col gap-1 text-sm">
+                          <span className="text-slate-600">Parcelas</span>
+                          <input
+                            value={structureInstallments}
+                            onChange={(e) => setStructureInstallments(e.target.value)}
+                            className="rounded border border-slate-300 px-2 py-1.5"
+                            inputMode="numeric"
+                            disabled={readOnly || structureSaving}
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1 text-sm">
+                          <span className="text-slate-600">Valor parcela</span>
+                          <input
+                            value={structureInstallmentValue}
+                            onChange={(e) => setStructureInstallmentValue(e.target.value)}
+                            className="rounded border border-slate-300 px-2 py-1.5"
+                            inputMode="decimal"
+                            disabled={readOnly || structureSaving}
+                          />
+                        </label>
+                      </>
+                    )}
+                  </>
+                )}
+                <label className="flex flex-col gap-1 text-sm sm:col-span-2 lg:col-span-4">
+                  <span className="text-slate-600">Descrição</span>
+                  <textarea
+                    value={structureDescription}
+                    onChange={(e) => setStructureDescription(e.target.value)}
+                    rows={3}
+                    className="rounded border border-slate-300 px-2 py-1.5"
+                    disabled={readOnly || structureSaving}
+                  />
+                </label>
+                <div className="flex gap-2 sm:col-span-2 lg:col-span-4">
+                  <button
+                    type="button"
+                    onClick={() => void saveStructure()}
+                    disabled={readOnly || structureSaving}
+                    className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {structureSaving ? "Salvando…" : "Salvar estrutura"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingStructure(false)}
+                    disabled={structureSaving}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {tipo === "endividamento" && (hasLegal || hasReneg) && (
             <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Status e renegociação</p>
