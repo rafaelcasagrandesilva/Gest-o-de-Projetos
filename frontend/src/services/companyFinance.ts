@@ -91,6 +91,8 @@ export async function createCompanyFinanceItem(payload: {
   return data;
 }
 
+const CF_STRUCTURE_DEBUG = import.meta.env.DEV;
+
 export async function updateCompanyFinanceItem(
   id: string,
   payload: {
@@ -112,9 +114,15 @@ export async function updateCompanyFinanceItem(
   },
   competencia: string,
 ): Promise<CompanyFinancialItem> {
-  const { data } = await api.patch<CompanyFinancialItem>(`/company-finance/items/${id}/`, payload, {
+  if (CF_STRUCTURE_DEBUG) {
+    console.info("[company-finance] PATCH estrutura →", { id, competencia, payload });
+  }
+  const { data } = await api.patch<CompanyFinancialItem>(`/company-finance/items/${id}`, payload, {
     params: { competencia },
   });
+  if (CF_STRUCTURE_DEBUG) {
+    console.info("[company-finance] PATCH estrutura ←", data);
+  }
   return data;
 }
 

@@ -996,6 +996,8 @@ function FinanceItemCard({
   const [structureInstallmentValue, setStructureInstallmentValue] = useState(
     typeof item.installment_value === "number" ? String(item.installment_value).replace(".", ",") : "",
   );
+  const [structureError, setStructureError] = useState<string | null>(null);
+  const [structureSuccess, setStructureSuccess] = useState<string | null>(null);
 
   const paymentsSyncKey = JSON.stringify(
     item.pagamentos.map((p) => ({ mes: p.mes, valor: p.valor })).sort((a, b) => a.mes.localeCompare(b.mes)),
@@ -1009,6 +1011,7 @@ function FinanceItemCard({
   }, [item.id, paymentsSyncKey]);
 
   useEffect(() => {
+    if (editingStructure) return;
     setStructureName(item.nome);
     setStructureRef(String(item.valor_referencia).replace(".", ","));
     setStructureCategory(item.category ?? defaultCategory(tipo));
@@ -1026,7 +1029,9 @@ function FinanceItemCard({
     setStructureInstallmentValue(
       typeof item.installment_value === "number" ? String(item.installment_value).replace(".", ",") : "",
     );
-  }, [item, tipo, projectOptions]);
+    setStructureError(null);
+    setStructureSuccess(null);
+  }, [item, tipo, projectOptions, editingStructure]);
 
   const persist = useCallback(async () => {
     if (readOnly) return;
@@ -1052,37 +1057,60 @@ function FinanceItemCard({
   async function saveStructure() {
     if (readOnly) return;
     const nome = structureName.trim();
-    if (!nome) return;
-    if (!structureCostCenterRef) return;
+    if (!nome) {
+      setStructureError("Informe o nome do item.");
+      return;
+    }
+    if (!structureCostCenterRef) {
+      setStructureError("Selecione o centro de custo.");
+      return;
+    }
+    const payload: Parameters<typeof updateCompanyFinanceItem>[1] = {
+      nome,
+      valor_referencia: parseBRLInput(structureRef),
+      category: structureCategory.trim() || defaultCategory(tipo),
+      cost_center_ref: structureCostCenterRef,
+      description: structureDescription.trim() || null,
+      recurrence: structureRecurrence || defaultRecurrence(tipo),
+    };
+    if (isMatrixCollaborator) {
+      payload.percentual = Number(String(structurePercentual || "0").replace(",", "."));
+    }
+    if (tipo === "endividamento") {
+      payload.has_legal_process = structureHasLegal;
+      payload.has_renegotiation = structureHasReneg;
+      payload.renegotiated_amount = structureHasReneg ? parseBRLInput(structureRenegAmount) : null;
+      payload.renegotiation_type = structureHasReneg ? structureRenegType : null;
+      if (structureHasReneg && structureRenegType === "INSTALLMENTS") {
+        payload.installment_count = Number.parseInt(structureInstallments || "0", 10);
+        payload.installment_value = parseBRLInput(structureInstallmentValue);
+      }
+    }
+
     setStructureSaving(true);
+    setStructureError(null);
+    setStructureSuccess(null);
     try {
-      await updateCompanyFinanceItem(
-        item.id,
-        {
-          nome,
-          valor_referencia: parseBRLInput(structureRef),
-          category: structureCategory.trim() || defaultCategory(tipo),
-          cost_center_ref: structureCostCenterRef || defaultCostCenterRef(tipo),
-          description: structureDescription.trim() || null,
-          recurrence: structureRecurrence || defaultRecurrence(tipo),
-          percentual: isMatrixCollaborator ? Number(String(structurePercentual || "0").replace(",", ".")) : null,
-          has_legal_process: tipo === "endividamento" ? structureHasLegal : false,
-          has_renegotiation: tipo === "endividamento" ? structureHasReneg : false,
-          renegotiated_amount: tipo === "endividamento" && structureHasReneg ? parseBRLInput(structureRenegAmount) : null,
-          renegotiation_type: tipo === "endividamento" && structureHasReneg ? structureRenegType : null,
-          installment_count:
-            tipo === "endividamento" && structureHasReneg && structureRenegType === "INSTALLMENTS"
-              ? Number.parseInt(structureInstallments || "0", 10)
-              : null,
-          installment_value:
-            tipo === "endividamento" && structureHasReneg && structureRenegType === "INSTALLMENTS"
-              ? parseBRLInput(structureInstallmentValue)
-              : null,
-        },
-        competencia,
-      );
+      const saved = await updateCompanyFinanceItem(item.id, payload, competencia);
+      setStructureSuccess("Estrutura salva. Contas a Pagar será atualizado para meses em aberto.");
       setEditingStructure(false);
       await onSaved();
+      if (import.meta.env.DEV) {
+        console.info("[company-finance] estrutura salva no card", {
+          sent: payload,
+          received: saved,
+        });
+      }
+    } catch (err) {
+      if (isAxiosError(err)) {
+        const detail = err.response?.data?.detail;
+        setStructureError(typeof detail === "string" ? detail : "Não foi possível salvar a estrutura.");
+        if (import.meta.env.DEV) {
+          console.error("[company-finance] PATCH estrutura falhou", err.response?.status, err.response?.data);
+        }
+      } else {
+        setStructureError("Não foi possível salvar a estrutura.");
+      }
     } finally {
       setStructureSaving(false);
     }
@@ -1344,6 +1372,16 @@ function FinanceItemCard({
                     disabled={readOnly || structureSaving}
                   />
                 </label>
+                {structureError ? (
+                  <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 sm:col-span-2 lg:col-span-4">
+                    {structureError}
+                  </div>
+                ) : null}
+                {structureSuccess ? (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 sm:col-span-2 lg:col-span-4">
+                    {structureSuccess}
+                  </div>
+                ) : null}
                 <div className="flex gap-2 sm:col-span-2 lg:col-span-4">
                   <button
                     type="button"

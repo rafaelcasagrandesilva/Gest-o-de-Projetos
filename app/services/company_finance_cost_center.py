@@ -30,18 +30,29 @@ def default_label_for_tipo(tipo: str) -> str:
     return CC_SYSTEM_LABELS[default_system_for_tipo(tipo)]
 
 
+def _normalize_label_key(label: str) -> str:
+    return (
+        label.strip()
+        .casefold()
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+
+
 def item_cost_center_ref(item: CompanyFinancialItem) -> str:
     pid = getattr(item, "cost_center_project_id", None)
     if pid is not None:
         return str(pid)
+    legacy = (getattr(item, "cost_center", None) or "").strip()
+    if legacy:
+        mapped = _legacy_label_to_system(legacy)
+        if mapped:
+            return mapped
     system = getattr(item, "cost_center_system", None)
     if system in CC_SYSTEM_LABELS:
-        return str(system)
-    legacy = (getattr(item, "cost_center", None) or "").strip()
-    if legacy.lower() == CC_LABEL_FINANCEIRO.lower():
-        return CC_SYSTEM_FINANCEIRO
-    if legacy.lower() == CC_LABEL_ADMINISTRATIVO.lower():
-        return CC_SYSTEM_ADMINISTRATIVO
+        # Só usa código sistêmico se não houver rótulo legado de projeto.
+        if not legacy or _legacy_label_to_system(legacy):
+            return str(system)
     return default_system_for_tipo(item.tipo)
 
 
@@ -61,6 +72,34 @@ def _legacy_label_to_system(label: str) -> str | None:
 class CompanyFinanceCostCenterService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    async def _find_project_by_label(self, label: str) -> Project | None:
+        legacy = _normalize_legacy_label(label)
+        if not legacy:
+            return None
+        key = _normalize_label_key(legacy)
+        stmt = select(Project).where(Project.deleted_at.is_(None)).limit(500)
+        for candidate in (await self.db.execute(stmt)).scalars().all():
+            if _normalize_label_key(str(candidate.name)) == key:
+                return candidate
+        return None
+
+    async def resolve_ref(self, item: CompanyFinancialItem) -> str:
+        pid = getattr(item, "cost_center_project_id", None)
+        if pid is not None:
+            return str(pid)
+        legacy = _normalize_legacy_label(getattr(item, "cost_center", None))
+        if legacy:
+            mapped = _legacy_label_to_system(legacy)
+            if mapped:
+                return mapped
+            proj = await self._find_project_by_label(legacy)
+            if proj is not None:
+                return str(proj.id)
+        system = getattr(item, "cost_center_system", None)
+        if system in CC_SYSTEM_LABELS:
+            return str(system)
+        return default_system_for_tipo(item.tipo)
 
     async def resolve_label(
         self,
@@ -154,22 +193,7 @@ class CompanyFinanceCostCenterService:
             return
 
         if legacy:
-            stmt = (
-                select(Project)
-                .where(Project.deleted_at.is_(None), Project.name == legacy)
-                .limit(1)
-            )
-            proj = (await self.db.execute(stmt)).scalars().first()
-            if proj is None:
-                stmt_ci = (
-                    select(Project)
-                    .where(Project.deleted_at.is_(None))
-                    .limit(500)
-                )
-                for candidate in (await self.db.execute(stmt_ci)).scalars().all():
-                    if str(candidate.name).strip().casefold() == legacy.casefold():
-                        proj = candidate
-                        break
+            proj = await self._find_project_by_label(legacy)
             if proj is not None:
                 item.cost_center_project_id = proj.id
                 item.cost_center_system = None

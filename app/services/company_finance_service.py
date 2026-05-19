@@ -15,7 +15,6 @@ from app.services.company_finance_cost_center import (
     CompanyFinanceCostCenterService,
     default_label_for_tipo,
     default_system_for_tipo,
-    item_cost_center_ref,
 )
 from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_total_cost
 from app.services.payable_snapshot_service import PayableSnapshotService
@@ -96,9 +95,10 @@ class CompanyFinanceService:
     async def _cost_center_fields(self, it: CompanyFinancialItem) -> dict[str, object]:
         cc_svc = CompanyFinanceCostCenterService(self.db)
         label = await cc_svc.resolve_label(it, project=getattr(it, "cost_center_project", None))
+        ref = await cc_svc.resolve_ref(it)
         it.cost_center = label
         return {
-            "cost_center_ref": item_cost_center_ref(it),
+            "cost_center_ref": ref,
             "cost_center": label,
             "cost_center_project_id": getattr(it, "cost_center_project_id", None),
             "cost_center_system": getattr(it, "cost_center_system", None),
@@ -238,6 +238,7 @@ class CompanyFinanceService:
         row = await self.db.get(CompanyFinancialItem, item_id)
         if row is None:
             return None
+        await CompanyFinanceCostCenterService(self.db).migrate_legacy_row(row)
         if "item_type" in data and data.get("item_type") is not None:
             row.item_type = CompanyFinancialItemType(data["item_type"])
         if "employee_id" in data:
@@ -251,7 +252,8 @@ class CompanyFinanceService:
         if "category" in data:
             row.category = (data.get("category") or _default_category(row.tipo)).strip()
         if "cost_center_ref" in data and data.get("cost_center_ref") is not None:
-            await CompanyFinanceCostCenterService(self.db).apply_ref(
+            cc_svc = CompanyFinanceCostCenterService(self.db)
+            await cc_svc.apply_ref(
                 row,
                 str(data["cost_center_ref"]),
                 allow_inactive_project_id=getattr(row, "cost_center_project_id", None),
@@ -314,6 +316,7 @@ class CompanyFinanceService:
         item = await self.db.get(CompanyFinancialItem, item_id)
         if item is None:
             return None
+        await CompanyFinanceCostCenterService(self.db).migrate_legacy_row(item)
 
         incoming: dict[date, float] = {}
         for p in pagamentos:

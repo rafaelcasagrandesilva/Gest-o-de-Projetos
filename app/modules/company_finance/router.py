@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from uuid import UUID
 
@@ -29,6 +30,7 @@ from app.services.company_finance_service import CompanyFinanceService, parse_mo
 _read = [Depends(require_permission(COMPANY_FINANCE_VIEW))]
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _default_month() -> str:
@@ -105,9 +107,17 @@ async def update_item(
 ) -> CompanyFinancialItemRead:
     _ = actor
     svc = CompanyFinanceService(db)
+    patch_data = payload.model_dump(exclude_unset=True)
+    logger.info(
+        "company_finance.patch_item item_id=%s competencia=%s payload=%s",
+        item_id,
+        competencia,
+        patch_data,
+    )
     try:
-        row = await svc.update_item(item_id=item_id, data=payload.model_dump(exclude_unset=True))
+        row = await svc.update_item(item_id=item_id, data=patch_data)
     except ValueError as exc:
+        logger.warning("company_finance.patch_item validation_error item_id=%s detail=%s", item_id, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if row is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")
@@ -117,6 +127,14 @@ async def update_item(
         raise HTTPException(status_code=404, detail="Item não encontrado")
     comp = competencia or _default_month()
     read = await svc._item_to_read(loaded, parse_month(comp))
+    logger.info(
+        "company_finance.patch_item saved item_id=%s cost_center_ref=%s cost_center=%s project_id=%s system=%s",
+        item_id,
+        read.get("cost_center_ref"),
+        read.get("cost_center"),
+        read.get("cost_center_project_id"),
+        read.get("cost_center_system"),
+    )
     return CompanyFinancialItemRead.model_validate(read)
 
 

@@ -17,6 +17,15 @@ export function isSystemCostCenterRef(ref: string): boolean {
   return ref === CC_REF_ADMINISTRATIVO || ref === CC_REF_FINANCEIRO;
 }
 
+function normalizeLabelKey(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[–—]/g, "-");
+}
+
 export function costCenterLabelFromRef(ref: string, projects: Project[]): string {
   if (ref === CC_REF_ADMINISTRATIVO) return "Administrativo";
   if (ref === CC_REF_FINANCEIRO) return "Financeiro";
@@ -28,14 +37,17 @@ export function costCenterLabelFromRef(ref: string, projects: Project[]): string
 export function itemCostCenterRef(item: CompanyFinancialItem, tipo: TipoFinanceiro, projects: Project[] = []): string {
   if (item.cost_center_ref) return item.cost_center_ref;
   if (item.cost_center_project_id) return item.cost_center_project_id;
+  const legacy = (item.cost_center ?? "").trim();
+  if (legacy) {
+    const legacyKey = normalizeLabelKey(legacy);
+    if (legacyKey === "administrativo") return CC_REF_ADMINISTRATIVO;
+    if (legacyKey === "financeiro") return CC_REF_FINANCEIRO;
+    const byName = projects.find((p: Project) => normalizeLabelKey(p.name) === legacyKey);
+    if (byName) return byName.id;
+  }
   if (item.cost_center_system === CC_REF_ADMINISTRATIVO || item.cost_center_system === CC_REF_FINANCEIRO) {
     return item.cost_center_system;
   }
-  const legacy = (item.cost_center ?? "").trim();
-  if (legacy.toLowerCase() === "administrativo") return CC_REF_ADMINISTRATIVO;
-  if (legacy.toLowerCase() === "financeiro") return CC_REF_FINANCEIRO;
-  const byName = projects.find((p: Project) => p.name.trim() === legacy);
-  if (byName) return byName.id;
   return defaultCostCenterRef(tipo);
 }
 
