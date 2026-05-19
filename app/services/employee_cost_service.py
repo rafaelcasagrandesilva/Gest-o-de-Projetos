@@ -254,3 +254,22 @@ def project_labor_full_monthly_cost(
     employee: Any, settings: Any, competencia: date, labor_row: Any | None
 ) -> float:
     return float(project_labor_monthly_cost_breakdown(employee, settings, competencia, labor_row)["total"])
+
+
+def project_labor_payable_monthly_amount(
+    employee: Any, settings: Any, competencia: date, labor_row: Any | None
+) -> float:
+    """
+    Obrigação financeira direta do colaborador para Contas a Pagar.
+
+    Para CLT, Contas a Pagar representa apenas o salário base desembolsado ao colaborador.
+    Encargos, VR/VA, adicionais, provisões e overhead continuam no custo gerencial, mas não
+    viram payable direto. Para não alterar o contrato de PJ neste ajuste, PJ mantém o valor
+    operacional já usado como obrigação.
+    """
+    _ = settings, competencia
+    employment_type = (getattr(employee, "employment_type", "") or "").strip().upper()
+    if employment_type == "CLT":
+        salary_override = labor_row_salary_base_override_value(labor_row)
+        return float(salary_override if salary_override is not None else (getattr(employee, "salary_base", 0) or 0))
+    return project_labor_full_monthly_cost(employee, settings, competencia, labor_row)

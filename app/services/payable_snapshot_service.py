@@ -20,7 +20,7 @@ from app.models.project_operational import ProjectLabor, ProjectOperationalFixed
 from app.models.receivable import ReceivableInvoice, ReceivableInvoiceAnticipation
 from app.repositories.projects import ProjectRepository
 from app.models.project import Project
-from app.services.employee_cost_service import project_labor_full_monthly_cost
+from app.services.employee_cost_service import project_labor_payable_monthly_amount
 from app.services.settings_service import SettingsService
 from app.utils.date_utils import normalize_competencia, previous_competencia
 
@@ -99,12 +99,6 @@ def _project_cost_center_label(project: Project) -> str:
     if cc is not None and str(cc).strip():
         return str(cc).strip()
     return str(project.name).strip()
-
-
-def _merge_realizado_previsto(*, real_map: dict, prev_map: dict, key) -> float:
-    real = float(real_map.get(key, 0.0) or 0.0)
-    prev = float(prev_map.get(key, 0.0) or 0.0)
-    return real if real > 0 else prev
 
 
 class PayableSnapshotService:
@@ -730,9 +724,10 @@ class PayableSnapshotService:
 
             created = 0
 
-            # --- Collaborators (individual; REALIZADO se existir, senão PREVISTO) ---
+            # --- Collaborators (individual; somente REALIZADO) ---
             keys_stmt = select(ProjectLabor.project_id, ProjectLabor.employee_id).where(
                 ProjectLabor.competencia == source_month,
+                ProjectLabor.scenario == scenario_pg_rhs(Scenario.REALIZADO),
                 ProjectLabor.employee_id.is_not(None),
             )
             if project_filter is not None:
@@ -747,23 +742,16 @@ class PayableSnapshotService:
                     competencia=source_month,
                     scenario=Scenario.REALIZADO,
                 )
-                prev = await self._get_labor_row(
-                    project_id=project_id,
-                    employee_id=employee_id,
-                    competencia=source_month,
-                    scenario=Scenario.PREVISTO,
-                )
-                labor_row = real if real is not None else prev
-                if labor_row is None:
+                if real is None:
                     continue
 
-                emp = labor_row.employee
-                proj = labor_row.project
+                emp = real.employee
+                proj = real.project
                 if not emp or not proj:
                     continue
 
-                full = float(project_labor_full_monthly_cost(emp, settings, source_month, labor_row))
-                factor = float(labor_row.allocation_percentage or 0) / 100.0
+                full = float(project_labor_payable_monthly_amount(emp, settings, source_month, real))
+                factor = float(real.allocation_percentage or 0) / 100.0
                 amount = round(full * factor, 2)
                 if amount <= 0:
                     continue
@@ -989,19 +977,13 @@ class PayableSnapshotService:
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def _sum_vehicle_monthly_cost(self, *, competencia: date, project_ids: set[UUID] | None) -> float:
-        async def sum_for(scenario: Scenario) -> float:
-            stmt = select(func.coalesce(func.sum(ProjectVehicle.monthly_cost), 0)).where(
-                ProjectVehicle.competencia == competencia,
-                ProjectVehicle.scenario == scenario_pg_rhs(scenario),
-            )
-            if project_ids is not None:
-                stmt = stmt.where(ProjectVehicle.project_id.in_(sorted(project_ids)))
-            return float((await self.session.execute(stmt)).scalar_one())
-
-        real = await sum_for(Scenario.REALIZADO)
-        if real > 0:
-            return real
-        return await sum_for(Scenario.PREVISTO)
+        stmt = select(func.coalesce(func.sum(ProjectVehicle.monthly_cost), 0)).where(
+            ProjectVehicle.competencia == competencia,
+            ProjectVehicle.scenario == scenario_pg_rhs(Scenario.REALIZADO),
+        )
+        if project_ids is not None:
+            stmt = stmt.where(ProjectVehicle.project_id.in_(sorted(project_ids)))
+        return float((await self.session.execute(stmt)).scalar_one())
 
     async def _sum_vehicle_monthly_cost_by_project(
         self,
@@ -1066,23 +1048,6 @@ class PayableSnapshotService:
                 continue
             op_real[(pid, base)] += float(total or 0.0)
 
-        op_prev: dict[tuple[UUID, str], float] = defaultdict(float)
-        stmt = (
-            select(ProjectOperationalFixed.project_id, ProjectOperationalFixed.name, func.sum(ProjectOperationalFixed.value))
-            .where(
-                ProjectOperationalFixed.competencia == competencia,
-                ProjectOperationalFixed.scenario == scenario_pg_rhs(Scenario.PREVISTO),
-            )
-        )
-        if project_ids is not None:
-            stmt = stmt.where(ProjectOperationalFixed.project_id.in_(sorted(project_ids)))
-        stmt = stmt.group_by(ProjectOperationalFixed.project_id, ProjectOperationalFixed.name)
-        for pid, name, total in (await self.session.execute(stmt)).all():
-            base = str(name).strip()
-            if not base:
-                continue
-            op_prev[(pid, base)] += float(total or 0.0)
-
         leg_real: dict[tuple[UUID, str], float] = defaultdict(float)
         stmt = (
             select(ProjectFixedCost.project_id, ProjectFixedCost.name, func.sum(ProjectFixedCost.amount_real))
@@ -1100,24 +1065,7 @@ class PayableSnapshotService:
                 continue
             leg_real[(pid, base)] += float(total or 0.0)
 
-        leg_prev: dict[tuple[UUID, str], float] = defaultdict(float)
-        stmt = (
-            select(ProjectFixedCost.project_id, ProjectFixedCost.name, func.sum(ProjectFixedCost.amount_calculated))
-            .where(
-                ProjectFixedCost.competencia == competencia,
-                ProjectFixedCost.scenario == scenario_pg_rhs(Scenario.PREVISTO),
-            )
-        )
-        if project_ids is not None:
-            stmt = stmt.where(ProjectFixedCost.project_id.in_(sorted(project_ids)))
-        stmt = stmt.group_by(ProjectFixedCost.project_id, ProjectFixedCost.name)
-        for pid, name, total in (await self.session.execute(stmt)).all():
-            base = str(name).strip()
-            if not base:
-                continue
-            leg_prev[(pid, base)] += float(total or 0.0)
-
-        keys = set(op_real) | set(op_prev) | set(leg_real) | set(leg_prev)
+        keys = set(op_real) | set(leg_real)
         if not keys:
             return []
 
@@ -1127,8 +1075,8 @@ class PayableSnapshotService:
 
         rows: list[tuple[UUID, str, float, str, str]] = []
         for pid, base in sorted(keys, key=lambda t: (str(t[0]), t[1])):
-            op_amt = _merge_realizado_previsto(real_map=op_real, prev_map=op_prev, key=(pid, base))
-            leg_amt = _merge_realizado_previsto(real_map=leg_real, prev_map=leg_prev, key=(pid, base))
+            op_amt = float(op_real.get((pid, base), 0.0) or 0.0)
+            leg_amt = float(leg_real.get((pid, base), 0.0) or 0.0)
             amount = float(op_amt or 0.0) + float(leg_amt or 0.0)
             if amount <= 0:
                 continue
@@ -1139,8 +1087,8 @@ class PayableSnapshotService:
 
             cc = _project_cost_center_label(proj)
 
-            has_op = (pid, base) in op_real or (pid, base) in op_prev
-            has_leg = (pid, base) in leg_real or (pid, base) in leg_prev
+            has_op = (pid, base) in op_real
+            has_leg = (pid, base) in leg_real
             if has_op and has_leg:
                 category = "Custos diversos"
             elif has_leg:
