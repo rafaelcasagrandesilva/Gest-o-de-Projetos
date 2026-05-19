@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from datetime import date, datetime, timezone
 from uuid import UUID
 
@@ -316,65 +317,100 @@ class CompanyFinanceService:
         return True
 
     async def replace_payments(self, *, item_id: UUID, pagamentos: list[dict]) -> CompanyFinancialItem | None:
-        item = await self.db.get(CompanyFinancialItem, item_id)
-        if item is None:
-            return None
-        await CompanyFinanceCostCenterService(self.db).migrate_legacy_row(item)
-
-        incoming: dict[date, float] = {}
-        for p in pagamentos:
-            mes = p["mes"]
-            comp = parse_month(mes)
-            val = max(0.0, float(p.get("valor") or 0))
-            incoming[comp] = val
-
-        if not incoming:
-            logger.info("company_finance.replace_payments noop item_id=%s (empty payload)", item_id)
-            return item
-
         logger.info(
-            "company_finance.replace_payments item_id=%s months=%s",
+            "company_finance.replace_payments service START item_id=%s pagamentos=%s",
             item_id,
-            sorted(month_key(c) for c in incoming),
+            pagamentos,
         )
+        try:
+            item = await self.db.get(CompanyFinancialItem, item_id)
+            if item is None:
+                logger.warning("company_finance.replace_payments service item_id=%s not found", item_id)
+                return None
 
-        existing_rows = (
+            logger.info("company_finance.replace_payments service BEFORE migrate_legacy_row item_id=%s", item_id)
+            await CompanyFinanceCostCenterService(self.db).migrate_legacy_row(item)
+            logger.info("company_finance.replace_payments service AFTER migrate_legacy_row item_id=%s", item_id)
+
+            incoming: dict[date, float] = {}
+            for p in pagamentos:
+                mes = p["mes"]
+                comp = parse_month(mes)
+                val = max(0.0, float(p.get("valor") or 0))
+                incoming[comp] = val
+
+            if not incoming:
+                logger.info("company_finance.replace_payments service noop item_id=%s (empty payload)", item_id)
+                return item
+
+            months_in_payload = set(incoming.keys())
+            logger.info(
+                "company_finance.replace_payments service incoming item_id=%s months=%s values=%s",
+                item_id,
+                sorted(month_key(c) for c in incoming),
+                {month_key(c): v for c, v in incoming.items()},
+            )
+
+            logger.info("company_finance.replace_payments service BEFORE delete item_id=%s", item_id)
             await self.db.execute(
-                select(CompanyFinancialPayment).where(
+                delete(CompanyFinancialPayment).where(
                     CompanyFinancialPayment.item_id == item_id,
                     CompanyFinancialPayment.competencia.in_(sorted(incoming)),
                 )
             )
-        ).scalars().all()
-        existing = {p.competencia: _f(p.valor) for p in existing_rows}
-        months_in_payload = set(incoming.keys())
+            logger.info("company_finance.replace_payments service AFTER delete item_id=%s", item_id)
 
-        # Substitui somente as competências presentes no payload. Isso preserva histórico fora
-        # da janela visível na tela e evita que uma edição em fevereiro apague pagamentos antigos.
-        await self.db.execute(
-            delete(CompanyFinancialPayment).where(
-                CompanyFinancialPayment.item_id == item_id,
-                CompanyFinancialPayment.competencia.in_(sorted(incoming)),
-            )
-        )
-        inserted = 0
-        for comp, val in incoming.items():
-            if val <= 0:
-                continue
-            self.db.add(
-                CompanyFinancialPayment(
-                    item_id=item_id,
-                    competencia=comp,
-                    valor=val,
+            logger.info("company_finance.replace_payments service BEFORE insert item_id=%s", item_id)
+            inserted = 0
+            for comp, val in incoming.items():
+                if val <= 0:
+                    continue
+                self.db.add(
+                    CompanyFinancialPayment(
+                        item_id=item_id,
+                        competencia=comp,
+                        valor=val,
+                    )
                 )
+                inserted += 1
+            logger.info(
+                "company_finance.replace_payments service AFTER insert item_id=%s inserted=%d",
+                item_id,
+                inserted,
             )
-            inserted += 1
-        item.updated_at = datetime.now(timezone.utc)
-        await self.db.flush()
-        await self.db.refresh(item, attribute_names=["payments"])
-        # Sincroniza todos os meses do payload (não só os que mudaram de valor).
-        await self._sync_payables_for_company_finance_item(item_id=item_id, months=months_in_payload)
-        return item
+
+            item.updated_at = datetime.now(timezone.utc)
+            logger.info("company_finance.replace_payments service BEFORE flush item_id=%s", item_id)
+            await self.db.flush()
+            logger.info("company_finance.replace_payments service AFTER flush item_id=%s", item_id)
+
+            logger.info("company_finance.replace_payments service BEFORE refresh item_id=%s", item_id)
+            await self.db.refresh(item, attribute_names=["payments"])
+            logger.info("company_finance.replace_payments service AFTER refresh item_id=%s", item_id)
+
+            logger.info(
+                "company_finance.replace_payments service BEFORE sync_company_finance_item_months "
+                "item_id=%s months=%s",
+                item_id,
+                sorted(month_key(c) for c in months_in_payload),
+            )
+            await self._sync_payables_for_company_finance_item(item_id=item_id, months=months_in_payload)
+            logger.info(
+                "company_finance.replace_payments service AFTER sync_company_finance_item_months item_id=%s",
+                item_id,
+            )
+
+            logger.info("company_finance.replace_payments service OK item_id=%s", item_id)
+            return item
+        except Exception as e:
+            logger.error(
+                "company_finance.replace_payments service FAILED item_id=%s pagamentos=%s error=%s\n%s",
+                item_id,
+                pagamentos,
+                e,
+                traceback.format_exc(),
+            )
+            raise
 
     async def kpis_endividamento(self, competencia: str) -> dict:
         items = (

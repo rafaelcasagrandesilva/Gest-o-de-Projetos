@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from datetime import date, datetime
 from uuid import UUID
 
@@ -161,33 +162,47 @@ async def replace_payments(
     actor: User = Depends(get_current_user),
 ) -> CompanyFinancialItemRead:
     _ = actor
-    svc = CompanyFinanceService(db)
     pags = [p.model_dump() for p in payload.pagamentos]
     logger.info(
-        "company_finance.replace_payments item_id=%s competencia=%s months=%s",
+        "company_finance.replace_payments START item_id=%s competencia=%s payload=%s",
         item_id,
         competencia,
-        [p.get("mes") for p in pags],
+        pags,
     )
     try:
+        svc = CompanyFinanceService(db)
         row = await svc.replace_payments(item_id=item_id, pagamentos=pags)
-    except ValueError as exc:
-        logger.warning("company_finance.replace_payments validation item_id=%s detail=%s", item_id, exc)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if row is None:
-        raise HTTPException(status_code=404, detail="Item não encontrado")
-    await db.commit()
-    logger.info(
-        "company_finance.replace_payments committed item_id=%s payment_count=%d",
-        item_id,
-        len(row.payments),
-    )
-    loaded = await _load_item(db, item_id)
-    if loaded is None:
-        raise HTTPException(status_code=404, detail="Item não encontrado")
-    comp = competencia or _default_month()
-    read = await svc._item_to_read(loaded, parse_month(comp))
-    return CompanyFinancialItemRead.model_validate(read)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Item não encontrado")
+
+        logger.info("company_finance.replace_payments BEFORE commit item_id=%s", item_id)
+        await db.commit()
+        logger.info(
+            "company_finance.replace_payments AFTER commit item_id=%s payment_count=%d",
+            item_id,
+            len(row.payments),
+        )
+
+        loaded = await _load_item(db, item_id)
+        if loaded is None:
+            raise HTTPException(status_code=404, detail="Item não encontrado")
+        comp = competencia or _default_month()
+        read = await svc._item_to_read(loaded, parse_month(comp))
+        result = CompanyFinancialItemRead.model_validate(read)
+        logger.info("company_finance.replace_payments OK item_id=%s competencia=%s", item_id, comp)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "company_finance.replace_payments FAILED item_id=%s competencia=%s payload=%s error=%s\n%s",
+            item_id,
+            competencia,
+            pags,
+            e,
+            traceback.format_exc(),
+        )
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/kpis/endividamento", response_model=KpiEndividamentoRead, dependencies=_read)
