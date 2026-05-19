@@ -63,6 +63,26 @@ function parseBRLInput(raw: string): number {
   return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
+/** Só envia meses com valor ou que tinham pagamento (evita zerar os outros 11 meses da janela). */
+function buildPagamentosPayload(
+  monthKeys: string[],
+  localPayments: Record<string, string>,
+  originalPagamentos: { mes: string; valor: number }[],
+): { mes: string; valor: number }[] {
+  const originalByMes = new Map(originalPagamentos.map((p) => [p.mes, p.valor]));
+  return monthKeys
+    .map((mes) => ({
+      mes,
+      valor: parseBRLInput(localPayments[mes] ?? ""),
+    }))
+    .filter(({ mes, valor }) => {
+      const prev = originalByMes.get(mes) ?? 0;
+      if (valor > 0) return true;
+      if (prev > 0) return true;
+      return (localPayments[mes] ?? "").trim().length > 0;
+    });
+}
+
 /** 12 meses em ordem cronológica terminando em `endMes` (YYYY-MM). */
 function rollingMonthKeys(endMes: string): string[] {
   const [y, m] = endMes.split("-").map(Number);
@@ -1033,19 +1053,64 @@ function FinanceItemCard({
     setStructureSuccess(null);
   }, [item, tipo, projectOptions, editingStructure]);
 
+  const [paymentsError, setPaymentsError] = useState<string | null>(null);
+  const [paymentsSuccess, setPaymentsSuccess] = useState<string | null>(null);
+  const [paymentsSaving, setPaymentsSaving] = useState(false);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const persist = useCallback(async () => {
-    if (readOnly) return;
-    const pagamentos = monthKeys.map((mes) => ({
-      mes,
-      valor: parseBRLInput(localPayments[mes] ?? ""),
-    }));
-    await replaceCompanyFinancePayments(item.id, pagamentos, competencia);
-    await onSaved();
-  }, [readOnly, monthKeys, localPayments, item.id, competencia, onSaved]);
+    if (readOnly) {
+      setPaymentsError(GESTOR_GLOBAL_EDIT_TOOLTIP);
+      return;
+    }
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+      debounceTimer.current = null;
+    }
+    setPaymentsError(null);
+    setPaymentsSuccess(null);
+    const pagamentos = buildPagamentosPayload(monthKeys, localPayments, item.pagamentos);
+    if (pagamentos.length === 0) {
+      setPaymentsError("Informe um valor em pelo menos um mês antes de salvar.");
+      return;
+    }
+    if (import.meta.env.DEV) {
+      console.info("[company-finance] Salvar agora clique", {
+        item_id: item.id,
+        competencia,
+        pagamentos,
+      });
+    }
+    setPaymentsSaving(true);
+    try {
+      const saved = await replaceCompanyFinancePayments(item.id, pagamentos, competencia);
+      const m: Record<string, string> = {};
+      for (const p of saved.pagamentos) {
+        m[p.mes] = p.valor > 0 ? String(p.valor).replace(".", ",") : "";
+      }
+      setLocalPayments(m);
+      await onSaved();
+      setPaymentsSuccess("Pagamentos salvos. Contas a Pagar será atualizado nos meses já gerados.");
+      if (import.meta.env.DEV) {
+        console.info("[company-finance] Salvar agora OK", saved);
+      }
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.error("[company-finance] Salvar agora erro", e);
+      }
+      if (isAxiosError(e)) {
+        const detail = e.response?.data?.detail;
+        setPaymentsError(typeof detail === "string" ? detail : "Não foi possível salvar os pagamentos.");
+      } else {
+        setPaymentsError("Não foi possível salvar os pagamentos.");
+      }
+    } finally {
+      setPaymentsSaving(false);
+    }
+  }, [readOnly, monthKeys, localPayments, item.id, item.pagamentos, competencia, onSaved]);
 
   const persistRef = useRef(persist);
   persistRef.current = persist;
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function updateMonth(mes: string, raw: string) {
     if (readOnly) return;
@@ -1467,15 +1532,24 @@ function FinanceItemCard({
               </label>
             ))}
           </div>
+          {(paymentsError || paymentsSuccess) && (
+            <div className="mt-3 text-sm">
+              {paymentsError ? <p className="text-red-700">{paymentsError}</p> : null}
+              {paymentsSuccess ? <p className="text-emerald-700">{paymentsSuccess}</p> : null}
+            </div>
+          )}
           <div className="mt-4 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => void persist()}
-              disabled={readOnly}
+              onClick={() => {
+                if (import.meta.env.DEV) console.info("[company-finance] botão Salvar agora");
+                void persist();
+              }}
+              disabled={readOnly || paymentsSaving}
               title={readOnly ? GESTOR_GLOBAL_EDIT_TOOLTIP : undefined}
               className="rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50 disabled:opacity-50"
             >
-              Salvar agora
+              {paymentsSaving ? "Salvando…" : "Salvar agora"}
             </button>
             <button
               type="button"

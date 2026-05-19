@@ -163,10 +163,25 @@ async def replace_payments(
     _ = actor
     svc = CompanyFinanceService(db)
     pags = [p.model_dump() for p in payload.pagamentos]
-    row = await svc.replace_payments(item_id=item_id, pagamentos=pags)
+    logger.info(
+        "company_finance.replace_payments item_id=%s competencia=%s months=%s",
+        item_id,
+        competencia,
+        [p.get("mes") for p in pags],
+    )
+    try:
+        row = await svc.replace_payments(item_id=item_id, pagamentos=pags)
+    except ValueError as exc:
+        logger.warning("company_finance.replace_payments validation item_id=%s detail=%s", item_id, exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if row is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")
     await db.commit()
+    logger.info(
+        "company_finance.replace_payments committed item_id=%s payment_count=%d",
+        item_id,
+        len(row.payments),
+    )
     loaded = await _load_item(db, item_id)
     if loaded is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")

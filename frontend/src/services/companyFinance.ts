@@ -135,11 +135,17 @@ export async function replaceCompanyFinancePayments(
   pagamentos: PagamentoMes[],
   competencia: string,
 ): Promise<CompanyFinancialItem> {
+  if (CF_STRUCTURE_DEBUG) {
+    console.info("[company-finance] PUT pagamentos →", { id, competencia, pagamentos });
+  }
   const { data } = await api.put<CompanyFinancialItem>(
-    `/company-finance/items/${id}/payments/`,
+    `/company-finance/items/${id}/payments`,
     { pagamentos },
     { params: { competencia } },
   );
+  if (CF_STRUCTURE_DEBUG) {
+    console.info("[company-finance] PUT pagamentos ←", data);
+  }
   return data;
 }
 

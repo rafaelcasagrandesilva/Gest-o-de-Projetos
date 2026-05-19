@@ -287,13 +287,39 @@ class PayableSnapshotService:
             return PayableSnapshotType.ENDIVIDAMENTO, cost_center, category
         raise ValueError("Tipo financeiro corporativo inválido para contas a pagar.")
 
+    async def sync_company_finance_item_metadata(self, *, item_id: UUID) -> int:
+        """
+        Atualiza nome/centro/categoria em snapshots corporativos existentes.
+
+        Nunca apaga linhas nem altera valores (`amount_*`). Usado em edição estrutural.
+        """
+        item = await self.session.get(CompanyFinancialItem, item_id)
+        if item is None:
+            return 0
+        _snap_type, cost_center, category = await self._company_finance_snapshot_meta(item)
+        rows = (
+            await self.session.execute(
+                select(PayableSnapshot).where(
+                    PayableSnapshot.ref_id == item_id,
+                    PayableSnapshot.type.in_((PayableSnapshotType.FIXED_COST, *PAYABLE_DEBT_TYPES)),
+                )
+            )
+        ).scalars().all()
+        for row in rows:
+            row.name = str(item.nome).strip()
+            row.cost_center = cost_center
+            row.category = category
+            _sync_legacy_paid_fields(row)
+        await self.session.flush()
+        return len(rows)
+
     async def sync_company_finance_item_months(self, *, item_id: UUID, months: set[date]) -> int:
         """
-        Sincroniza somente as linhas de payables originadas de um item de Company Finance.
+        Sincroniza valores de payables a partir de `company_financial_payments` (Salvar agora).
 
         Não invalida nem recria o snapshot do mês inteiro. Linhas já pagas nunca são apagadas
-        e `amount_paid` é preservado ao atualizar valor/vencimento, evitando que histórico pago
-        volte para ABERTO por causa de uma edição em outro mês.
+        e `amount_paid` é preservado ao atualizar valor/vencimento. **Nunca remove** linhas
+        existentes — exclusão automática foi desativada para evitar perda de histórico.
         """
         if not months:
             return 0
@@ -315,10 +341,6 @@ class PayableSnapshotService:
 
         changed = 0
         for comp in comps:
-            # Se o snapshot ainda não existe, a geração futura usará company_financial_payments.
-            if not await self.is_generated(month=comp):
-                continue
-
             existing = list(
                 (
                     await self.session.execute(
@@ -332,15 +354,31 @@ class PayableSnapshotService:
                 .scalars()
                 .all()
             )
+            # Sem marcador de geração e sem linha existente: aguarda geração do mês.
+            if not existing and not await self.is_generated(month=comp):
+                logger.info(
+                    "payables company_finance sync skip item_id=%s month=%s (month not generated, no rows)",
+                    item_id,
+                    comp,
+                )
+                continue
+
             amount = payments_by_month.get(comp, Decimal("0.00"))
 
             if amount <= 0:
                 for row in existing:
-                    if _money2(row.amount_paid) > 0:
-                        _sync_legacy_paid_fields(row)
-                        continue
-                    await self.session.delete(row)
+                    row.name = str(item.nome).strip()
+                    row.cost_center = cost_center
+                    row.category = category
+                    _sync_legacy_paid_fields(row)
                     changed += 1
+                logger.warning(
+                    "payables company_finance sync skipped amount update item_id=%s month=%s "
+                    "(payment amount <= 0; preserving %d snapshot row(s))",
+                    item_id,
+                    comp,
+                    len(existing),
+                )
                 continue
 
             target = next((row for row in existing if row.type == snap_type), None)
@@ -382,8 +420,14 @@ class PayableSnapshotService:
                 if _money2(row.amount_paid) > 0:
                     _sync_legacy_paid_fields(row)
                     continue
-                await self.session.delete(row)
-                changed += 1
+                logger.warning(
+                    "payables company_finance sync preserving duplicate unpaid row id=%s "
+                    "item_id=%s month=%s type=%s (auto-delete disabled)",
+                    row.id,
+                    item_id,
+                    comp,
+                    row.type,
+                )
 
         await self.session.flush()
         return changed
@@ -547,15 +591,14 @@ class PayableSnapshotService:
             if await self.is_generated(month=comp) and not force_regenerate:
                 existing = await self.list_for_month(month=comp)
                 if len(existing) == 0:
-                    # Bug/estado ruim histórico: marker existe, mas snapshot está vazio. Loga e tenta auto-recuperar.
                     logger.error(
-                        "payables snapshot month=%s is marked generated but has 0 rows; will attempt regeneration. "
-                        "sees_all=%s accessible_projects=%d source_month=%s",
+                        "payables snapshot month=%s is marked generated but has 0 rows; "
+                        "refusing auto-regeneration (audit required). sees_all=%s accessible_projects=%d",
                         comp,
                         sees_all_projects,
                         project_count,
-                        source_month,
                     )
+                    return []
                 else:
                     # Não recria snapshots gerados automaticamente aqui: isso apaga histórico financeiro
                     # (amount_paid) de linhas automáticas. Inconsistências devem ser corrigidas de forma
@@ -594,20 +637,14 @@ class PayableSnapshotService:
                             await self.session.flush()
                             return await self.list_for_month(month=comp)
                         return existing
-                # Auto-recuperação: marker existe mas 0 linhas -> remove marker e tenta gerar novamente.
                 logger.error(
-                    "payables snapshot month=%s has generation marker but 0 rows; deleting marker and regenerating. "
-                    "sees_all=%s accessible_projects=%d source_month=%s",
+                    "payables snapshot month=%s has generation marker but 0 rows under lock; "
+                    "refusing auto-regeneration. sees_all=%s accessible_projects=%d",
                     comp,
                     sees_all_projects,
                     project_count,
-                    source_month,
                 )
-                await self.session.execute(
-                    text("DELETE FROM payable_snapshot_generations WHERE month = :m"),
-                    {"m": comp},
-                )
-                await self.session.flush()
+                return []
 
             if force_regenerate:
                 paid_rows = await self._count_paid_automatic_rows(month=comp)

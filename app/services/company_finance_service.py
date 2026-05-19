@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timezone
 from uuid import UUID
 
@@ -19,6 +20,8 @@ from app.services.company_finance_cost_center import (
 from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_total_cost
 from app.services.payable_snapshot_service import PayableSnapshotService
 from app.services.settings_service import SettingsService
+
+logger = logging.getLogger(__name__)
 
 
 def month_key(d: date) -> str:
@@ -63,6 +66,9 @@ class CompanyFinanceService:
             )
         ).scalars().all()
         return set(rows)
+
+    async def _sync_payables_metadata_for_company_finance_item(self, *, item_id: UUID) -> None:
+        await PayableSnapshotService(self.db).sync_company_finance_item_metadata(item_id=item_id)
 
     async def _sync_payables_for_company_finance_item(self, *, item_id: UUID, months: set[date]) -> None:
         if months:
@@ -297,10 +303,7 @@ class CompanyFinanceService:
         row.updated_at = datetime.now(timezone.utc)
         await self.db.flush()
         await self.db.refresh(row)
-        await self._sync_payables_for_company_finance_item(
-            item_id=item_id,
-            months=await self._payment_months_for_item(item_id=item_id),
-        )
+        await self._sync_payables_metadata_for_company_finance_item(item_id=item_id)
         return row
 
     async def delete_item(self, *, item_id: UUID) -> bool:
@@ -326,7 +329,14 @@ class CompanyFinanceService:
             incoming[comp] = val
 
         if not incoming:
+            logger.info("company_finance.replace_payments noop item_id=%s (empty payload)", item_id)
             return item
+
+        logger.info(
+            "company_finance.replace_payments item_id=%s months=%s",
+            item_id,
+            sorted(month_key(c) for c in incoming),
+        )
 
         existing_rows = (
             await self.db.execute(
@@ -337,11 +347,7 @@ class CompanyFinanceService:
             )
         ).scalars().all()
         existing = {p.competencia: _f(p.valor) for p in existing_rows}
-        changed_months = {
-            comp
-            for comp, new_value in incoming.items()
-            if round(existing.get(comp, 0.0), 2) != round(new_value, 2)
-        }
+        months_in_payload = set(incoming.keys())
 
         # Substitui somente as competências presentes no payload. Isso preserva histórico fora
         # da janela visível na tela e evita que uma edição em fevereiro apague pagamentos antigos.
@@ -351,6 +357,7 @@ class CompanyFinanceService:
                 CompanyFinancialPayment.competencia.in_(sorted(incoming)),
             )
         )
+        inserted = 0
         for comp, val in incoming.items():
             if val <= 0:
                 continue
@@ -361,10 +368,12 @@ class CompanyFinanceService:
                     valor=val,
                 )
             )
+            inserted += 1
         item.updated_at = datetime.now(timezone.utc)
         await self.db.flush()
         await self.db.refresh(item, attribute_names=["payments"])
-        await self._sync_payables_for_company_finance_item(item_id=item_id, months=changed_months)
+        # Sincroniza todos os meses do payload (não só os que mudaram de valor).
+        await self._sync_payables_for_company_finance_item(item_id=item_id, months=months_in_payload)
         return item
 
     async def kpis_endividamento(self, competencia: str) -> dict:
