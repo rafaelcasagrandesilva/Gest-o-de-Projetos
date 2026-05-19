@@ -11,6 +11,12 @@ from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPay
 from app.models.company_finance import CompanyFinancialItemType
 from app.models.employee import Employee
 from app.schemas.company_finance import PagamentoMes
+from app.services.company_finance_cost_center import (
+    CompanyFinanceCostCenterService,
+    default_label_for_tipo,
+    default_system_for_tipo,
+    item_cost_center_ref,
+)
 from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_total_cost
 from app.services.payable_snapshot_service import PayableSnapshotService
 from app.services.settings_service import SettingsService
@@ -43,10 +49,6 @@ def _default_category(tipo: str) -> str:
     return "Endividamento" if tipo == "endividamento" else "Custos diversos"
 
 
-def _default_cost_center(tipo: str) -> str:
-    return "Financeiro" if tipo == "endividamento" else "Administrativo"
-
-
 def _default_recurrence(tipo: str) -> str:
     return "INSTALLMENTS" if tipo == "endividamento" else "MONTHLY"
 
@@ -71,7 +73,11 @@ class CompanyFinanceService:
         q = (
             select(CompanyFinancialItem)
             .where(CompanyFinancialItem.tipo == tipo)
-            .options(selectinload(CompanyFinancialItem.payments), selectinload(CompanyFinancialItem.employee))
+            .options(
+                selectinload(CompanyFinancialItem.payments),
+                selectinload(CompanyFinancialItem.employee),
+                selectinload(CompanyFinancialItem.cost_center_project),
+            )
             .order_by(CompanyFinancialItem.nome)
         )
         rows = (await self.db.execute(q)).scalars().unique().all()
@@ -86,6 +92,17 @@ class CompanyFinanceService:
         if (emp.employment_type or "").upper() == "CLT":
             return float(calculate_clt_cost(emp, settings, competencia.year, competencia.month))
         return float(calculate_pj_total_cost(emp))
+
+    async def _cost_center_fields(self, it: CompanyFinancialItem) -> dict[str, object]:
+        cc_svc = CompanyFinanceCostCenterService(self.db)
+        label = await cc_svc.resolve_label(it, project=getattr(it, "cost_center_project", None))
+        it.cost_center = label
+        return {
+            "cost_center_ref": item_cost_center_ref(it),
+            "cost_center": label,
+            "cost_center_project_id": getattr(it, "cost_center_project_id", None),
+            "cost_center_system": getattr(it, "cost_center_system", None),
+        }
 
     async def _item_to_read(self, it: CompanyFinancialItem, competencia: date | None) -> dict:
         pags = sorted(it.payments, key=lambda p: p.competencia)
@@ -112,6 +129,8 @@ class CompanyFinanceService:
             base_val = await self._employee_base_value(emp, competencia=competencia)
             ref = round(float(base_val) * (float(percentual) / 100.0), 2)
 
+        cc_fields = await self._cost_center_fields(it)
+
         if it.tipo == "endividamento":
             restante = max(0.0, debt_base - total_pago)
             progresso = (total_pago / debt_base) if debt_base > 0 else 0.0
@@ -127,7 +146,7 @@ class CompanyFinanceService:
                 "nome": it.nome,
                 "valor_referencia": ref,
                 "category": getattr(it, "category", None) or _default_category(it.tipo),
-                "cost_center": getattr(it, "cost_center", None) or _default_cost_center(it.tipo),
+                **cc_fields,
                 "description": getattr(it, "description", None),
                 "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
                 "has_legal_process": bool(getattr(it, "has_legal_process", False)),
@@ -159,7 +178,7 @@ class CompanyFinanceService:
             "nome": it.nome,
             "valor_referencia": ref,
             "category": getattr(it, "category", None) or _default_category(it.tipo),
-            "cost_center": getattr(it, "cost_center", None) or _default_cost_center(it.tipo),
+            **cc_fields,
             "description": getattr(it, "description", None),
             "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
             "has_legal_process": bool(getattr(it, "has_legal_process", False)),
@@ -192,7 +211,6 @@ class CompanyFinanceService:
             nome=data["nome"].strip(),
             valor_referencia=data["valor_referencia"],
             category=(data.get("category") or _default_category(data["tipo"])).strip(),
-            cost_center=(data.get("cost_center") or _default_cost_center(data["tipo"])).strip(),
             description=(data.get("description") or None),
             recurrence=(data.get("recurrence") or _default_recurrence(data["tipo"])).strip(),
             item_type=item_type,
@@ -204,9 +222,15 @@ class CompanyFinanceService:
             renegotiation_type=renegotiation_type,
             installment_count=data.get("installment_count"),
             installment_value=data.get("installment_value"),
+            cost_center=default_label_for_tipo(data["tipo"]),
+            cost_center_system=default_system_for_tipo(data["tipo"]),
         )
         self.db.add(row)
         await self.db.flush()
+        ref_raw = data.get("cost_center_ref")
+        if not ref_raw:
+            raise ValueError("Centro de custo é obrigatório.")
+        await CompanyFinanceCostCenterService(self.db).apply_ref(row, str(ref_raw))
         await self.db.refresh(row)
         return row
 
@@ -226,8 +250,12 @@ class CompanyFinanceService:
             row.valor_referencia = data["valor_referencia"]
         if "category" in data:
             row.category = (data.get("category") or _default_category(row.tipo)).strip()
-        if "cost_center" in data:
-            row.cost_center = (data.get("cost_center") or _default_cost_center(row.tipo)).strip()
+        if "cost_center_ref" in data and data.get("cost_center_ref") is not None:
+            await CompanyFinanceCostCenterService(self.db).apply_ref(
+                row,
+                str(data["cost_center_ref"]),
+                allow_inactive_project_id=getattr(row, "cost_center_project_id", None),
+            )
         if "description" in data:
             raw = data.get("description")
             row.description = str(raw).strip() if raw is not None and str(raw).strip() else None
@@ -371,7 +399,11 @@ class CompanyFinanceService:
                 await self.db.execute(
                     select(CompanyFinancialItem)
                     .where(CompanyFinancialItem.tipo == "custo_fixo")
-                    .options(selectinload(CompanyFinancialItem.payments), selectinload(CompanyFinancialItem.employee))
+                    .options(
+                selectinload(CompanyFinancialItem.payments),
+                selectinload(CompanyFinancialItem.employee),
+                selectinload(CompanyFinancialItem.cost_center_project),
+            )
                 )
             )
             .scalars()

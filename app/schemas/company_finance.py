@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 TipoFinanceiro = Literal["endividamento", "custo_fixo"]
 RenegotiationType = Literal["UNIQUE", "INSTALLMENTS"]
 CompanyFinancialItemType = Literal["MANUAL", "COLABORADOR_MATRIZ"]
+CompanyFinancialCostCenterSystem = Literal["ADMINISTRATIVO", "FINANCEIRO"]
 
 
 def _money(v: object) -> float:
@@ -42,7 +43,12 @@ class CompanyFinancialItemCreate(BaseModel):
     nome: str = Field(..., min_length=1, max_length=255)
     valor_referencia: float = Field(..., ge=0)
     category: str | None = Field(None, max_length=120)
-    cost_center: str | None = Field(None, max_length=255)
+    cost_center_ref: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="ADMINISTRATIVO, FINANCEIRO ou UUID do projeto ativo.",
+    )
     description: str | None = Field(None, max_length=4000)
     recurrence: str | None = Field(None, max_length=32)
     item_type: CompanyFinancialItemType = "MANUAL"
@@ -92,7 +98,12 @@ class CompanyFinancialItemUpdate(BaseModel):
     nome: str | None = Field(None, min_length=1, max_length=255)
     valor_referencia: float | None = Field(None, ge=0)
     category: str | None = Field(None, max_length=120)
-    cost_center: str | None = Field(None, max_length=255)
+    cost_center_ref: str | None = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        description="ADMINISTRATIVO, FINANCEIRO ou UUID do projeto.",
+    )
     description: str | None = Field(None, max_length=4000)
     recurrence: str | None = Field(None, max_length=32)
     item_type: CompanyFinancialItemType | None = None
@@ -174,7 +185,10 @@ class CompanyFinancialItemRead(BaseModel):
     nome: str
     valor_referencia: float
     category: str | None = None
-    cost_center: str | None = None
+    cost_center_ref: str
+    cost_center: str
+    cost_center_project_id: UUID | None = None
+    cost_center_system: CompanyFinancialCostCenterSystem | None = None
     description: str | None = None
     recurrence: str | None = None
     has_legal_process: bool = False

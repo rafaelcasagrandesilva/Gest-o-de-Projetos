@@ -20,6 +20,7 @@ from app.models.project_operational import ProjectLabor, ProjectOperationalFixed
 from app.models.receivable import ReceivableInvoice, ReceivableInvoiceAnticipation
 from app.repositories.projects import ProjectRepository
 from app.models.project import Project
+from app.services.company_finance_cost_center import CompanyFinanceCostCenterService
 from app.services.employee_cost_service import project_labor_payable_monthly_amount
 from app.services.settings_service import SettingsService
 from app.utils.date_utils import normalize_competencia, previous_competencia
@@ -243,18 +244,13 @@ class PayableSnapshotService:
             amt = float(p.valor or 0.0)
             if amt <= 0:
                 continue
+            snap_type, cost_center, category = await self._company_finance_snapshot_meta(it)
             if it.tipo == "custo_fixo":
                 if it.id in existing_fixed:
                     continue
-                snap_type = PayableSnapshotType.FIXED_COST
-                cost_center = str(getattr(it, "cost_center", None) or "Administrativo").strip()
-                category = str(getattr(it, "category", None) or "Custos diversos").strip()
             else:
                 if it.id in existing_fin:
                     continue
-                snap_type = PayableSnapshotType.ENDIVIDAMENTO
-                cost_center = str(getattr(it, "cost_center", None) or "Financeiro").strip()
-                category = str(getattr(it, "category", None) or "Endividamento").strip()
 
             self.session.add(
                 PayableSnapshot(
@@ -280,13 +276,13 @@ class PayableSnapshotService:
             logger.warning("payables company_finance manual entries backfill applied month=%s added=%d", comp, created)
         return created
 
-    def _company_finance_snapshot_meta(self, item: CompanyFinancialItem) -> tuple[PayableSnapshotType, str, str]:
+    async def _company_finance_snapshot_meta(self, item: CompanyFinancialItem) -> tuple[PayableSnapshotType, str, str]:
+        cc_svc = CompanyFinanceCostCenterService(self.session)
+        cost_center = await cc_svc.resolve_label(item, project=getattr(item, "cost_center_project", None))
         if item.tipo == "custo_fixo":
-            cost_center = str(getattr(item, "cost_center", None) or "Administrativo").strip()
             category = str(getattr(item, "category", None) or "Custos diversos").strip()
             return PayableSnapshotType.FIXED_COST, cost_center, category
         if item.tipo == "endividamento":
-            cost_center = str(getattr(item, "cost_center", None) or "Financeiro").strip()
             category = str(getattr(item, "category", None) or "Endividamento").strip()
             return PayableSnapshotType.ENDIVIDAMENTO, cost_center, category
         raise ValueError("Tipo financeiro corporativo inválido para contas a pagar.")
@@ -305,7 +301,7 @@ class PayableSnapshotService:
         item = await self.session.get(CompanyFinancialItem, item_id)
         if item is None:
             return 0
-        snap_type, cost_center, category = self._company_finance_snapshot_meta(item)
+        snap_type, cost_center, category = await self._company_finance_snapshot_meta(item)
         comps = sorted({normalize_competencia(m) for m in months})
         pay_rows = (
             await self.session.execute(
@@ -831,14 +827,7 @@ class PayableSnapshotService:
                 amt = float(p.valor or 0.0)
                 if amt <= 0:
                     continue
-                if it.tipo == "custo_fixo":
-                    snap_type = PayableSnapshotType.FIXED_COST
-                    cost_center = str(getattr(it, "cost_center", None) or "Administrativo").strip()
-                    category = str(getattr(it, "category", None) or "Custos diversos").strip()
-                else:
-                    snap_type = PayableSnapshotType.ENDIVIDAMENTO
-                    cost_center = str(getattr(it, "cost_center", None) or "Financeiro").strip()
-                    category = str(getattr(it, "category", None) or "Endividamento").strip()
+                snap_type, cost_center, category = await self._company_finance_snapshot_meta(it)
                 self.session.add(
                     PayableSnapshot(
                         month=payment_month,

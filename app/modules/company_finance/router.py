@@ -54,7 +54,11 @@ async def _load_item(db: AsyncSession, item_id: UUID) -> CompanyFinancialItem | 
     q = (
         select(CompanyFinancialItem)
         .where(CompanyFinancialItem.id == item_id)
-        .options(selectinload(CompanyFinancialItem.payments), selectinload(CompanyFinancialItem.employee))
+        .options(
+            selectinload(CompanyFinancialItem.payments),
+            selectinload(CompanyFinancialItem.employee),
+            selectinload(CompanyFinancialItem.cost_center_project),
+        )
     )
     return (await db.execute(q)).scalars().unique().one_or_none()
 
@@ -78,7 +82,10 @@ async def create_item(
     actor: User = Depends(get_current_user),
 ) -> CompanyFinancialItemRead:
     svc = CompanyFinanceService(db)
-    row = await svc.create_item(actor_user_id=actor.id, data=payload.model_dump())
+    try:
+        row = await svc.create_item(actor_user_id=actor.id, data=payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.commit()
     loaded = await _load_item(db, row.id)
     if loaded is None:
@@ -98,7 +105,10 @@ async def update_item(
 ) -> CompanyFinancialItemRead:
     _ = actor
     svc = CompanyFinanceService(db)
-    row = await svc.update_item(item_id=item_id, data=payload.model_dump(exclude_unset=True))
+    try:
+        row = await svc.update_item(item_id=item_id, data=payload.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if row is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")
     await db.commit()

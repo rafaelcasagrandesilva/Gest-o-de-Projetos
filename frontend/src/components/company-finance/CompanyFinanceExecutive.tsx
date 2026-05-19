@@ -26,6 +26,13 @@ import {
   type TipoFinanceiro,
 } from "@/services/companyFinance";
 import { listEmployees, type Employee } from "@/services/employees";
+import { listProjects, type Project } from "@/services/projects";
+import {
+  CC_REF_ADMINISTRATIVO,
+  defaultCostCenterRef,
+  itemCostCenterRef,
+} from "@/components/company-finance/costCenter";
+import { CostCenterSelect } from "@/components/company-finance/CostCenterSelect";
 import { isAxiosError } from "axios";
 import { GESTOR_GLOBAL_EDIT_TOOLTIP, useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
 import { usePermission } from "@/hooks/usePermission";
@@ -89,10 +96,6 @@ function defaultCategory(tipo: TipoFinanceiro): string {
   return tipo === "endividamento" ? "Endividamento" : "Custos diversos";
 }
 
-function defaultCostCenter(tipo: TipoFinanceiro): string {
-  return tipo === "endividamento" ? "Financeiro" : "Administrativo";
-}
-
 function defaultRecurrence(tipo: TipoFinanceiro): string {
   return tipo === "endividamento" ? "INSTALLMENTS" : "MONTHLY";
 }
@@ -148,7 +151,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [draftName, setDraftName] = useState("");
   const [draftRef, setDraftRef] = useState("");
   const [draftCategory, setDraftCategory] = useState(() => defaultCategory(tipo));
-  const [draftCostCenter, setDraftCostCenter] = useState(() => defaultCostCenter(tipo));
+  const [draftCostCenterRef, setDraftCostCenterRef] = useState(() => defaultCostCenterRef(tipo));
+  const [projectOptions, setProjectOptions] = useState<Project[]>([]);
   const [draftDescription, setDraftDescription] = useState("");
   const [draftRecurrence, setDraftRecurrence] = useState(() => defaultRecurrence(tipo));
   const [draftItemType, setDraftItemType] = useState<"MANUAL" | "COLABORADOR_MATRIZ">("MANUAL");
@@ -170,9 +174,32 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
 
   useEffect(() => {
     setDraftCategory(defaultCategory(tipo));
-    setDraftCostCenter(defaultCostCenter(tipo));
+    setDraftCostCenterRef(defaultCostCenterRef(tipo));
     setDraftRecurrence(defaultRecurrence(tipo));
   }, [tipo]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await listProjects({ status: "ACTIVE", limit: 200 });
+        if (!cancelled) {
+          setProjectOptions([...list].sort((a, b) => a.name.localeCompare(b.name, "pt-BR")));
+        }
+      } catch {
+        if (!cancelled) setProjectOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ") {
+      setDraftCostCenterRef(CC_REF_ADMINISTRATIVO);
+    }
+  }, [tipo, draftItemType]);
 
   const installmentCountN = useMemo(() => {
     const n = Number.parseInt(draftInstallmentCount || "0", 10);
@@ -343,6 +370,10 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         : draftName.trim();
     const ref = calculatedRef;
     if (!nome || ref < 0) return;
+    if (!draftCostCenterRef) {
+      setError("Selecione o centro de custo.");
+      return;
+    }
     if (createValidationError) {
       setError(createValidationError);
       return;
@@ -365,7 +396,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         nome,
         valor_referencia: ref,
         category: draftCategory.trim() || defaultCategory(tipo),
-        cost_center: draftCostCenter.trim() || defaultCostCenter(tipo),
+        cost_center_ref: draftCostCenterRef || defaultCostCenterRef(tipo),
         description: draftDescription.trim() || null,
         recurrence: draftRecurrence.trim() || defaultRecurrence(tipo),
         item_type: tipo === "custo_fixo" ? draftItemType : "MANUAL",
@@ -388,7 +419,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       setDraftName("");
       setDraftRef("");
       setDraftCategory(defaultCategory(tipo));
-      setDraftCostCenter(defaultCostCenter(tipo));
+      setDraftCostCenterRef(defaultCostCenterRef(tipo));
       setDraftDescription("");
       setDraftRecurrence(defaultRecurrence(tipo));
       setDraftItemType("MANUAL");
@@ -644,12 +675,12 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             />
           </label>
           <label className="flex w-full min-w-[160px] flex-col gap-1 text-sm sm:w-48">
-            <span className="text-slate-600">Centro de custo</span>
-            <input
-              value={draftCostCenter}
-              onChange={(e) => setDraftCostCenter(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              disabled={financeReadOnly}
+            <span className="text-slate-600">Centro de custo *</span>
+            <CostCenterSelect
+              value={draftCostCenterRef}
+              onChange={setDraftCostCenterRef}
+              projects={projectOptions}
+              disabled={financeReadOnly || (tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ")}
             />
           </label>
           <label className="flex w-full min-w-[160px] flex-col gap-1 text-sm sm:w-48">
@@ -870,6 +901,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               competencia={competencia}
               expanded={expandedId === it.id}
               monthKeys={monthKeys}
+              projectOptions={projectOptions}
               readOnly={financeReadOnly}
               onToggle={() => setExpandedId((prev) => (prev === it.id ? null : it.id))}
               onDelete={() => void handleDelete(it.id)}
@@ -905,6 +937,7 @@ function FinanceItemCard({
   competencia,
   expanded,
   monthKeys,
+  projectOptions,
   readOnly,
   onToggle,
   onDelete,
@@ -915,6 +948,7 @@ function FinanceItemCard({
   competencia: string;
   expanded: boolean;
   monthKeys: string[];
+  projectOptions: Project[];
   readOnly: boolean;
   onToggle: () => void;
   onDelete: () => void;
@@ -940,7 +974,9 @@ function FinanceItemCard({
   const [structureName, setStructureName] = useState(item.nome);
   const [structureRef, setStructureRef] = useState(String(item.valor_referencia).replace(".", ","));
   const [structureCategory, setStructureCategory] = useState(item.category ?? defaultCategory(tipo));
-  const [structureCostCenter, setStructureCostCenter] = useState(item.cost_center ?? defaultCostCenter(tipo));
+  const [structureCostCenterRef, setStructureCostCenterRef] = useState(() =>
+    itemCostCenterRef(item, tipo, projectOptions),
+  );
   const [structureDescription, setStructureDescription] = useState(item.description ?? "");
   const [structureRecurrence, setStructureRecurrence] = useState(item.recurrence ?? defaultRecurrence(tipo));
   const [structurePercentual, setStructurePercentual] = useState(
@@ -976,7 +1012,7 @@ function FinanceItemCard({
     setStructureName(item.nome);
     setStructureRef(String(item.valor_referencia).replace(".", ","));
     setStructureCategory(item.category ?? defaultCategory(tipo));
-    setStructureCostCenter(item.cost_center ?? defaultCostCenter(tipo));
+    setStructureCostCenterRef(itemCostCenterRef(item, tipo, projectOptions));
     setStructureDescription(item.description ?? "");
     setStructureRecurrence(item.recurrence ?? defaultRecurrence(tipo));
     setStructurePercentual(typeof item.percentual === "number" ? String(item.percentual).replace(".", ",") : "");
@@ -990,7 +1026,7 @@ function FinanceItemCard({
     setStructureInstallmentValue(
       typeof item.installment_value === "number" ? String(item.installment_value).replace(".", ",") : "",
     );
-  }, [item, tipo]);
+  }, [item, tipo, projectOptions]);
 
   const persist = useCallback(async () => {
     if (readOnly) return;
@@ -1017,6 +1053,7 @@ function FinanceItemCard({
     if (readOnly) return;
     const nome = structureName.trim();
     if (!nome) return;
+    if (!structureCostCenterRef) return;
     setStructureSaving(true);
     try {
       await updateCompanyFinanceItem(
@@ -1025,7 +1062,7 @@ function FinanceItemCard({
           nome,
           valor_referencia: parseBRLInput(structureRef),
           category: structureCategory.trim() || defaultCategory(tipo),
-          cost_center: structureCostCenter.trim() || defaultCostCenter(tipo),
+          cost_center_ref: structureCostCenterRef || defaultCostCenterRef(tipo),
           description: structureDescription.trim() || null,
           recurrence: structureRecurrence || defaultRecurrence(tipo),
           percentual: isMatrixCollaborator ? Number(String(structurePercentual || "0").replace(",", ".")) : null,
@@ -1147,7 +1184,7 @@ function FinanceItemCard({
                 </div>
                 <div>
                   <dt className="text-xs text-slate-500">Centro de custo</dt>
-                  <dd className="font-medium text-slate-900">{item.cost_center ?? defaultCostCenter(tipo)}</dd>
+                  <dd className="font-medium text-slate-900">{item.cost_center}</dd>
                 </div>
                 <div>
                   <dt className="text-xs text-slate-500">Recorrência</dt>
@@ -1189,12 +1226,14 @@ function FinanceItemCard({
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-slate-600">Centro de custo</span>
-                  <input
-                    value={structureCostCenter}
-                    onChange={(e) => setStructureCostCenter(e.target.value)}
-                    className="rounded border border-slate-300 px-2 py-1.5"
-                    disabled={readOnly || structureSaving}
+                  <span className="text-slate-600">Centro de custo *</span>
+                  <CostCenterSelect
+                    value={structureCostCenterRef}
+                    onChange={setStructureCostCenterRef}
+                    projects={projectOptions}
+                    disabled={readOnly || structureSaving || isMatrixCollaborator}
+                    className="rounded border border-slate-300 bg-white px-2 py-1.5"
+                    legacyLabel={item.cost_center}
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-sm">

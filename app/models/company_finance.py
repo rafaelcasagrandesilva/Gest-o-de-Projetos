@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, TimestampUUIDMixin
 from app.models.employee import Employee
+from app.models.project import Project
 
 
 class RenegotiationType(str, Enum):
@@ -42,6 +43,10 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     valor_referencia: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     category: Mapped[str | None] = mapped_column(String(120), nullable=True)
     cost_center: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cost_center_project_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    cost_center_system: Mapped[str | None] = mapped_column(String(32), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     recurrence: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
@@ -62,6 +67,7 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     )
 
     employee: Mapped[Employee | None] = relationship()
+    cost_center_project: Mapped[Project | None] = relationship()
 
 
 class CompanyFinancialPayment(TimestampUUIDMixin, Base):

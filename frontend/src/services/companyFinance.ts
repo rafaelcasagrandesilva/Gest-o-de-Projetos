@@ -19,7 +19,10 @@ export interface CompanyFinancialItem {
   nome: string;
   valor_referencia: number;
   category?: string | null;
-  cost_center?: string | null;
+  cost_center_ref?: string;
+  cost_center: string;
+  cost_center_project_id?: string | null;
+  cost_center_system?: "ADMINISTRATIVO" | "FINANCEIRO" | null;
   description?: string | null;
   recurrence?: string | null;
   has_legal_process?: boolean;
@@ -71,7 +74,7 @@ export async function createCompanyFinanceItem(payload: {
   nome: string;
   valor_referencia: number;
   category?: string | null;
-  cost_center?: string | null;
+  cost_center_ref: string;
   description?: string | null;
   recurrence?: string | null;
   item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
@@ -94,7 +97,7 @@ export async function updateCompanyFinanceItem(
     nome?: string;
     valor_referencia?: number;
     category?: string | null;
-    cost_center?: string | null;
+    cost_center_ref?: string;
     description?: string | null;
     recurrence?: string | null;
     item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
