@@ -14,6 +14,10 @@ from app.database.session import get_db
 from app.models.company_staff_cost import CompanyStaffCost
 from app.models.user import User
 from app.repositories.company_staff_cost import CompanyStaffCostRepository
+from app.schemas.employee_monthly_payroll import (
+    EmployeeMonthlyPayrollRead,
+    EmployeeMonthlyPayrollUpsert,
+)
 from app.schemas.employees import (
     CLTCostPreviewRequest,
     CLTCostPreviewResponse,
@@ -26,6 +30,7 @@ from app.schemas.employees import (
     PayrollResponse,
 )
 from app.services.employee_cost_service import calculate_clt_cost_fields
+from app.services.employee_monthly_payroll_service import EmployeeMonthlyPayrollService
 from app.services.employees_service import EmployeesService, default_cost_reference
 from app.services.payroll_service import PayrollService
 from app.services.settings_service import SettingsService
@@ -229,6 +234,59 @@ async def update_employee(
     else:
         comp = default_cost_reference()
     return await svc.employee_to_read(row, competencia=comp)
+
+
+@router.get(
+    "/{employee_id}/monthly-payroll/{competence}",
+    response_model=EmployeeMonthlyPayrollRead,
+    dependencies=_read,
+)
+async def get_monthly_payroll(
+    employee_id: UUID,
+    competence: str,
+    db: AsyncSession = Depends(get_db),
+) -> EmployeeMonthlyPayrollRead:
+    row = await EmployeeMonthlyPayrollService(db).get(
+        employee_id=employee_id, competence_month=competence
+    )
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Não há folha real cadastrada para esta competência.",
+        )
+    return EmployeeMonthlyPayrollRead.model_validate(row)
+
+
+@router.post(
+    "/{employee_id}/monthly-payroll/{competence}",
+    response_model=EmployeeMonthlyPayrollRead,
+    dependencies=[Depends(require_permission(EMPLOYEES_EDIT))],
+)
+async def upsert_monthly_payroll_post(
+    employee_id: UUID,
+    competence: str,
+    payload: EmployeeMonthlyPayrollUpsert,
+    db: AsyncSession = Depends(get_db),
+) -> EmployeeMonthlyPayrollRead:
+    return await EmployeeMonthlyPayrollService(db).upsert(
+        employee_id=employee_id, competence_month=competence, payload=payload
+    )
+
+
+@router.put(
+    "/{employee_id}/monthly-payroll/{competence}",
+    response_model=EmployeeMonthlyPayrollRead,
+    dependencies=[Depends(require_permission(EMPLOYEES_EDIT))],
+)
+async def upsert_monthly_payroll_put(
+    employee_id: UUID,
+    competence: str,
+    payload: EmployeeMonthlyPayrollUpsert,
+    db: AsyncSession = Depends(get_db),
+) -> EmployeeMonthlyPayrollRead:
+    return await EmployeeMonthlyPayrollService(db).upsert(
+        employee_id=employee_id, competence_month=competence, payload=payload
+    )
 
 
 @router.delete("/{employee_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])

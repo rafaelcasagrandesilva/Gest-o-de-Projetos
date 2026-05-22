@@ -25,7 +25,12 @@ import {
   type ProjectSystemCost,
   type ProjectVehicle,
 } from "@/services/projectStructure";
-import { listEmployees, type Employee } from "@/services/employees";
+import {
+  getMonthlyPayroll,
+  listEmployees,
+  saveMonthlyPayroll,
+  type Employee,
+} from "@/services/employees";
 import { usePermission } from "@/hooks/usePermission";
 import { isAxiosError } from "axios";
 import {
@@ -168,6 +173,147 @@ function SourceBadge({ overrideActive }: { overrideActive: boolean }) {
     >
       {overrideActive ? "Override aplicado" : "Base: cadastro"}
     </span>
+  );
+}
+
+function MonthlyPayrollSection({
+  employeeId,
+  competenceMonth,
+  readOnly = false,
+  onSaved,
+}: {
+  employeeId: string;
+  competenceMonth: string;
+  readOnly?: boolean;
+  onSaved: () => void | Promise<void>;
+}) {
+  const [netSalary, setNetSalary] = useState("");
+  const [vrAmount, setVrAmount] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    (async () => {
+      try {
+        const row = await getMonthlyPayroll(employeeId, competenceMonth);
+        if (cancelled) return;
+        setNetSalary(row?.net_salary_amount != null ? String(row.net_salary_amount) : "");
+        setVrAmount(row?.vr_amount != null ? String(row.vr_amount) : "");
+        setNotes(row?.notes ?? "");
+      } catch {
+        if (!cancelled) setErr("Não foi possível carregar a folha real do mês.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [employeeId, competenceMonth]);
+
+  function parseNum(s: string): number | null {
+    if (s.trim() === "") return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  async function handleSave() {
+    if (readOnly) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      await saveMonthlyPayroll(employeeId, competenceMonth, {
+        net_salary_amount: parseNum(netSalary),
+        vr_amount: parseNum(vrAmount),
+        notes: notes.trim() || null,
+      });
+      await Promise.resolve(onSaved());
+    } catch {
+      setErr("Não foi possível salvar a folha mensal.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <fieldset disabled={readOnly} className="m-0 mt-4 min-w-0 border-0 p-0">
+      <div className="rounded-lg border border-emerald-100 bg-emerald-50/40 p-4">
+        <p className="text-xs font-medium text-emerald-900">Folha real do mês (opcional)</p>
+        <p className="mt-1 text-xs text-slate-600">
+          Os valores abaixo afetam apenas os lançamentos financeiros do mês e{" "}
+          <strong>não alteram</strong> o custo gerencial do colaborador no projeto.
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          Custo integral do colaborador = custo gerencial / projeto. Folha real do mês = usado no contas a
+          pagar.
+        </p>
+        {err ? <p className="mt-2 text-xs text-red-700">{err}</p> : null}
+        {loading ? (
+          <p className="mt-3 text-xs text-slate-500">Carregando…</p>
+        ) : (
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="block text-xs text-slate-600">
+              Competência
+              <input
+                type="text"
+                readOnly
+                value={competenceMonth}
+                className="mt-1 w-full rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-700"
+              />
+            </label>
+            <label className="block text-xs text-slate-600">
+              Salário líquido real
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={netSalary}
+                onChange={(e) => setNetSalary(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+                placeholder="Ex.: 4137.40"
+              />
+            </label>
+            <label className="block text-xs text-slate-600">
+              VR real
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={vrAmount}
+                onChange={(e) => setVrAmount(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+                placeholder="Ex.: 672.00"
+              />
+            </label>
+            <label className="block text-xs text-slate-600 sm:col-span-2 lg:col-span-3">
+              Observações
+              <textarea
+                rows={2}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+                placeholder="Ex.: multa atraso salário mês anterior"
+              />
+            </label>
+          </div>
+        )}
+        <div className="mt-3">
+          <button
+            type="button"
+            disabled={saving || readOnly || loading}
+            onClick={() => void handleSave()}
+            className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+          >
+            {saving ? "Salvando…" : "Salvar folha mensal"}
+          </button>
+        </div>
+      </div>
+    </fieldset>
   );
 }
 
@@ -1074,6 +1220,14 @@ function LaborTab({
                             readOnly={structureReadOnly}
                             onSaved={onRefresh}
                           />
+                          {(r.tipo || "").toUpperCase() === "CLT" ? (
+                            <MonthlyPayrollSection
+                              employeeId={r.employee_id}
+                              competenceMonth={competencia.slice(0, 7)}
+                              readOnly={structureReadOnly}
+                              onSaved={onRefresh}
+                            />
+                          ) : null}
                           <div className="mt-3 flex justify-end border-t border-slate-200 pt-3">
                             <button
                               type="button"

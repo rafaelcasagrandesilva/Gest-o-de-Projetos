@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from app.core.scenario import Scenario, coerce_scenario, scenario_pg_rhs
 from app.models.costs import ProjectFixedCost
 from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment
+from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
 from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.models.payable_snapshot_generation import PayableSnapshotGeneration
 from app.models.project_operational import ProjectLabor, ProjectOperationalFixed, ProjectVehicle
@@ -175,6 +176,11 @@ def _month_bounds(comp: date) -> tuple[date, date]:
     return date(c.year, c.month, 1), date(c.year, c.month, last)
 
 
+def _competence_month_yyyy_mm(comp: date) -> str:
+    c = normalize_competencia(comp)
+    return f"{c.year:04d}-{c.month:02d}"
+
+
 def _collaborator_payable_snapshot_name(display_name: str, component_label: str) -> str:
     label = (component_label or "").strip()
     if not label:
@@ -232,6 +238,26 @@ def _project_cost_center_label(project: Project) -> str:
 class PayableSnapshotService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def _payroll_override_map_for_month(
+        self, *, employee_ids: list[UUID], source_month: date
+    ) -> dict[UUID, EmployeeMonthlyPayrollOverride]:
+        if not employee_ids:
+            return {}
+        comp = _competence_month_yyyy_mm(source_month)
+        rows = (
+            (
+                await self.session.execute(
+                    select(EmployeeMonthlyPayrollOverride).where(
+                        EmployeeMonthlyPayrollOverride.employee_id.in_(employee_ids),
+                        EmployeeMonthlyPayrollOverride.competence_month == comp,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return {r.employee_id: r for r in rows}
 
     async def _count_paid_automatic_rows(self, *, month: date) -> int:
         comp = normalize_competencia(month)
@@ -640,7 +666,12 @@ class PayableSnapshotService:
         display_name = _employee_display_name(emp)
         cost_center = str(proj.name).strip()
 
-        integral_components = project_labor_payable_snapshot_components(emp, settings, source_month, real)
+        override_map = await self._payroll_override_map_for_month(
+            employee_ids=[emp.id], source_month=source_month
+        )
+        integral_components = project_labor_payable_snapshot_components(
+            emp, settings, source_month, real, payroll_override=override_map.get(emp.id)
+        )
         allocated = _allocate_payable_components(integral_components, factor)
         expected: dict[str, Decimal] = {}
         for component_label, amt in allocated:
@@ -1123,6 +1154,10 @@ class PayableSnapshotService:
                 keys_stmt = keys_stmt.where(ProjectLabor.project_id.in_(sorted(project_filter)))
             keys_stmt = keys_stmt.distinct()
             keys = (await self.session.execute(keys_stmt)).all()
+            employee_ids = list({employee_id for _, employee_id in keys})
+            payroll_override_map = await self._payroll_override_map_for_month(
+                employee_ids=employee_ids, source_month=source_month
+            )
 
             for project_id, employee_id in keys:
                 real = await self._get_labor_row(
@@ -1145,7 +1180,11 @@ class PayableSnapshotService:
 
                 display_name = _employee_display_name(emp)
                 integral_components = project_labor_payable_snapshot_components(
-                    emp, settings, source_month, real
+                    emp,
+                    settings,
+                    source_month,
+                    real,
+                    payroll_override=payroll_override_map.get(emp.id),
                 )
                 allocated = _allocate_payable_components(integral_components, factor)
                 if not allocated:

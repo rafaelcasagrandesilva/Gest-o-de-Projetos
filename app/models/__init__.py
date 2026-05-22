@@ -5,6 +5,7 @@ from app.models.costs import CorporateCost, CostAllocation, ProjectCost, Project
 from app.models.dashboard import KPI, ProjectResult
 from app.models.company_staff_cost import CompanyStaffCost
 from app.models.employee import Employee, EmployeeAllocation
+from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
 from app.models.financial import Invoice, InvoiceAnticipation, Revenue
 from app.models.chart_of_accounts import ChartOfAccounts
 from app.models.payable import Payable

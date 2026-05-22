@@ -256,8 +256,38 @@ def project_labor_full_monthly_cost(
     return float(project_labor_monthly_cost_breakdown(employee, settings, competencia, labor_row)["total"])
 
 
+CLT_PAYABLE_LABEL_SALARY = "Salário CLT"
+CLT_PAYABLE_LABEL_BENEFIT = "Benefício CLT"
+
+
+def clt_payable_components_from_monthly_override(payroll_override: Any | None) -> list[tuple[str, float]] | None:
+    """
+    Componentes de Contas a Pagar a partir da folha real (holerite).
+    Retorna None se não houver override aplicável (comportamento legado).
+    """
+    if payroll_override is None:
+        return None
+    lines: list[tuple[str, float]] = []
+    net = getattr(payroll_override, "net_salary_amount", None)
+    if net is not None:
+        v = float(net)
+        if v > 0:
+            lines.append((CLT_PAYABLE_LABEL_SALARY, v))
+    vr = getattr(payroll_override, "vr_amount", None)
+    if vr is not None:
+        v = float(vr)
+        if v > 0:
+            lines.append((CLT_PAYABLE_LABEL_BENEFIT, v))
+    return lines if lines else None
+
+
 def project_labor_payable_snapshot_components(
-    employee: Any, settings: Any, competencia: date, labor_row: Any | None
+    employee: Any,
+    settings: Any,
+    competencia: date,
+    labor_row: Any | None,
+    *,
+    payroll_override: Any | None = None,
 ) -> list[tuple[str, float]]:
     """
     Componentes da obrigação para geração de snapshots de Contas a Pagar.
@@ -268,6 +298,9 @@ def project_labor_payable_snapshot_components(
     """
     employment = (getattr(employee, "employment_type", "") or "").strip().upper()
     if employment == "CLT":
+        override_lines = clt_payable_components_from_monthly_override(payroll_override)
+        if override_lines is not None:
+            return override_lines
         amt = float(project_labor_payable_monthly_amount(employee, settings, competencia, labor_row))
         return [("", amt)] if amt > 0 else []
 

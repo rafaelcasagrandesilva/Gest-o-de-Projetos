@@ -1,3 +1,4 @@
+import { isAxiosError } from "axios";
 import { api } from "./api";
 
 export interface Employee {
@@ -93,6 +94,50 @@ export async function updateEmployee(id: string, payload: Partial<EmployeeCreate
 
 export async function deleteEmployee(id: string): Promise<void> {
   await api.delete(`/employees/${id}/`);
+}
+
+export interface EmployeeMonthlyPayrollOverride {
+  id: string;
+  employee_id: string;
+  competence_month: string;
+  net_salary_amount: number | null;
+  vr_amount: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmployeeMonthlyPayrollUpsert {
+  net_salary_amount?: number | null;
+  vr_amount?: number | null;
+  notes?: string | null;
+}
+
+export async function getMonthlyPayroll(
+  employeeId: string,
+  competenceMonth: string,
+): Promise<EmployeeMonthlyPayrollOverride | null> {
+  try {
+    const { data } = await api.get<EmployeeMonthlyPayrollOverride>(
+      `/employees/${employeeId}/monthly-payroll/${competenceMonth}`,
+    );
+    return data;
+  } catch (e: unknown) {
+    if (isAxiosError(e) && e.response?.status === 404) return null;
+    throw e;
+  }
+}
+
+export async function saveMonthlyPayroll(
+  employeeId: string,
+  competenceMonth: string,
+  payload: EmployeeMonthlyPayrollUpsert,
+): Promise<EmployeeMonthlyPayrollOverride> {
+  const { data } = await api.put<EmployeeMonthlyPayrollOverride>(
+    `/employees/${employeeId}/monthly-payroll/${competenceMonth}`,
+    payload,
+  );
+  return data;
 }
 
 const DEFAULT_SCENARIO_QUERY = "REALIZADO";
