@@ -15,6 +15,8 @@ type Props = {
   label: string;
   value: string;
   onChange: (id: string) => void;
+  /** Chamado ao escolher um item da lista (id + nome). */
+  onPick?: (item: CollaboratorSearchItem) => void;
   placeholder?: string;
   disabled?: boolean;
   /** nome já resolvido (para mostrar quando value estiver preenchido) */
@@ -25,6 +27,7 @@ export function CollaboratorSelect({
   label,
   value,
   onChange,
+  onPick,
   placeholder = "Buscar colaborador…",
   disabled,
   selectedName,
@@ -123,6 +126,7 @@ export function CollaboratorSelect({
                     type="button"
                     onClick={() => {
                       onChange(it.id);
+                      onPick?.(it);
                       setOpen(false);
                       setQuery("");
                       setItems([]);

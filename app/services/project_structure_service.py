@@ -120,6 +120,22 @@ class ProjectStructureService:
             months={next_competencia(normalize_competencia(competencia))}
         )
 
+    async def _sync_collaborator_payables_if_realizado(
+        self,
+        *,
+        project_id: UUID,
+        employee_id: UUID,
+        competencia,
+        scenario: str | Scenario,
+    ) -> None:
+        """Atualiza snapshots de colaborador no mês de pagamento sem apagar histórico."""
+        await PayableSnapshotService(self.session).sync_collaborator_payables_for_labor(
+            project_id=project_id,
+            employee_id=employee_id,
+            labor_competencia=normalize_competencia(competencia),
+            scenario=scenario,
+        )
+
     # --- Labor (vínculo; custo derivado do Employee) ---
 
     async def copy_labors_from_previous_month(
@@ -408,8 +424,12 @@ class ProjectStructureService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erro ao carregar vínculo de mão de obra.",
             )
-        # Snapshot de payables é execução real: só REALIZADO afeta o mês seguinte.
-        await self._invalidate_next_payable_if_realizado(competencia=competencia, scenario=scenario)
+        await self._sync_collaborator_payables_if_realizado(
+            project_id=project_id,
+            employee_id=employee_id,
+            competencia=competencia,
+            scenario=scenario,
+        )
         await self.session.commit()
         return await self._labor_to_read(loaded)
 
@@ -452,7 +472,12 @@ class ProjectStructureService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erro ao carregar vínculo de mão de obra.",
             )
-        await self._invalidate_next_payable_if_realizado(competencia=row.competencia, scenario=row.scenario)
+        await self._sync_collaborator_payables_if_realizado(
+            project_id=project_id,
+            employee_id=row.employee_id,
+            competencia=row.competencia,
+            scenario=row.scenario,
+        )
         await self.session.commit()
         return await self._labor_to_read(loaded)
 
@@ -483,15 +508,19 @@ class ProjectStructureService:
         )
         await self.session.commit()
         comp = before.get("competencia")
-        if comp:
+        pid = before.get("project_id")
+        eid = before.get("employee_id")
+        if comp and pid and eid:
             try:
-                await self._invalidate_next_payable_if_realizado(
+                await self._sync_collaborator_payables_if_realizado(
+                    project_id=UUID(str(pid)),
+                    employee_id=UUID(str(eid)),
                     competencia=comp,
                     scenario=before.get("scenario", DEFAULT_SCENARIO),
                 )
                 await self.session.commit()
             except Exception:
-                pass
+                logger.exception("payables dynamic sync after delete_labor failed")
 
     # --- Vehicle (alocação frota → projeto) ---
 

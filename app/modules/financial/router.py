@@ -48,7 +48,7 @@ from app.schemas.payables import (
 )
 from app.services.financial_crud_service import FinancialCrudService
 from app.services.finance_service import FinanceService
-from app.services.payable_snapshot_service import payable_snapshot_payment_status
+from app.services.payable_snapshot_service import payable_snapshot_derived_fields
 from app.services.receivable_service import ReceivableService
 from app.services.receivable_manual_service import ReceivableManualService
 from app.utils.date_utils import normalize_competencia, previous_competencia
@@ -567,12 +567,11 @@ async def financial_dashboard_breakdown(
 def _snapshot_to_read(row) -> PayableSnapshotRead:
     amount_final = float(row.amount_final)
     amount_paid = float(row.amount_paid or 0)
-    amount_remaining = round(max(0.0, amount_final - amount_paid), 2)
-    st = payable_snapshot_payment_status(
+    derived = payable_snapshot_derived_fields(
         amount_paid=Decimal(str(amount_paid)),
         amount_final=Decimal(str(amount_final)),
     )
-    paid_flag = st == "PAGO"
+    st = derived["status"]
     return PayableSnapshotRead(
         id=row.id,
         created_at=row.created_at,
@@ -587,10 +586,12 @@ def _snapshot_to_read(row) -> PayableSnapshotRead:
         amount_original=float(row.amount_original),
         amount_final=amount_final,
         amount_paid=amount_paid,
-        amount_remaining=amount_remaining,
+        amount_remaining=float(derived["amount_remaining"]),
+        is_overpaid=bool(derived["is_overpaid"]),
+        overpaid_amount=float(derived["overpaid_amount"]),
         due_date=row.due_date,
         payment_date=row.payment_date,
-        paid=paid_flag,
+        paid=st == "PAGO",
         observation=row.observation,
         status=st,
     )

@@ -22,6 +22,9 @@ import { Receivables } from "@/pages/Receivables";
 import { RevenuePage } from "@/pages/Revenue";
 import { Reports } from "@/pages/Reports";
 import { Users } from "@/pages/Users";
+import { Assets } from "@/pages/Assets";
+import { AssetsDashboard } from "@/pages/AssetsDashboard";
+import { AssetDetailPage } from "@/pages/AssetDetail";
 
 function LegacyProjectDetailRedirect() {
   const { projectId } = useParams();
@@ -30,7 +33,13 @@ function LegacyProjectDetailRedirect() {
 
 function WorkspaceNotFoundRedirect() {
   const { workspace } = useWorkspace();
-  return <Navigate to={workspace === "projects" ? "/projects/dashboard" : "/finance/dashboard"} replace />;
+  const target =
+    workspace === "projects"
+      ? "/projects/dashboard"
+      : workspace === "assets"
+        ? "/assets/dashboard"
+        : "/finance/dashboard";
+  return <Navigate to={target} replace />;
 }
 
 function WorkspaceSessionSync() {
@@ -84,6 +93,10 @@ export default function App() {
               <Route path="finance/debt" element={<CompanyDebt />} />
               <Route path="finance/fixed-costs" element={<CompanyFixedCosts />} />
               <Route path="finance/reports" element={<Reports />} />
+
+              <Route path="assets/dashboard" element={<AssetsDashboard />} />
+              <Route path="assets" element={<Assets />} />
+              <Route path="assets/:assetId" element={<AssetDetailPage />} />
 
               {/* Compat: rotas antigas (mantidas via redirect) */}
               <Route index element={<WorkspaceNotFoundRedirect />} />

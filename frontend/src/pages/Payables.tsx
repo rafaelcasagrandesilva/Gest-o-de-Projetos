@@ -48,10 +48,17 @@ function formatDateBr(iso: string): string {
   return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`;
 }
 
-function statusBadgeClass(s: PayableSnapshotStatus): string {
+function statusBadgeClass(s: PayableSnapshotStatus, isOverpaid = false): string {
+  if (s === "PAGO" && isOverpaid) return "bg-amber-100 text-amber-900 ring-amber-300";
   if (s === "PAGO") return "bg-emerald-100 text-emerald-900 ring-emerald-200";
   if (s === "PARCIAL") return "bg-blue-100 text-blue-900 ring-blue-200";
   return "bg-amber-100 text-amber-900 ring-amber-200";
+}
+
+function saldoClassName(remaining: number, isOverpaid: boolean): string {
+  if (isOverpaid || remaining < -0.005) return "text-amber-800";
+  if (remaining > 0.005) return "text-slate-900";
+  return "text-slate-600";
 }
 
 function typeLabel(t: PayableSnapshotType): string {
@@ -226,8 +233,10 @@ export function Payables() {
     }
     total = Math.round(total * 100) / 100;
     pago = Math.round(pago * 100) / 100;
-    const emAberto = Math.round((total - pago) * 100) / 100;
-    return { total, pago, emAberto };
+    const saldoLiquido = Math.round(
+      filteredRows.reduce((s, r) => s + Number(r.amount_remaining ?? 0), 0) * 100,
+    ) / 100;
+    return { total, pago, emAberto: saldoLiquido };
   }, [filteredRows]);
 
   function closeActionModal() {
@@ -241,9 +250,27 @@ export function Payables() {
     if (!canEdit) return;
     setError(null);
     setModalObs("");
-    setModalAmount(row.amount_remaining > 0 ? formatMoneyFieldBr(row.amount_remaining) : "");
+    const saldo = Number(row.amount_remaining ?? 0);
+    setModalAmount(saldo > 0.005 ? formatMoneyFieldBr(saldo) : "");
     setActionModal({ open: true, mode: "register", row });
   }
+
+  const modalOverpaymentPreview = useMemo(() => {
+    if (!actionModal.open || actionModal.mode !== "register") return null;
+    const row = actionModal.row;
+    const amt = parseMoneyInput(modalAmount.trim());
+    if (!Number.isFinite(amt) || amt <= 0) return null;
+    const newPaid = Math.round((row.amount_paid + amt) * 100) / 100;
+    const newRemaining = Math.round((row.amount_final - newPaid) * 100) / 100;
+    if (newPaid > row.amount_final + 0.02) {
+      return {
+        newPaid,
+        newRemaining,
+        overpaidAmount: Math.round((newPaid - row.amount_final) * 100) / 100,
+      };
+    }
+    return { newPaid, newRemaining, overpaidAmount: 0 };
+  }, [actionModal, modalAmount]);
 
   function openReversePayment(row: PayableSnapshotRow) {
     if (!canEdit) return;
@@ -621,7 +648,6 @@ export function Payables() {
             ) : (
               filteredRows.map((r) => {
                 const isEditing = editingId === r.id;
-                const saldoPositivo = r.amount_remaining > 0.005;
                 const temPago = r.amount_paid > 0.005;
                 return (
                   <tr key={r.id} className="hover:bg-slate-50/80">
@@ -662,8 +688,16 @@ export function Payables() {
                     <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-slate-800">
                       {formatBRL(r.amount_paid)}
                     </td>
-                    <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums font-medium text-slate-900">
+                    <td
+                      className={`whitespace-nowrap px-2 py-2 text-right tabular-nums font-medium ${saldoClassName(
+                        r.amount_remaining,
+                        r.is_overpaid,
+                      )}`}
+                    >
                       {formatBRL(r.amount_remaining)}
+                      {r.is_overpaid ? (
+                        <span className="ml-1 text-[10px] font-normal text-amber-700">(adiant.)</span>
+                      ) : null}
                     </td>
                     <td className="min-w-[130px] whitespace-nowrap px-2 py-2 align-middle">
                       {isEditing ? (
@@ -680,9 +714,13 @@ export function Payables() {
                     </td>
                     <td className="px-2 py-2">
                       <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${statusBadgeClass(r.status)}`}
+                        className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${statusBadgeClass(
+                          r.status,
+                          r.is_overpaid,
+                        )}`}
                       >
                         {r.status}
+                        {r.is_overpaid ? "+" : ""}
                       </span>
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-right">
@@ -717,7 +755,7 @@ export function Payables() {
                           </button>
                           <button
                             type="button"
-                            disabled={!canEdit || !saldoPositivo || editingId === r.id}
+                            disabled={!canEdit || editingId === r.id}
                             onClick={() => openRegisterPayment(r)}
                             className="rounded px-1.5 py-0.5 text-xs text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
                           >
@@ -767,8 +805,32 @@ export function Payables() {
               {" · "}
               Pago: <span className="font-medium text-slate-700">{formatBRL(actionModal.row.amount_paid)}</span>
               {" · "}
-              Saldo: <span className="font-medium text-slate-700">{formatBRL(actionModal.row.amount_remaining)}</span>
+              Saldo:{" "}
+              <span
+                className={`font-medium ${saldoClassName(
+                  actionModal.row.amount_remaining,
+                  actionModal.row.is_overpaid,
+                )}`}
+              >
+                {formatBRL(actionModal.row.amount_remaining)}
+              </span>
             </p>
+            {modalOverpaymentPreview && modalOverpaymentPreview.overpaidAmount > 0.02 ? (
+              <div
+                className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+                role="status"
+              >
+                Pagamento acima do valor esperado. Adiantamento de{" "}
+                <span className="font-semibold">{formatBRL(modalOverpaymentPreview.overpaidAmount)}</span>
+                {modalOverpaymentPreview.newRemaining < -0.005 ? (
+                  <>
+                    {" "}
+                    (saldo após pagamento:{" "}
+                    <span className="font-semibold">{formatBRL(modalOverpaymentPreview.newRemaining)}</span>)
+                  </>
+                ) : null}
+              </div>
+            ) : null}
             <div className="mt-4 space-y-3">
               <label className="flex flex-col gap-1 text-sm">
                 <span className="font-medium text-slate-700">

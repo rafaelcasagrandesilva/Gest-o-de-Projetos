@@ -256,6 +256,41 @@ def project_labor_full_monthly_cost(
     return float(project_labor_monthly_cost_breakdown(employee, settings, competencia, labor_row)["total"])
 
 
+def project_labor_payable_snapshot_components(
+    employee: Any, settings: Any, competencia: date, labor_row: Any | None
+) -> list[tuple[str, float]]:
+    """
+    Componentes da obrigação para geração de snapshots de Contas a Pagar.
+
+    Retorna lista de (rótulo, valor_integral_mensal) antes do rateio % do projeto.
+    Rótulo vazio = uma única linha com o nome do colaborador (CLT ou PJ sem ajuda de custo).
+    Rótulos não vazios são sufixos: "Nome — {rótulo}".
+    """
+    employment = (getattr(employee, "employment_type", "") or "").strip().upper()
+    if employment == "CLT":
+        amt = float(project_labor_payable_monthly_amount(employee, settings, competencia, labor_row))
+        return [("", amt)] if amt > 0 else []
+
+    if labor_row_total_override_value(labor_row) is not None:
+        total = float(project_labor_monthly_cost_breakdown(employee, settings, competencia, labor_row)["total"])
+        return [("", total)] if total > 0 else []
+
+    breakdown = project_labor_monthly_cost_breakdown(employee, settings, competencia, labor_row)
+    base = float(breakdown.get("salary_base") or 0)
+    ajuda = float(breakdown.get("ajuda_custo") or 0)
+
+    if ajuda <= 0:
+        single = base if base > 0 else float(breakdown.get("total") or 0)
+        return [("", single)] if single > 0 else []
+
+    lines: list[tuple[str, float]] = []
+    if base > 0:
+        lines.append(("Salário Base PJ", base))
+    if ajuda > 0:
+        lines.append(("Ajuda de Custo PJ", ajuda))
+    return lines
+
+
 def project_labor_payable_monthly_amount(
     employee: Any, settings: Any, competencia: date, labor_row: Any | None
 ) -> float:

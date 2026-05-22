@@ -20,6 +20,7 @@ from app.modules.receivables.router import invoices_router
 from app.modules.payables.router import router as payables_router
 from app.modules.reports.router import router as reports_router
 from app.modules.admin.router import router as admin_router
+from app.modules.assets.router import router as assets_router
 
 
 api_router = APIRouter()
@@ -42,6 +43,7 @@ protected.include_router(company_finance_router, prefix="/company-finance", tags
 protected.include_router(payables_router, prefix="/payables", tags=["payables"])
 protected.include_router(invoices_router, prefix="/invoices", tags=["accounts-receivable"])
 protected.include_router(reports_router, prefix="/reports")
+protected.include_router(assets_router, prefix="/assets", tags=["assets"])
 
 api_router.include_router(protected)
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])

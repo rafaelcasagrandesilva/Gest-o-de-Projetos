@@ -39,6 +39,9 @@ from app.core.permission_codes import (
     USERS_MANAGE,
     VEHICLES_EDIT,
     VEHICLES_VIEW,
+    ASSETS_EDIT,
+    ASSETS_VIEW,
+    WORKSPACE_ASSETS_ACCESS,
     WORKSPACE_FINANCE_ACCESS,
     WORKSPACE_PROJECTS_ACCESS,
 )
@@ -47,7 +50,7 @@ from app.repositories.projects import ProjectRepository
 
 
 SESSION_VERSION = 2
-WorkspaceName = Literal["projects", "finance"]
+WorkspaceName = Literal["projects", "finance", "assets"]
 
 PROJECTS_WORKSPACE_PERMISSIONS = frozenset(
     {
@@ -92,6 +95,15 @@ FINANCE_WORKSPACE_PERMISSIONS = frozenset(
     }
 )
 
+ASSETS_WORKSPACE_PERMISSIONS = frozenset(
+    {
+        ASSETS_VIEW,
+        ASSETS_EDIT,
+        SETTINGS_VIEW,
+        SETTINGS_EDIT,
+    }
+)
+
 
 def role_names(user: User) -> list[str]:
     return [link.role.name for link in (getattr(user, "roles", []) or []) if getattr(link, "role", None)]
@@ -126,6 +138,8 @@ def _workspace_permission_from_module_permissions(names: frozenset[str], code: s
         return bool(names.intersection(PROJECTS_WORKSPACE_PERMISSIONS))
     if code == WORKSPACE_FINANCE_ACCESS:
         return bool(names.intersection(FINANCE_WORKSPACE_PERMISSIONS))
+    if code == WORKSPACE_ASSETS_ACCESS:
+        return bool(names.intersection(ASSETS_WORKSPACE_PERMISSIONS))
     return False
 
 
@@ -150,6 +164,8 @@ def accessible_workspaces(user: User, *, is_superuser: bool = False) -> list[Wor
         out.append("projects")
     if user_has_permission(user, WORKSPACE_FINANCE_ACCESS, is_superuser=is_superuser):
         out.append("finance")
+    if user_has_permission(user, WORKSPACE_ASSETS_ACCESS, is_superuser=is_superuser):
+        out.append("assets")
     return out
 
 
@@ -159,6 +175,8 @@ def session_permission_names(user: User, *, is_superuser: bool = False) -> list[
         names.add(WORKSPACE_PROJECTS_ACCESS)
     if user_has_permission(user, WORKSPACE_FINANCE_ACCESS, is_superuser=is_superuser):
         names.add(WORKSPACE_FINANCE_ACCESS)
+    if user_has_permission(user, WORKSPACE_ASSETS_ACCESS, is_superuser=is_superuser):
+        names.add(WORKSPACE_ASSETS_ACCESS)
     return sorted(names)
 
 
@@ -168,6 +186,8 @@ def default_workspace_for_user(user: User, *, is_superuser: bool = False) -> Wor
         return "projects"
     if "finance" in workspaces:
         return "finance"
+    if "assets" in workspaces:
+        return "assets"
     return "projects"
 
 

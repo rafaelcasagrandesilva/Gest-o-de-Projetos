@@ -40,3 +40,5 @@ uploads/
 *.db
 *.sqlite3
 backup_sgp.sql
+*.sql
+*.dump

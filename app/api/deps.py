@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.permission_codes import (
     ALERTS_VIEW,
+    ASSETS_EDIT,
+    ASSETS_VIEW,
     BILLING_VIEW,
     COMPANY_FINANCE_EDIT,
     COMPANY_FINANCE_VIEW,
@@ -46,6 +48,7 @@ from app.core.permission_codes import (
     USERS_MANAGE,
     VEHICLES_EDIT,
     VEHICLES_VIEW,
+    WORKSPACE_ASSETS_ACCESS,
     WORKSPACE_FINANCE_ACCESS,
     WORKSPACE_PROJECTS_ACCESS,
 )
@@ -189,6 +192,15 @@ def user_has_permission(user: User, code: str) -> bool:
             COMPANY_FINANCE_EDIT,
             REPORTS_VIEW,
             REPORTS_EXPORT,
+            SETTINGS_VIEW,
+            SETTINGS_EDIT,
+        }
+    ):
+        return True
+    if code == WORKSPACE_ASSETS_ACCESS and names.intersection(
+        {
+            ASSETS_VIEW,
+            ASSETS_EDIT,
             SETTINGS_VIEW,
             SETTINGS_EDIT,
         }
@@ -360,6 +372,14 @@ def require_workspace_access(workspace: WorkspaceName) -> Callable:
 def require_permission(*codes: str) -> Callable:
     async def _dep(user: User = Depends(get_current_user)) -> User:
         if not user_has_any_permission(user, *codes):
+            effective = sorted(effective_permission_names(user))
+            logger.warning(
+                "permission_denied user_id=%s email=%s required=%s effective=%s",
+                user.id,
+                user.email,
+                list(codes),
+                effective,
+            )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
         return user
 

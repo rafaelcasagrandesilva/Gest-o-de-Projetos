@@ -11,18 +11,21 @@ export function Header() {
 
   const canProjects = hasPermission(perms, "workspace.projects.access");
   const canFinance = hasPermission(perms, "workspace.finance.access");
+  const canAssets = hasPermission(perms, "workspace.assets.access");
 
   function go(w: WorkspaceName) {
     if (w === workspace) return;
     setWorkspace(w);
-    navigate(w === "projects" ? "/projects/dashboard" : "/finance/dashboard");
+    if (w === "projects") navigate("/projects/dashboard");
+    else if (w === "assets") navigate("/assets/dashboard");
+    else navigate("/finance/dashboard");
   }
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6">
       <div className="flex items-center gap-6">
         <h1 className="text-sm font-medium text-slate-500">Área logada</h1>
-        {(canProjects || canFinance) && (
+        {(canProjects || canFinance || canAssets) && (
           <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 bg-white">
             {canProjects && (
               <button
@@ -48,6 +51,19 @@ export function Header() {
                 }`}
               >
                 Financeiro
+              </button>
+            )}
+            {canAssets && (
+              <button
+                type="button"
+                onClick={() => go("assets")}
+                className={`px-3 py-1.5 text-sm font-medium ${
+                  workspace === "assets"
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Gestão de Ativos
               </button>
             )}
           </div>

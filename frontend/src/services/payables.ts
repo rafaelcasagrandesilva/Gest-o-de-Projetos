@@ -54,6 +54,8 @@ export interface PayableSnapshotRow {
   amount_final: number;
   amount_paid: number;
   amount_remaining: number;
+  is_overpaid: boolean;
+  overpaid_amount: number;
 
   due_date: string;
   payment_date: string | null;

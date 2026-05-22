@@ -4,6 +4,7 @@ export const ALL_PERMISSION_CODES: string[] = [
   "system.all_projects",
   "workspace.projects.access",
   "workspace.finance.access",
+  "workspace.assets.access",
   "dashboard.view",
   "dashboard.director",
   "payables.view",
@@ -33,6 +34,8 @@ export const ALL_PERMISSION_CODES: string[] = [
   "alerts.view",
   "company_finance.view",
   "company_finance.edit",
+  "assets.view",
+  "assets.edit",
 ];
 
 export const PERMISSION_LABELS: Record<string, string> = {
@@ -40,6 +43,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "system.all_projects": "Ver todos os projetos",
   "workspace.projects.access": "Workspace Projetos",
   "workspace.finance.access": "Workspace Financeiro",
+  "workspace.assets.access": "Workspace Gestão de Ativos",
   "dashboard.view": "Dashboard (visualizar)",
   "dashboard.director": "Dashboard diretoria",
   "payables.view": "Contas a pagar (visualizar)",
@@ -69,6 +73,8 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "alerts.view": "Alertas",
   "company_finance.view": "Finanças empresa (visualizar)",
   "company_finance.edit": "Finanças empresa (editar)",
+  "assets.view": "Gestão de ativos (visualizar)",
+  "assets.edit": "Gestão de ativos (editar)",
 };
 
 export function hasPermission(permissionNames: string[] | undefined, code: string): boolean {
@@ -126,6 +132,11 @@ export function hasPermission(permissionNames: string[] | undefined, code: strin
       ].includes(p),
     );
   }
+  if (code === "workspace.assets.access") {
+    return permissionNames.some((p) =>
+      ["assets.view", "assets.edit", "settings.view", "settings.edit"].includes(p),
+    );
+  }
   return false;
 }
 
@@ -138,6 +149,7 @@ export const ROLE_PERMISSION_PRESET: Record<"ADMIN" | "GESTOR" | "CONSULTA", str
   CONSULTA: [
     "workspace.projects.access",
     "workspace.finance.access",
+    "workspace.assets.access",
     "dashboard.view",
     "payables.view",
     "receivables.view",
@@ -153,5 +165,6 @@ export const ROLE_PERMISSION_PRESET: Record<"ADMIN" | "GESTOR" | "CONSULTA", str
     "reports.view",
     "alerts.view",
     "company_finance.view",
+    "assets.view",
   ],
 };

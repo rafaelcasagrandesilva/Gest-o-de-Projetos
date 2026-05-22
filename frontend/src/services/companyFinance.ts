@@ -22,7 +22,7 @@ export interface CompanyFinancialItem {
   cost_center_ref?: string;
   cost_center: string;
   cost_center_project_id?: string | null;
-  cost_center_system?: "ADMINISTRATIVO" | "FINANCEIRO" | null;
+  cost_center_system?: "ADMINISTRATIVO" | "FINANCEIRO" | "RH" | null;
   description?: string | null;
   recurrence?: string | null;
   has_legal_process?: boolean;

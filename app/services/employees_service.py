@@ -13,6 +13,7 @@ from app.repositories.employees import EmployeeAllocationRepository, EmployeeRep
 from app.schemas.employees import EmployeeRead
 from app.services.audit_service import AuditService
 from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_total_cost
+from app.services.payable_snapshot_service import PayableSnapshotService
 from app.services.settings_service import SettingsService
 from app.services.utils import model_to_dict
 
@@ -20,6 +21,20 @@ from app.services.utils import model_to_dict
 def default_cost_reference() -> date:
     return date.today().replace(day=1)
 
+
+_EMPLOYEE_PAYABLE_COST_FIELDS = frozenset(
+    {
+        "salary_base",
+        "additional_costs",
+        "pj_hours_per_month",
+        "pj_additional_cost",
+        "has_periculosidade",
+        "has_adicional_dirigida",
+        "extra_hours_50",
+        "extra_hours_70",
+        "extra_hours_100",
+    }
+)
 
 _EMPLOYEE_PATCHABLE = frozenset(
     {
@@ -179,6 +194,10 @@ class EmployeesService:
                 )
 
         await self._compute_and_assign_total_cost(emp, reference=ref_date)
+        if _EMPLOYEE_PAYABLE_COST_FIELDS & patch.keys():
+            await PayableSnapshotService(self.session).sync_collaborator_payables_for_employee(
+                employee_id=emp.id
+            )
         await self.audit.log_action(
             user=actor,
             action="update",

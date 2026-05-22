@@ -39,6 +39,8 @@ class PayableSnapshotRead(UUIDTimestampRead):
     amount_final: float
     amount_paid: float
     amount_remaining: float
+    is_overpaid: bool = False
+    overpaid_amount: float = 0.0
 
     due_date: date
     payment_date: date | None

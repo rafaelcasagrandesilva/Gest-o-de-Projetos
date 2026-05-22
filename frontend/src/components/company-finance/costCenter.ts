@@ -3,10 +3,12 @@ import type { Project } from "@/services/projects";
 
 export const CC_REF_ADMINISTRATIVO = "ADMINISTRATIVO";
 export const CC_REF_FINANCEIRO = "FINANCEIRO";
+export const CC_REF_RH = "RH";
 
 export const CC_FIXED_OPTIONS: { ref: string; label: string }[] = [
   { ref: CC_REF_ADMINISTRATIVO, label: "Administrativo" },
   { ref: CC_REF_FINANCEIRO, label: "Financeiro" },
+  { ref: CC_REF_RH, label: "RH" },
 ];
 
 export function defaultCostCenterRef(tipo: TipoFinanceiro): string {
@@ -14,7 +16,7 @@ export function defaultCostCenterRef(tipo: TipoFinanceiro): string {
 }
 
 export function isSystemCostCenterRef(ref: string): boolean {
-  return ref === CC_REF_ADMINISTRATIVO || ref === CC_REF_FINANCEIRO;
+  return ref === CC_REF_ADMINISTRATIVO || ref === CC_REF_FINANCEIRO || ref === CC_REF_RH;
 }
 
 function normalizeLabelKey(label: string): string {
@@ -29,6 +31,7 @@ function normalizeLabelKey(label: string): string {
 export function costCenterLabelFromRef(ref: string, projects: Project[]): string {
   if (ref === CC_REF_ADMINISTRATIVO) return "Administrativo";
   if (ref === CC_REF_FINANCEIRO) return "Financeiro";
+  if (ref === CC_REF_RH) return "RH";
   const project = projects.find((p) => p.id === ref);
   if (project) return project.name;
   return ref;
@@ -42,11 +45,13 @@ export function itemCostCenterRef(item: CompanyFinancialItem, tipo: TipoFinancei
     const legacyKey = normalizeLabelKey(legacy);
     if (legacyKey === "administrativo") return CC_REF_ADMINISTRATIVO;
     if (legacyKey === "financeiro") return CC_REF_FINANCEIRO;
+    if (legacyKey === "rh" || legacyKey === "recursos humanos") return CC_REF_RH;
     const byName = projects.find((p: Project) => normalizeLabelKey(p.name) === legacyKey);
     if (byName) return byName.id;
   }
-  if (item.cost_center_system === CC_REF_ADMINISTRATIVO || item.cost_center_system === CC_REF_FINANCEIRO) {
-    return item.cost_center_system;
+  const sys = item.cost_center_system;
+  if (sys === CC_REF_ADMINISTRATIVO || sys === CC_REF_FINANCEIRO || sys === CC_REF_RH) {
+    return sys;
   }
   return defaultCostCenterRef(tipo);
 }

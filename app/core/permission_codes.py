@@ -9,6 +9,7 @@ SYSTEM_ALL_PROJECTS = "system.all_projects"
 # Módulos
 WORKSPACE_PROJECTS_ACCESS = "workspace.projects.access"
 WORKSPACE_FINANCE_ACCESS = "workspace.finance.access"
+WORKSPACE_ASSETS_ACCESS = "workspace.assets.access"
 
 DASHBOARD_VIEW = "dashboard.view"
 DASHBOARD_DIRECTOR = "dashboard.director"
@@ -54,11 +55,15 @@ ALERTS_VIEW = "alerts.view"
 COMPANY_FINANCE_VIEW = "company_finance.view"
 COMPANY_FINANCE_EDIT = "company_finance.edit"
 
+ASSETS_VIEW = "assets.view"
+ASSETS_EDIT = "assets.edit"
+
 ALL_PERMISSION_CODES: tuple[str, ...] = (
     SYSTEM_ADMIN,
     SYSTEM_ALL_PROJECTS,
     WORKSPACE_PROJECTS_ACCESS,
     WORKSPACE_FINANCE_ACCESS,
+    WORKSPACE_ASSETS_ACCESS,
     DASHBOARD_VIEW,
     DASHBOARD_DIRECTOR,
     PROJECTS_VIEW,
@@ -88,6 +93,8 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     ALERTS_VIEW,
     COMPANY_FINANCE_VIEW,
     COMPANY_FINANCE_EDIT,
+    ASSETS_VIEW,
+    ASSETS_EDIT,
 )
 
 # Compatibilidade com perfis legados (seed / ajuste em massa)
@@ -123,6 +130,9 @@ PRESET_GESTOR = frozenset(
         ALERTS_VIEW,
         COMPANY_FINANCE_VIEW,
         COMPANY_FINANCE_EDIT,
+        WORKSPACE_ASSETS_ACCESS,
+        ASSETS_VIEW,
+        ASSETS_EDIT,
         SETTINGS_VIEW,
         SETTINGS_EDIT,
     }
@@ -147,6 +157,8 @@ PRESET_CONSULTA = frozenset(
         REPORTS_VIEW,
         ALERTS_VIEW,
         COMPANY_FINANCE_VIEW,
+        WORKSPACE_ASSETS_ACCESS,
+        ASSETS_VIEW,
     }
 )
 

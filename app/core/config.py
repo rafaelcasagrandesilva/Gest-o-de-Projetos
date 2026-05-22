@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     receivable_upload_dir: str = Field(default="var/receivable_uploads", alias="RECEIVABLE_UPLOAD_DIR")
     receivable_pdf_max_bytes: int = Field(default=5 * 1024 * 1024, alias="RECEIVABLE_PDF_MAX_BYTES")
 
+    asset_upload_dir: str = Field(default="var/asset_uploads", alias="ASSET_UPLOAD_DIR")
+    asset_upload_max_bytes: int = Field(default=15 * 1024 * 1024, alias="ASSET_UPLOAD_MAX_BYTES")
+
     @field_validator("jwt_secret_key", "jwt_algorithm", mode="before")
     @classmethod
     def strip_secrets(cls, v: str) -> str:

@@ -11,7 +11,7 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.scenario import Scenario, scenario_pg_rhs
+from app.core.scenario import Scenario, coerce_scenario, scenario_pg_rhs
 from app.models.costs import ProjectFixedCost
 from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment
 from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
@@ -21,14 +21,16 @@ from app.models.receivable import ReceivableInvoice, ReceivableInvoiceAnticipati
 from app.repositories.projects import ProjectRepository
 from app.models.project import Project
 from app.services.company_finance_cost_center import CompanyFinanceCostCenterService
-from app.services.employee_cost_service import project_labor_payable_monthly_amount
+from app.services.employee_cost_service import project_labor_payable_snapshot_components
 from app.services.settings_service import SettingsService
-from app.utils.date_utils import normalize_competencia, previous_competencia
+from app.utils.date_utils import next_competencia, normalize_competencia, previous_competencia
 
 logger = logging.getLogger(__name__)
 
 PAYABLE_PAYMENT_TOLERANCE = Decimal("0.02")
 _MONEY_QUANT = Decimal("0.01")
+PAYABLE_MANUAL_ADJUSTMENT_TAG = "[ajuste manual]"
+PAYABLE_CONCILIATED_TAG = "[conciliado]"
 
 
 def _money2(value: object) -> Decimal:
@@ -46,7 +48,7 @@ PAYABLE_DEBT_TYPES = (PayableSnapshotType.ENDIVIDAMENTO, PayableSnapshotType.FIN
 
 
 def payable_snapshot_payment_status(*, amount_paid: Decimal, amount_final: Decimal) -> str:
-    """ABERTO | PARCIAL | PAGO com base no valor pago acumulado."""
+    """ABERTO | PARCIAL | PAGO (inclui overpayment como PAGO)."""
     ap = _money2(amount_paid)
     af = _money2(amount_final)
     if ap <= 0:
@@ -56,11 +58,95 @@ def payable_snapshot_payment_status(*, amount_paid: Decimal, amount_final: Decim
     return "PAGO"
 
 
+def payable_snapshot_derived_fields(*, amount_paid: Decimal, amount_final: Decimal) -> dict[str, object]:
+    """
+    Campos derivados para API/UI.
+
+    amount_remaining pode ser negativo (adiantamento/overpayment).
+    """
+    ap = _money2(amount_paid)
+    af = _money2(amount_final)
+    remaining = (af - ap).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+    is_overpaid = ap > af + PAYABLE_PAYMENT_TOLERANCE
+    overpaid_amount = (
+        (ap - af).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP) if is_overpaid else Decimal("0.00")
+    )
+    return {
+        "amount_remaining": float(remaining),
+        "is_overpaid": is_overpaid,
+        "overpaid_amount": float(overpaid_amount),
+        "status": payable_snapshot_payment_status(amount_paid=ap, amount_final=af),
+    }
+
+
 def _payable_row_is_protected_from_auto_delete(row: PayableSnapshot) -> bool:
     """MANUAL ou já com pagamento registrado — nunca remover no sync corporativo."""
     if row.type == PayableSnapshotType.MANUAL:
         return True
     return _money2(row.amount_paid) > 0
+
+
+def _payable_row_is_dynamic_sync_protected(row: PayableSnapshot) -> bool:
+    """Snapshots que não devem ter valores recalculados automaticamente."""
+    if row.type == PayableSnapshotType.MANUAL:
+        return True
+    obs = (row.observation or "").casefold()
+    if PAYABLE_MANUAL_ADJUSTMENT_TAG.casefold() in obs:
+        return True
+    if PAYABLE_CONCILIATED_TAG.casefold() in obs:
+        return True
+    if abs(_money2(row.amount_final) - _money2(row.amount_original)) > PAYABLE_PAYMENT_TOLERANCE:
+        return True
+    return False
+
+
+def _payable_remaining_balance(*, amount_final: Decimal, amount_paid: Decimal) -> Decimal:
+    """Saldo assinado: negativo quando overpaid."""
+    return (_money2(amount_final) - _money2(amount_paid)).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+
+def _apply_dynamic_payable_amounts(row: PayableSnapshot, *, new_amount: Decimal) -> None:
+    """Atualiza obrigação preservando amount_paid e recalcula status legado."""
+    row.amount_original = new_amount
+    row.amount_final = new_amount
+    _sync_legacy_paid_fields(row)
+
+
+def _log_payable_dynamic_sync(
+    *,
+    action: str,
+    row: PayableSnapshot,
+    before_original: Decimal,
+    before_final: Decimal,
+    before_paid: Decimal,
+) -> None:
+    after_final = _money2(row.amount_final)
+    after_paid = _money2(row.amount_paid)
+    derived = payable_snapshot_derived_fields(amount_paid=after_paid, amount_final=after_final)
+    logger.info(
+        "payables dynamic sync %s snapshot_id=%s name=%s before_original=%s before_final=%s "
+        "before_paid=%s after_final=%s amount_paid=%s saldo=%s status=%s is_overpaid=%s overpaid_amount=%s",
+        action,
+        row.id,
+        row.name,
+        before_original,
+        before_final,
+        before_paid,
+        after_final,
+        after_paid,
+        derived["amount_remaining"],
+        derived["status"],
+        derived["is_overpaid"],
+        derived["overpaid_amount"],
+    )
+    if derived["is_overpaid"]:
+        logger.warning(
+            "payables dynamic sync reconciliation overpaid snapshot_id=%s name=%s saldo=%s overpaid_amount=%s",
+            row.id,
+            row.name,
+            derived["amount_remaining"],
+            derived["overpaid_amount"],
+        )
 
 
 def _sync_legacy_paid_fields(row: PayableSnapshot, *, anchor_date: date | None = None) -> None:
@@ -87,6 +173,40 @@ def _month_bounds(comp: date) -> tuple[date, date]:
     c = normalize_competencia(comp)
     last = calendar.monthrange(c.year, c.month)[1]
     return date(c.year, c.month, 1), date(c.year, c.month, last)
+
+
+def _collaborator_payable_snapshot_name(display_name: str, component_label: str) -> str:
+    label = (component_label or "").strip()
+    if not label:
+        return display_name
+    return f"{display_name} — {label}"
+
+
+def _allocate_payable_components(
+    components: list[tuple[str, float]], factor: float
+) -> list[tuple[str, float]]:
+    """Rateia componentes pelo % do projeto; última linha absorve centavos de arredondamento."""
+    if not components or factor <= 0:
+        return []
+    integral_total = sum(amt for _, amt in components)
+    target_total = round(integral_total * factor, 2)
+    if target_total <= 0:
+        return []
+
+    if len(components) == 1:
+        return [(components[0][0], target_total)]
+
+    out: list[tuple[str, float]] = []
+    allocated = 0.0
+    for idx, (label, integral_amt) in enumerate(components):
+        if idx == len(components) - 1:
+            amt = round(target_total - allocated, 2)
+        else:
+            amt = round(integral_amt * factor, 2)
+            allocated += amt
+        if amt > 0:
+            out.append((label, amt))
+    return out
 
 
 def _employee_display_name(emp: object) -> str:
@@ -450,6 +570,217 @@ class PayableSnapshotService:
         await self.session.flush()
         return changed
 
+    async def sync_collaborator_payables_for_labor(
+        self,
+        *,
+        project_id: UUID,
+        employee_id: UUID,
+        labor_competencia: date,
+        scenario: str | Scenario,
+    ) -> int:
+        """
+        Reavalia snapshots COLLABORATOR do mês de pagamento (competência seguinte ao REALIZADO).
+
+        Atualiza amount_original/amount_final em linhas abertas; preserva amount_paid e histórico.
+        """
+        if coerce_scenario(scenario) != Scenario.REALIZADO:
+            return 0
+
+        source_month = normalize_competencia(labor_competencia)
+        payment_month = next_competencia(source_month)
+        changed = 0
+
+        real = await self._get_labor_row(
+            project_id=project_id,
+            employee_id=employee_id,
+            competencia=source_month,
+            scenario=Scenario.REALIZADO,
+        )
+
+        existing = list(
+            (
+                await self.session.execute(
+                    select(PayableSnapshot).where(
+                        PayableSnapshot.month == payment_month,
+                        PayableSnapshot.type == PayableSnapshotType.COLLABORATOR,
+                        PayableSnapshot.ref_id == employee_id,
+                        PayableSnapshot.project_id == project_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        if real is None or not real.employee or not real.project:
+            removed = 0
+            for row in existing:
+                if _payable_row_is_dynamic_sync_protected(row):
+                    continue
+                if _money2(row.amount_paid) > 0:
+                    continue
+                await self.session.delete(row)
+                removed += 1
+                changed += 1
+            if removed:
+                logger.info(
+                    "payables dynamic sync labor removed orphan rows project_id=%s employee_id=%s month=%s n=%d",
+                    project_id,
+                    employee_id,
+                    payment_month,
+                    removed,
+                )
+            await self.session.flush()
+            return changed
+
+        emp = real.employee
+        proj = real.project
+        settings = await SettingsService(self.session).get_or_create()
+        factor = float(real.allocation_percentage or 0) / 100.0
+        display_name = _employee_display_name(emp)
+        cost_center = str(proj.name).strip()
+
+        integral_components = project_labor_payable_snapshot_components(emp, settings, source_month, real)
+        allocated = _allocate_payable_components(integral_components, factor)
+        expected: dict[str, Decimal] = {}
+        for component_label, amt in allocated:
+            snapshot_name = _collaborator_payable_snapshot_name(display_name, component_label)
+            expected[snapshot_name] = Decimal(str(amt))
+
+        consolidated = round(sum(float(v) for v in expected.values()), 2)
+        logger.info(
+            "payables dynamic sync labor start project_id=%s employee_id=%s source_month=%s payment_month=%s "
+            "name=%s employment=%s allocation_pct=%s integral=%s expected=%s consolidated=%s",
+            project_id,
+            employee_id,
+            source_month,
+            payment_month,
+            display_name,
+            getattr(emp, "employment_type", None),
+            real.allocation_percentage,
+            [(lbl or "(único)", round(amt, 2)) for lbl, amt in integral_components],
+            {k: float(v) for k, v in expected.items()},
+            consolidated,
+        )
+
+        month_generated = await self.is_generated(month=payment_month)
+        matched_ids: set[UUID] = set()
+
+        for snapshot_name, new_amt in expected.items():
+            row = next((r for r in existing if r.name == snapshot_name), None)
+            if row is None:
+                legacy = next(
+                    (r for r in existing if r.name == display_name and r.id not in matched_ids),
+                    None,
+                )
+                if legacy is not None:
+                    row = legacy
+                    row.name = snapshot_name
+            if row is None:
+                if new_amt <= 0 or not month_generated:
+                    continue
+                row = PayableSnapshot(
+                    month=payment_month,
+                    type=PayableSnapshotType.COLLABORATOR,
+                    ref_id=emp.id,
+                    project_id=proj.id,
+                    name=snapshot_name,
+                    cost_center=cost_center,
+                    category="Mão de obra",
+                    amount_original=new_amt,
+                    amount_final=new_amt,
+                    amount_paid=Decimal("0"),
+                    due_date=_default_due_date(payment_month, day=10),
+                    paid=False,
+                    payment_date=None,
+                    observation=None,
+                )
+                self.session.add(row)
+                changed += 1
+                _log_payable_dynamic_sync(
+                    action="created",
+                    row=row,
+                    before_original=Decimal("0"),
+                    before_final=Decimal("0"),
+                    before_paid=Decimal("0"),
+                )
+                matched_ids.add(row.id)
+                continue
+
+            matched_ids.add(row.id)
+            if _payable_row_is_dynamic_sync_protected(row):
+                logger.info(
+                    "payables dynamic sync skip protected snapshot_id=%s name=%s",
+                    row.id,
+                    row.name,
+                )
+                continue
+
+            before_o = _money2(row.amount_original)
+            before_f = _money2(row.amount_final)
+            before_p = _money2(row.amount_paid)
+            row.cost_center = cost_center
+            _apply_dynamic_payable_amounts(row, new_amount=new_amt)
+            changed += 1
+            _log_payable_dynamic_sync(
+                action="updated",
+                row=row,
+                before_original=before_o,
+                before_final=before_f,
+                before_paid=before_p,
+            )
+
+        for row in existing:
+            if row.id in matched_ids:
+                continue
+            if _payable_row_is_dynamic_sync_protected(row):
+                logger.info(
+                    "payables dynamic sync skip protected orphan snapshot_id=%s name=%s",
+                    row.id,
+                    row.name,
+                )
+                continue
+            if _money2(row.amount_paid) > 0:
+                logger.info(
+                    "payables dynamic sync preserve paid orphan snapshot_id=%s name=%s amount_paid=%s",
+                    row.id,
+                    row.name,
+                    row.amount_paid,
+                )
+                continue
+            logger.info(
+                "payables dynamic sync remove orphan snapshot_id=%s name=%s",
+                row.id,
+                row.name,
+            )
+            await self.session.delete(row)
+            changed += 1
+
+        await self.session.flush()
+        return changed
+
+    async def sync_collaborator_payables_for_employee(self, *, employee_id: UUID) -> int:
+        """Reavalia snapshots de todos os vínculos REALIZADO do colaborador."""
+        keys = (
+            await self.session.execute(
+                select(ProjectLabor.project_id, ProjectLabor.competencia)
+                .where(
+                    ProjectLabor.employee_id == employee_id,
+                    ProjectLabor.scenario == scenario_pg_rhs(Scenario.REALIZADO),
+                )
+                .distinct()
+            )
+        ).all()
+        total = 0
+        for project_id, comp in keys:
+            total += await self.sync_collaborator_payables_for_labor(
+                project_id=project_id,
+                employee_id=employee_id,
+                labor_competencia=comp,
+                scenario=Scenario.REALIZADO,
+            )
+        return total
+
     async def preserve_or_remove_deleted_company_finance_item(self, *, item_id: UUID) -> int:
         """
         Remove snapshots corporativos órfãos de um item excluído, mas preserva qualquer linha
@@ -808,31 +1139,61 @@ class PayableSnapshotService:
                 if not emp or not proj:
                     continue
 
-                full = float(project_labor_payable_monthly_amount(emp, settings, source_month, real))
                 factor = float(real.allocation_percentage or 0) / 100.0
-                amount = round(full * factor, 2)
-                if amount <= 0:
+                if factor <= 0:
                     continue
 
-                self.session.add(
-                    PayableSnapshot(
-                        month=payment_month,
-                        type=PayableSnapshotType.COLLABORATOR,
-                        ref_id=emp.id,
-                        project_id=proj.id,
-                        name=_employee_display_name(emp),
-                        cost_center=str(proj.name).strip(),
-                        category="Mão de obra",
-                        amount_original=Decimal(str(amount)),
-                        amount_final=Decimal(str(amount)),
-                        amount_paid=Decimal("0"),
-                        due_date=due,
-                        paid=False,
-                        payment_date=None,
-                        observation=None,
-                    )
+                display_name = _employee_display_name(emp)
+                integral_components = project_labor_payable_snapshot_components(
+                    emp, settings, source_month, real
                 )
-                created += 1
+                allocated = _allocate_payable_components(integral_components, factor)
+                if not allocated:
+                    continue
+
+                consolidated = round(sum(amt for _, amt in allocated), 2)
+                employment = (getattr(emp, "employment_type", "") or "").strip().upper()
+                logger.info(
+                    "payables collaborator snapshot employee_id=%s project_id=%s name=%s "
+                    "employment=%s allocation_pct=%s integral_components=%s allocated=%s consolidated=%s",
+                    emp.id,
+                    proj.id,
+                    display_name,
+                    employment,
+                    real.allocation_percentage,
+                    [(lbl or "(único)", round(amt, 2)) for lbl, amt in integral_components],
+                    [(lbl or "(único)", amt) for lbl, amt in allocated],
+                    consolidated,
+                )
+
+                for component_label, amount in allocated:
+                    snapshot_name = _collaborator_payable_snapshot_name(display_name, component_label)
+                    self.session.add(
+                        PayableSnapshot(
+                            month=payment_month,
+                            type=PayableSnapshotType.COLLABORATOR,
+                            ref_id=emp.id,
+                            project_id=proj.id,
+                            name=snapshot_name,
+                            cost_center=str(proj.name).strip(),
+                            category="Mão de obra",
+                            amount_original=Decimal(str(amount)),
+                            amount_final=Decimal(str(amount)),
+                            amount_paid=Decimal("0"),
+                            due_date=due,
+                            paid=False,
+                            payment_date=None,
+                            observation=None,
+                        )
+                    )
+                    created += 1
+                    logger.info(
+                        "payables collaborator line employee_id=%s project_id=%s name=%s amount=%s",
+                        emp.id,
+                        proj.id,
+                        snapshot_name,
+                        amount,
+                    )
 
             # --- Vehicles (aggregated) ---
             # Regra nova: distribuir por projeto (centro de custo real) — nunca usar "Operacional".
@@ -1200,6 +1561,7 @@ class PayableSnapshotService:
             cur_paid = _money2(row.amount_paid)
             if cur_paid > af + PAYABLE_PAYMENT_TOLERANCE:
                 row.amount_paid = af
+            self._append_observation(row, PAYABLE_MANUAL_ADJUSTMENT_TAG)
         if due_date is not None:
             row.due_date = due_date
         if observation is not None:
@@ -1221,19 +1583,59 @@ class PayableSnapshotService:
         amt = _money2(amount)
         if amt <= 0:
             raise ValueError("Valor do pagamento deve ser maior que zero.")
+        if amt > Decimal("999999999.99"):
+            raise ValueError("Valor do pagamento fora do limite permitido.")
+
         final = _money2(row.amount_final)
         paid_cur = _money2(row.amount_paid)
-        remaining = final - paid_cur
-        if amt > remaining + PAYABLE_PAYMENT_TOLERANCE:
-            raise ValueError("Pagamento excede o saldo (tolerância de centavos).")
-        new_paid = paid_cur + amt
-        if new_paid > final:
-            new_paid = final
+        before_derived = payable_snapshot_derived_fields(amount_paid=paid_cur, amount_final=final)
+        logger.info(
+            "payables register_payment before snapshot_id=%s name=%s amount_final=%s amount_paid=%s "
+            "saldo=%s status=%s payment=%s",
+            row.id,
+            row.name,
+            final,
+            paid_cur,
+            before_derived["amount_remaining"],
+            before_derived["status"],
+            amt,
+        )
+
+        new_paid = (paid_cur + amt).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
         row.amount_paid = new_paid
         anchor = date.today()
         _sync_legacy_paid_fields(row, anchor_date=anchor)
+
+        after_derived = payable_snapshot_derived_fields(amount_paid=new_paid, amount_final=final)
+        if after_derived["is_overpaid"]:
+            logger.warning(
+                "payables register_payment overpayment detected snapshot_id=%s name=%s "
+                "expected_final=%s amount_paid=%s overpaid_amount=%s saldo=%s",
+                row.id,
+                row.name,
+                final,
+                new_paid,
+                after_derived["overpaid_amount"],
+                after_derived["amount_remaining"],
+            )
+
+        obs_parts = [f"[pagamento +{amt}]"]
+        if after_derived["is_overpaid"]:
+            obs_parts.append("(acima do valor esperado)")
         if observation and observation.strip():
-            self._append_observation(row, f"[pagamento +{amt}] {observation.strip()}")
+            obs_parts.append(observation.strip())
+        self._append_observation(row, " ".join(obs_parts))
+
+        logger.info(
+            "payables register_payment after snapshot_id=%s amount_paid=%s saldo=%s status=%s "
+            "is_overpaid=%s overpaid_amount=%s",
+            row.id,
+            new_paid,
+            after_derived["amount_remaining"],
+            after_derived["status"],
+            after_derived["is_overpaid"],
+            after_derived["overpaid_amount"],
+        )
         await self.session.flush()
         return row
 

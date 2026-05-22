@@ -22,6 +22,7 @@ from app.models.project_operational import (
 )
 from app.models.settings import SystemSettings
 from app.models.permission import Permission, UserPermission
+from app.models.asset import Asset, AssetAssignment, AssetAttachment, AssetInspection
 from app.models.user import ProjectUser, Role, User, UserRole
 
 __all__ = [
@@ -61,4 +62,8 @@ __all__ = [
     "User",
     "UserPermission",
     "UserRole",
+    "Asset",
+    "AssetAssignment",
+    "AssetAttachment",
+    "AssetInspection",
 ]
