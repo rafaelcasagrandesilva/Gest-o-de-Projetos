@@ -16,6 +16,13 @@ ReportType = Literal[
     "dashboard",
     "users",
     "revenues",
+    "payables_detailed",
+    "receivables_detailed",
+    "invoices_detailed",
+    "assets_inventory",
+    "assets_in_use",
+    "assets_inspections",
+    "assets_movements",
 ]
 
 

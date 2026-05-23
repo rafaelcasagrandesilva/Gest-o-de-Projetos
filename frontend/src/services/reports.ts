@@ -11,7 +11,14 @@ export type ReportType =
   | "fixed_costs"
   | "dashboard"
   | "users"
-  | "revenues";
+  | "revenues"
+  | "payables_detailed"
+  | "receivables_detailed"
+  | "invoices_detailed"
+  | "assets_inventory"
+  | "assets_in_use"
+  | "assets_inspections"
+  | "assets_movements";
 
 export type ReportFormat = "xlsx" | "pdf";
 

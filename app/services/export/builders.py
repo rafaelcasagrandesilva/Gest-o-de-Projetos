@@ -74,6 +74,124 @@ def build_xlsx_bytes(
     return buf.getvalue()
 
 
+def build_operational_xlsx_bytes(
+    *,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+    sheet_title: str = "Relatório",
+    money_columns: frozenset[int] | None = None,
+    date_columns: frozenset[int] | None = None,
+) -> bytes:
+    """Planilha operacional: cabeçalho, autofiltro, largura automática e formatos básicos."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_title[:31]
+    header_fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
+    ncols = len(headers)
+    for col, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col, value=str(h))
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    for r_idx, row in enumerate(rows, start=2):
+        for c_idx, val in enumerate(row, start=1):
+            cell = ws.cell(row=r_idx, column=c_idx, value=val)
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            if money_columns and c_idx in money_columns and isinstance(val, (int, float)):
+                cell.number_format = _BRL_NUM_FMT
+            if date_columns and c_idx in date_columns and val not in (None, ""):
+                cell.number_format = "DD/MM/YYYY"
+    last_row = max(1, len(rows) + 1)
+    if ncols and last_row:
+        ws.auto_filter.ref = f"A1:{get_column_letter(ncols)}{last_row}"
+    for col in range(1, ncols + 1):
+        max_len = len(str(headers[col - 1]))
+        for r_idx in range(2, last_row + 1):
+            v = ws.cell(row=r_idx, column=col).value
+            if v is not None:
+                max_len = max(max_len, min(len(str(v)), 48))
+        ws.column_dimensions[get_column_letter(col)].width = min(max(max_len + 2, 12), 42)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _pdf_footer(canvas, doc) -> None:
+    canvas.saveState()
+    canvas.setFont("Helvetica", 8)
+    canvas.drawString(1.5 * cm, 0.8 * cm, "SGC")
+    page = canvas.getPageNumber()
+    canvas.drawRightString(doc.pagesize[0] - 1.5 * cm, 0.8 * cm, f"Página {page}")
+    canvas.restoreState()
+
+
+def build_executive_pdf_bytes(
+    *,
+    title: str,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+    meta_lines: Sequence[str],
+    totals_row: Sequence[Any] | None = None,
+) -> bytes:
+    """PDF executivo com marca SGC, metadados e paginação."""
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(A4),
+        rightMargin=1.2 * cm,
+        leftMargin=1.2 * cm,
+        topMargin=1.2 * cm,
+        bottomMargin=1.4 * cm,
+    )
+    styles = getSampleStyleSheet()
+    story: list[Any] = []
+    story.append(Paragraph("<b>SGC</b>", styles["Normal"]))
+    story.append(Paragraph(f"<b>{escape(title)}</b>", styles["Title"]))
+    gen = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    story.append(Paragraph(f"Gerado em: {gen}", styles["Normal"]))
+    for line in meta_lines:
+        if line:
+            story.append(Paragraph(escape(line), styles["Normal"]))
+    story.append(Spacer(1, 0.35 * cm))
+
+    data: list[list[Any]] = [list(headers)]
+    for row in rows:
+        data.append([("" if v is None else str(v)) for v in row])
+    if totals_row is not None:
+        data.append([("" if v is None else str(v)) for v in totals_row])
+
+    col_count = max(len(r) for r in data) if data else 1
+    w = doc.width / max(col_count, 1)
+    tbl = Table(data, colWidths=[w] * col_count, repeatRows=1)
+    tbl.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]
+        )
+    )
+    if totals_row is not None:
+        last = len(data) - 1
+        tbl.setStyle(
+            TableStyle(
+                [
+                    ("FONTNAME", (0, last), (-1, last), "Helvetica-Bold"),
+                    ("BACKGROUND", (0, last), (-1, last), colors.HexColor("#f8fafc")),
+                ]
+            )
+        )
+    story.append(tbl)
+    doc.build(story, onFirstPage=_pdf_footer, onLaterPages=_pdf_footer)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def build_pdf_bytes(
     *,
     title: str,

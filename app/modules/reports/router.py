@@ -3,22 +3,26 @@ from __future__ import annotations
 import io
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
     get_current_user,
+    get_current_workspace,
     require_project_access,
     user_has_any_permission,
     user_sees_all_projects,
 )
 from app.core.permission_codes import (
+    ASSETS_VIEW,
     BILLING_VIEW,
     COMPANY_FINANCE_VIEW,
     DEBTS_VIEW,
     EMPLOYEES_VIEW,
     INVOICES_VIEW,
+    PAYABLES_VIEW,
+    RECEIVABLES_VIEW,
     REPORTS_EXPORT,
     REPORTS_VIEW,
     USERS_MANAGE,
@@ -28,6 +32,8 @@ from app.core.scenario import Scenario, coerce_scenario
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.reports import ReportGenerateRequest
+from app.services.operational_report_export import render_operational_report_bytes
+from app.services.operational_report_service import OperationalReportService, resolve_project_access
 from app.services.report_export import render_report_bytes
 from app.services.report_service import (
     ReportService,
@@ -65,8 +71,10 @@ def _stream(data: bytes, filename: str, media: str) -> StreamingResponse:
 @router.post("/generate")
 async def generate_report(
     body: ReportGenerateRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
+    _ws: str = Depends(get_current_workspace),
 ) -> StreamingResponse:
     """Gera relatório (Excel ou PDF) conforme tipo e filtros."""
     f = body.filters
@@ -214,6 +222,68 @@ async def generate_report(
             scenario=_report_scenario(body),
         )
         raw, name, media = render_report_bytes("dashboard", payload, fmt)
+        return _stream(raw, name, media)
+
+    if body.type == "payables_detailed":
+        _assert_report_access(user)
+        if not user_has_any_permission(user, PAYABLES_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
+        sees_all, allowed = await resolve_project_access(db, user)
+        payload = await OperationalReportService(db).generate_payables_detailed(
+            filters=f,
+            accessible_project_ids=allowed,
+            sees_all_projects=sees_all,
+        )
+        await db.commit()
+        raw, name, media = render_operational_report_bytes("payables_detailed", payload, fmt)
+        return _stream(raw, name, media)
+
+    if body.type == "receivables_detailed":
+        _assert_report_access(user)
+        if not user_has_any_permission(user, RECEIVABLES_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
+        sees_all, allowed = await resolve_project_access(db, user)
+        payload = await OperationalReportService(db).generate_receivables_detailed(
+            filters=f,
+            workspace_id=_ws,
+            accessible_project_ids=allowed,
+            sees_all_projects=sees_all,
+        )
+        raw, name, media = render_operational_report_bytes("receivables_detailed", payload, fmt)
+        return _stream(raw, name, media)
+
+    if body.type == "invoices_detailed":
+        _assert_report_access(user)
+        if not user_has_any_permission(user, INVOICES_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
+        sees_all, allowed = await resolve_project_access(db, user)
+        payload = await OperationalReportService(db).generate_invoices_detailed(
+            filters=f,
+            accessible_project_ids=allowed,
+            sees_all_projects=sees_all,
+        )
+        raw, name, media = render_operational_report_bytes("invoices_detailed", payload, fmt)
+        return _stream(raw, name, media)
+
+    if body.type in (
+        "assets_inventory",
+        "assets_in_use",
+        "assets_inspections",
+        "assets_movements",
+    ):
+        _assert_report_access(user)
+        if not user_has_any_permission(user, ASSETS_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
+        ops = OperationalReportService(db)
+        if body.type == "assets_inventory":
+            payload = await ops.generate_assets_inventory(filters=f)
+        elif body.type == "assets_in_use":
+            payload = await ops.generate_assets_in_use(filters=f)
+        elif body.type == "assets_inspections":
+            payload = await ops.generate_assets_inspections(filters=f)
+        else:
+            payload = await ops.generate_assets_movements(filters=f)
+        raw, name, media = render_operational_report_bytes(body.type, payload, fmt)
         return _stream(raw, name, media)
 
     raise HTTPException(status_code=400, detail="Tipo de relatório desconhecido.")
