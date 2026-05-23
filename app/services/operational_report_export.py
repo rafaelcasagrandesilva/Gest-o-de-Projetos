@@ -4,14 +4,15 @@ from datetime import date, datetime, timezone
 from typing import Any, Sequence
 
 from app.services.export.builders import (
-    MIME_PDF,
-    MIME_XLSX,
     build_executive_pdf_bytes,
     build_operational_xlsx_bytes,
     export_filename,
     format_brl,
     format_date_br,
 )
+
+MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+MIME_PDF = "application/pdf"
 
 _OPERATIONAL_SPECS: dict[str, tuple[list[str], list[str], frozenset[int]]] = {
     "payables_detailed": (
