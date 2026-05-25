@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { isAxiosError } from "axios";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AssetSizeBadge } from "@/components/assets/AssetSizeBadge";
 import { AssetSizeField } from "@/components/assets/AssetSizeField";
@@ -49,6 +50,15 @@ import {
   type AssetStatus,
 } from "@/services/assets";
 import { listProjects, type Project } from "@/services/projects";
+import { formatApiError } from "@/utils/apiError";
+
+function todayIsoLocal(): string {
+  const t = new Date();
+  const y = t.getFullYear();
+  const m = String(t.getMonth() + 1).padStart(2, "0");
+  const d = String(t.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
 type TabId = "general" | "assignments" | "inspections" | "files" | "timeline";
 
@@ -182,6 +192,11 @@ export function AssetDetailPage() {
       setError("Informe quem entregou, quem recebeu e a data de entrega.");
       return;
     }
+    const today = todayIsoLocal();
+    if (assignDate > today) {
+      setError("Data de entrega não pode ser futura.");
+      return;
+    }
     try {
       await createAssignment(assetId, {
         employee_id: assignEmployeeId,
@@ -195,14 +210,26 @@ export function AssetDetailPage() {
       setAssignDate("");
       setError(null);
       await load();
-    } catch {
-      setError("Não foi possível registrar a entrega.");
+    } catch (e) {
+      setError(
+        isAxiosError(e) ? formatApiError(e) : "Não foi possível registrar a entrega.",
+      );
     }
   }
 
   async function handleReturn(assignmentId: string) {
     if (!assetId || !returnDate || !returnToId) {
       setError("Informe quem recebeu a devolução e a data.");
+      return;
+    }
+    const today = todayIsoLocal();
+    if (returnDate > today) {
+      setError("Data de devolução não pode ser futura.");
+      return;
+    }
+    const delivery = openAssignment?.delivery_date;
+    if (delivery && returnDate < delivery) {
+      setError("Data de devolução não pode ser anterior à entrega.");
       return;
     }
     try {
@@ -218,8 +245,10 @@ export function AssetDetailPage() {
       setReturnNotes("");
       setError(null);
       await load();
-    } catch {
-      setError("Não foi possível registrar a devolução.");
+    } catch (e) {
+      setError(
+        isAxiosError(e) ? formatApiError(e) : "Não foi possível registrar a devolução.",
+      );
     }
   }
 
@@ -237,6 +266,16 @@ export function AssetDetailPage() {
       setError("Informe quem recebeu a devolução e a data.");
       return;
     }
+    const today = todayIsoLocal();
+    if (returnDate > today) {
+      setError("Data de devolução não pode ser futura.");
+      return;
+    }
+    const assignment = detail?.assignments.find((a) => a.id === assignmentId);
+    if (assignment && returnDate < assignment.delivery_date) {
+      setError("Data de devolução não pode ser anterior à entrega.");
+      return;
+    }
     try {
       await updateReturnAssignment(assetId, assignmentId, {
         return_date: returnDate,
@@ -247,8 +286,10 @@ export function AssetDetailPage() {
       setEditReturnId(null);
       setError(null);
       await load();
-    } catch {
-      setError("Não foi possível atualizar a devolução.");
+    } catch (e) {
+      setError(
+        isAxiosError(e) ? formatApiError(e) : "Não foi possível atualizar a devolução.",
+      );
     }
   }
 
@@ -645,6 +686,8 @@ export function AssetDetailPage() {
                       <input
                         type="date"
                         value={returnDate}
+                        min={openAssignment.delivery_date}
+                        max={todayIsoLocal()}
                         onChange={(e) => setReturnDate(e.target.value)}
                         className="mt-1 w-full rounded border px-3 py-2"
                       />
@@ -717,6 +760,7 @@ export function AssetDetailPage() {
                     <input
                       type="date"
                       value={assignDate}
+                      max={todayIsoLocal()}
                       onChange={(e) => setAssignDate(e.target.value)}
                       className="mt-1 w-full rounded border px-3 py-2"
                     />
@@ -757,6 +801,8 @@ export function AssetDetailPage() {
                         <input
                           type="date"
                           value={returnDate}
+                          min={a.delivery_date}
+                          max={todayIsoLocal()}
                           onChange={(e) => setReturnDate(e.target.value)}
                           className="mt-1 w-full rounded border px-3 py-2"
                         />

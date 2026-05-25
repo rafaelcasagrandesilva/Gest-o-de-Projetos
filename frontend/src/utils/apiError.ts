@@ -1,5 +1,9 @@
 import { isAxiosError } from "axios";
 
+function cleanValidationMsg(msg: string): string {
+  return msg.replace(/^Value error,\s*/i, "");
+}
+
 /** Converte `detail` do FastAPI (string, lista de erros de validação ou objeto) em texto legível. */
 export function formatApiError(e: unknown): string {
   if (!isAxiosError(e)) {
@@ -11,7 +15,7 @@ export function formatApiError(e: unknown): string {
     return d
       .map((item: { loc?: (string | number)[]; msg?: string }) => {
         const loc = item.loc?.filter((x) => x !== "body").join(".") ?? "";
-        const m = item.msg ?? "";
+        const m = cleanValidationMsg(item.msg ?? "");
         return loc ? `${loc}: ${m}` : m;
       })
       .filter(Boolean)
