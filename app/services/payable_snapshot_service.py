@@ -17,7 +17,12 @@ from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPay
 from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
 from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.models.payable_snapshot_generation import PayableSnapshotGeneration
-from app.models.project_operational import ProjectLabor, ProjectOperationalFixed, ProjectVehicle
+from app.models.project_operational import (
+    ProjectLabor,
+    ProjectOperationalFixed,
+    ProjectSystemCost,
+    ProjectVehicle,
+)
 from app.models.receivable import ReceivableInvoice, ReceivableInvoiceAnticipation
 from app.repositories.projects import ProjectRepository
 from app.models.project import Project
@@ -46,6 +51,21 @@ def _money2(value: object) -> Decimal:
 # Contas a pagar — despesa manual (centros fixos + nome de projeto cadastrado)
 MANUAL_PAYABLE_FIXED_COST_CENTERS = frozenset({"Administrativo", "Financeiro"})
 PAYABLE_DEBT_TYPES = (PayableSnapshotType.ENDIVIDAMENTO, PayableSnapshotType.FINANCIAL)
+
+SOURCE_TAG_PROJECT_MISC = "[source:project_misc_cost]"
+SOURCE_TAG_PROJECT_SYSTEM = "[source:project_system]"
+CATEGORY_PROJECT_MISC = "Operacional"
+CATEGORY_PROJECT_SYSTEM = "Sistema"
+
+
+def _misc_cost_snapshot_name(item_name: str) -> str:
+    base = (item_name or "").strip() or "Item"
+    return f"Custo diverso — {base}"
+
+
+def _system_snapshot_name(item_name: str) -> str:
+    base = (item_name or "").strip() or "Sistema"
+    return f"Sistema — {base}"
 
 
 def payable_snapshot_payment_status(*, amount_paid: Decimal, amount_final: Decimal) -> str:
@@ -790,6 +810,207 @@ class PayableSnapshotService:
         await self.session.flush()
         return changed
 
+    async def _sync_project_cost_payable(
+        self,
+        *,
+        source_kind: str,
+        project_id: UUID,
+        source_id: UUID,
+        labor_competencia: date,
+        scenario: str | Scenario,
+        item_name: str | None = None,
+        item_value: float | None = None,
+    ) -> int:
+        """
+        Sincroniza um custo diverso ou sistema do projeto no mês de pagamento (REALIZADO).
+
+        Com `item_name`/`item_value` None, remove snapshots automáticos abertos do `source_id`.
+        """
+        if coerce_scenario(scenario) != Scenario.REALIZADO:
+            return 0
+
+        source_month = normalize_competencia(labor_competencia)
+        payment_month = next_competencia(source_month)
+        is_misc = source_kind == "misc"
+        category = CATEGORY_PROJECT_MISC if is_misc else CATEGORY_PROJECT_SYSTEM
+        source_tag = SOURCE_TAG_PROJECT_MISC if is_misc else SOURCE_TAG_PROJECT_SYSTEM
+        name_fn = _misc_cost_snapshot_name if is_misc else _system_snapshot_name
+
+        existing = list(
+            (
+                await self.session.execute(
+                    select(PayableSnapshot).where(
+                        PayableSnapshot.month == payment_month,
+                        PayableSnapshot.type == PayableSnapshotType.FIXED_COST,
+                        PayableSnapshot.ref_id == source_id,
+                        PayableSnapshot.project_id == project_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        if item_name is None or item_value is None:
+            removed = 0
+            for row in existing:
+                if _payable_row_is_dynamic_sync_protected(row):
+                    continue
+                if _money2(row.amount_paid) > 0:
+                    continue
+                await self.session.delete(row)
+                removed += 1
+            if removed:
+                logger.info(
+                    "payables dynamic sync %s removed project_id=%s source_id=%s month=%s n=%d",
+                    source_kind,
+                    project_id,
+                    source_id,
+                    payment_month,
+                    removed,
+                )
+            await self.session.flush()
+            return removed
+
+        amount = float(item_value or 0.0)
+        proj = await self.session.get(Project, project_id)
+        if not proj or getattr(proj, "deleted_at", None) is not None:
+            return 0
+        cost_center = _project_cost_center_label(proj)
+        snapshot_name = name_fn(item_name)
+        new_amt = Decimal(str(round(amount, 2)))
+
+        if amount <= 0:
+            return await self._sync_project_cost_payable(
+                source_kind=source_kind,
+                project_id=project_id,
+                source_id=source_id,
+                labor_competencia=labor_competencia,
+                scenario=scenario,
+                item_name=None,
+                item_value=None,
+            )
+
+        month_generated = await self.is_generated(month=payment_month)
+        changed = 0
+        row = existing[0] if existing else None
+
+        if row is None:
+            if not month_generated:
+                await self.session.flush()
+                return 0
+            row = PayableSnapshot(
+                month=payment_month,
+                type=PayableSnapshotType.FIXED_COST,
+                ref_id=source_id,
+                project_id=project_id,
+                name=snapshot_name,
+                cost_center=cost_center,
+                category=category,
+                amount_original=new_amt,
+                amount_final=new_amt,
+                amount_paid=Decimal("0"),
+                due_date=_default_due_date(payment_month, day=10),
+                paid=False,
+                payment_date=None,
+                observation=source_tag,
+            )
+            self.session.add(row)
+            changed += 1
+            _log_payable_dynamic_sync(
+                action=f"created_{source_kind}",
+                row=row,
+                before_original=Decimal("0"),
+                before_final=Decimal("0"),
+                before_paid=Decimal("0"),
+            )
+        else:
+            if _payable_row_is_dynamic_sync_protected(row):
+                logger.info(
+                    "payables dynamic sync skip protected %s snapshot_id=%s",
+                    source_kind,
+                    row.id,
+                )
+            else:
+                before_o = _money2(row.amount_original)
+                before_f = _money2(row.amount_final)
+                before_p = _money2(row.amount_paid)
+                row.name = snapshot_name
+                row.cost_center = cost_center
+                row.category = category
+                if not (row.observation or "").strip():
+                    row.observation = source_tag
+                _apply_dynamic_payable_amounts(row, new_amount=new_amt)
+                changed += 1
+                _log_payable_dynamic_sync(
+                    action=f"updated_{source_kind}",
+                    row=row,
+                    before_original=before_o,
+                    before_final=before_f,
+                    before_paid=before_p,
+                )
+
+        await self.session.flush()
+        return changed
+
+    async def sync_project_misc_cost_payables(
+        self,
+        *,
+        project_id: UUID,
+        cost_id: UUID,
+        labor_competencia: date,
+        scenario: str | Scenario,
+    ) -> int:
+        row = await self.session.get(ProjectOperationalFixed, cost_id)
+        if row is None or row.project_id != project_id:
+            return await self._sync_project_cost_payable(
+                source_kind="misc",
+                project_id=project_id,
+                source_id=cost_id,
+                labor_competencia=labor_competencia,
+                scenario=scenario,
+                item_name=None,
+                item_value=None,
+            )
+        return await self._sync_project_cost_payable(
+            source_kind="misc",
+            project_id=project_id,
+            source_id=cost_id,
+            labor_competencia=normalize_competencia(row.competencia),
+            scenario=scenario,
+            item_name=row.name,
+            item_value=float(row.value or 0),
+        )
+
+    async def sync_project_system_payables(
+        self,
+        *,
+        project_id: UUID,
+        system_id: UUID,
+        labor_competencia: date,
+        scenario: str | Scenario,
+    ) -> int:
+        row = await self.session.get(ProjectSystemCost, system_id)
+        if row is None or row.project_id != project_id:
+            return await self._sync_project_cost_payable(
+                source_kind="system",
+                project_id=project_id,
+                source_id=system_id,
+                labor_competencia=labor_competencia,
+                scenario=scenario,
+                item_name=None,
+                item_value=None,
+            )
+        return await self._sync_project_cost_payable(
+            source_kind="system",
+            project_id=project_id,
+            source_id=system_id,
+            labor_competencia=normalize_competencia(row.competencia),
+            scenario=scenario,
+            item_name=row.name,
+            item_value=float(row.value or 0),
+        )
+
     async def sync_collaborator_payables_for_employee(self, *, employee_id: UUID) -> int:
         """Reavalia snapshots de todos os vínculos REALIZADO do colaborador."""
         keys = (
@@ -1303,8 +1524,84 @@ class PayableSnapshotService:
                 )
                 created += 1
 
-            # --- Custos diversos do projeto (operacional + legado), por projeto ---
-            fixed_rows = await self._project_fixed_cost_rows(competencia=source_month, project_ids=project_filter)
+            # --- Custos diversos (operacional) — um snapshot por item ---
+            misc_stmt = (
+                select(ProjectOperationalFixed)
+                .options(selectinload(ProjectOperationalFixed.project))
+                .where(
+                    ProjectOperationalFixed.competencia == source_month,
+                    ProjectOperationalFixed.scenario == scenario_pg_rhs(Scenario.REALIZADO),
+                )
+            )
+            if project_filter is not None:
+                misc_stmt = misc_stmt.where(ProjectOperationalFixed.project_id.in_(sorted(project_filter)))
+            for misc_row in (await self.session.execute(misc_stmt)).scalars().all():
+                amt = float(misc_row.value or 0.0)
+                if amt <= 0 or not misc_row.project:
+                    continue
+                if getattr(misc_row.project, "deleted_at", None) is not None:
+                    continue
+                self.session.add(
+                    PayableSnapshot(
+                        month=payment_month,
+                        type=PayableSnapshotType.FIXED_COST,
+                        ref_id=misc_row.id,
+                        project_id=misc_row.project_id,
+                        name=_misc_cost_snapshot_name(misc_row.name),
+                        cost_center=_project_cost_center_label(misc_row.project),
+                        category=CATEGORY_PROJECT_MISC,
+                        amount_original=Decimal(str(round(amt, 2))),
+                        amount_final=Decimal(str(round(amt, 2))),
+                        amount_paid=Decimal("0"),
+                        due_date=due,
+                        paid=False,
+                        payment_date=None,
+                        observation=SOURCE_TAG_PROJECT_MISC,
+                    )
+                )
+                created += 1
+
+            # --- Sistemas do projeto — um snapshot por item ---
+            sys_stmt = (
+                select(ProjectSystemCost)
+                .options(selectinload(ProjectSystemCost.project))
+                .where(
+                    ProjectSystemCost.competencia == source_month,
+                    ProjectSystemCost.scenario == scenario_pg_rhs(Scenario.REALIZADO),
+                )
+            )
+            if project_filter is not None:
+                sys_stmt = sys_stmt.where(ProjectSystemCost.project_id.in_(sorted(project_filter)))
+            for sys_row in (await self.session.execute(sys_stmt)).scalars().all():
+                amt = float(sys_row.value or 0.0)
+                if amt <= 0 or not sys_row.project:
+                    continue
+                if getattr(sys_row.project, "deleted_at", None) is not None:
+                    continue
+                self.session.add(
+                    PayableSnapshot(
+                        month=payment_month,
+                        type=PayableSnapshotType.FIXED_COST,
+                        ref_id=sys_row.id,
+                        project_id=sys_row.project_id,
+                        name=_system_snapshot_name(sys_row.name),
+                        cost_center=_project_cost_center_label(sys_row.project),
+                        category=CATEGORY_PROJECT_SYSTEM,
+                        amount_original=Decimal(str(round(amt, 2))),
+                        amount_final=Decimal(str(round(amt, 2))),
+                        amount_paid=Decimal("0"),
+                        due_date=due,
+                        paid=False,
+                        payment_date=None,
+                        observation=SOURCE_TAG_PROJECT_SYSTEM,
+                    )
+                )
+                created += 1
+
+            # --- Custos diversos legado (agregado por nome, sem ref_id) ---
+            fixed_rows = await self._project_fixed_cost_legacy_rows(
+                competencia=source_month, project_ids=project_filter
+            )
             for project_id, display_name, amount, cost_center_label, category in fixed_rows:
                 amount = float(amount or 0.0)
                 if amount <= 0:
@@ -1474,31 +1771,14 @@ class PayableSnapshotService:
             out.append((pid, name_map.get(pid, str(pid)), float(total or 0.0)))
         return out
 
-    async def _project_fixed_cost_rows(
+    async def _project_fixed_cost_legacy_rows(
         self, *, competencia: date, project_ids: set[UUID] | None
     ) -> list[tuple[UUID, str, float, str, str]]:
         """
-        Custos diversos ligados a projeto (operacional + legado), sempre por projeto.
+        Custos diversos legados (`project_fixed_costs`), agregados por projeto × nome.
 
         Retorna tuplas: (project_id, name, amount, cost_center_label, category)
         """
-        op_real: dict[tuple[UUID, str], float] = defaultdict(float)
-        stmt = (
-            select(ProjectOperationalFixed.project_id, ProjectOperationalFixed.name, func.sum(ProjectOperationalFixed.value))
-            .where(
-                ProjectOperationalFixed.competencia == competencia,
-                ProjectOperationalFixed.scenario == scenario_pg_rhs(Scenario.REALIZADO),
-            )
-        )
-        if project_ids is not None:
-            stmt = stmt.where(ProjectOperationalFixed.project_id.in_(sorted(project_ids)))
-        stmt = stmt.group_by(ProjectOperationalFixed.project_id, ProjectOperationalFixed.name)
-        for pid, name, total in (await self.session.execute(stmt)).all():
-            base = str(name).strip()
-            if not base:
-                continue
-            op_real[(pid, base)] += float(total or 0.0)
-
         leg_real: dict[tuple[UUID, str], float] = defaultdict(float)
         stmt = (
             select(ProjectFixedCost.project_id, ProjectFixedCost.name, func.sum(ProjectFixedCost.amount_real))
@@ -1516,19 +1796,16 @@ class PayableSnapshotService:
                 continue
             leg_real[(pid, base)] += float(total or 0.0)
 
-        keys = set(op_real) | set(leg_real)
-        if not keys:
+        if not leg_real:
             return []
 
-        proj_ids = {pid for pid, _ in keys}
+        proj_ids = {pid for pid, _ in leg_real}
         projects = (await self.session.execute(select(Project).where(Project.id.in_(sorted(proj_ids))))).scalars().all()
         proj_map = {p.id: p for p in projects}
 
         rows: list[tuple[UUID, str, float, str, str]] = []
-        for pid, base in sorted(keys, key=lambda t: (str(t[0]), t[1])):
-            op_amt = float(op_real.get((pid, base), 0.0) or 0.0)
-            leg_amt = float(leg_real.get((pid, base), 0.0) or 0.0)
-            amount = float(op_amt or 0.0) + float(leg_amt or 0.0)
+        for pid, base in sorted(leg_real.keys(), key=lambda t: (str(t[0]), t[1])):
+            amount = float(leg_real.get((pid, base), 0.0) or 0.0)
             if amount <= 0:
                 continue
 
@@ -1537,17 +1814,7 @@ class PayableSnapshotService:
                 continue
 
             cc = _project_cost_center_label(proj)
-
-            has_op = (pid, base) in op_real
-            has_leg = (pid, base) in leg_real
-            if has_op and has_leg:
-                category = "Custos diversos"
-            elif has_leg:
-                category = "Custos diversos (legado)"
-            else:
-                category = "Custos diversos"
-
-            rows.append((pid, base, amount, cc, category))
+            rows.append((pid, base, amount, cc, "Custos diversos (legado)"))
 
         return rows
 

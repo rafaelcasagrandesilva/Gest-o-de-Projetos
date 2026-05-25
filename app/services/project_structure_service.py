@@ -136,6 +136,36 @@ class ProjectStructureService:
             scenario=scenario,
         )
 
+    async def _sync_misc_cost_payables_if_realizado(
+        self,
+        *,
+        project_id: UUID,
+        cost_id: UUID,
+        competencia,
+        scenario: str | Scenario,
+    ) -> None:
+        await PayableSnapshotService(self.session).sync_project_misc_cost_payables(
+            project_id=project_id,
+            cost_id=cost_id,
+            labor_competencia=normalize_competencia(competencia),
+            scenario=scenario,
+        )
+
+    async def _sync_system_payables_if_realizado(
+        self,
+        *,
+        project_id: UUID,
+        system_id: UUID,
+        competencia,
+        scenario: str | Scenario,
+    ) -> None:
+        await PayableSnapshotService(self.session).sync_project_system_payables(
+            project_id=project_id,
+            system_id=system_id,
+            labor_competencia=normalize_competencia(competencia),
+            scenario=scenario,
+        )
+
     # --- Labor (vínculo; custo derivado do Employee) ---
 
     async def copy_labors_from_previous_month(
@@ -751,7 +781,9 @@ class ProjectStructureService:
         await self.systems.add(row)
         await self.session.commit()
         await self.session.refresh(row)
-        await self._invalidate_next_payable_if_realizado(competencia=comp, scenario=scenario)
+        await self._sync_system_payables_if_realizado(
+            project_id=project_id, system_id=row.id, competencia=comp, scenario=scenario
+        )
         await self.session.commit()
         return row
 
@@ -764,7 +796,9 @@ class ProjectStructureService:
         self.systems.apply_updates(row, {k: v for k, v in data.items() if v is not None})
         await self.session.commit()
         await self.session.refresh(row)
-        await self._invalidate_next_payable_if_realizado(competencia=comp, scenario=scenario)
+        await self._sync_system_payables_if_realizado(
+            project_id=row.project_id, system_id=row.id, competencia=comp, scenario=scenario
+        )
         await self.session.commit()
         return row
 
@@ -774,9 +808,12 @@ class ProjectStructureService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
         comp = normalize_competencia(row.competencia)
         scenario = row.scenario
+        project_id = row.project_id
         await self.systems.delete(row)
         await self.session.commit()
-        await self._invalidate_next_payable_if_realizado(competencia=comp, scenario=scenario)
+        await self._sync_system_payables_if_realizado(
+            project_id=project_id, system_id=system_id, competencia=comp, scenario=scenario
+        )
         await self.session.commit()
 
     # --- Operational fixed ---
@@ -802,7 +839,9 @@ class ProjectStructureService:
         await self.fixed.add(row)
         await self.session.commit()
         await self.session.refresh(row)
-        await self._invalidate_next_payable_if_realizado(competencia=comp, scenario=scenario)
+        await self._sync_misc_cost_payables_if_realizado(
+            project_id=project_id, cost_id=row.id, competencia=comp, scenario=scenario
+        )
         await self.session.commit()
         return row
 
@@ -815,7 +854,9 @@ class ProjectStructureService:
         self.fixed.apply_updates(row, {k: v for k, v in data.items() if v is not None})
         await self.session.commit()
         await self.session.refresh(row)
-        await self._invalidate_next_payable_if_realizado(competencia=comp, scenario=scenario)
+        await self._sync_misc_cost_payables_if_realizado(
+            project_id=row.project_id, cost_id=row.id, competencia=comp, scenario=scenario
+        )
         await self.session.commit()
         return row
 
@@ -825,7 +866,10 @@ class ProjectStructureService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
         comp = normalize_competencia(row.competencia)
         scenario = row.scenario
+        project_id = row.project_id
         await self.fixed.delete(row)
         await self.session.commit()
-        await self._invalidate_next_payable_if_realizado(competencia=comp, scenario=scenario)
+        await self._sync_misc_cost_payables_if_realizado(
+            project_id=project_id, cost_id=fixed_id, competencia=comp, scenario=scenario
+        )
         await self.session.commit()
