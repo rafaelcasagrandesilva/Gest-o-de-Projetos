@@ -20,7 +20,11 @@ from app.repositories.projects import ProjectRepository
 from app.services.assets_service import AssetsService, expiration_alert_level
 from app.services.asset_categories import normalize_tags
 from app.services.finance_service import FinanceService
-from app.services.payable_snapshot_service import payable_snapshot_derived_fields
+from app.services.payable_snapshot_service import (
+    SOURCE_TAG_PROJECT_MISC,
+    SOURCE_TAG_PROJECT_SYSTEM,
+    payable_snapshot_derived_fields,
+)
 from app.services.receivable_manual_service import ReceivableManualService
 from app.services.receivable_service import ReceivableService
 from app.utils.date_utils import normalize_competencia, previous_competencia
@@ -207,13 +211,18 @@ class OperationalReportService:
             derived = payable_snapshot_derived_fields(
                 amount_paid=r.amount_paid, amount_final=r.amount_final
             )
-            comp_src = previous_competencia(normalize_competencia(r.month))
+            obs = (r.observation or "")
+            comp_month = normalize_competencia(r.month)
+            if SOURCE_TAG_PROJECT_MISC in obs or SOURCE_TAG_PROJECT_SYSTEM in obs:
+                comp_src = comp_month
+            else:
+                comp_src = previous_competencia(comp_month)
             tipo = r.type.value if hasattr(r.type, "value") else str(r.type)
             out_rows.append(
                 {
                     "vencimento": r.due_date.isoformat(),
                     "competencia": comp_src.isoformat()[:7],
-                    "mes_pagamento": normalize_competencia(r.month).isoformat()[:7],
+                    "mes_pagamento": comp_month.isoformat()[:7],
                     "nome": r.name,
                     "projeto": project_names.get(r.project_id) or r.cost_center or "",
                     "categoria": r.category,

@@ -54,18 +54,13 @@ PAYABLE_DEBT_TYPES = (PayableSnapshotType.ENDIVIDAMENTO, PayableSnapshotType.FIN
 
 SOURCE_TAG_PROJECT_MISC = "[source:project_misc_cost]"
 SOURCE_TAG_PROJECT_SYSTEM = "[source:project_system]"
-CATEGORY_PROJECT_MISC = "Operacional"
+CATEGORY_PROJECT_MISC = "Custo diverso"
 CATEGORY_PROJECT_SYSTEM = "Sistema"
 
 
-def _misc_cost_snapshot_name(item_name: str) -> str:
-    base = (item_name or "").strip() or "Item"
-    return f"Custo diverso — {base}"
-
-
-def _system_snapshot_name(item_name: str) -> str:
-    base = (item_name or "").strip() or "Sistema"
-    return f"Sistema — {base}"
+def _project_item_snapshot_name(item_name: str, *, fallback: str = "Item") -> str:
+    """Nome exibido no payable — sem prefixo (tipo/categoria já identificam)."""
+    return (item_name or "").strip() or fallback
 
 
 def payable_snapshot_payment_status(*, amount_paid: Decimal, amount_final: Decimal) -> str:
@@ -822,25 +817,24 @@ class PayableSnapshotService:
         item_value: float | None = None,
     ) -> int:
         """
-        Sincroniza um custo diverso ou sistema do projeto no mês de pagamento (REALIZADO).
+        Sincroniza custo diverso ou sistema no mesmo mês da competência do projeto (REALIZADO).
 
-        Com `item_name`/`item_value` None, remove snapshots automáticos abertos do `source_id`.
+        Diferente da folha CLT: não usa mês seguinte. Com `item_name`/`item_value` None,
+        remove snapshots automáticos abertos do `source_id`.
         """
         if coerce_scenario(scenario) != Scenario.REALIZADO:
             return 0
 
-        source_month = normalize_competencia(labor_competencia)
-        payment_month = next_competencia(source_month)
+        payable_month = normalize_competencia(labor_competencia)
         is_misc = source_kind == "misc"
         category = CATEGORY_PROJECT_MISC if is_misc else CATEGORY_PROJECT_SYSTEM
         source_tag = SOURCE_TAG_PROJECT_MISC if is_misc else SOURCE_TAG_PROJECT_SYSTEM
-        name_fn = _misc_cost_snapshot_name if is_misc else _system_snapshot_name
+        name_fallback = "Item" if is_misc else "Sistema"
 
         existing = list(
             (
                 await self.session.execute(
                     select(PayableSnapshot).where(
-                        PayableSnapshot.month == payment_month,
                         PayableSnapshot.type == PayableSnapshotType.FIXED_COST,
                         PayableSnapshot.ref_id == source_id,
                         PayableSnapshot.project_id == project_id,
@@ -850,23 +844,30 @@ class PayableSnapshotService:
             .scalars()
             .all()
         )
+        row = next((r for r in existing if normalize_competencia(r.month) == payable_month), None)
+        orphan_rows = [
+            r
+            for r in existing
+            if normalize_competencia(r.month) != payable_month
+            and _money2(r.amount_paid) <= 0
+            and not _payable_row_is_dynamic_sync_protected(r)
+        ]
 
         if item_name is None or item_value is None:
             removed = 0
-            for row in existing:
-                if _payable_row_is_dynamic_sync_protected(row):
+            for r in existing:
+                if _payable_row_is_dynamic_sync_protected(r):
                     continue
-                if _money2(row.amount_paid) > 0:
+                if _money2(r.amount_paid) > 0:
                     continue
-                await self.session.delete(row)
+                await self.session.delete(r)
                 removed += 1
             if removed:
                 logger.info(
-                    "payables dynamic sync %s removed project_id=%s source_id=%s month=%s n=%d",
+                    "payables dynamic sync %s removed project_id=%s source_id=%s n=%d",
                     source_kind,
                     project_id,
                     source_id,
-                    payment_month,
                     removed,
                 )
             await self.session.flush()
@@ -877,8 +878,9 @@ class PayableSnapshotService:
         if not proj or getattr(proj, "deleted_at", None) is not None:
             return 0
         cost_center = _project_cost_center_label(proj)
-        snapshot_name = name_fn(item_name)
+        snapshot_name = _project_item_snapshot_name(item_name, fallback=name_fallback)
         new_amt = Decimal(str(round(amount, 2)))
+        due = _default_due_date(payable_month, day=10)
 
         if amount <= 0:
             return await self._sync_project_cost_payable(
@@ -891,16 +893,20 @@ class PayableSnapshotService:
                 item_value=None,
             )
 
-        month_generated = await self.is_generated(month=payment_month)
+        month_generated = await self.is_generated(month=payable_month)
         changed = 0
-        row = existing[0] if existing else None
+
+        if row is None and orphan_rows:
+            row = orphan_rows[0]
+            row.month = payable_month
+            row.due_date = due
 
         if row is None:
             if not month_generated:
                 await self.session.flush()
                 return 0
             row = PayableSnapshot(
-                month=payment_month,
+                month=payable_month,
                 type=PayableSnapshotType.FIXED_COST,
                 ref_id=source_id,
                 project_id=project_id,
@@ -910,7 +916,7 @@ class PayableSnapshotService:
                 amount_original=new_amt,
                 amount_final=new_amt,
                 amount_paid=Decimal("0"),
-                due_date=_default_due_date(payment_month, day=10),
+                due_date=due,
                 paid=False,
                 payment_date=None,
                 observation=source_tag,
@@ -935,6 +941,8 @@ class PayableSnapshotService:
                 before_o = _money2(row.amount_original)
                 before_f = _money2(row.amount_final)
                 before_p = _money2(row.amount_paid)
+                row.month = payable_month
+                row.due_date = due
                 row.name = snapshot_name
                 row.cost_center = cost_center
                 row.category = category
@@ -949,6 +957,13 @@ class PayableSnapshotService:
                     before_final=before_f,
                     before_paid=before_p,
                 )
+
+        if row is not None:
+            for orphan in orphan_rows:
+                if orphan.id == row.id:
+                    continue
+                await self.session.delete(orphan)
+                changed += 1
 
         await self.session.flush()
         return changed
@@ -1541,19 +1556,20 @@ class PayableSnapshotService:
                     continue
                 if getattr(misc_row.project, "deleted_at", None) is not None:
                     continue
+                comp_month = normalize_competencia(misc_row.competencia)
                 self.session.add(
                     PayableSnapshot(
-                        month=payment_month,
+                        month=comp_month,
                         type=PayableSnapshotType.FIXED_COST,
                         ref_id=misc_row.id,
                         project_id=misc_row.project_id,
-                        name=_misc_cost_snapshot_name(misc_row.name),
+                        name=_project_item_snapshot_name(misc_row.name),
                         cost_center=_project_cost_center_label(misc_row.project),
                         category=CATEGORY_PROJECT_MISC,
                         amount_original=Decimal(str(round(amt, 2))),
                         amount_final=Decimal(str(round(amt, 2))),
                         amount_paid=Decimal("0"),
-                        due_date=due,
+                        due_date=_default_due_date(comp_month, day=10),
                         paid=False,
                         payment_date=None,
                         observation=SOURCE_TAG_PROJECT_MISC,
@@ -1578,19 +1594,20 @@ class PayableSnapshotService:
                     continue
                 if getattr(sys_row.project, "deleted_at", None) is not None:
                     continue
+                comp_month = normalize_competencia(sys_row.competencia)
                 self.session.add(
                     PayableSnapshot(
-                        month=payment_month,
+                        month=comp_month,
                         type=PayableSnapshotType.FIXED_COST,
                         ref_id=sys_row.id,
                         project_id=sys_row.project_id,
-                        name=_system_snapshot_name(sys_row.name),
+                        name=_project_item_snapshot_name(sys_row.name, fallback="Sistema"),
                         cost_center=_project_cost_center_label(sys_row.project),
                         category=CATEGORY_PROJECT_SYSTEM,
                         amount_original=Decimal(str(round(amt, 2))),
                         amount_final=Decimal(str(round(amt, 2))),
                         amount_paid=Decimal("0"),
-                        due_date=due,
+                        due_date=_default_due_date(comp_month, day=10),
                         paid=False,
                         payment_date=None,
                         observation=SOURCE_TAG_PROJECT_SYSTEM,
