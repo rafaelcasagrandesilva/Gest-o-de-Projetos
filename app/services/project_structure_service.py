@@ -181,6 +181,7 @@ class ProjectStructureService:
         copied = 0
         skipped_already_linked = 0
         skipped_allocation_cap = 0
+        copied_employee_ids: list[UUID] = []
         for pr in prev_rows:
             if pr.employee_id in cur_emp:
                 skipped_already_linked += 1
@@ -216,6 +217,7 @@ class ProjectStructureService:
                 )
             )
             cur_emp.add(pr.employee_id)
+            copied_employee_ids.append(pr.employee_id)
             copied += 1
         if copied == 0:
             return ProjectLaborCopyFromPreviousResult(
@@ -224,6 +226,14 @@ class ProjectStructureService:
                 skipped_allocation_cap=skipped_allocation_cap,
             )
         try:
+            await self.session.flush()
+            for employee_id in copied_employee_ids:
+                await self._sync_collaborator_payables_if_realizado(
+                    project_id=project_id,
+                    employee_id=employee_id,
+                    competencia=comp,
+                    scenario=eff,
+                )
             await self.session.commit()
         except IntegrityError as e:
             await self.session.rollback()
