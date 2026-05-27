@@ -6,7 +6,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from sqlalchemy import String, cast, func, or_, select, text
+from collections.abc import Iterable
+
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,9 +42,11 @@ from app.schemas.assets import (
 )
 from app.services.company_finance_cost_center import (
     CC_LABEL_ADMINISTRATIVO,
+    CC_LABEL_ALMOXARIFADO,
     CC_LABEL_FINANCEIRO,
     CC_LABEL_RH,
     CC_SYSTEM_ADMINISTRATIVO,
+    CC_SYSTEM_ALMOXARIFADO,
     CC_SYSTEM_FINANCEIRO,
     CC_SYSTEM_LABELS,
     CC_SYSTEM_RH,
@@ -52,17 +56,47 @@ from app.services.company_finance_cost_center import (
 from app.services.asset_categories import (
     ASSET_MACRO_CATEGORIES,
     _LEGACY_TO_MACRO,
+    categories_for_scope,
     normalize_macro_category,
     normalize_tags,
+    sqlalchemy_exclude_epi,
+    sqlalchemy_is_epi_category,
 )
 
-ASSET_CODE_PREFIX = "ASSET-"
-_ASSET_CODE_RE = re.compile(r"^ASSET-(\d+)$", re.IGNORECASE)
+ASSET_CODE_PREFIX = "ME-"
+_ASSET_CODE_RE = re.compile(r"^(?:ASSET|ME)-(\d+)$", re.IGNORECASE)
 _ASSET_CODE_MAX_ATTEMPTS = 3
 
 
 def _format_asset_code(sequence: int) -> str:
     return f"{ASSET_CODE_PREFIX}{sequence:05d}"
+
+
+def present_asset_code(raw: str) -> str:
+    """
+    Camada de apresentação:
+    - códigos antigos: ASSET-00003 -> ME-00003
+    - códigos novos: ME-00003 -> ME-00003
+    - outros formatos: retorna como veio
+    """
+    m = _ASSET_CODE_RE.match((raw or "").strip())
+    if not m:
+        return (raw or "").strip()
+    try:
+        n = int(m.group(1))
+    except ValueError:
+        return (raw or "").strip()
+    return f"ME-{n:05d}"
+
+
+def _max_asset_code_sequence(codes: Iterable[str]) -> int:
+    """Maior sequência numérica em códigos ASSET-xxxxx ou ME-xxxxx (case-insensitive)."""
+    max_n = 0
+    for raw in codes:
+        m = _ASSET_CODE_RE.match((raw or "").strip())
+        if m:
+            max_n = max(max_n, int(m.group(1)))
+    return max_n
 
 
 def _integrity_error_is_asset_code_duplicate(exc: IntegrityError) -> bool:
@@ -79,21 +113,10 @@ async def _generate_asset_code(db: AsyncSession) -> str:
     Próximo código patrimonial sequencial.
 
     Considera todos os registros (inclui soft delete) para nunca reutilizar código.
+    Extração em Python evita regex SQL com ':' (interpretado como bind param pelo SQLAlchemy).
     """
-    row = (
-        await db.execute(
-            text(
-                """
-                SELECT COALESCE(MAX(
-                    (regexp_match(asset_code, '^ASSET-([0-9]+)$', 'i'))[1]::integer
-                ), 0)
-                FROM assets
-                """
-            )
-        )
-    ).scalar_one()
-    max_n = int(row or 0)
-    return _format_asset_code(max_n + 1)
+    codes = (await db.execute(select(Asset.asset_code))).scalars().all()
+    return _format_asset_code(_max_asset_code_sequence(codes) + 1)
 
 
 def expiration_alert_level(expiration_date: date | None, *, today: date | None = None) -> ExpirationAlertLevel | None:
@@ -127,8 +150,8 @@ class AssetsService:
         self._cc = CompanyFinanceCostCenterService(db)
 
     @staticmethod
-    def categories_meta() -> list[str]:
-        return list(ASSET_MACRO_CATEGORIES)
+    def categories_meta(*, scope: str | None = None) -> list[str]:
+        return categories_for_scope(scope)
 
     @staticmethod
     def _asset_tags(asset: Asset) -> list[str] | None:
@@ -192,6 +215,11 @@ class AssetsService:
             asset.cost_center_project_id = None
             asset.cost_center_system = CC_SYSTEM_RH
             asset.cost_center = CC_LABEL_RH
+            return
+        if ref == CC_SYSTEM_ALMOXARIFADO:
+            asset.cost_center_project_id = None
+            asset.cost_center_system = CC_SYSTEM_ALMOXARIFADO
+            asset.cost_center = CC_LABEL_ALMOXARIFADO
             return
         project_id = UUID(ref)
         proj = await self.db.get(Project, project_id)
@@ -265,7 +293,7 @@ class AssetsService:
         holder_name = await self._employee_name(holder_id) if holder_id else None
         return AssetListItem(
             id=asset.id,
-            asset_code=asset.asset_code,
+            asset_code=present_asset_code(asset.asset_code),
             name=asset.name,
             category=asset.category,
             subcategory=asset.subcategory,
@@ -294,8 +322,14 @@ class AssetsService:
         size: str | None = None,
         without_holder: bool | None = None,
         physical_condition: AssetPhysicalCondition | None = None,
+        exclude_epi: bool = False,
+        only_epi: bool = False,
     ) -> list[AssetListItem]:
         stmt = select(Asset).where(Asset.deleted_at.is_(None)).order_by(Asset.asset_code.asc())
+        if only_epi:
+            stmt = stmt.where(sqlalchemy_is_epi_category(Asset.category))
+        elif exclude_epi:
+            stmt = stmt.where(sqlalchemy_exclude_epi(Asset.category))
         if category:
             cats = self._category_filter_values(category)
             stmt = stmt.where(Asset.category.in_(list(cats)))
@@ -305,10 +339,20 @@ class AssetsService:
             stmt = stmt.where(Asset.size.ilike(size.strip()))
         if q:
             like = f"%{q.strip()}%"
+            qn = q.strip()
+            alt_codes: list[str] = []
+            # Busca por código deve aceitar ME-xxxxx e ASSET-xxxxx (retrocompat).
+            up = qn.upper()
+            if up.startswith("ME-"):
+                alt_codes.append(up.replace("ME-", "ASSET-", 1))
+            if up.startswith("ASSET-"):
+                alt_codes.append(up.replace("ASSET-", "ME-", 1))
+            alt_likes = [f"%{c}%" for c in alt_codes]
             stmt = stmt.where(
                 or_(
                     Asset.name.ilike(like),
                     Asset.asset_code.ilike(like),
+                    *(Asset.asset_code.ilike(a) for a in alt_likes),
                     Asset.serial_number.ilike(like),
                     Asset.patrimony_tag.ilike(like),
                     Asset.size.ilike(like),

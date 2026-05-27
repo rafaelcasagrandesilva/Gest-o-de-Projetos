@@ -29,6 +29,12 @@ from app.schemas.receivable import (
     ReceivableKpisRead,
     ReceivableInvoiceFileRead,
 )
+from app.schemas.receivable_advance_batch import (
+    AdvanceBatchCreate,
+    AdvanceBatchEligibleInvoiceRead,
+    AdvanceBatchRead,
+)
+from app.services.receivable_advance_batch_service import ReceivableAdvanceBatchService
 from app.services.receivable_service import ReceivableService
 from app.models.receivable import ReceivableInvoiceFile
 
@@ -124,6 +130,165 @@ async def get_kpis(
     else:
         data = await svc.kpis(project_id=project_id, project_ids=None, year=year, month=month, period_field=pf)
     return ReceivableKpisRead.model_validate(data)
+
+
+@invoices_router.get(
+    "/advance-batches/eligible-invoices",
+    response_model=list[AdvanceBatchEligibleInvoiceRead],
+    dependencies=_read_view,
+)
+async def list_eligible_invoices_for_batch(
+    search: str | None = Query(default=None, max_length=255),
+    project_id: UUID | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[AdvanceBatchEligibleInvoiceRead]:
+    batch_svc = ReceivableAdvanceBatchService(db)
+    recv_svc = ReceivableService(db)
+    project_ids: list[UUID] | None = None
+    if not user_sees_all_projects(user):
+        allowed = await get_accessible_project_ids(user, db)
+        if project_id is not None:
+            if project_id not in allowed:
+                raise HTTPException(status_code=403, detail="Sem permissão.")
+            project_ids = [project_id]
+        else:
+            project_ids = allowed
+    elif project_id is not None:
+        project_ids = [project_id]
+
+    rows = await batch_svc.list_eligible_invoices(project_ids=project_ids, search=search)
+    out: list[AdvanceBatchEligibleInvoiceRead] = []
+    for inv in rows:
+        if project_id is not None and inv.project_id != project_id:
+            continue
+        if project_ids is not None and inv.project_id not in project_ids:
+            continue
+        d = recv_svc.invoice_to_read(inv)
+        out.append(
+            AdvanceBatchEligibleInvoiceRead(
+                id=inv.id,
+                project_id=inv.project_id,
+                project_name=d.get("project_name"),
+                number=inv.nf_number,
+                client_name=inv.client_name,
+                issue_date=inv.issue_date,
+                due_date=inv.due_date,
+                gross_amount=float(inv.gross_amount),
+                net_amount=float(inv.net_amount),
+                status=str(d.get("status")),
+            )
+        )
+    return out
+
+
+@invoices_router.get(
+    "/advance-batches",
+    response_model=list[AdvanceBatchRead],
+    dependencies=_read_view,
+)
+async def list_advance_batches(
+    db: AsyncSession = Depends(get_db),
+) -> list[AdvanceBatchRead]:
+    batch_svc = ReceivableAdvanceBatchService(db)
+    rows = await batch_svc.list_batches()
+    return [AdvanceBatchRead.model_validate(batch_svc.batch_to_read(b)) for b in rows]
+
+
+@invoices_router.get(
+    "/advance-batches/{batch_id}",
+    response_model=AdvanceBatchRead,
+    dependencies=_read_view,
+)
+async def get_advance_batch(
+    batch_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> AdvanceBatchRead:
+    batch_svc = ReceivableAdvanceBatchService(db)
+    row = await batch_svc.get_batch(batch_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Borderô não encontrado.")
+    return AdvanceBatchRead.model_validate(batch_svc.batch_to_read(row))
+
+
+@invoices_router.post(
+    "/advance-batches",
+    response_model=AdvanceBatchRead,
+    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+)
+async def create_advance_batch(
+    payload: AdvanceBatchCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> AdvanceBatchRead:
+    if not user_sees_all_projects(actor):
+        allowed = await get_accessible_project_ids(actor, db)
+        for iid in payload.invoice_ids:
+            inv = await ReceivableService(db).get_invoice(iid)
+            if inv is None:
+                raise HTTPException(status_code=404, detail="NF não encontrada.")
+            if inv.project_id not in allowed:
+                raise HTTPException(status_code=403, detail="Sem permissão para uma ou mais NFs.")
+
+    batch_svc = ReceivableAdvanceBatchService(db)
+    try:
+        batch = await batch_svc.create_batch(
+            operation_type=getattr(payload, "operation_type", "BORDERO"),
+            operation_code=getattr(payload, "operation_code", None),
+            institution=payload.institution,
+            received_amount=payload.received_amount,
+            discount_amount=payload.discount_amount,
+            fee_amount=payload.fee_amount,
+            receive_date=payload.receive_date,
+            repayment_date=payload.repayment_date,
+            observation=payload.observation,
+            invoice_ids=payload.invoice_ids,
+            created_by_id=actor.id,
+            log_user=_actor_email(actor),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    loaded = await batch_svc.get_batch(batch.id)
+    if loaded is None:
+        raise HTTPException(status_code=500, detail="Falha ao carregar borderô.")
+    return AdvanceBatchRead.model_validate(batch_svc.batch_to_read(loaded))
+
+
+@invoices_router.delete(
+    "/advance-batches/{batch_id}",
+    status_code=204,
+    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+)
+async def cancel_advance_batch(
+    batch_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> None:
+    batch_svc = ReceivableAdvanceBatchService(db)
+    try:
+        await batch_svc.cancel_batch(batch_id=batch_id, log_user=_actor_email(actor))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+
+
+@invoices_router.delete(
+    "/advance-batches/{batch_id}/hard",
+    status_code=204,
+    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+)
+async def delete_advance_batch_hard(
+    batch_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> None:
+    batch_svc = ReceivableAdvanceBatchService(db)
+    try:
+        await batch_svc.delete_batch(batch_id=batch_id, log_user=_actor_email(actor))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
 
 
 @invoices_router.post("", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])

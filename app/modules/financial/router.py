@@ -4,9 +4,10 @@ from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import MissingGreenlet
+from sqlalchemy import func, or_, select
 
 from app.api.deps import (
     assert_may_write_scenario,
@@ -40,12 +41,24 @@ from app.schemas.financial import (
     RevenueUpdate,
 )
 from app.models.payable_snapshot import PayableSnapshotType
+from app.schemas.cost_center_alias import CostCenterAliasCreate, CostCenterAliasRead
+from app.schemas.payable_import import (
+    PayableImportAnalyzeResult,
+    PayableImportConfirmResult,
+    PayableImportCostCenterScanResult,
+    PayableImportPreviewResult,
+    PayableImportTemplateCreate,
+    PayableImportTemplateRead,
+)
+from app.services.cost_center_alias_service import CostCenterAliasService
 from app.schemas.payables import (
     PayableSnapshotManualCreate,
-    PayableSnapshotPaymentBody,
+    PayableSnapshotRegisterPaymentBody,
+    PayableSnapshotReversePaymentBody,
     PayableSnapshotRead,
     PayableSnapshotUpdate,
 )
+from app.services.payable_import import MAX_IMPORT_BYTES, PayableManualImportService
 from app.services.financial_crud_service import FinancialCrudService
 from app.services.finance_service import FinanceService
 from app.services.payable_snapshot_service import payable_snapshot_derived_fields
@@ -59,6 +72,8 @@ from app.schemas.receivable import (
     ReceivableManualItemUpdate,
     ReceivableViewRead,
 )
+from app.models.receivable_advance_batch import ReceivableAdvanceBatch, ReceivableAdvanceBatchStatus
+from app.models.receivable import ReceivableInvoice
 from app.schemas.financial_dashboard import (
     FinancialDashboardBreakdownRead,
     FinancialDashboardGroupedItem,
@@ -90,7 +105,7 @@ async def list_receivables_view(
     project_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None, pattern="^(EMITIDA|ANTECIPADA|RECEBIDA|CANCELADA)$"),
     client: str | None = Query(default=None, max_length=255),
-    tipo: str | None = Query(default=None, pattern="^(NF|MANUAL|ANTECIPACAO)$"),
+    tipo: str | None = Query(default=None, pattern="^(NF|MANUAL|ANTECIPACAO|BORDERO)$"),
     period_field: str = Query(default="issue", pattern="^(issue|due)$"),
     year: int | None = Query(default=None, ge=2000, le=2100),
     month: int | None = Query(default=None, ge=1, le=12),
@@ -243,6 +258,70 @@ async def list_receivables_view(
                         status="RECEBIDO",
                     )
                 )
+
+    if tipo is None or tipo == "BORDERO":
+        # Borderôs como evento de recebimento (linha separada) — mês sempre pelo receive_date.
+        start = end = None
+        if year is not None and month is not None:
+            start, end = date(year, month, 1), date(year, month, 28)
+            import calendar
+
+            last = calendar.monthrange(year, month)[1]
+            end = date(year, month, last)
+
+        stmt = (
+            select(ReceivableAdvanceBatch)
+            .where(ReceivableAdvanceBatch.status != ReceivableAdvanceBatchStatus.CANCELLED)
+            .order_by(ReceivableAdvanceBatch.receive_date.desc(), ReceivableAdvanceBatch.batch_number.desc())
+        )
+        if start and end:
+            stmt = stmt.where(
+                ReceivableAdvanceBatch.receive_date >= start,
+                ReceivableAdvanceBatch.receive_date <= end,
+            )
+        q = (client or "").strip().lower()
+        if q:
+            stmt = stmt.where(func.lower(ReceivableAdvanceBatch.institution).contains(q))
+
+        # Escopo por projeto/permissões: borderô aparece se tiver ao menos 1 NF elegível no escopo.
+        if project_id is not None or (not sees_all and allowed is not None):
+            stmt = stmt.join(
+                ReceivableInvoice,
+                ReceivableInvoice.advance_batch_id == ReceivableAdvanceBatch.id,
+            )
+            if project_id is not None:
+                stmt = stmt.where(ReceivableInvoice.project_id == project_id)
+            elif allowed is not None:
+                stmt = stmt.where(ReceivableInvoice.project_id.in_(allowed))
+            stmt = stmt.distinct()
+
+        rows = list((await db.execute(stmt)).scalars().unique().all())
+        for b in rows:
+            rd = b.receive_date
+            val = float(b.received_amount or 0.0)
+            if val <= 0:
+                continue
+            out.append(
+                ReceivableViewRead(
+                    id=b.id,
+                    created_at=b.created_at,
+                    updated_at=b.updated_at,
+                    tipo="BORDERO",
+                    client=b.institution,
+                    number=(b.operation_code or b.batch_number or f"ANTECIPACAO-{str(b.id)[:8]}"),
+                    descricao="Antecipação",
+                    issue_date=rd,
+                    due_date=rd,
+                    received_at=rd,
+                    net_value=round(val, 2),
+                    amount_received_advance=0.0,
+                    amount_received_customer=round(val, 2),
+                    total_received=round(val, 2),
+                    remaining=0.0,
+                    status="RECEBIDO",
+                    observacao=b.observation,
+                )
+            )
     return out
 
 
@@ -564,7 +643,13 @@ async def financial_dashboard_breakdown(
     )
 
 
-def _snapshot_to_read(row) -> PayableSnapshotRead:
+def _snapshot_to_read(
+    row,
+    *,
+    last_payment_date: date | None = None,
+    paid_in_period: float = 0.0,
+    view_month: date | None = None,
+) -> PayableSnapshotRead:
     amount_final = float(row.amount_final)
     amount_paid = float(row.amount_paid or 0)
     derived = payable_snapshot_derived_fields(
@@ -572,6 +657,9 @@ def _snapshot_to_read(row) -> PayableSnapshotRead:
         amount_final=Decimal(str(amount_final)),
     )
     st = derived["status"]
+    competence_out_of_view = False
+    if view_month is not None:
+        competence_out_of_view = normalize_competencia(row.month) != normalize_competencia(view_month)
     return PayableSnapshotRead(
         id=row.id,
         created_at=row.created_at,
@@ -594,12 +682,39 @@ def _snapshot_to_read(row) -> PayableSnapshotRead:
         paid=st == "PAGO",
         observation=row.observation,
         status=st,
+        last_payment_date=last_payment_date,
+        paid_in_period=paid_in_period,
+        competence_out_of_view=competence_out_of_view,
     )
+
+
+async def _snapshots_to_read(
+    svc, rows: list, *, view_month: date | None = None
+) -> list[PayableSnapshotRead]:
+    if not rows:
+        return []
+    ids = [r.id for r in rows]
+    dates = await svc.last_payment_dates_by_snapshot_ids(ids)
+    paid_map: dict = {}
+    if view_month is not None:
+        paid_map = await svc.paid_in_period_by_snapshot_ids(ids, month=view_month)
+    return [
+        _snapshot_to_read(
+            r,
+            last_payment_date=dates.get(r.id),
+            paid_in_period=float(paid_map.get(r.id, 0)),
+            view_month=view_month,
+        )
+        for r in rows
+    ]
 
 
 @router.get("/payables", response_model=list[PayableSnapshotRead], dependencies=[Depends(require_permission(PAYABLES_VIEW))])
 async def list_payables_snapshot(
-    month: str | None = Query(default=None, description="Mês de competência do pagamento (YYYY-MM). Omitir = todos."),
+    month: str | None = Query(
+        default=None,
+        description="Mês operacional (YYYY-MM): em aberto na competência + pagamentos realizados no mês. Omitir = todos.",
+    ),
     force_regenerate: bool = Query(default=False, description="Regerar snapshot do mês (apaga snapshot existente)."),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -618,14 +733,15 @@ async def list_payables_snapshot(
 
     # month omitido: retorna todos os snapshots já salvos (não gera em massa).
     if month is None or (isinstance(month, str) and not month.strip()):
-        rows = await FinanceService(db).payable_snapshots.list_all()
+        svc = FinanceService(db).payable_snapshots
+        rows = await svc.list_all()
         await db.commit()
-        return [_snapshot_to_read(r) for r in rows]
+        return await _snapshots_to_read(svc, rows)
 
     comp = _parse_month(month)
 
     try:
-        rows = await FinanceService(db).get_or_create_payables_snapshot(
+        await FinanceService(db).get_or_create_payables_snapshot(
             month=comp,
             accessible_project_ids=allowed,
             sees_all_projects=sees_all,
@@ -647,24 +763,26 @@ async def list_payables_snapshot(
             },
         ) from e
 
+    await db.commit()
+    svc = FinanceService(db).payable_snapshots
+    operational_rows = await svc.list_for_operational_month(month=comp)
     if not sees_all and allowed is not None:
-        filtered = []
-        for r in rows:
+        op_filtered: list = []
+        for r in operational_rows:
             if r.type in (
                 PayableSnapshotType.VEHICLE,
                 PayableSnapshotType.FIXED_COST,
                 PayableSnapshotType.ENDIVIDAMENTO,
                 PayableSnapshotType.FINANCIAL,
                 PayableSnapshotType.MANUAL,
+                PayableSnapshotType.ANTECIPACAO,
             ):
-                filtered.append(r)
+                op_filtered.append(r)
                 continue
             if r.type == PayableSnapshotType.COLLABORATOR and r.project_id in allowed:
-                filtered.append(r)
-        rows = filtered
-
-    await db.commit()
-    return [_snapshot_to_read(r) for r in rows]
+                op_filtered.append(r)
+        operational_rows = op_filtered
+    return await _snapshots_to_read(svc, operational_rows, view_month=comp)
 
 
 async def _ensure_payable_snapshot_edit_access(*, row, user: User, db: AsyncSession) -> None:
@@ -697,7 +815,8 @@ async def update_payables_snapshot(
         observation=data.get("observation"),
     )
     await db.commit()
-    return _snapshot_to_read(updated)
+    dates = await FinanceService(db).payable_snapshots.last_payment_dates_by_snapshot_ids([updated.id])
+    return _snapshot_to_read(updated, last_payment_date=dates.get(updated.id))
 
 
 @router.post(
@@ -707,7 +826,7 @@ async def update_payables_snapshot(
 )
 async def register_payables_payment(
     snapshot_id: UUID,
-    payload: PayableSnapshotPaymentBody,
+    payload: PayableSnapshotRegisterPaymentBody,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> PayableSnapshotRead:
@@ -718,12 +837,18 @@ async def register_payables_payment(
     await _ensure_payable_snapshot_edit_access(row=row, user=user, db=db)
     try:
         updated = await svc.register_payment(
-            row=row, amount=payload.amount, observation=payload.observation
+            row=row,
+            amount=payload.amount,
+            payment_date=payload.payment_date,
+            observation=payload.observation,
+            created_by=user.id,
+            allow_overpayment=payload.allow_overpayment,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     await db.commit()
-    return _snapshot_to_read(updated)
+    dates = await svc.last_payment_dates_by_snapshot_ids([updated.id])
+    return _snapshot_to_read(updated, last_payment_date=dates.get(updated.id))
 
 
 @router.post(
@@ -733,7 +858,7 @@ async def register_payables_payment(
 )
 async def reverse_payables_payment(
     snapshot_id: UUID,
-    payload: PayableSnapshotPaymentBody,
+    payload: PayableSnapshotReversePaymentBody,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> PayableSnapshotRead:
@@ -744,12 +869,275 @@ async def reverse_payables_payment(
     await _ensure_payable_snapshot_edit_access(row=row, user=user, db=db)
     try:
         updated = await svc.reverse_payment(
-            row=row, amount=payload.amount, observation=payload.observation
+            row=row,
+            amount=payload.amount,
+            observation=payload.observation,
+            reversal_reason=payload.reversal_reason,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     await db.commit()
-    return _snapshot_to_read(updated)
+    dates = await svc.last_payment_dates_by_snapshot_ids([updated.id])
+    return _snapshot_to_read(updated, last_payment_date=dates.get(updated.id))
+
+
+async def _read_payables_import_file(file: UploadFile) -> tuple[bytes, str]:
+    name = (file.filename or "").lower()
+    if not (name.endswith(".xlsx") or name.endswith(".csv")):
+        raise HTTPException(status_code=400, detail="Envie um arquivo .xlsx ou .csv.")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+    if len(content) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="Arquivo muito grande (máximo 5 MB).")
+    return content, name
+
+
+@router.post(
+    "/payables/import/analyze",
+    response_model=PayableImportAnalyzeResult,
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def analyze_payables_import(
+    file: UploadFile = File(...),
+    header_row: int = Form(1),
+    db: AsyncSession = Depends(get_db),
+) -> PayableImportAnalyzeResult:
+    content, filename = await _read_payables_import_file(file)
+    try:
+        return await PayableManualImportService(db).analyze(
+            content, filename=filename, header_row=header_row
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/payables/import/mapped/scan-cost-centers",
+    response_model=PayableImportCostCenterScanResult,
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def scan_payables_import_cost_centers(
+    file: UploadFile = File(...),
+    header_row: int = Form(1),
+    mapping: str = Form(..., description="JSON com mapeamento de colunas"),
+    db: AsyncSession = Depends(get_db),
+) -> PayableImportCostCenterScanResult:
+    content, filename = await _read_payables_import_file(file)
+    svc = PayableManualImportService(db)
+    try:
+        col_map = svc.parse_mapping_json(mapping)
+        return await svc.scan_mapped_cost_centers(
+            content, filename=filename, header_row=header_row, mapping=col_map
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/payables/import/mapped/preview",
+    response_model=PayableImportPreviewResult,
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def preview_payables_import_mapped(
+    file: UploadFile = File(...),
+    header_row: int = Form(1),
+    mapping: str = Form(..., description="JSON com mapeamento de colunas"),
+    cost_center_resolutions: str | None = Form(
+        None, description="JSON mapa texto planilha → centro de custo SGP"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> PayableImportPreviewResult:
+    content, filename = await _read_payables_import_file(file)
+    svc = PayableManualImportService(db)
+    try:
+        col_map = svc.parse_mapping_json(mapping)
+        resolutions = svc.parse_cost_center_resolutions_json(cost_center_resolutions)
+        return await svc.preview_mapped(
+            content,
+            filename=filename,
+            header_row=header_row,
+            mapping=col_map,
+            cost_center_resolutions=resolutions or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/payables/import/mapped/confirm",
+    response_model=PayableImportConfirmResult,
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def confirm_payables_import_mapped(
+    file: UploadFile = File(...),
+    header_row: int = Form(1),
+    mapping: str = Form(..., description="JSON com mapeamento de colunas"),
+    cost_center_resolutions: str | None = Form(
+        None, description="JSON mapa texto planilha → centro de custo SGP"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> PayableImportConfirmResult:
+    content, filename = await _read_payables_import_file(file)
+    svc = PayableManualImportService(db)
+    try:
+        col_map = svc.parse_mapping_json(mapping)
+        resolutions = svc.parse_cost_center_resolutions_json(cost_center_resolutions)
+        result = await svc.confirm_mapped(
+            content,
+            filename=filename,
+            header_row=header_row,
+            mapping=col_map,
+            cost_center_resolutions=resolutions or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return result
+
+
+@router.get(
+    "/cost-center-aliases",
+    response_model=list[CostCenterAliasRead],
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def list_cost_center_aliases(
+    db: AsyncSession = Depends(get_db),
+) -> list[CostCenterAliasRead]:
+    rows = await CostCenterAliasService(db).list_aliases()
+    return [
+        CostCenterAliasRead(
+            id=r.id,
+            alias_name=r.alias_name,
+            target_cost_center=r.target_cost_center,
+            created_by_user_id=r.created_by_user_id,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+@router.post(
+    "/cost-center-aliases",
+    response_model=CostCenterAliasRead,
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def create_cost_center_alias(
+    payload: CostCenterAliasCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> CostCenterAliasRead:
+    try:
+        row = await CostCenterAliasService(db).create_alias(
+            alias_name=payload.alias_name,
+            target_cost_center=payload.target_cost_center,
+            created_by_user_id=user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return CostCenterAliasRead(
+        id=row.id,
+        alias_name=row.alias_name,
+        target_cost_center=row.target_cost_center,
+        created_by_user_id=row.created_by_user_id,
+        created_at=row.created_at,
+    )
+
+
+@router.delete(
+    "/cost-center-aliases/{alias_id}",
+    status_code=204,
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def delete_cost_center_alias(
+    alias_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    ok = await CostCenterAliasService(db).delete_alias(alias_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Alias não encontrado.")
+    await db.commit()
+
+
+@router.get(
+    "/payables/import/templates",
+    response_model=list[PayableImportTemplateRead],
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def list_payables_import_templates(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[PayableImportTemplateRead]:
+    return await PayableManualImportService(db).list_templates(user.id)
+
+
+@router.post(
+    "/payables/import/templates",
+    response_model=PayableImportTemplateRead,
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def create_payables_import_template(
+    payload: PayableImportTemplateCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> PayableImportTemplateRead:
+    try:
+        row = await PayableManualImportService(db).create_template(user.id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return row
+
+
+@router.delete(
+    "/payables/import/templates/{template_id}",
+    status_code=204,
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def delete_payables_import_template(
+    template_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    ok = await PayableManualImportService(db).delete_template(user.id, template_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Modelo não encontrado.")
+    await db.commit()
+
+
+@router.post(
+    "/payables/import/preview",
+    response_model=PayableImportPreviewResult,
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def preview_payables_import(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> PayableImportPreviewResult:
+    content, filename = await _read_payables_import_file(file)
+    try:
+        return await PayableManualImportService(db).preview(content, filename=filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/payables/import/confirm",
+    response_model=PayableImportConfirmResult,
+    dependencies=[Depends(require_permission(COSTS_EDIT))],
+)
+async def confirm_payables_import(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> PayableImportConfirmResult:
+    content, filename = await _read_payables_import_file(file)
+    try:
+        result = await PayableManualImportService(db).confirm(content, filename=filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return result
 
 
 @router.post("/payables", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(COSTS_EDIT))])

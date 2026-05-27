@@ -12,16 +12,19 @@ from app.models.project import Project
 CC_SYSTEM_ADMINISTRATIVO = "ADMINISTRATIVO"
 CC_SYSTEM_FINANCEIRO = "FINANCEIRO"
 CC_SYSTEM_RH = "RH"
+CC_SYSTEM_ALMOXARIFADO = "ALMOXARIFADO"
 
 # Rótulos exibidos em Contas a Pagar, dashboards e relatórios.
 CC_LABEL_ADMINISTRATIVO = "Administrativo"
 CC_LABEL_FINANCEIRO = "Financeiro"
 CC_LABEL_RH = "RH"
+CC_LABEL_ALMOXARIFADO = "Almoxarifado"
 
 CC_SYSTEM_LABELS: dict[str, str] = {
     CC_SYSTEM_ADMINISTRATIVO: CC_LABEL_ADMINISTRATIVO,
     CC_SYSTEM_FINANCEIRO: CC_LABEL_FINANCEIRO,
     CC_SYSTEM_RH: CC_LABEL_RH,
+    CC_SYSTEM_ALMOXARIFADO: CC_LABEL_ALMOXARIFADO,
 }
 
 
@@ -71,6 +74,8 @@ def _legacy_label_to_system(label: str) -> str | None:
         return CC_SYSTEM_FINANCEIRO
     if low in {CC_LABEL_RH.casefold(), "recursos humanos", "rh"}:
         return CC_SYSTEM_RH
+    if low in {CC_LABEL_ALMOXARIFADO.casefold(), "almox"}:
+        return CC_SYSTEM_ALMOXARIFADO
     return None
 
 
@@ -169,11 +174,17 @@ class CompanyFinanceCostCenterService:
             item.cost_center = CC_LABEL_RH
             return CC_LABEL_RH
 
+        if ref == CC_SYSTEM_ALMOXARIFADO:
+            item.cost_center_project_id = None
+            item.cost_center_system = CC_SYSTEM_ALMOXARIFADO
+            item.cost_center = CC_LABEL_ALMOXARIFADO
+            return CC_LABEL_ALMOXARIFADO
+
         try:
             project_id = UUID(ref)
         except ValueError as exc:
             raise ValueError(
-                "Centro de custo inválido. Selecione Administrativo, Financeiro, RH ou um projeto ativo."
+                "Centro de custo inválido. Selecione Administrativo, Financeiro, Almoxarifado, RH ou um projeto ativo."
             ) from exc
 
         proj = await self.db.get(Project, project_id)

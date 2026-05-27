@@ -15,6 +15,9 @@ import { usePermission } from "@/hooks/usePermission";
 import { useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
 import { CollaboratorSelect } from "@/components/CollaboratorSelect";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
+import { SortableTh } from "@/components/table";
+import { useTableSort } from "@/hooks/useTableSort";
+import { FLEET_VEHICLE_SORT_COLUMNS, defaultFleetVehicleSort } from "@/tableSort/vehicles";
 
 function monthStartIso(): string {
   const d = new Date();
@@ -127,6 +130,10 @@ export function Vehicles() {
     }
     return { totalVehicles: active.length, totalCost, byKey };
   }, [items]);
+
+  const { sortedRows, headerSort } = useTableSort(items, FLEET_VEHICLE_SORT_COLUMNS, {
+    defaultCompare: defaultFleetVehicleSort,
+  });
 
   useEffect(() => {
     if (!settings) return;
@@ -365,17 +372,17 @@ export function Vehicles() {
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="border-b border-slate-100 bg-slate-50/80">
               <tr>
-                <th className="px-4 py-3 font-medium text-slate-600">Placa</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Modelo</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Tipo</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Custo mensal</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Condutor</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Ativo</th>
+                <SortableTh label="Placa" column="plate" variant="standard" {...headerSort} />
+                <SortableTh label="Modelo" column="model" variant="standard" {...headerSort} />
+                <SortableTh label="Tipo" column="type" variant="standard" {...headerSort} />
+                <SortableTh label="Custo mensal" column="monthly_cost" variant="standard" {...headerSort} />
+                <SortableTh label="Condutor" column="driver" variant="standard" {...headerSort} />
+                <SortableTh label="Ativo" column="active" variant="standard" {...headerSort} />
                 {!readOnly && <th className="px-4 py-3" />}
               </tr>
             </thead>
             <tbody>
-              {items.map((v) => (
+              {sortedRows.map((v) => (
                 <tr key={v.id} className="border-b border-slate-50">
                   <td className="px-4 py-3 font-medium tabular-nums">{v.plate}</td>
                   <td className="min-w-0 max-w-[280px] px-4 py-3 align-middle text-slate-600">

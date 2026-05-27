@@ -9,9 +9,13 @@ from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollO
 from app.models.financial import Invoice, InvoiceAnticipation, Revenue
 from app.models.chart_of_accounts import ChartOfAccounts
 from app.models.payable import Payable
+from app.models.payable_payment import PayablePayment
 from app.models.payable_snapshot import PayableSnapshot
 from app.models.payable_snapshot_generation import PayableSnapshotGeneration
+from app.models.cost_center_alias import CostCenterAlias
+from app.models.payable_import_template import PayableImportTemplate
 from app.models.receivable import ReceivableInvoice
+from app.models.receivable_advance_batch import ReceivableAdvanceBatch, ReceivableAdvanceBatchItem
 from app.models.receivable_manual import ReceivableManualItem
 from app.models.fleet import Vehicle, VehicleUsage
 from app.models.project import Project
@@ -41,14 +45,19 @@ __all__ = [
     "Employee",
     "EmployeeAllocation",
     "ReceivableInvoice",
+    "ReceivableAdvanceBatch",
+    "ReceivableAdvanceBatchItem",
     "ReceivableManualItem",
     "Invoice",
     "InvoiceAnticipation",
     "Revenue",
     "ChartOfAccounts",
     "Payable",
+    "PayablePayment",
     "PayableSnapshot",
     "PayableSnapshotGeneration",
+    "CostCenterAlias",
+    "PayableImportTemplate",
     "Vehicle",
     "VehicleUsage",
     "Project",

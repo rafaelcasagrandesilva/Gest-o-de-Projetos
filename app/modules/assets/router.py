@@ -39,8 +39,10 @@ _workspace = [Depends(require_permission(WORKSPACE_ASSETS_ACCESS))]
 
 
 @router.get("/meta/categories", response_model=list[str], dependencies=_read + _workspace)
-async def list_categories() -> list[str]:
-    return AssetsService.categories_meta()
+async def list_categories(
+    scope: str | None = Query(default=None, description="patrimonial | epi | all (default all)"),
+) -> list[str]:
+    return AssetsService.categories_meta(scope=scope)
 
 
 @router.get("", response_model=list[AssetListItem], dependencies=_read + _workspace)
@@ -54,6 +56,8 @@ async def list_assets(
     size: str | None = Query(default=None),
     without_holder: bool | None = Query(default=None),
     physical_condition: AssetPhysicalCondition | None = Query(default=None),
+    exclude_epi: bool = Query(default=False, description="Excluir categoria EPI (patrimônio)"),
+    only_epi: bool = Query(default=False, description="Somente categoria EPI"),
     db: AsyncSession = Depends(get_db),
 ) -> list[AssetListItem]:
     svc = AssetsService(db)
@@ -67,6 +71,35 @@ async def list_assets(
         size=size,
         without_holder=without_holder,
         physical_condition=physical_condition,
+        exclude_epi=exclude_epi,
+        only_epi=only_epi,
+    )
+
+
+@router.get("/epis", response_model=list[AssetListItem], dependencies=_read + _workspace)
+async def list_epis(
+    q: str | None = Query(default=None),
+    status: AssetStatus | None = Query(default=None),
+    employee_id: UUID | None = Query(default=None),
+    cost_center_ref: str | None = Query(default=None),
+    expiration: str | None = Query(default=None, description="expired | 30 | 7 | tomorrow"),
+    size: str | None = Query(default=None),
+    without_holder: bool | None = Query(default=None),
+    physical_condition: AssetPhysicalCondition | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> list[AssetListItem]:
+    """Listagem operacional de EPIs (mesma tabela `assets`, escopo EPI)."""
+    svc = AssetsService(db)
+    return await svc.list_assets(
+        q=q,
+        status=status,
+        employee_id=employee_id,
+        cost_center_ref=cost_center_ref,
+        expiration=expiration,
+        size=size,
+        without_holder=without_holder,
+        physical_condition=physical_condition,
+        only_epi=True,
     )
 
 

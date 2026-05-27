@@ -10,6 +10,7 @@ from app.models.receivable import DUE_DAYS_CHOICES
 
 INVOICE_STATUSES = frozenset({"EMITIDA", "ANTECIPADA", "RECEBIDA", "CANCELADA"})
 from app.schemas.common import UUIDTimestampRead
+from app.schemas.receivable_advance_batch import AdvanceBatchSummaryRead
 
 InvoiceStatus = Literal["EMITIDA", "ANTECIPADA", "RECEBIDA", "CANCELADA"]
 
@@ -87,6 +88,8 @@ class ReceivableInvoiceRead(UUIDTimestampRead):
     pdf_url: str | None = None
     pdf_files: list[ReceivableInvoiceFileRead] = Field(default_factory=list)
     activity_log: str | None = None
+    advance_batch_id: UUID | None = None
+    advance_batch: AdvanceBatchSummaryRead | None = None
 
 
 class ReceivableInvoiceCreate(BaseModel):
@@ -205,7 +208,7 @@ class ReceivableKpisRead(BaseModel):
 
 
 ReceivableViewStatus = Literal["ABERTO", "PARCIAL", "RECEBIDO"]
-ReceivableViewType = Literal["NF", "MANUAL", "ANTECIPACAO"]
+ReceivableViewType = Literal["NF", "MANUAL", "ANTECIPACAO", "BORDERO"]
 
 
 class ReceivableViewRead(UUIDTimestampRead):

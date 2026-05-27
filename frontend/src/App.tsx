@@ -14,6 +14,7 @@ import { ProjectDetail } from "@/pages/ProjectDetail";
 import { Projects } from "@/pages/Projects";
 import { Settings } from "@/pages/Settings";
 import { Invoices } from "@/pages/Invoices";
+import { AdvanceBatches } from "@/pages/AdvanceBatches";
 import { CompanyDebt } from "@/pages/CompanyDebt";
 import { CompanyFixedCosts } from "@/pages/CompanyFixedCosts";
 import { FinancialDashboard } from "@/pages/FinancialDashboard";
@@ -25,6 +26,7 @@ import { Users } from "@/pages/Users";
 import { Assets } from "@/pages/Assets";
 import { AssetsDashboard } from "@/pages/AssetsDashboard";
 import { AssetDetailPage } from "@/pages/AssetDetail";
+import { Epis } from "@/pages/Epis";
 
 function LegacyProjectDetailRedirect() {
   const { projectId } = useParams();
@@ -90,6 +92,7 @@ export default function App() {
               <Route path="finance/payables" element={<Payables />} />
               <Route path="finance/receivables" element={<Receivables />} />
               <Route path="finance/invoices" element={<Invoices />} />
+              <Route path="finance/advance-batches" element={<AdvanceBatches />} />
               <Route path="finance/debt" element={<CompanyDebt />} />
               <Route path="finance/fixed-costs" element={<CompanyFixedCosts />} />
               <Route path="finance/reports" element={<Reports />} />
@@ -97,6 +100,8 @@ export default function App() {
               <Route path="assets/dashboard" element={<AssetsDashboard />} />
               <Route path="assets" element={<Assets />} />
               <Route path="assets/:assetId" element={<AssetDetailPage />} />
+              <Route path="epis" element={<Epis />} />
+              <Route path="epis/:assetId" element={<AssetDetailPage />} />
 
               {/* Compat: rotas antigas (mantidas via redirect) */}
               <Route index element={<WorkspaceNotFoundRedirect />} />

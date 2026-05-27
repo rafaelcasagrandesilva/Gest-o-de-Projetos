@@ -17,6 +17,9 @@ import {
   PERMISSION_LABELS,
   ROLE_PERMISSION_PRESET,
 } from "@/permissions";
+import { SortableTh } from "@/components/table";
+import { useTableSort } from "@/hooks/useTableSort";
+import { USER_SORT_COLUMNS, defaultUserSort } from "@/tableSort/users";
 
 const ROLES = ["ADMIN", "GESTOR", "CONSULTA"] as const;
 type RoleName = (typeof ROLES)[number];
@@ -229,6 +232,10 @@ export function Users() {
       setResetting(false);
     }
   }
+
+  const { sortedRows, headerSort } = useTableSort(items, USER_SORT_COLUMNS, {
+    defaultCompare: defaultUserSort,
+  });
 
   return (
     <div className="space-y-6">
@@ -509,24 +516,24 @@ export function Users() {
           <table className="w-full text-left text-sm">
             <thead className="border-b border-slate-100 bg-slate-50/80">
               <tr>
-                <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Email</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Perfil</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Permissões</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Projetos</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Ativo</th>
+                <SortableTh label="Nome" column="name" variant="standard" {...headerSort} />
+                <SortableTh label="Email" column="email" variant="standard" {...headerSort} />
+                <SortableTh label="Perfil" column="role" variant="standard" {...headerSort} />
+                <SortableTh label="Permissões" column="permissions" variant="standard" {...headerSort} />
+                <SortableTh label="Projetos" column="projects" variant="standard" {...headerSort} />
+                <SortableTh label="Ativo" column="active" variant="standard" {...headerSort} />
                 <th className="px-4 py-3 font-medium text-slate-600 w-44" />
               </tr>
             </thead>
             <tbody>
-              {items.length === 0 ? (
+              {sortedRows.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                     Nenhum usuário ou sem permissão para listar.
                   </td>
                 </tr>
               ) : (
-                items.map((u) => {
+                sortedRows.map((u) => {
                   const primaryRole = u.role_names?.[0] || "—";
                   const nPerms = u.permission_names?.length ?? 0;
                   const st = statusBadge(u);

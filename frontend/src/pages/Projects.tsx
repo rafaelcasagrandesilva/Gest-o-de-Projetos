@@ -13,6 +13,9 @@ import {
 } from "@/services/projects";
 import { isAxiosError } from "axios";
 import { TruncatedCell } from "@/components/TruncatedText";
+import { SortableTh } from "@/components/table";
+import { useTableSort } from "@/hooks/useTableSort";
+import { PROJECT_SORT_COLUMNS, defaultProjectSort } from "@/tableSort/projects";
 
 function statusLabel(p: Project): { label: string; cls: string } {
   if (p.is_active) return { label: "Ativo", cls: "bg-emerald-100 text-emerald-900 ring-emerald-200" };
@@ -51,6 +54,10 @@ export function Projects() {
   }, [statusFilter]);
 
   const canManageAny = useMemo(() => !readOnly && (canEditProject || canDeleteProject), [readOnly, canEditProject, canDeleteProject]);
+
+  const { sortedRows, headerSort } = useTableSort(items, PROJECT_SORT_COLUMNS, {
+    defaultCompare: defaultProjectSort,
+  });
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -161,21 +168,21 @@ export function Projects() {
           <table className="w-full text-left text-sm">
             <thead className="border-b border-slate-100 bg-slate-50/80">
               <tr>
-                <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
-                <th className="px-4 py-3 font-medium text-slate-600 w-32">Status</th>
-                <th className="px-4 py-3 font-medium text-slate-600">Descrição</th>
+                <SortableTh label="Nome" column="name" variant="standard" {...headerSort} />
+                <SortableTh label="Status" column="status" variant="standard" className="w-32" {...headerSort} />
+                <SortableTh label="Descrição" column="description" variant="standard" {...headerSort} />
                 <th className="px-4 py-3 font-medium text-slate-600 w-[260px]" />
               </tr>
             </thead>
             <tbody>
-              {items.length === 0 ? (
+              {sortedRows.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
                     Nenhum projeto encontrado.
                   </td>
                 </tr>
               ) : (
-                items.map((p) => (
+                sortedRows.map((p) => (
                   <tr key={p.id} className="border-b border-slate-50 last:border-0">
                     <td className="min-w-0 max-w-[300px] px-4 py-3 align-middle font-medium text-slate-900">
                       <TruncatedCell value={p.name} maxWidthClass="max-w-[300px]" />

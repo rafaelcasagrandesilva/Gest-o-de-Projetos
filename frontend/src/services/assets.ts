@@ -136,8 +136,12 @@ export type AssetCreatePayload = {
   cost_center_ref?: string | null;
 };
 
-export async function fetchAssetCategories(): Promise<string[]> {
-  const { data } = await api.get<string[]>("/assets/meta/categories");
+export type AssetCategoryScope = "patrimonial" | "epi" | "all";
+
+export async function fetchAssetCategories(scope?: AssetCategoryScope): Promise<string[]> {
+  const { data } = await api.get<string[]>("/assets/meta/categories", {
+    params: scope ? { scope } : undefined,
+  });
   return data;
 }
 
@@ -151,8 +155,15 @@ export async function listAssets(params?: {
   size?: string;
   without_holder?: boolean;
   physical_condition?: AssetPhysicalCondition;
+  exclude_epi?: boolean;
+  only_epi?: boolean;
 }): Promise<AssetListItem[]> {
   const { data } = await api.get<AssetListItem[]>("/assets", { params });
+  return data;
+}
+
+export async function listEpis(params?: Omit<Parameters<typeof listAssets>[0], "exclude_epi" | "only_epi" | "category">): Promise<AssetListItem[]> {
+  const { data } = await api.get<AssetListItem[]>("/assets/epis", { params });
   return data;
 }
 

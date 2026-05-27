@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.asset import Asset, AssetAssignment, AssetInspection, AssetPhysicalCondition, AssetStatus
@@ -18,7 +18,12 @@ from app.schemas.assets_dashboard import (
     AssetDashboardRead,
     AssetDashboardStatusKpis,
 )
-from app.services.asset_categories import ASSET_MACRO_CATEGORIES, normalize_macro_category
+from app.services.asset_categories import (
+    PATRIMONIAL_MACRO_CATEGORIES,
+    is_epi_category,
+    normalize_macro_category,
+    sqlalchemy_exclude_epi,
+)
 from app.services.company_finance_cost_center import (
     CC_LABEL_ADMINISTRATIVO,
     CC_LABEL_FINANCEIRO,
@@ -29,7 +34,7 @@ from app.services.company_finance_cost_center import (
     CC_SYSTEM_LABELS,
 )
 
-_CATEGORY_ORDER = list(ASSET_MACRO_CATEGORIES)
+_CATEGORY_ORDER = list(PATRIMONIAL_MACRO_CATEGORIES)
 _SYSTEM_CC_ORDER = [CC_LABEL_ADMINISTRATIVO, CC_LABEL_FINANCEIRO, CC_LABEL_RH]
 
 _PHYSICAL_ORDER: list[tuple[AssetPhysicalCondition, str]] = [
@@ -93,7 +98,7 @@ class AssetsDashboardService:
     async def get_dashboard(self) -> AssetDashboardRead:
         today = date.today()
         in_30 = today + timedelta(days=30)
-        base = Asset.deleted_at.is_(None)
+        base = and_(Asset.deleted_at.is_(None), sqlalchemy_exclude_epi(Asset.category))
         pv = func.coalesce(Asset.purchase_value, 0)
 
         status_rows = (
@@ -172,6 +177,8 @@ class AssetsDashboardService:
 
         for row in asset_rows:
             _id, code, name, category, _subcategory, cc_label, cc_sys, cc_proj, proj_name, phys, st, val = row
+            if is_epi_category(str(category)):
+                continue
             v = float(val or 0)
             bucket = _category_bucket(str(category))
             if bucket not in cat_acc:

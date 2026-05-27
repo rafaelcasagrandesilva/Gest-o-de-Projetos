@@ -49,7 +49,9 @@ class AssetBaseFields(BaseModel):
     acquisition_date: date | None = None
     purchase_value: float | None = Field(default=None, ge=0)
     notes: str | None = None
-    cost_center_ref: str | None = Field(default=None, description="ADMINISTRATIVO | FINANCEIRO | RH | project UUID")
+    cost_center_ref: str | None = Field(
+        default=None, description="ADMINISTRATIVO | FINANCEIRO | ALMOXARIFADO | RH | project UUID"
+    )
 
 
 class AssetCreate(AssetBaseFields):

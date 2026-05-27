@@ -12,8 +12,14 @@ import {
 import { PeriodFilter } from "@/components/PeriodFilter";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 import { formatApiError } from "@/utils/apiError";
-
-type ReceivableUiStatus = "ABERTO" | "RECEBIDO" | "EM_ATRASO";
+import { SortableTh } from "@/components/table";
+import { useTableSort } from "@/hooks/useTableSort";
+import {
+  type ReceivableUiStatus,
+  type ReceivableViewItem,
+  RECEIVABLE_VIEW_SORT_COLUMNS,
+  defaultReceivableViewSort,
+} from "@/tableSort/receivables";
 
 function formatBRL(n: number): string {
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -106,7 +112,7 @@ export function Receivables() {
     void load();
   }, [load]);
 
-  const viewRows = useMemo(() => {
+  const viewRows = useMemo((): ReceivableViewItem[] => {
     const base = rows
       .map((r) => {
         const net = Number(r.net_value ?? 0);
@@ -120,6 +126,10 @@ export function Receivables() {
     if (!statusFilter) return base;
     return base.filter((x) => x.uiStatus === statusFilter);
   }, [rows, statusFilter]);
+
+  const { sortedRows, headerSort } = useTableSort(viewRows, RECEIVABLE_VIEW_SORT_COLUMNS, {
+    defaultCompare: defaultReceivableViewSort,
+  });
 
   const kpis = useMemo(() => {
     let total = 0;
@@ -200,6 +210,7 @@ export function Receivables() {
               <option value="NF">NF</option>
               <option value="MANUAL">Manual</option>
               <option value="ANTECIPACAO">Antecipação</option>
+              <option value="BORDERO">Borderô</option>
             </select>
           </label>
 
@@ -240,17 +251,17 @@ export function Receivables() {
         <table className="min-w-[1100px] w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
             <tr>
-              <th className="px-2 py-3">Tipo</th>
-              <th className="px-2 py-3">Cliente</th>
-              <th className="px-2 py-3">NF / Referência</th>
-              <th className="px-2 py-3">Emissão</th>
-              <th className="px-2 py-3">Vencimento</th>
-              <th className="px-2 py-3 text-right">Valor líquido</th>
-              <th className="px-2 py-3 text-right">Recebido (antecipação)</th>
-              <th className="px-2 py-3 text-right">Recebido (cliente)</th>
-              <th className="px-2 py-3">Recebido em</th>
-              <th className="px-2 py-3 text-right">Saldo</th>
-              <th className="px-2 py-3">Status</th>
+              <SortableTh label="Tipo" column="tipo" {...headerSort} />
+              <SortableTh label="Cliente" column="client" {...headerSort} />
+              <SortableTh label="NF / Referência" column="number" {...headerSort} />
+              <SortableTh label="Emissão" column="issue_date" {...headerSort} />
+              <SortableTh label="Vencimento" column="due_date" {...headerSort} />
+              <SortableTh label="Valor líquido" column="net" {...headerSort} align="right" />
+              <SortableTh label="Recebido (antecipação)" column="advance" {...headerSort} align="right" />
+              <SortableTh label="Recebido (cliente)" column="customer" {...headerSort} align="right" />
+              <SortableTh label="Recebido em" column="received_at" {...headerSort} />
+              <SortableTh label="Saldo" column="saldo" {...headerSort} align="right" />
+              <SortableTh label="Status" column="status" {...headerSort} />
               <th className="px-2 py-3 text-right">Ações</th>
             </tr>
           </thead>
@@ -268,7 +279,7 @@ export function Receivables() {
                 </td>
               </tr>
             ) : (
-              viewRows.map(({ r, tipo, net, saldo, uiStatus }) => (
+              sortedRows.map(({ r, tipo, net, saldo, uiStatus }) => (
                 <tr key={r.id} className="hover:bg-slate-50/80">
                   <td className="px-2 py-2">
                     {tipo === "MANUAL" ? (

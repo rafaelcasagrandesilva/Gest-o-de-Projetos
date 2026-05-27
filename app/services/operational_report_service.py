@@ -393,12 +393,20 @@ class OperationalReportService:
             physical = AssetPhysicalCondition(str(filters["physical_condition"]))
         employee_id = UUID(str(filters["employee_id"])) if filters.get("employee_id") else None
 
+        from app.services.asset_categories import is_epi_category
+
+        cat_raw = str(filters["category"]).strip() if filters.get("category") else None
+        only_epi = bool(cat_raw and is_epi_category(cat_raw))
+        exclude_epi = not only_epi
+
         items = await svc.list_assets(
-            category=str(filters["category"]).strip() if filters.get("category") else None,
+            category=cat_raw,
             status=status,
             employee_id=employee_id,
             cost_center_ref=str(filters["cost_center_ref"]).strip() if filters.get("cost_center_ref") else None,
             physical_condition=physical,
+            exclude_epi=exclude_epi,
+            only_epi=only_epi,
         )
 
         asset_ids = [i.id for i in items]

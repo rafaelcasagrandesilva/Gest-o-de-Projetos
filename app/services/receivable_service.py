@@ -200,6 +200,18 @@ class ReceivableService:
         except MissingGreenlet:
             files = []
         pname = inv.project.name if inv.project else None
+        try:
+            batch = getattr(inv, "advance_batch", None)
+        except MissingGreenlet:
+            batch = None
+        batch_summary = None
+        if batch is not None:
+            batch_summary = {
+                "id": batch.id,
+                "batch_number": batch.batch_number,
+                "institution": batch.institution,
+                "status": batch.status.value if hasattr(batch.status, "value") else str(batch.status),
+            }
         ants_out: list[dict] = []
         for a in anticipations:
             base_date = getattr(a, "received_date", None) or (a.created_at.date() if getattr(a, "created_at", None) else date.today())
@@ -272,6 +284,8 @@ class ReceivableService:
                 for f in files
             ],
             "activity_log": inv.activity_log,
+            "advance_batch_id": inv.advance_batch_id,
+            "advance_batch": batch_summary,
         }
 
     async def list_invoices(
@@ -415,6 +429,7 @@ class ReceivableService:
                 selectinload(ReceivableInvoice.project),
                 selectinload(ReceivableInvoice.anticipations),
                 selectinload(ReceivableInvoice.files),
+                selectinload(ReceivableInvoice.advance_batch),
             )
         )
         return (await self.db.execute(q)).scalars().unique().one_or_none()
@@ -436,6 +451,8 @@ class ReceivableService:
         months_before = get_affected_months(inv)
         if inv.invoice_status == "CANCELADA":
             raise ValueError("Não é possível antecipar NF cancelada.")
+        if inv.advance_batch_id is not None:
+            raise ValueError("NF vinculada a um borderô. Remova do borderô antes de antecipar individualmente.")
         inst = (institution or "").strip()
         if not inst:
             raise ValueError("Informe a instituição.")
@@ -497,12 +514,13 @@ class ReceivableService:
             )
             any_left = (await self.db.execute(q)).scalars().first()
             if not any_left:
-                inv.is_anticipated = False
-                inv.institution = None
-                inv.advance_amount_received = None
-                inv.advance_amount_due = None
-                inv.advance_due_date = None
-                await self.db.flush()
+                if inv.advance_batch_id is None:
+                    inv.is_anticipated = False
+                    inv.institution = None
+                    inv.advance_amount_received = None
+                    inv.advance_amount_due = None
+                    inv.advance_due_date = None
+                    await self.db.flush()
         # Recarrega para computar meses após (sem a antecipação) e invalida união.
         inv_after = await self.get_invoice(invoice_id)
         months_after = get_affected_months(inv_after) if inv_after is not None else set()

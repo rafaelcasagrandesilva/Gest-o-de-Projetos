@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -15,6 +15,7 @@ from app.core.scenario import Scenario, coerce_scenario, scenario_pg_rhs
 from app.models.costs import ProjectFixedCost
 from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment
 from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
+from app.models.payable_payment import PayablePayment
 from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.models.payable_snapshot_generation import PayableSnapshotGeneration
 from app.models.project_operational import (
@@ -179,6 +180,21 @@ def _sync_legacy_paid_fields(row: PayableSnapshot, *, anchor_date: date | None =
         row.payment_date = None
 
 
+def _validate_payment_date(payment_date: date | None) -> date:
+    pd = payment_date or date.today()
+    if pd > date.today():
+        raise ValueError("Data do pagamento não pode ser futura.")
+    return pd
+
+
+def _payable_snapshot_open_sql():
+    """Obrigação ainda não quitada (ABERTO ou PARCIAL)."""
+    return or_(
+        PayableSnapshot.amount_paid <= 0,
+        PayableSnapshot.amount_paid + PAYABLE_PAYMENT_TOLERANCE < PayableSnapshot.amount_final,
+    )
+
+
 def _default_due_date(payment_month: date, *, day: int = 10) -> date:
     comp = normalize_competencia(payment_month)
     last = calendar.monthrange(comp.year, comp.month)[1]
@@ -336,6 +352,88 @@ class PayableSnapshotService:
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def list_for_operational_month(self, *, month: date) -> list[PayableSnapshot]:
+        """
+        Visão operacional do mês (competência + fluxo de caixa):
+
+        A) todas as obrigações da competência do mês (`snapshot.month` = mês filtrado)
+        B) obrigações com pagamento realizado no mês (`payment_date` no intervalo), qualquer competência
+
+        União sem duplicar por snapshot.id.
+        """
+        comp = normalize_competencia(month)
+        start, end = _month_bounds(comp)
+
+        competence_stmt = (
+            select(PayableSnapshot)
+            .where(PayableSnapshot.month == comp)
+            .order_by(
+                PayableSnapshot.due_date.asc(),
+                PayableSnapshot.type.asc(),
+                PayableSnapshot.name.asc(),
+            )
+        )
+        competence_rows = list((await self.session.execute(competence_stmt)).scalars().all())
+
+        paid_ids = set(
+            (
+                await self.session.execute(
+                    select(PayablePayment.payable_snapshot_id)
+                    .where(
+                        PayablePayment.reversed_at.is_(None),
+                        PayablePayment.payment_date >= start,
+                        PayablePayment.payment_date <= end,
+                    )
+                    .distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        paid_rows: list[PayableSnapshot] = []
+        if paid_ids:
+            paid_stmt = (
+                select(PayableSnapshot)
+                .where(PayableSnapshot.id.in_(paid_ids))
+                .order_by(
+                    PayableSnapshot.month.asc(),
+                    PayableSnapshot.due_date.asc(),
+                    PayableSnapshot.name.asc(),
+                )
+            )
+            paid_rows = list((await self.session.execute(paid_stmt)).scalars().all())
+
+        merged: dict[UUID, PayableSnapshot] = {r.id: r for r in competence_rows}
+        for r in paid_rows:
+            merged.setdefault(r.id, r)
+
+        return list(merged.values())
+
+    async def paid_in_period_by_snapshot_ids(
+        self, snapshot_ids: list[UUID], *, month: date
+    ) -> dict[UUID, Decimal]:
+        """Soma de pagamentos ativos com payment_date no mês (fluxo de caixa do período)."""
+        if not snapshot_ids:
+            return {}
+        comp = normalize_competencia(month)
+        start, end = _month_bounds(comp)
+        stmt = (
+            select(
+                PayablePayment.payable_snapshot_id,
+                func.coalesce(func.sum(PayablePayment.amount), 0),
+            )
+            .where(
+                PayablePayment.payable_snapshot_id.in_(snapshot_ids),
+                PayablePayment.reversed_at.is_(None),
+                PayablePayment.payment_date >= start,
+                PayablePayment.payment_date <= end,
+            )
+            .group_by(PayablePayment.payable_snapshot_id)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return {sid: _money2(amt) for sid, amt in rows}
+
     async def list_all(self) -> list[PayableSnapshot]:
         stmt = select(PayableSnapshot).order_by(
             PayableSnapshot.month.desc(),
@@ -347,6 +445,65 @@ class PayableSnapshotService:
 
     async def get(self, snapshot_id: UUID) -> PayableSnapshot | None:
         return await self.session.get(PayableSnapshot, snapshot_id)
+
+    async def last_payment_dates_by_snapshot_ids(self, snapshot_ids: list[UUID]) -> dict[UUID, date]:
+        if not snapshot_ids:
+            return {}
+        stmt = (
+            select(
+                PayablePayment.payable_snapshot_id,
+                func.max(PayablePayment.payment_date),
+            )
+            .where(
+                PayablePayment.payable_snapshot_id.in_(snapshot_ids),
+                PayablePayment.reversed_at.is_(None),
+            )
+            .group_by(PayablePayment.payable_snapshot_id)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return {sid: d for sid, d in rows if d is not None}
+
+    async def _sum_active_payments(self, snapshot_id: UUID) -> Decimal:
+        total = await self.session.scalar(
+            select(func.coalesce(func.sum(PayablePayment.amount), 0)).where(
+                PayablePayment.payable_snapshot_id == snapshot_id,
+                PayablePayment.reversed_at.is_(None),
+            )
+        )
+        return _money2(total or 0)
+
+    async def _max_active_payment_date(self, snapshot_id: UUID) -> date | None:
+        return await self.session.scalar(
+            select(func.max(PayablePayment.payment_date)).where(
+                PayablePayment.payable_snapshot_id == snapshot_id,
+                PayablePayment.reversed_at.is_(None),
+            )
+        )
+
+    async def _list_active_payments(
+        self, snapshot_id: UUID, *, newest_first: bool = True
+    ) -> list[PayablePayment]:
+        stmt = select(PayablePayment).where(
+            PayablePayment.payable_snapshot_id == snapshot_id,
+            PayablePayment.reversed_at.is_(None),
+        )
+        if newest_first:
+            stmt = stmt.order_by(
+                PayablePayment.payment_date.desc(),
+                PayablePayment.created_at.desc(),
+            )
+        else:
+            stmt = stmt.order_by(
+                PayablePayment.payment_date.asc(),
+                PayablePayment.created_at.asc(),
+            )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def _recalculate_amount_paid(self, row: PayableSnapshot) -> None:
+        total = await self._sum_active_payments(row.id)
+        row.amount_paid = total
+        anchor = await self._max_active_payment_date(row.id)
+        _sync_legacy_paid_fields(row, anchor_date=anchor)
 
     async def count_for_month(self, *, month: date) -> int:
         comp = normalize_competencia(month)
@@ -1556,10 +1713,9 @@ class PayableSnapshotService:
                     continue
                 if getattr(misc_row.project, "deleted_at", None) is not None:
                     continue
-                comp_month = normalize_competencia(misc_row.competencia)
                 self.session.add(
                     PayableSnapshot(
-                        month=comp_month,
+                        month=payment_month,
                         type=PayableSnapshotType.FIXED_COST,
                         ref_id=misc_row.id,
                         project_id=misc_row.project_id,
@@ -1569,7 +1725,7 @@ class PayableSnapshotService:
                         amount_original=Decimal(str(round(amt, 2))),
                         amount_final=Decimal(str(round(amt, 2))),
                         amount_paid=Decimal("0"),
-                        due_date=_default_due_date(comp_month, day=10),
+                        due_date=_default_due_date(payment_month, day=10),
                         paid=False,
                         payment_date=None,
                         observation=SOURCE_TAG_PROJECT_MISC,
@@ -1594,10 +1750,9 @@ class PayableSnapshotService:
                     continue
                 if getattr(sys_row.project, "deleted_at", None) is not None:
                     continue
-                comp_month = normalize_competencia(sys_row.competencia)
                 self.session.add(
                     PayableSnapshot(
-                        month=comp_month,
+                        month=payment_month,
                         type=PayableSnapshotType.FIXED_COST,
                         ref_id=sys_row.id,
                         project_id=sys_row.project_id,
@@ -1607,7 +1762,7 @@ class PayableSnapshotService:
                         amount_original=Decimal(str(round(amt, 2))),
                         amount_final=Decimal(str(round(amt, 2))),
                         amount_paid=Decimal("0"),
-                        due_date=_default_due_date(comp_month, day=10),
+                        due_date=_default_due_date(payment_month, day=10),
                         paid=False,
                         payment_date=None,
                         observation=SOURCE_TAG_PROJECT_SYSTEM,
@@ -1836,30 +1991,54 @@ class PayableSnapshotService:
         return rows
 
     async def _validate_manual_cost_center(self, cost_center: str) -> str:
-        cc = str(cost_center).strip()
+        cc = " ".join(str(cost_center).strip().split())
         if not cc:
             raise ValueError("Centro de custo é obrigatório.")
-        if cc in MANUAL_PAYABLE_FIXED_COST_CENTERS:
-            return cc
-        stmt = (
-            select(Project.id)
-            .where(Project.deleted_at.is_(None), Project.name == cc)
-            .limit(1)
-        )
-        found = (await self.session.execute(stmt)).scalar_one_or_none()
-        if found is None:
-            raise ValueError(
-                "Centro de custo inválido. Use «Administrativo», «Financeiro» ou o nome exato de um projeto cadastrado."
+        lowered = cc.casefold()
+        for fixed in MANUAL_PAYABLE_FIXED_COST_CENTERS:
+            if fixed.casefold() == lowered:
+                return fixed
+        exact = (
+            await self.session.execute(
+                select(Project.name).where(Project.deleted_at.is_(None), Project.name == cc).limit(1)
             )
-        return cc
+        ).scalar_one_or_none()
+        if exact:
+            return str(exact)
+        insensitive = (
+            await self.session.execute(
+                select(Project.name).where(
+                    Project.deleted_at.is_(None),
+                    func.lower(Project.name) == lowered,
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if insensitive:
+            return str(insensitive)
+        raise ValueError(
+            "Centro de custo inválido. Use «Administrativo», «Financeiro» ou o nome exato de um projeto cadastrado."
+        )
 
-    async def create_manual(self, *, month: date, name: str, category: str, cost_center: str, amount: float, due_date: date) -> PayableSnapshot:
-        comp = normalize_competencia(month)
+    async def create_manual(
+        self,
+        *,
+        month: date,
+        name: str,
+        category: str,
+        cost_center: str,
+        amount: float,
+        due_date: date,
+        observation: str | None = None,
+        snapshot_type: PayableSnapshotType = PayableSnapshotType.MANUAL,
+    ) -> PayableSnapshot:
+        # Manual: competência = mês do vencimento (obrigação), não o mês do filtro da tela.
+        comp = normalize_competencia(due_date)
         amt = Decimal(str(round(float(amount), 2)))
         cc = await self._validate_manual_cost_center(cost_center)
+        obs = (observation or "").strip() or None
         row = PayableSnapshot(
             month=comp,
-            type=PayableSnapshotType.MANUAL,
+            type=snapshot_type,
             ref_id=uuid4(),
             project_id=None,
             name=str(name).strip(),
@@ -1871,7 +2050,7 @@ class PayableSnapshotService:
             due_date=due_date,
             paid=False,
             payment_date=None,
-            observation=None,
+            observation=obs,
         )
         self.session.add(row)
         await self.session.flush()
@@ -1880,16 +2059,23 @@ class PayableSnapshotService:
     async def update_row(self, *, row: PayableSnapshot, amount_final: float | None, due_date: date | None, observation: str | None) -> PayableSnapshot:
         if amount_final is not None:
             row.amount_final = Decimal(str(round(float(amount_final), 2)))
-            af = _money2(row.amount_final)
-            cur_paid = _money2(row.amount_paid)
-            if cur_paid > af + PAYABLE_PAYMENT_TOLERANCE:
-                row.amount_paid = af
             self._append_observation(row, PAYABLE_MANUAL_ADJUSTMENT_TAG)
         if due_date is not None:
             row.due_date = due_date
         if observation is not None:
             row.observation = observation
-        _sync_legacy_paid_fields(row)
+        await self.session.flush()
+        await self._recalculate_amount_paid(row)
+        if amount_final is not None:
+            af = _money2(row.amount_final)
+            cur_paid = _money2(row.amount_paid)
+            if cur_paid > af + PAYABLE_PAYMENT_TOLERANCE:
+                excess = (cur_paid - af).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+                await self.reverse_payment(
+                    row=row,
+                    amount=float(excess),
+                    reversal_reason="Ajuste automático por redução do valor final.",
+                )
         await self.session.flush()
         return row
 
@@ -1901,7 +2087,14 @@ class PayableSnapshotService:
         row.observation = f"{prev}\n{line}".strip() if prev else line
 
     async def register_payment(
-        self, *, row: PayableSnapshot, amount: float, observation: str | None = None
+        self,
+        *,
+        row: PayableSnapshot,
+        amount: float,
+        payment_date: date | None = None,
+        observation: str | None = None,
+        created_by: UUID | None = None,
+        allow_overpayment: bool = False,
     ) -> PayableSnapshot:
         amt = _money2(amount)
         if amt <= 0:
@@ -1909,12 +2102,21 @@ class PayableSnapshotService:
         if amt > Decimal("999999999.99"):
             raise ValueError("Valor do pagamento fora do limite permitido.")
 
+        pd = _validate_payment_date(payment_date)
         final = _money2(row.amount_final)
-        paid_cur = _money2(row.amount_paid)
+        paid_cur = await self._sum_active_payments(row.id)
+        remaining = _payable_remaining_balance(amount_final=final, amount_paid=paid_cur)
+
+        if not allow_overpayment and remaining > PAYABLE_PAYMENT_TOLERANCE and amt > remaining + PAYABLE_PAYMENT_TOLERANCE:
+            raise ValueError(
+                f"Valor excede o saldo em aberto ({remaining}). "
+                "Confirme pagamento acima do saldo ou ajuste o valor."
+            )
+
         before_derived = payable_snapshot_derived_fields(amount_paid=paid_cur, amount_final=final)
         logger.info(
             "payables register_payment before snapshot_id=%s name=%s amount_final=%s amount_paid=%s "
-            "saldo=%s status=%s payment=%s",
+            "saldo=%s status=%s payment=%s payment_date=%s",
             row.id,
             row.name,
             final,
@@ -1922,13 +2124,22 @@ class PayableSnapshotService:
             before_derived["amount_remaining"],
             before_derived["status"],
             amt,
+            pd,
         )
 
-        new_paid = (paid_cur + amt).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
-        row.amount_paid = new_paid
-        anchor = date.today()
-        _sync_legacy_paid_fields(row, anchor_date=anchor)
+        self.session.add(
+            PayablePayment(
+                payable_snapshot_id=row.id,
+                amount=amt,
+                payment_date=pd,
+                observation=(observation or "").strip() or None,
+                created_by=created_by,
+            )
+        )
+        await self.session.flush()
+        await self._recalculate_amount_paid(row)
 
+        new_paid = _money2(row.amount_paid)
         after_derived = payable_snapshot_derived_fields(amount_paid=new_paid, amount_final=final)
         if after_derived["is_overpaid"]:
             logger.warning(
@@ -1942,7 +2153,7 @@ class PayableSnapshotService:
                 after_derived["amount_remaining"],
             )
 
-        obs_parts = [f"[pagamento +{amt}]"]
+        obs_parts = [f"[pagamento +{amt} em {pd:%d/%m/%Y}]"]
         if after_derived["is_overpaid"]:
             obs_parts.append("(acima do valor esperado)")
         if observation and observation.strip():
@@ -1963,17 +2174,54 @@ class PayableSnapshotService:
         return row
 
     async def reverse_payment(
-        self, *, row: PayableSnapshot, amount: float, observation: str | None = None
+        self,
+        *,
+        row: PayableSnapshot,
+        amount: float,
+        observation: str | None = None,
+        reversal_reason: str | None = None,
     ) -> PayableSnapshot:
         amt = _money2(amount)
         if amt <= 0:
             raise ValueError("Valor do estorno deve ser maior que zero.")
-        paid_cur = _money2(row.amount_paid)
-        new_paid = max(Decimal("0.00"), paid_cur - amt)
-        row.amount_paid = new_paid
-        _sync_legacy_paid_fields(row)
+
+        paid_cur = await self._sum_active_payments(row.id)
+        if amt > paid_cur + PAYABLE_PAYMENT_TOLERANCE:
+            raise ValueError("Valor de estorno maior que o total pago ativo.")
+
+        payments = await self._list_active_payments(row.id, newest_first=True)
+        remaining = amt
+        reversed_total = Decimal("0.00")
+        now = datetime.now(timezone.utc)
+        reason = (reversal_reason or "").strip() or None
+
+        for payment in payments:
+            if remaining <= PAYABLE_PAYMENT_TOLERANCE:
+                break
+            p_amt = _money2(payment.amount)
+            if p_amt <= remaining + PAYABLE_PAYMENT_TOLERANCE:
+                payment.reversed_at = now
+                payment.reversal_reason = reason
+                reversed_total += p_amt
+                remaining = (remaining - p_amt).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+            else:
+                raise ValueError(
+                    f"Estorno parcial do pagamento de {p_amt} não é suportado. "
+                    f"Estorne até {p_amt} ou estorne pagamentos mais recentes primeiro."
+                )
+
+        if remaining > PAYABLE_PAYMENT_TOLERANCE:
+            raise ValueError("Não há pagamentos ativos suficientes para este estorno.")
+
+        await self.session.flush()
+        await self._recalculate_amount_paid(row)
+
+        obs_line = f"[estorno -{reversed_total}]"
+        if reason:
+            obs_line = f"{obs_line} {reason}"
         if observation and observation.strip():
-            self._append_observation(row, f"[estorno -{amt}] {observation.strip()}")
+            obs_line = f"{obs_line} — {observation.strip()}"
+        self._append_observation(row, obs_line)
         await self.session.flush()
         return row
 

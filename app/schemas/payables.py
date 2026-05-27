@@ -48,8 +48,37 @@ class PayableSnapshotRead(UUIDTimestampRead):
 
     observation: str | None = None
     status: PayableSnapshotStatus
+    last_payment_date: date | None = None
+    # Valor pago com payment_date no mês da listagem (fluxo de caixa do período).
+    paid_in_period: float = 0.0
+    # Competência da obrigação fora do mês filtrado na tela operacional.
+    competence_out_of_view: bool = False
 
 
+class PayableSnapshotRegisterPaymentBody(BaseModel):
+    amount: float = Field(..., gt=0)
+    payment_date: date | None = Field(
+        None,
+        description="Data real do pagamento (fluxo de caixa). Padrão: hoje.",
+    )
+    observation: str | None = Field(None, max_length=2000)
+    allow_overpayment: bool = False
+
+    @field_validator("payment_date")
+    @classmethod
+    def payment_date_not_future(cls, v: date | None) -> date | None:
+        if v is not None and v > date.today():
+            raise ValueError("Data do pagamento não pode ser futura.")
+        return v
+
+
+class PayableSnapshotReversePaymentBody(BaseModel):
+    amount: float = Field(..., gt=0)
+    reversal_reason: str | None = Field(None, max_length=500)
+    observation: str | None = Field(None, max_length=2000)
+
+
+# Compatibilidade com clientes antigos (sem payment_date).
 class PayableSnapshotPaymentBody(BaseModel):
     amount: float = Field(..., gt=0)
     observation: str | None = Field(None, max_length=2000)

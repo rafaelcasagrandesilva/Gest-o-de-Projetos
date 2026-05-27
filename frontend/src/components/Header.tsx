@@ -2,6 +2,7 @@ import { useAuth } from "@/context/AuthContext";
 import { hasPermission } from "@/permissions";
 import { useWorkspace, type WorkspaceName } from "@/context/WorkspaceContext";
 import { useNavigate } from "react-router-dom";
+import { SidebarToggleButton } from "@/components/SidebarToggleButton";
 
 export function Header() {
   const { user, logout } = useAuth();
@@ -23,8 +24,9 @@ export function Header() {
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6">
-      <div className="flex items-center gap-6">
-        <h1 className="text-sm font-medium text-slate-500">Área logada</h1>
+      <div className="flex items-center gap-4">
+        <SidebarToggleButton className="md:hidden" />
+        <h1 className="hidden text-sm font-medium text-slate-500 sm:block">Área logada</h1>
         {(canProjects || canFinance || canAssets) && (
           <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 bg-white">
             {canProjects && (

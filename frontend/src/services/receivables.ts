@@ -36,6 +36,15 @@ export interface ReceivableInvoice {
   has_pdf: boolean;
   pdf_url: string | null;
   activity_log: string | null;
+  advance_batch_id?: string | null;
+  advance_batch?: AdvanceBatchSummary | null;
+}
+
+export interface AdvanceBatchSummary {
+  id: string;
+  batch_number: string;
+  institution: string;
+  status: string;
 }
 
 export interface InvoiceAnticipation {
@@ -86,7 +95,7 @@ export async function fetchReceivableKpis(params: {
 }
 
 export type ReceivableViewStatus = "ABERTO" | "PARCIAL" | "RECEBIDO";
-export type ReceivableViewType = "NF" | "MANUAL" | "ANTECIPACAO";
+export type ReceivableViewType = "NF" | "MANUAL" | "ANTECIPACAO" | "BORDERO";
 
 export interface ReceivableViewRow {
   id: string;

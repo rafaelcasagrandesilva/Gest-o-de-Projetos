@@ -45,6 +45,13 @@ class ReceivableInvoice(TimestampUUIDMixin, Base):
     pdf_path: Mapped[str | None] = mapped_column(String(512))
     activity_log: Mapped[str | None] = mapped_column(Text)
 
+    advance_batch_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("receivable_advance_batches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     project: Mapped["Project"] = relationship(back_populates="receivable_invoices")
     anticipations: Mapped[list["ReceivableInvoiceAnticipation"]] = relationship(
         back_populates="invoice",
@@ -55,6 +62,13 @@ class ReceivableInvoice(TimestampUUIDMixin, Base):
         back_populates="invoice",
         cascade="all, delete-orphan",
         order_by="ReceivableInvoiceFile.created_at.asc()",
+    )
+    advance_batch: Mapped["ReceivableAdvanceBatch | None"] = relationship(
+        foreign_keys=[advance_batch_id],
+    )
+    advance_batch_item: Mapped["ReceivableAdvanceBatchItem | None"] = relationship(
+        back_populates="invoice",
+        uselist=False,
     )
 
 

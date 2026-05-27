@@ -1,4 +1,6 @@
-/** Categorias macro do patrimônio (alinhado ao backend). */
+export const EPI_MACRO_CATEGORY = "EPI";
+
+/** Todas as categorias (inclui EPI). */
 export const ASSET_MACRO_CATEGORIES = [
   "Tecnologia",
   "EPI",
@@ -9,6 +11,9 @@ export const ASSET_MACRO_CATEGORIES = [
   "Veículos",
   "Uniformes",
 ] as const;
+
+/** Categorias do módulo patrimonial (sem EPI). */
+export const PATRIMONIAL_MACRO_CATEGORIES = ASSET_MACRO_CATEGORIES.filter((c) => c !== EPI_MACRO_CATEGORY);
 
 const LEGACY_MAP: Record<string, string> = {
   TECNOLOGIA: "Tecnologia",

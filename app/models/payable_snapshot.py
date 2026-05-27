@@ -6,7 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import Boolean, Date, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, TimestampUUIDMixin
 
@@ -68,3 +68,10 @@ class PayableSnapshot(TimestampUUIDMixin, Base):
     paid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
 
     observation: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    payments: Mapped[list["PayablePayment"]] = relationship(  # noqa: F821
+        "PayablePayment",
+        back_populates="snapshot",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )

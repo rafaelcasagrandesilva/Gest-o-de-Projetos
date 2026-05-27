@@ -32,6 +32,16 @@ import {
   type Employee,
 } from "@/services/employees";
 import { usePermission } from "@/hooks/usePermission";
+import { SortableTh } from "@/components/table";
+import { useTableSort } from "@/hooks/useTableSort";
+import {
+  NAMED_VALUE_SORT_COLUMNS,
+  PROJECT_LABOR_SORT_COLUMNS,
+  PROJECT_VEHICLE_SORT_COLUMNS,
+  defaultNamedValueSort,
+  defaultProjectLaborSort,
+  defaultProjectVehicleSort,
+} from "@/tableSort/projectStructure";
 import { isAxiosError } from "axios";
 import {
   Bar,
@@ -789,6 +799,10 @@ function LaborTab({
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
   const linkedIds = useMemo(() => new Set(rows.map((r) => r.employee_id)), [rows]);
+
+  const { sortedRows, headerSort } = useTableSort(rows, PROJECT_LABOR_SORT_COLUMNS, {
+    defaultCompare: defaultProjectLaborSort,
+  });
   const availableEmployees = useMemo(
     () => employeeOptions.filter((e) => !linkedIds.has(e.id)),
     [employeeOptions, linkedIds],
@@ -1107,22 +1121,22 @@ function LaborTab({
         <table className="w-full min-w-[32rem] text-left text-sm">
           <thead className="border-b border-slate-200 bg-slate-50 text-xs font-medium uppercase text-slate-500">
             <tr>
-              <th className="px-4 py-3">Nome</th>
-              <th className="px-4 py-3">Tipo</th>
-              <th className="px-4 py-3 text-right">%</th>
-              <th className="px-4 py-3 text-right">Custo proporcional</th>
+              <SortableTh label="Nome" column="name" variant="standard" {...headerSort} />
+              <SortableTh label="Tipo" column="type" variant="standard" {...headerSort} />
+              <SortableTh label="%" column="percent" variant="standard" align="right" {...headerSort} />
+              <SortableTh label="Custo proporcional" column="cost" variant="standard" align="right" {...headerSort} />
               <th className="px-4 py-3 w-28" />
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {sortedRows.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
                   Nenhum colaborador vinculado nesta competência.
                 </td>
               </tr>
             ) : (
-              rows.map((r) => {
+              sortedRows.map((r) => {
                 const open = openDetailId === r.labor_id;
                 const b = r.breakdown;
                 return (
@@ -1314,6 +1328,10 @@ function VehiclesTab({
   function rowByVehicleId(list: ProjectVehicle[], vehicleId: string) {
     return list.find((x) => x.vehicle_id === vehicleId);
   }
+
+  const { sortedRows, headerSort } = useTableSort(rows, PROJECT_VEHICLE_SORT_COLUMNS, {
+    defaultCompare: defaultProjectVehicleSort,
+  });
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -1523,24 +1541,24 @@ function VehiclesTab({
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="border-b border-slate-100 bg-slate-50/80">
             <tr>
-              <th className="px-4 py-3 font-medium text-slate-600">Placa</th>
-              <th className="px-4 py-3 font-medium text-slate-600">Modelo</th>
-              <th className="px-4 py-3 font-medium text-slate-600">Condutor</th>
-              <th className="px-4 py-3 font-medium text-slate-600">KM (ref.)</th>
-              <th className="px-4 py-3 font-medium text-slate-600">Combustível</th>
-              <th className="px-4 py-3 font-medium text-slate-600">Custo</th>
+              <SortableTh label="Placa" column="plate" variant="standard" {...headerSort} />
+              <SortableTh label="Modelo" column="model" variant="standard" {...headerSort} />
+              <SortableTh label="Condutor" column="driver" variant="standard" {...headerSort} />
+              <SortableTh label="KM (ref.)" column="km" variant="standard" {...headerSort} />
+              <SortableTh label="Combustível" column="fuel" variant="standard" {...headerSort} />
+              <SortableTh label="Custo" column="cost" variant="standard" {...headerSort} />
               <th className="px-4 py-3" />
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {sortedRows.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
                   Nenhum veículo nesta competência.
                 </td>
               </tr>
             ) : (
-              rows.map((r) => {
+              sortedRows.map((r) => {
                 const prevRow = rowByVehicleId(rowsPrevisto, r.vehicle_id);
                 const realRow = rowByVehicleId(rowsRealizado, r.vehicle_id);
                 const pv = prevRow?.display_fuel_cost;
@@ -1726,6 +1744,10 @@ function SystemsTab({
     return { count: rows.length, totalCost };
   }, [rows]);
 
+  const { sortedRows, headerSort } = useTableSort(rows, NAMED_VALUE_SORT_COLUMNS, {
+    defaultCompare: defaultNamedValueSort,
+  });
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (structureReadOnly) return;
@@ -1785,29 +1807,46 @@ function SystemsTab({
         </div>
       </div>
 
-      <ul className="space-y-2">
-        {rows.map((r) => (
-          <li
-            key={r.id}
-            className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-4 py-3 text-sm"
-          >
-            <span>
-              {r.name} — {formatCurrency(r.value)}
-            </span>
-            <button
-              type="button"
-              disabled={structureReadOnly}
-              onClick={async () => {
-                await deleteSystem(projectId, r.id);
-                onRefresh();
-              }}
-              className="text-red-600 hover:underline disabled:opacity-50"
-            >
-              Excluir
-            </button>
-          </li>
-        ))}
-      </ul>
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+        <table className="w-full min-w-[24rem] text-left text-sm">
+          <thead className="border-b border-slate-100 bg-slate-50/80">
+            <tr>
+              <SortableTh label="Nome" column="name" variant="standard" {...headerSort} />
+              <SortableTh label="Valor mensal" column="value" variant="standard" align="right" {...headerSort} />
+              <th className="px-4 py-3 w-24" />
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.length === 0 ? (
+              <tr>
+                <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
+                  Nenhum sistema cadastrado nesta competência.
+                </td>
+              </tr>
+            ) : (
+              sortedRows.map((r) => (
+                <tr key={r.id} className="border-b border-slate-50 last:border-0">
+                  <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-slate-700">{formatCurrency(r.value)}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      disabled={structureReadOnly}
+                      onClick={async () => {
+                        await deleteSystem(projectId, r.id);
+                        onRefresh();
+                      }}
+                      className="text-red-600 hover:underline disabled:opacity-50"
+                    >
+                      Excluir
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1834,6 +1873,10 @@ function FixedTab({
     const totalCost = rows.reduce((s, r) => s + r.value, 0);
     return { count: rows.length, totalCost };
   }, [rows]);
+
+  const { sortedRows, headerSort } = useTableSort(rows, NAMED_VALUE_SORT_COLUMNS, {
+    defaultCompare: defaultNamedValueSort,
+  });
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -1894,29 +1937,46 @@ function FixedTab({
         </div>
       </div>
 
-      <ul className="space-y-2">
-        {rows.map((r) => (
-          <li
-            key={r.id}
-            className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-4 py-3 text-sm"
-          >
-            <span>
-              {r.name} — {formatCurrency(r.value)}
-            </span>
-            <button
-              type="button"
-              disabled={structureReadOnly}
-              onClick={async () => {
-                await deleteFixedOperational(projectId, r.id);
-                onRefresh();
-              }}
-              className="text-red-600 hover:underline disabled:opacity-50"
-            >
-              Excluir
-            </button>
-          </li>
-        ))}
-      </ul>
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+        <table className="w-full min-w-[24rem] text-left text-sm">
+          <thead className="border-b border-slate-100 bg-slate-50/80">
+            <tr>
+              <SortableTh label="Nome" column="name" variant="standard" {...headerSort} />
+              <SortableTh label="Valor mensal" column="value" variant="standard" align="right" {...headerSort} />
+              <th className="px-4 py-3 w-24" />
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.length === 0 ? (
+              <tr>
+                <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
+                  Nenhum custo diverso nesta competência.
+                </td>
+              </tr>
+            ) : (
+              sortedRows.map((r) => (
+                <tr key={r.id} className="border-b border-slate-50 last:border-0">
+                  <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-slate-700">{formatCurrency(r.value)}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      disabled={structureReadOnly}
+                      onClick={async () => {
+                        await deleteFixedOperational(projectId, r.id);
+                        onRefresh();
+                      }}
+                      className="text-red-600 hover:underline disabled:opacity-50"
+                    >
+                      Excluir
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

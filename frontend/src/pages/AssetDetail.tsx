@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { isAxiosError } from "axios";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { AssetSizeBadge } from "@/components/assets/AssetSizeBadge";
 import { AssetSizeField } from "@/components/assets/AssetSizeField";
 import {
-  ASSET_MACRO_CATEGORIES,
+  EPI_MACRO_CATEGORY,
+  PATRIMONIAL_MACRO_CATEGORIES,
   isEpiMacroCategory,
   isTechMacroCategory,
 } from "@/components/assets/assetCategories";
@@ -92,9 +93,13 @@ const PHYSICAL_OPTIONS: AssetPhysicalCondition[] = ["NEW", "GOOD", "FAIR", "DAMA
 
 export function AssetDetailPage() {
   const { assetId } = useParams<{ assetId: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
   const { setWorkspace } = useWorkspace();
+  const isEpiModule = location.pathname.startsWith("/epis");
+  const listPath = isEpiModule ? "/epis" : "/assets";
+  const listLabel = isEpiModule ? "EPIs" : "Patrimônio";
 
   useEffect(() => {
     setWorkspace("assets");
@@ -123,6 +128,11 @@ export function AssetDetailPage() {
   const [confirm, setConfirm] = useState<ConfirmTarget | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
 
+  const isEpiItem = useMemo(
+    () => isEpiModule || isEpiMacroCategory(detail?.category ?? ""),
+    [isEpiModule, detail?.category],
+  );
+
   const openAssignment = useMemo(
     () => detail?.assignments.find((a) => !a.return_date) ?? null,
     [detail],
@@ -145,10 +155,12 @@ export function AssetDetailPage() {
   useEffect(() => {
     void load();
     void listProjects().then(setProjects).catch(() => undefined);
-    void fetchAssetCategories()
+    void fetchAssetCategories(isEpiModule ? "epi" : "patrimonial")
       .then(setCategories)
-      .catch(() => setCategories([...ASSET_MACRO_CATEGORIES]));
-  }, [load]);
+      .catch(() =>
+        setCategories(isEpiModule ? [EPI_MACRO_CATEGORY] : [...PATRIMONIAL_MACRO_CATEGORIES]),
+      );
+  }, [isEpiModule, load]);
 
   async function saveGeneral() {
     if (!detail || !canEdit) return;
@@ -170,7 +182,11 @@ export function AssetDetailPage() {
         status: detail.status,
         physical_condition: detail.physical_condition,
         acquisition_date: detail.acquisition_date,
-        purchase_value: purchaseValueInput.trim() ? parseBRLInput(purchaseValueInput) : null,
+        purchase_value: isEpiItem
+          ? null
+          : purchaseValueInput.trim()
+            ? parseBRLInput(purchaseValueInput)
+            : null,
         notes: detail.notes,
         cost_center_ref: detail.cost_center_ref ?? undefined,
       });
@@ -299,7 +315,7 @@ export function AssetDetailPage() {
     try {
       if (confirm.type === "asset") {
         await deleteAsset(assetId);
-        navigate("/assets");
+        navigate(listPath);
         return;
       }
       if (confirm.type === "assignment") await deleteAssignment(assetId, confirm.id);
@@ -360,7 +376,7 @@ export function AssetDetailPage() {
   if (!detail) {
     return (
       <div className="space-y-4">
-        <Link to="/assets" className="text-sm text-indigo-600 hover:underline">
+        <Link to={listPath} className="text-sm text-indigo-600 hover:underline">
           ← Voltar
         </Link>
         <p className="text-slate-500">{error ?? "Carregando…"}</p>
@@ -372,8 +388,8 @@ export function AssetDetailPage() {
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link to="/assets" className="text-sm text-indigo-600 hover:underline">
-            ← Patrimônio
+          <Link to={listPath} className="text-sm text-indigo-600 hover:underline">
+            ← {listLabel}
           </Link>
           <h1 className="mt-2 text-2xl font-semibold text-slate-900">
             {detail.name}{" "}
@@ -438,7 +454,12 @@ export function AssetDetailPage() {
                 onChange={(e) => patch("category", e.target.value)}
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
               >
-                {(categories.length ? categories : [...ASSET_MACRO_CATEGORIES]).map((c) => (
+                {(categories.length
+                  ? categories
+                  : isEpiItem
+                    ? [EPI_MACRO_CATEGORY]
+                    : [...PATRIMONIAL_MACRO_CATEGORIES]
+                ).map((c) => (
                   <option key={c} value={c}>
                     {c}
                   </option>
@@ -500,17 +521,19 @@ export function AssetDetailPage() {
                 <AssetPhysicalConditionBadge condition={detail.physical_condition} />
               </div>
             </label>
-            <label className="text-sm">
-              <span className="text-slate-600">Valor do item (R$)</span>
-              <AssetMoneyInput
-                disabled={!canEdit}
-                value={purchaseValueInput}
-                onChange={setPurchaseValueInput}
-              />
-              {detail.purchase_value != null && detail.purchase_value > 0 ? (
-                <p className="mt-1 text-xs text-slate-500">{formatBRL(detail.purchase_value)}</p>
-              ) : null}
-            </label>
+            {!isEpiItem ? (
+              <label className="text-sm">
+                <span className="text-slate-600">Valor do item (R$)</span>
+                <AssetMoneyInput
+                  disabled={!canEdit}
+                  value={purchaseValueInput}
+                  onChange={setPurchaseValueInput}
+                />
+                {detail.purchase_value != null && detail.purchase_value > 0 ? (
+                  <p className="mt-1 text-xs text-slate-500">{formatBRL(detail.purchase_value)}</p>
+                ) : null}
+              </label>
+            ) : null}
             <label className="text-sm">
               <span className="text-slate-600">Centro de custo</span>
               <CostCenterSelect

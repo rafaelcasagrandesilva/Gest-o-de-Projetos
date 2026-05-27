@@ -18,6 +18,15 @@ import { PeriodFilter } from "@/components/PeriodFilter";
 import { TruncatedCell } from "@/components/TruncatedText";
 import { listProjects, type Project } from "@/services/projects";
 import { formatApiError } from "@/utils/apiError";
+import { PayablesImportModal } from "@/components/PayablesImportModal";
+import { SortableTh } from "@/components/table";
+import { useTableSort, type TableSortHeaderProps } from "@/hooks/useTableSort";
+import { PAYABLE_SORT_COLUMNS, defaultPayableOperationalSort, defaultPayableSort } from "@/tableSort/payables";
+import {
+  payableCashFlowLabelFromDate,
+  payableCompetenceLabel,
+  todayIsoLocal,
+} from "@/utils/payableCompetence";
 
 /** Centros fixos permitidos no manual — alinhado a `MANUAL_PAYABLE_FIXED_COST_CENTERS` no backend. */
 const PAYABLES_MANUAL_FIXED_COST_CENTERS = ["Administrativo", "Financeiro"] as const;
@@ -113,9 +122,12 @@ export function Payables() {
 
   const [actionModal, setActionModal] = useState<ActionModal>({ open: false });
   const [modalAmount, setModalAmount] = useState("");
+  const [modalPaymentDate, setModalPaymentDate] = useState(() => todayIsoLocal());
+  const [modalReversalReason, setModalReversalReason] = useState("");
   const [modalObs, setModalObs] = useState("");
   const [modalBusy, setModalBusy] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   useEffect(() => {
     if (!canEdit) return;
@@ -224,12 +236,20 @@ export function Payables() {
     });
   }, [rows, statusFilter, search]);
 
+  const { sortedRows, headerSort } = useTableSort(filteredRows, PAYABLE_SORT_COLUMNS, {
+    defaultCompare: periodMode === "MONTH" ? defaultPayableOperationalSort : defaultPayableSort,
+  });
+
   const totals = useMemo(() => {
     let total = 0;
     let pago = 0;
     for (const r of filteredRows) {
       total += Number(r.amount_final ?? 0);
-      pago += Number(r.amount_paid ?? 0);
+      if (periodMode === "MONTH") {
+        pago += Number(r.paid_in_period ?? 0);
+      } else {
+        pago += Number(r.amount_paid ?? 0);
+      }
     }
     total = Math.round(total * 100) / 100;
     pago = Math.round(pago * 100) / 100;
@@ -237,11 +257,13 @@ export function Payables() {
       filteredRows.reduce((s, r) => s + Number(r.amount_remaining ?? 0), 0) * 100,
     ) / 100;
     return { total, pago, emAberto: saldoLiquido };
-  }, [filteredRows]);
+  }, [filteredRows, periodMode]);
 
   function closeActionModal() {
     setActionModal({ open: false });
     setModalAmount("");
+    setModalPaymentDate(todayIsoLocal());
+    setModalReversalReason("");
     setModalObs("");
     setModalBusy(false);
   }
@@ -250,6 +272,7 @@ export function Payables() {
     if (!canEdit) return;
     setError(null);
     setModalObs("");
+    setModalPaymentDate(todayIsoLocal());
     const saldo = Number(row.amount_remaining ?? 0);
     setModalAmount(saldo > 0.005 ? formatMoneyFieldBr(saldo) : "");
     setActionModal({ open: true, mode: "register", row });
@@ -276,6 +299,7 @@ export function Payables() {
     if (!canEdit) return;
     setError(null);
     setModalObs("");
+    setModalReversalReason("");
     setModalAmount(row.amount_paid > 0 ? formatMoneyFieldBr(row.amount_paid) : "");
     setActionModal({ open: true, mode: "reverse", row });
   }
@@ -294,14 +318,37 @@ export function Payables() {
       setError("Informe um valor maior que zero.");
       return;
     }
+    if (actionModal.mode === "register") {
+      if (!modalPaymentDate) {
+        setError("Informe a data do pagamento.");
+        return;
+      }
+      if (modalPaymentDate > todayIsoLocal()) {
+        setError("A data do pagamento não pode ser futura.");
+        return;
+      }
+    }
     setModalBusy(true);
     setError(null);
     try {
       const obs = modalObs.trim() ? modalObs.trim() : null;
+      const allowOver =
+        actionModal.mode === "register" &&
+        modalOverpaymentPreview != null &&
+        modalOverpaymentPreview.overpaidAmount > 0.02;
       const updated =
         actionModal.mode === "register"
-          ? await registerPayablePayment(row.id, { amount: amt, observation: obs })
-          : await reversePayablePayment(row.id, { amount: amt, observation: obs });
+          ? await registerPayablePayment(row.id, {
+              amount: amt,
+              payment_date: modalPaymentDate,
+              observation: obs,
+              allow_overpayment: allowOver,
+            })
+          : await reversePayablePayment(row.id, {
+              amount: amt,
+              reversal_reason: modalReversalReason.trim() || null,
+              observation: obs,
+            });
       setRows((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       if (editingId === row.id) setEditingId(null);
       closeActionModal();
@@ -359,8 +406,9 @@ export function Payables() {
     setSaving(true);
     setError(null);
     try {
+      const competenceMonth = form.due_date.trim().slice(0, 7) || period;
       await createManualPayableSnapshot({
-        month: period,
+        month: competenceMonth,
         name: form.name.trim(),
         amount,
         due_date: form.due_date,
@@ -439,8 +487,24 @@ export function Payables() {
         : "Estornar pagamento"
       : "";
 
+  const tableProps = {
+    canEdit,
+    editingId,
+    editSaving,
+    editValue,
+    editDate,
+    setEditValue,
+    setEditDate,
+    onSaveEdit: () => void saveEdit(),
+    onCancelEdit: cancelEdit,
+    onStartEdit: startEdit,
+    onRegisterPayment: openRegisterPayment,
+    onReversePayment: openReversePayment,
+    onDeleteManual: openDeleteManual,
+  };
+
   return (
-    <div className="mx-auto max-w-[1600px] space-y-6">
+    <div className="mx-auto max-w-full overflow-x-hidden space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Contas a pagar</h1>
@@ -450,14 +514,24 @@ export function Payables() {
             valor pago acumulado nas linhas atuais.
           </p>
         </div>
-        <button
-          type="button"
-          disabled={!canEdit || periodMode === "ALL"}
-          onClick={() => setShowForm((s) => !s)}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {showForm ? "Fechar" : "Adicionar despesa"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={!canEdit || periodMode === "ALL"}
+            onClick={() => setImportOpen(true)}
+            className="rounded-lg border border-indigo-200 bg-white px-4 py-2 text-sm font-medium text-indigo-800 shadow-sm hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Importar planilha
+          </button>
+          <button
+            type="button"
+            disabled={!canEdit || periodMode === "ALL"}
+            onClick={() => setShowForm((s) => !s)}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {showForm ? "Fechar" : "Adicionar despesa"}
+          </button>
+        </div>
       </div>
       {periodMode === "ALL" && (
         <p className="text-sm text-slate-600">
@@ -471,14 +545,18 @@ export function Payables() {
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Kpi label="Total (valor final)" value={formatBRL(totals.total)} />
-        <Kpi label="Pago (acumulado)" value={formatBRL(totals.pago)} accent="text-emerald-800" />
+        <Kpi
+          label={periodMode === "MONTH" ? "Pago no período" : "Pago (acumulado)"}
+          value={formatBRL(totals.pago)}
+          accent="text-emerald-800"
+        />
         <Kpi label="Em aberto" value={formatBRL(totals.emAberto)} accent="text-amber-800" />
       </section>
 
       <section className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap gap-3">
           <PeriodFilter
-            label="Mês (pagamento)"
+            label="Mês (fluxo de caixa)"
             mode={periodMode}
             value={period}
             onModeChange={setPeriodMode}
@@ -604,189 +682,35 @@ export function Payables() {
         </form>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-        <table className="min-w-[1380px] w-full divide-y divide-slate-200 text-sm">
-          <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
-            <tr>
-              <th className="px-2 py-3">Tipo</th>
-              <th className="px-2 py-3">Nome</th>
-              <th className="px-2 py-3">Mês</th>
-              <th className="px-2 py-3">Centro de custo</th>
-              <th className="px-2 py-3 text-right">Valor original</th>
-              <th className="px-2 py-3 text-right">Valor final</th>
-              <th className="px-2 py-3 text-right">Pago</th>
-              <th className="px-2 py-3 text-right">Saldo</th>
-              <th className="px-2 py-3">Vencimento</th>
-              <th className="px-2 py-3">Status</th>
-              <th className="px-2 py-3 text-right">Ações</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {loading ? (
-              <tr>
-                <td colSpan={11} className="px-3 py-10 text-center text-slate-500">
-                  <div className="flex items-center justify-center gap-2">
-                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                    <span>Carregando…</span>
-                  </div>
-                </td>
-              </tr>
-            ) : error ? (
-              <tr>
-                <td colSpan={11} className="px-3 py-10 text-center text-slate-500">
-                  Não foi possível carregar os dados.
-                </td>
-              </tr>
-            ) : filteredRows.length === 0 ? (
-              <tr>
-                <td colSpan={11} className="px-3 py-8 text-center text-slate-500">
-                  {rows.length === 0
-                    ? (emptyMessage ?? "Nenhuma conta a pagar neste período.")
-                    : "Nenhum item para os filtros atuais."}
-                </td>
-              </tr>
-            ) : (
-              filteredRows.map((r) => {
-                const isEditing = editingId === r.id;
-                const temPago = r.amount_paid > 0.005;
-                return (
-                  <tr key={r.id} className="hover:bg-slate-50/80">
-                    <td className="whitespace-nowrap px-2 py-2 text-slate-700">{typeLabel(r.type)}</td>
-                    <td className="min-w-0 max-w-[300px] px-2 py-2 align-middle text-slate-900">
-                      <TruncatedCell value={r.name} maxWidthClass="max-w-[300px]" />
-                    </td>
-                    <td className="whitespace-nowrap px-2 py-2 text-slate-700">{r.month.slice(0, 7)}</td>
-                    <td className="min-w-0 max-w-[280px] px-2 py-2 align-middle text-slate-700">
-                      <TruncatedCell value={r.cost_center} maxWidthClass="max-w-[280px]" />
-                    </td>
-                    <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-slate-700">
-                      {formatBRL(r.amount_original)}
-                    </td>
-                    <td className="min-w-[120px] whitespace-nowrap px-2 py-2 text-right align-middle tabular-nums text-slate-900">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          inputMode="decimal"
-                          value={Number.isFinite(editValue) ? editValue : 0}
-                          onChange={(e) => {
-                            const raw = e.target.value;
-                            if (raw === "") {
-                              setEditValue(0);
-                              return;
-                            }
-                            const n = Number.parseFloat(raw);
-                            if (Number.isFinite(n)) setEditValue(n);
-                          }}
-                          className="w-full min-w-[6.5rem] rounded border border-slate-300 px-2 py-1 text-right text-sm"
-                        />
-                      ) : (
-                        formatBRL(r.amount_final)
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-slate-800">
-                      {formatBRL(r.amount_paid)}
-                    </td>
-                    <td
-                      className={`whitespace-nowrap px-2 py-2 text-right tabular-nums font-medium ${saldoClassName(
-                        r.amount_remaining,
-                        r.is_overpaid,
-                      )}`}
-                    >
-                      {formatBRL(r.amount_remaining)}
-                      {r.is_overpaid ? (
-                        <span className="ml-1 text-[10px] font-normal text-amber-700">(adiant.)</span>
-                      ) : null}
-                    </td>
-                    <td className="min-w-[130px] whitespace-nowrap px-2 py-2 align-middle">
-                      {isEditing ? (
-                        <input
-                          type="date"
-                          required
-                          value={editDate}
-                          onChange={(e) => setEditDate(e.target.value)}
-                          className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
-                        />
-                      ) : (
-                        formatDateBr(r.due_date)
-                      )}
-                    </td>
-                    <td className="px-2 py-2">
-                      <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${statusBadgeClass(
-                          r.status,
-                          r.is_overpaid,
-                        )}`}
-                      >
-                        {r.status}
-                        {r.is_overpaid ? "+" : ""}
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-2 py-2 text-right">
-                      {isEditing ? (
-                        <span className="inline-flex flex-wrap items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            disabled={!canEdit || editSaving}
-                            onClick={() => void saveEdit()}
-                            className="rounded border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {editSaving ? "Salvando…" : "Salvar"}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={editSaving}
-                            onClick={cancelEdit}
-                            className="rounded border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Cancelar
-                          </button>
-                        </span>
-                      ) : (
-                        <span className="inline-flex flex-wrap items-center justify-end gap-x-1 gap-y-1">
-                          <button
-                            type="button"
-                            disabled={!canEdit}
-                            onClick={() => startEdit(r)}
-                            className="rounded px-1.5 py-0.5 text-xs text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!canEdit || editingId === r.id}
-                            onClick={() => openRegisterPayment(r)}
-                            className="rounded px-1.5 py-0.5 text-xs text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Registrar pagamento
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!canEdit || !temPago || editingId === r.id}
-                            onClick={() => openReversePayment(r)}
-                            className="rounded px-1.5 py-0.5 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Estornar
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!canEdit || r.type !== "MANUAL" || editingId === r.id}
-                            onClick={() => openDeleteManual(r)}
-                            className="rounded px-1.5 py-0.5 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Excluir
-                          </button>
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+      {loading ? (
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-500 shadow-sm">
+          <div className="flex items-center justify-center gap-2">
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+            <span>Carregando…</span>
+          </div>
+        </div>
+      ) : error ? (
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-500 shadow-sm">
+          Não foi possível carregar os dados.
+        </div>
+      ) : (
+        <PayablesSnapshotTable
+          rows={sortedRows}
+          headerSort={headerSort}
+          emptyLabel={
+            rows.length === 0
+              ? (emptyMessage ?? "Nenhuma conta a pagar neste período.")
+              : "Nenhum item para os filtros atuais."
+          }
+          {...tableProps}
+        />
+      )}
+
+      <PayablesImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => void load()}
+      />
 
       {actionModal.open && actionModal.mode !== "delete" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -831,7 +755,48 @@ export function Payables() {
                 ) : null}
               </div>
             ) : null}
+            {actionModal.mode === "register" ? (
+              <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-sm text-indigo-950">
+                <p>
+                  <span className="font-medium">Competência:</span>{" "}
+                  {payableCompetenceLabel(actionModal.row.month)}
+                </p>
+                <p className="mt-1">
+                  <span className="font-medium">Fluxo de caixa:</span>{" "}
+                  {payableCashFlowLabelFromDate(modalPaymentDate)}
+                </p>
+                <p className="mt-2 text-xs text-indigo-800/90">
+                  Este pagamento quitará uma obrigação de{" "}
+                  <span className="font-semibold">{payableCompetenceLabel(actionModal.row.month)}</span>, mas será
+                  registrado no fluxo de caixa de{" "}
+                  <span className="font-semibold">{payableCashFlowLabelFromDate(modalPaymentDate)}</span>.
+                </p>
+              </div>
+            ) : null}
             <div className="mt-4 space-y-3">
+              {actionModal.mode === "register" ? (
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="font-medium text-slate-700">Data do pagamento *</span>
+                  <input
+                    type="date"
+                    required
+                    max={todayIsoLocal()}
+                    value={modalPaymentDate}
+                    onChange={(e) => setModalPaymentDate(e.target.value)}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </label>
+              ) : (
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="font-medium text-slate-700">Motivo do estorno (opcional)</span>
+                  <input
+                    value={modalReversalReason}
+                    onChange={(e) => setModalReversalReason(e.target.value)}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    placeholder="Ex.: lançamento duplicado"
+                  />
+                </label>
+              )}
               <label className="flex flex-col gap-1 text-sm">
                 <span className="font-medium text-slate-700">
                   {actionModal.mode === "register" ? "Valor do pagamento *" : "Valor a estornar *"}
@@ -913,6 +878,238 @@ export function Payables() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+type PayablesSnapshotTableProps = {
+  rows: PayableSnapshotRow[];
+  headerSort: TableSortHeaderProps;
+  emptyLabel: string;
+  canEdit: boolean;
+  editingId: string | null;
+  editSaving: boolean;
+  editValue: number;
+  editDate: string;
+  setEditValue: (n: number) => void;
+  setEditDate: (d: string) => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  onStartEdit: (r: PayableSnapshotRow) => void;
+  onRegisterPayment: (r: PayableSnapshotRow) => void;
+  onReversePayment: (r: PayableSnapshotRow) => void;
+  onDeleteManual: (r: PayableSnapshotRow) => void;
+};
+
+function PayablesSnapshotTable({
+  rows,
+  headerSort,
+  emptyLabel,
+  canEdit,
+  editingId,
+  editSaving,
+  editValue,
+  editDate,
+  setEditValue,
+  setEditDate,
+  onSaveEdit,
+  onCancelEdit,
+  onStartEdit,
+  onRegisterPayment,
+  onReversePayment,
+  onDeleteManual,
+}: PayablesSnapshotTableProps) {
+  return (
+    <div className="overflow-x-auto w-full rounded-xl border border-slate-200 bg-white shadow-sm">
+      <table className="min-w-[1320px] w-full table-fixed divide-y divide-slate-200 text-sm">
+        <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+          <tr>
+            <SortableTh label="Tipo" column="type" className="w-[90px] px-2 py-2" {...headerSort} />
+            <SortableTh label="Nome" column="name" className="w-[280px] px-2 py-2" {...headerSort} />
+            <SortableTh label="Competência" column="month" className="w-[110px] px-2 py-2" {...headerSort} />
+            <SortableTh label="Centro de custo" column="cost_center" className="w-[160px] px-2 py-2" {...headerSort} />
+            <SortableTh
+              label="Valor original"
+              column="amount_original"
+              className="w-[100px] px-2 py-2"
+              align="right"
+              {...headerSort}
+            />
+            <SortableTh
+              label="Valor final"
+              column="amount_final"
+              className="w-[100px] px-2 py-2"
+              align="right"
+              {...headerSort}
+            />
+            <SortableTh label="Pago" column="amount_paid" className="w-[90px] px-2 py-2" align="right" {...headerSort} />
+            <SortableTh label="Saldo" column="amount_remaining" className="w-[90px] px-2 py-2" align="right" {...headerSort} />
+            <SortableTh label="Vencimento" column="due_date" className="w-[100px] px-2 py-2" align="right" {...headerSort} />
+            <SortableTh label="Status" column="status" className="w-[90px] px-2 py-2" {...headerSort} />
+            <SortableTh
+              label="Último pagamento"
+              column="last_payment"
+              className="w-[120px] px-2 py-2"
+              {...headerSort}
+            />
+            <th className="w-[220px] whitespace-nowrap px-2 py-2 text-right">Ações</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {rows.length === 0 ? (
+            <tr>
+              <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
+                {emptyLabel}
+              </td>
+            </tr>
+          ) : (
+            rows.map((r) => {
+              const isEditing = editingId === r.id;
+              const temPago = r.amount_paid > 0.005;
+              return (
+                <tr key={r.id} className="hover:bg-slate-50/80">
+                  <td className="whitespace-nowrap px-2 py-1.5 text-slate-700">{typeLabel(r.type)}</td>
+                  <td className="min-w-0 px-2 py-1.5 align-middle text-slate-900">
+                    <div className="truncate max-w-[280px]" title={r.name}>
+                      {r.name}
+                    </div>
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-slate-700">
+                    {payableCompetenceLabel(r.month)}
+                  </td>
+                  <td className="min-w-0 px-2 py-1.5 align-middle text-slate-700">
+                    <TruncatedCell value={r.cost_center} maxWidthClass="max-w-[160px]" />
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-slate-700">
+                    {formatBRL(r.amount_original)}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-right align-middle tabular-nums text-slate-900">
+                    {isEditing ? (
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        inputMode="decimal"
+                        value={Number.isFinite(editValue) ? editValue : 0}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === "") {
+                            setEditValue(0);
+                            return;
+                          }
+                          const n = Number.parseFloat(raw);
+                          if (Number.isFinite(n)) setEditValue(n);
+                        }}
+                        className="w-full min-w-[5.5rem] rounded border border-slate-300 px-1.5 py-0.5 text-right text-sm"
+                      />
+                    ) : (
+                      formatBRL(r.amount_final)
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-slate-800">
+                    {formatBRL(r.amount_paid)}
+                  </td>
+                  <td
+                    className={`whitespace-nowrap px-2 py-1.5 text-right tabular-nums font-medium ${saldoClassName(
+                      r.amount_remaining,
+                      r.is_overpaid,
+                    )}`}
+                  >
+                    {formatBRL(r.amount_remaining)}
+                    {r.is_overpaid ? (
+                      <span className="ml-1 text-[10px] font-normal text-amber-700">(adiant.)</span>
+                    ) : null}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 align-middle text-slate-700">
+                    {isEditing ? (
+                      <input
+                        type="date"
+                        required
+                        value={editDate}
+                        onChange={(e) => setEditDate(e.target.value)}
+                        className="w-full rounded border border-slate-300 px-1.5 py-0.5 text-sm"
+                      />
+                    ) : (
+                      formatDateBr(r.due_date)
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <span
+                      className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${statusBadgeClass(
+                        r.status,
+                        r.is_overpaid,
+                      )}`}
+                    >
+                      {r.status}
+                      {r.is_overpaid ? "+" : ""}
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">
+                    {r.last_payment_date ? formatDateBr(r.last_payment_date) : "—"}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-right">
+                    {isEditing ? (
+                      <span className="inline-flex items-center justify-end gap-1 whitespace-nowrap">
+                        <button
+                          type="button"
+                          disabled={!canEdit || editSaving}
+                          onClick={onSaveEdit}
+                          className="rounded border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {editSaving ? "Salvando…" : "Salvar"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={editSaving}
+                          onClick={onCancelEdit}
+                          className="rounded border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Cancelar
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center justify-end gap-x-1 whitespace-nowrap">
+                        <button
+                          type="button"
+                          disabled={!canEdit}
+                          onClick={() => onStartEdit(r)}
+                          className="rounded px-1.5 py-0.5 text-xs text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!canEdit || editingId === r.id}
+                          onClick={() => onRegisterPayment(r)}
+                          className="rounded px-1.5 py-0.5 text-xs text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Registrar pagamento
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!canEdit || !temPago || editingId === r.id}
+                          onClick={() => onReversePayment(r)}
+                          className="rounded px-1.5 py-0.5 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Estornar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!canEdit || r.type !== "MANUAL" || editingId === r.id}
+                          onClick={() => onDeleteManual(r)}
+                          className="rounded px-1.5 py-0.5 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Excluir
+                        </button>
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }

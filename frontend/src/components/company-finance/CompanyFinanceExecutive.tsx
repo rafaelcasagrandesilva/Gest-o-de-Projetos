@@ -27,12 +27,17 @@ import {
 } from "@/services/companyFinance";
 import { listEmployees, type Employee } from "@/services/employees";
 import { listProjects, type Project } from "@/services/projects";
+import { SortableTh } from "@/components/table";
+import { useTableSort } from "@/hooks/useTableSort";
+import { COMPANY_FINANCE_SORT_COLUMNS, defaultCompanyFinanceSort } from "@/tableSort/companyFinance";
 import {
   CC_REF_ADMINISTRATIVO,
   defaultCostCenterRef,
   itemCostCenterRef,
 } from "@/components/company-finance/costCenter";
 import { CostCenterSelect } from "@/components/company-finance/CostCenterSelect";
+import { itemMatchesSearch } from "@/components/company-finance/itemSearch";
+import { CollapsiblePanel, PrimaryAddButton } from "@/components/ExpandableFormSection";
 import { isAxiosError } from "axios";
 import { GESTOR_GLOBAL_EDIT_TOOLTIP, useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
 import { usePermission } from "@/hooks/usePermission";
@@ -167,6 +172,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showCharts, setShowCharts] = useState(false);
   const [creditorFilter, setCreditorFilter] = useState<DebtCreditorFilter>("ALL");
   const [draftName, setDraftName] = useState("");
   const [draftRef, setDraftRef] = useState("");
@@ -189,8 +195,30 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [draftInstallmentCount, setDraftInstallmentCount] = useState("");
   const [draftInstallmentValue, setDraftInstallmentValue] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [itemSearch, setItemSearch] = useState("");
 
   const monthKeys = useMemo(() => rollingMonthKeys(competencia), [competencia]);
+
+  const resetCreateForm = useCallback(() => {
+    setDraftName("");
+    setDraftRef("");
+    setDraftCategory(defaultCategory(tipo));
+    setDraftCostCenterRef(defaultCostCenterRef(tipo));
+    setDraftDescription("");
+    setDraftRecurrence(defaultRecurrence(tipo));
+    setDraftItemType("MANUAL");
+    setDraftEmployeeQuery("");
+    setDraftEmployeeOptions([]);
+    setDraftEmployeeId("");
+    setDraftPercentual("100");
+    setDraftHasLegalProcess(false);
+    setDraftHasRenegotiation(false);
+    setDraftRenegotiatedAmount("");
+    setDraftRenegotiationType("UNIQUE");
+    setDraftInstallmentCount("");
+    setDraftInstallmentValue("");
+  }, [tipo]);
 
   useEffect(() => {
     setDraftCategory(defaultCategory(tipo));
@@ -361,25 +389,37 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   );
 
   const filteredItems = useMemo(() => {
-    if (tipo !== "endividamento") return items;
-    return items.filter((it) => {
-      const hasLegal = Boolean(it.has_legal_process);
-      const hasReneg = Boolean(it.has_renegotiation);
-      switch (creditorFilter) {
-        case "HAS_LEGAL_PROCESS":
-          return hasLegal;
-        case "NO_LEGAL_PROCESS":
-          return !hasLegal;
-        case "HAS_RENEGOTIATION":
-          return hasReneg;
-        case "NO_RENEGOTIATION":
-          return !hasReneg;
-        case "ALL":
-        default:
-          return true;
-      }
-    });
-  }, [tipo, items, creditorFilter]);
+    let list = items;
+    if (tipo === "endividamento") {
+      list = list.filter((it) => {
+        const hasLegal = Boolean(it.has_legal_process);
+        const hasReneg = Boolean(it.has_renegotiation);
+        switch (creditorFilter) {
+          case "HAS_LEGAL_PROCESS":
+            return hasLegal;
+          case "NO_LEGAL_PROCESS":
+            return !hasLegal;
+          case "HAS_RENEGOTIATION":
+            return hasReneg;
+          case "NO_RENEGOTIATION":
+            return !hasReneg;
+          case "ALL":
+          default:
+            return true;
+        }
+      });
+    }
+    if (itemSearch.trim()) {
+      list = list.filter((it) => itemMatchesSearch(it, itemSearch, projectOptions, tipo));
+    }
+    return list;
+  }, [tipo, items, creditorFilter, itemSearch, projectOptions]);
+
+  const { sortedRows: sortedFilteredItems, headerSort } = useTableSort(
+    filteredItems,
+    COMPANY_FINANCE_SORT_COLUMNS,
+    { defaultCompare: defaultCompanyFinanceSort },
+  );
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -436,23 +476,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             ? installmentValueN
             : null,
       });
-      setDraftName("");
-      setDraftRef("");
-      setDraftCategory(defaultCategory(tipo));
-      setDraftCostCenterRef(defaultCostCenterRef(tipo));
-      setDraftDescription("");
-      setDraftRecurrence(defaultRecurrence(tipo));
-      setDraftItemType("MANUAL");
-      setDraftEmployeeQuery("");
-      setDraftEmployeeOptions([]);
-      setDraftEmployeeId("");
-      setDraftPercentual("100");
-      setDraftHasLegalProcess(false);
-      setDraftHasRenegotiation(false);
-      setDraftRenegotiatedAmount("");
-      setDraftRenegotiationType("UNIQUE");
-      setDraftInstallmentCount("");
-      setDraftInstallmentValue("");
+      resetCreateForm();
+      setShowCreateForm(false);
       await loadAll();
     } catch (err) {
       if (isAxiosError(err)) setError(String(err.response?.data?.detail ?? err.message));
@@ -507,6 +532,16 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               className="rounded-lg border border-slate-300 px-3 py-2 text-slate-900 shadow-sm"
             />
           </label>
+          <PrimaryAddButton
+            open={showCreateForm}
+            disabled={financeReadOnly}
+            onToggle={() => {
+              setShowCreateForm((open) => {
+                if (open) resetCreateForm();
+                return !open;
+              });
+            }}
+          />
         </div>
       </header>
 
@@ -544,102 +579,139 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         )}
       </section>
 
-      {/* Gráficos */}
-      <section className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <h2 className="text-sm font-medium text-slate-800">
-                {tipo === "endividamento" ? "Evolução do saldo restante" : "Pagamentos acumulados"}
-              </h2>
-              <p className="text-xs text-slate-500">
-                {tipo === "endividamento"
-                  ? "Soma do saldo devedor ao fim de cada mês (eixo Y ajustado à faixa dos valores para destacar variações)"
-                  : "Soma acumulada dos pagamentos registrados"}
-              </p>
-            </div>
-            {tipo === "endividamento" && saldoPeriodDelta != null && (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-right">
-                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Variação no período</p>
-                <p
-                  className={`text-sm font-semibold tabular-nums ${
-                    saldoPeriodDelta < 0 ? "text-emerald-700" : saldoPeriodDelta > 0 ? "text-amber-800" : "text-slate-700"
-                  }`}
-                >
-                  {saldoPeriodDelta > 0 ? "+" : ""}
-                  {formatBRL(saldoPeriodDelta)}
-                </p>
-              </div>
-            )}
+      {/* Gráficos (recolhível) */}
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-medium text-slate-800">Gráficos</h2>
+            <p className="text-xs text-slate-500">Opcional: abra para visualizar tendências do período.</p>
           </div>
-          <div className="mt-3 h-[260px]">
-            {lineData.length === 0 ? (
-              <p className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados.</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={lineData} margin={{ top: 8, right: 12, left: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="mes" tick={{ fontSize: 10 }} />
-                  <YAxis
-                    tick={{ fontSize: 10 }}
-                    tickFormatter={(v) =>
-                      Math.abs(v) >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : `${(v / 1000).toFixed(0)}k`
-                    }
-                    width={48}
-                    domain={tipo === "endividamento" && saldoLineYDomain ? saldoLineYDomain : undefined}
-                    allowDataOverflow
-                  />
-                  <Tooltip formatter={(v: number) => formatBRL(v)} />
-                  <Legend />
-                  {tipo === "endividamento" ? (
-                    <Line
-                      type="monotone"
-                      dataKey="saldo"
-                      name="Saldo restante"
-                      stroke="#4F46E5"
-                      strokeWidth={2}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      dot={{ r: 3, fill: "#4F46E5", strokeWidth: 0 }}
-                      activeDot={{ r: 5, stroke: "#fff", strokeWidth: 2 }}
-                    />
-                  ) : (
-                    <Line type="monotone" dataKey="acumulado" name="Acumulado" stroke="#059669" strokeWidth={2} dot={false} />
+          <button
+            type="button"
+            onClick={() => setShowCharts((v) => !v)}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            aria-expanded={showCharts}
+          >
+            <span>{showCharts ? "Ocultar gráficos" : "Mostrar gráficos"}</span>
+            <span className={`select-none text-slate-500 transition-transform ${showCharts ? "rotate-90" : ""}`}>
+              ›
+            </span>
+          </button>
+        </div>
+
+        <CollapsiblePanel open={showCharts} className="pt-4">
+          {showCharts ? (
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-medium text-slate-800">
+                      {tipo === "endividamento" ? "Evolução do saldo restante" : "Pagamentos acumulados"}
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      {tipo === "endividamento"
+                        ? "Soma do saldo devedor ao fim de cada mês (eixo Y ajustado à faixa dos valores para destacar variações)"
+                        : "Soma acumulada dos pagamentos registrados"}
+                    </p>
+                  </div>
+                  {tipo === "endividamento" && saldoPeriodDelta != null && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-right">
+                      <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Variação no período</p>
+                      <p
+                        className={`text-sm font-semibold tabular-nums ${
+                          saldoPeriodDelta < 0
+                            ? "text-emerald-700"
+                            : saldoPeriodDelta > 0
+                              ? "text-amber-800"
+                              : "text-slate-700"
+                        }`}
+                      >
+                        {saldoPeriodDelta > 0 ? "+" : ""}
+                        {formatBRL(saldoPeriodDelta)}
+                      </p>
+                    </div>
                   )}
-                </LineChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h2 className="text-sm font-medium text-slate-800">Pagamentos por mês</h2>
-          <p className="text-xs text-slate-500">Soma de todos os itens no mês</p>
-          <div className="mt-3 h-[260px]">
-            {barData.length === 0 ? (
-              <p className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados.</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={barData} margin={{ top: 8, right: 12, left: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="mes" tick={{ fontSize: 10 }} />
-                  <YAxis
-                    tick={{ fontSize: 10 }}
-                    tickFormatter={(v) =>
-                      Math.abs(v) >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : `${(v / 1000).toFixed(0)}k`
-                    }
-                    width={40}
-                  />
-                  <Tooltip formatter={(v: number) => formatBRL(v)} />
-                  <Bar dataKey="pagamentos" fill="#6366F1" radius={[4, 4, 0, 0]} name="Pagamentos" />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
+                </div>
+                <div className="mt-3 h-[260px]">
+                  {lineData.length === 0 ? (
+                    <p className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={lineData} margin={{ top: 8, right: 12, left: 8, bottom: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="mes" tick={{ fontSize: 10 }} />
+                        <YAxis
+                          tick={{ fontSize: 10 }}
+                          tickFormatter={(v) =>
+                            Math.abs(v) >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : `${(v / 1000).toFixed(0)}k`
+                          }
+                          width={48}
+                          domain={tipo === "endividamento" && saldoLineYDomain ? saldoLineYDomain : undefined}
+                          allowDataOverflow
+                        />
+                        <Tooltip formatter={(v: number) => formatBRL(v)} />
+                        <Legend />
+                        {tipo === "endividamento" ? (
+                          <Line
+                            type="monotone"
+                            dataKey="saldo"
+                            name="Saldo restante"
+                            stroke="#4F46E5"
+                            strokeWidth={2}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            dot={{ r: 3, fill: "#4F46E5", strokeWidth: 0 }}
+                            activeDot={{ r: 5, stroke: "#fff", strokeWidth: 2 }}
+                          />
+                        ) : (
+                          <Line
+                            type="monotone"
+                            dataKey="acumulado"
+                            name="Acumulado"
+                            stroke="#059669"
+                            strokeWidth={2}
+                            dot={false}
+                          />
+                        )}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <h3 className="text-sm font-medium text-slate-800">Pagamentos por mês</h3>
+                <p className="text-xs text-slate-500">Soma de todos os itens no mês</p>
+                <div className="mt-3 h-[260px]">
+                  {barData.length === 0 ? (
+                    <p className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={barData} margin={{ top: 8, right: 12, left: 8, bottom: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="mes" tick={{ fontSize: 10 }} />
+                        <YAxis
+                          tick={{ fontSize: 10 }}
+                          tickFormatter={(v) =>
+                            Math.abs(v) >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : `${(v / 1000).toFixed(0)}k`
+                          }
+                          width={40}
+                        />
+                        <Tooltip formatter={(v: number) => formatBRL(v)} />
+                        <Bar dataKey="pagamentos" fill="#6366F1" radius={[4, 4, 0, 0]} name="Pagamentos" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </CollapsiblePanel>
       </section>
 
-      {/* Novo item */}
-      <section className="rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+      <CollapsiblePanel
+        open={showCreateForm}
+        className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 shadow-sm"
+      >
         <h2 className="text-sm font-medium text-slate-800">Novo item</h2>
         <form onSubmit={handleCreate} className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
           {tipo === "custo_fixo" && (
@@ -903,17 +975,52 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             {saving ? "Salvando…" : "Adicionar"}
           </button>
         </form>
-      </section>
+      </CollapsiblePanel>
 
       {/* Cards */}
       <section className="space-y-4">
-        <h2 className="text-lg font-medium text-slate-900">Itens</h2>
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+          <h2 className="text-lg font-medium text-slate-900">Itens</h2>
+          <label className="flex min-w-[min(100%,280px)] flex-1 flex-col gap-1 text-sm sm:max-w-md">
+            <span className="font-medium text-slate-700">Buscar</span>
+            <input
+              type="search"
+              value={itemSearch}
+              onChange={(e) => setItemSearch(e.target.value)}
+              placeholder="Buscar item, fornecedor ou descrição..."
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm"
+            />
+          </label>
+        </div>
+        {!loading && sortedFilteredItems.length > 0 ? (
+          <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead className="border-b border-slate-100 bg-slate-50/80">
+                <tr>
+                  <SortableTh label="Nome" column="nome" variant="standard" {...headerSort} />
+                  <SortableTh label="Categoria" column="category" variant="standard" {...headerSort} />
+                  <SortableTh label="Centro de custo" column="cost_center" variant="standard" {...headerSort} />
+                  <SortableTh label="Referência" column="valor_referencia" variant="standard" align="right" {...headerSort} />
+                  <SortableTh label="Total pago" column="total_pago" variant="standard" align="right" {...headerSort} />
+                  <SortableTh label="Pago no mês" column="pago_mes" variant="standard" align="right" {...headerSort} />
+                  <SortableTh label="Status" column="status" variant="standard" {...headerSort} />
+                </tr>
+              </thead>
+            </table>
+          </div>
+        ) : null}
         {loading && items.length === 0 ? (
           <p className="text-sm text-slate-500">Carregando…</p>
         ) : filteredItems.length === 0 ? (
-          <p className="text-sm text-slate-500">Nenhum item encontrado para este filtro.</p>
+          <p className="text-sm text-slate-500">
+            {items.length === 0
+              ? "Nenhum item cadastrado."
+              : itemSearch.trim()
+                ? "Nenhum item corresponde à busca."
+                : "Nenhum item encontrado para este filtro."}
+          </p>
         ) : (
-          filteredItems.map((it) => (
+          sortedFilteredItems.map((it) => (
             <FinanceItemCard
               key={it.id}
               item={it}

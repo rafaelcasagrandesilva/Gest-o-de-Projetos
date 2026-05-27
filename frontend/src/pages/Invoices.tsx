@@ -21,6 +21,10 @@ import { usePermission } from "@/hooks/usePermission";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
 import { PeriodFilter } from "@/components/PeriodFilter";
+import { SortableTh } from "@/components/table";
+import { useTableSort } from "@/hooks/useTableSort";
+import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
+import { defaultInvoiceSort, INVOICE_SORT_COLUMNS } from "@/tableSort/invoices";
 
 function formatAxiosDetail(e: unknown): string {
   if (!isAxiosError(e)) return "Erro inesperado.";
@@ -156,6 +160,8 @@ export function Invoices() {
   const [antBusy, setAntBusy] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [viewBatchId, setViewBatchId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     project_id: "",
@@ -166,6 +172,10 @@ export function Invoices() {
     net_amount: "",
     client_name: "",
     notes: "",
+  });
+
+  const { sortedRows, headerSort } = useTableSort(rows, INVOICE_SORT_COLUMNS, {
+    defaultCompare: defaultInvoiceSort,
   });
 
   const ym = useMemo(() => {
@@ -585,7 +595,18 @@ export function Invoices() {
         </button>
       </section>
 
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          disabled={!canEditInvoices}
+          onClick={() => {
+            setViewBatchId(null);
+            setBatchModalOpen(true);
+          }}
+          className="rounded-lg border border-indigo-200 bg-white px-4 py-2 text-sm font-medium text-indigo-800 shadow-sm hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Nova antecipação
+        </button>
         <button
           type="button"
           disabled={!canEditInvoices}
@@ -700,16 +721,73 @@ export function Invoices() {
         <table className="min-w-[1000px] w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
             <tr>
-              <th className="px-2 py-3">Projeto</th>
+              <SortableTh
+                label="Projeto"
+                column="project"
+                activeColumn={headerSort.activeColumn}
+                direction={headerSort.direction}
+                onSort={headerSort.onSort}
+              />
               <th className="px-2 py-3">Cliente</th>
-              <th className="px-2 py-3">Nº NF</th>
-              <th className="px-2 py-3">Emissão</th>
-              <th className="px-2 py-3">Prazo</th>
-              <th className="px-2 py-3">Venc.</th>
-              <th className="px-2 py-3 text-right">Bruto</th>
-              <th className="px-2 py-3 text-right">Líquido</th>
-              <th className="px-2 py-3 text-right">Recebido</th>
-              <th className="px-2 py-3">Status</th>
+              <SortableTh
+                label="Nº NF"
+                column="number"
+                activeColumn={headerSort.activeColumn}
+                direction={headerSort.direction}
+                onSort={headerSort.onSort}
+              />
+              <SortableTh
+                label="Emissão"
+                column="issue_date"
+                activeColumn={headerSort.activeColumn}
+                direction={headerSort.direction}
+                onSort={headerSort.onSort}
+              />
+              <SortableTh
+                label="Prazo"
+                column="due_days"
+                activeColumn={headerSort.activeColumn}
+                direction={headerSort.direction}
+                onSort={headerSort.onSort}
+              />
+              <SortableTh
+                label="Venc."
+                column="due_date"
+                activeColumn={headerSort.activeColumn}
+                direction={headerSort.direction}
+                onSort={headerSort.onSort}
+              />
+              <SortableTh
+                label="Bruto"
+                column="gross_amount"
+                activeColumn={headerSort.activeColumn}
+                direction={headerSort.direction}
+                onSort={headerSort.onSort}
+                align="right"
+              />
+              <SortableTh
+                label="Líquido"
+                column="net_amount"
+                activeColumn={headerSort.activeColumn}
+                direction={headerSort.direction}
+                onSort={headerSort.onSort}
+                align="right"
+              />
+              <SortableTh
+                label="Recebido"
+                column="received_amount"
+                activeColumn={headerSort.activeColumn}
+                direction={headerSort.direction}
+                onSort={headerSort.onSort}
+                align="right"
+              />
+              <SortableTh
+                label="Status"
+                column="status"
+                activeColumn={headerSort.activeColumn}
+                direction={headerSort.direction}
+                onSort={headerSort.onSort}
+              />
               <th className="px-2 py-3">PDF</th>
               <th className="px-2 py-3 text-right">Ações</th>
             </tr>
@@ -728,7 +806,7 @@ export function Invoices() {
                 </td>
               </tr>
             ) : (
-              rows.map((row) => {
+              sortedRows.map((row) => {
                 const overdue = isOverdue(row);
                 const rowClass =
                   row.status === "CANCELADA"
@@ -761,6 +839,18 @@ export function Invoices() {
                         {overdue && row.status !== "CANCELADA" && (
                           <span className="ml-1 text-[10px] font-semibold text-red-700">Atraso</span>
                         )}
+                        {row.advance_batch ? (
+                          <button
+                            type="button"
+                            className="mt-0.5 block text-left text-[10px] text-indigo-700 hover:underline"
+                            onClick={() => {
+                              setViewBatchId(row.advance_batch!.id);
+                              setBatchModalOpen(true);
+                            }}
+                          >
+                            Antecipação
+                          </button>
+                        ) : null}
                       </td>
                       <td className="whitespace-nowrap px-2 py-2">
                         {row.has_pdf ? (
@@ -1010,6 +1100,13 @@ export function Invoices() {
                                   </ul>
                                 )}
 
+                                {row.advance_batch ? (
+                                  <p className="mb-2 text-xs text-indigo-800">
+                                    NF em operação de antecipação. Use antecipação individual apenas
+                                    fora do lote.
+                                  </p>
+                                ) : null}
+
                                 <div className="rounded border border-slate-200 bg-white p-3">
                                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
                                     + Adicionar antecipação
@@ -1089,7 +1186,12 @@ export function Invoices() {
                                     )}
                                     <button
                                       type="button"
-                                      disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
+                                      disabled={
+                                        !canEditInvoices ||
+                                        antBusy ||
+                                        row.status === "CANCELADA" ||
+                                        Boolean(row.advance_batch)
+                                      }
                                       onClick={() => void handleAddAnticipation(row)}
                                       className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
                                     >
@@ -1163,6 +1265,16 @@ export function Invoices() {
           </tbody>
         </table>
       </div>
+
+      <AdvanceBatchModal
+        open={batchModalOpen}
+        viewBatchId={viewBatchId}
+        onClose={() => {
+          setBatchModalOpen(false);
+          setViewBatchId(null);
+        }}
+        onCreated={() => void load()}
+      />
     </div>
   );
 }

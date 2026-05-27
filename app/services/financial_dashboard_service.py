@@ -8,9 +8,11 @@ from datetime import date
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.payable_payment import PayablePayment
 from app.models.payable_snapshot import PayableSnapshot
 from app.models.project import Project
 from app.models.receivable import ReceivableInvoice, ReceivableInvoiceAnticipation
+from app.models.receivable_advance_batch import ReceivableAdvanceBatch, ReceivableAdvanceBatchStatus
 from app.models.receivable_manual import ReceivableManualItem
 from app.schemas.receivable import CENT_TOL
 from app.utils.date_utils import normalize_competencia, previous_competencia
@@ -84,7 +86,7 @@ class FinancialDashboardService:
     Dashboard financeiro em regime de caixa:
     - Faturamento: total recebido no mês (data de recebimento), alinhado a Contas a receber:
       notas fiscais (`received_date` + valor recebido) e receitas manuais (`data_recebimento` + valor recebido).
-    - Custos: pago (contas a pagar), agrupado por mês do snapshot
+    - Custos: pago (contas a pagar), agrupado por mês da data real do pagamento (`PayablePayment.payment_date`)
     - Caixa: faturamento - custos
     """
 
@@ -140,6 +142,23 @@ class FinancialDashboardService:
         ant_rows = (await self.db.execute(ant_stmt)).all()
         rev_map_ants = {normalize_competencia(r.m.date()): float(r.v) for r in ant_rows if r.m is not None}
 
+        # Borderôs (entrada líquida no mês do recebimento)
+        batch_stmt = (
+            select(
+                func.date_trunc("month", ReceivableAdvanceBatch.receive_date).label("m"),
+                func.coalesce(func.sum(ReceivableAdvanceBatch.received_amount), 0).label("v"),
+            )
+            .where(
+                ReceivableAdvanceBatch.status != ReceivableAdvanceBatchStatus.CANCELLED,
+                ReceivableAdvanceBatch.receive_date >= period_start,
+                ReceivableAdvanceBatch.receive_date <= period_end,
+                ReceivableAdvanceBatch.received_amount > 0,
+            )
+            .group_by("m")
+        )
+        batch_rows = (await self.db.execute(batch_stmt)).all()
+        rev_map_batches = {normalize_competencia(r.m.date()): float(r.v) for r in batch_rows if r.m is not None}
+
         # Receitas manuais (mesma lógica da tela Contas a receber — tipo MANUAL)
         man_stmt = (
             select(
@@ -158,23 +177,19 @@ class FinancialDashboardService:
         )
         man_rows = (await self.db.execute(man_stmt)).all()
         rev_map_manual = {normalize_competencia(r.m.date()): float(r.v) for r in man_rows if r.m is not None}
-        rev_map = _merge_month_amounts(rev_map_nf, rev_map_ants, rev_map_manual)
+        rev_map = _merge_month_amounts(rev_map_nf, rev_map_ants, rev_map_batches, rev_map_manual)
 
-        # --- Pago (contas a pagar do módulo) por mês ---
-        # Importante: a tela "Contas a pagar" é filtrada por `month` do snapshot (mês de pagamento),
-        # e o backend hoje define `payment_date` como a data atual ao registrar pagamento (não representa o mês).
-        # Para consistência com o módulo, agrupamos/filtramos por `PayableSnapshot.month`.
-        pay_month = PayableSnapshot.month.label("m")
+        # --- Pago (fluxo de caixa real) por mês da data do pagamento ---
+        pay_month = func.date_trunc("month", PayablePayment.payment_date).label("m")
         cost_stmt = (
             select(
                 pay_month,
-                func.coalesce(func.sum(PayableSnapshot.amount_paid), 0).label("v"),
+                func.coalesce(func.sum(PayablePayment.amount), 0).label("v"),
             )
             .where(
-                # Conta como pago qualquer valor pago acumulado (PAGO/PARCIAL) no mês efetivo.
-                PayableSnapshot.amount_paid > 0,
-                PayableSnapshot.month >= start,
-                PayableSnapshot.month <= end,
+                PayablePayment.reversed_at.is_(None),
+                PayablePayment.payment_date >= period_start,
+                PayablePayment.payment_date <= period_end,
             )
             .group_by("m")
         )
@@ -270,15 +285,17 @@ class FinancialDashboardService:
             stmt = (
                 select(
                     PayableSnapshot.cost_center.label("label"),
-                    func.coalesce(func.sum(PayableSnapshot.amount_paid), 0).label("v"),
+                    func.coalesce(func.sum(PayablePayment.amount), 0).label("v"),
                 )
+                .select_from(PayablePayment)
+                .join(PayableSnapshot, PayableSnapshot.id == PayablePayment.payable_snapshot_id)
                 .where(
-                    PayableSnapshot.amount_paid > 0,
-                    PayableSnapshot.month >= start,
-                    PayableSnapshot.month <= end,
+                    PayablePayment.reversed_at.is_(None),
+                    PayablePayment.payment_date >= start,
+                    PayablePayment.payment_date <= end,
                 )
                 .group_by(PayableSnapshot.cost_center)
-                .order_by(func.sum(PayableSnapshot.amount_paid).desc())
+                .order_by(func.sum(PayablePayment.amount).desc())
             )
             rows = (await self.db.execute(stmt)).all()
             groups = [CashDashboardGroup(label=str(r.label), valor=round(float(r.v), 2)) for r in rows]
