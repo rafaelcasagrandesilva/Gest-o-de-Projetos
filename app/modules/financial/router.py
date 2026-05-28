@@ -1177,7 +1177,14 @@ async def delete_payables_snapshot(
     if row is None:
         raise HTTPException(status_code=404, detail="Item não encontrado.")
     if row.type != PayableSnapshotType.MANUAL:
-        raise HTTPException(status_code=400, detail="Somente itens MANUAL podem ser excluídos.")
+        if not await svc.can_delete_orphaned_row(row=row):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Exclusão não permitida. "
+                    "Somente itens MANUAL ou linhas órfãs/extornadas sem pagamentos ativos podem ser excluídas."
+                ),
+            )
     await _ensure_payable_snapshot_edit_access(row=row, user=user, db=db)
     await svc.delete_row(row=row)
     await db.commit()

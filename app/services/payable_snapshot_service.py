@@ -117,6 +117,20 @@ def _payable_row_is_dynamic_sync_protected(row: PayableSnapshot) -> bool:
     return False
 
 
+async def _has_active_payments(session: AsyncSession, *, snapshot_id: UUID) -> bool:
+    cnt = (
+        await session.execute(
+            select(func.count())
+            .select_from(PayablePayment)
+            .where(
+                PayablePayment.payable_snapshot_id == snapshot_id,
+                PayablePayment.reversed_at.is_(None),
+            )
+        )
+    ).scalar_one()
+    return int(cnt or 0) > 0
+
+
 def _payable_remaining_balance(*, amount_final: Decimal, amount_paid: Decimal) -> Decimal:
     """Saldo assinado: negativo quando overpaid."""
     return (_money2(amount_final) - _money2(amount_paid)).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
@@ -2224,6 +2238,57 @@ class PayableSnapshotService:
         self._append_observation(row, obs_line)
         await self.session.flush()
         return row
+
+    async def can_delete_orphaned_row(self, *, row: PayableSnapshot) -> bool:
+        """
+        Exclusão segura de linhas órfãs/extornadas no snapshot.
+
+        Regras (libera exclusão mesmo que já tenha existido pagamento no passado):
+        - não pode ser ANTECIPACAO
+        - não pode estar pago (status derivado != PAGO)
+        - amount_paid ativo atual == 0 (pagamentos ativos inexistentes)
+        - deve estar órfã (fonte removida) para tipos automáticos suportados
+        """
+        if row.type == PayableSnapshotType.ANTECIPACAO:
+            return False
+
+        derived = payable_snapshot_derived_fields(
+            amount_paid=_money2(row.amount_paid),
+            amount_final=_money2(row.amount_final),
+        )
+        if str(derived.get("status")) == "PAGO":
+            return False
+
+        if await _has_active_payments(self.session, snapshot_id=row.id):
+            return False
+
+        if _money2(row.amount_paid) > 0:
+            return False
+
+        if row.ref_id is None:
+            return False
+
+        # Orfandade: FIXED_COST corporativo (CompanyFinancialItem) ou operacional do projeto.
+        if row.type == PayableSnapshotType.FIXED_COST:
+            if row.project_id is None:
+                src = await self._get_company_financial_item(row.ref_id)
+                return src is None or str(getattr(src, "tipo", "")).strip() != "custo_fixo"
+            obs = (row.observation or "")
+            if SOURCE_TAG_PROJECT_SYSTEM in obs:
+                src = await self.session.get(ProjectSystemCost, row.ref_id)
+                return src is None
+            if SOURCE_TAG_PROJECT_MISC in obs:
+                src = await self.session.get(ProjectOperationalFixed, row.ref_id)
+                return src is None
+            # FIXED_COST legado / desconhecido: não liberar (sem prova de orfandade)
+            return False
+
+        # ENDIVIDAMENTO/FINANCIAL corporativo: também pode ficar órfão se item foi removido/substituído.
+        if row.type in PAYABLE_DEBT_TYPES and row.project_id is None:
+            src = await self._get_company_financial_item(row.ref_id)
+            return src is None
+
+        return False
 
     async def delete_row(self, *, row: PayableSnapshot) -> None:
         await self.session.delete(row)
