@@ -83,16 +83,32 @@ type SingleBarRow = {
   color: string;
 };
 
+/** Custo total alinhado ao lucro líquido: operacional + impostos + rateio + antecipação + retenção. */
+function chartCostTotal(p: MonthlyPoint, receita: number, lucro: number): number {
+  const fromComponents =
+    Number(p.operational_cost ?? 0) +
+    Number(p.tax_amount ?? 0) +
+    Number(p.overhead_amount ?? 0) +
+    Number(p.anticipation_amount ?? 0) +
+    Number(p.total_retention ?? 0);
+  if (fromComponents > 0) return fromComponents;
+  const withRetention = Number(p.total_cost ?? p.cost_total ?? 0) + Number(p.total_retention ?? 0);
+  if (withRetention > 0) return withRetention;
+  return receita - lucro;
+}
+
 function monthlyPointsToRows(points: MonthlyPoint[]): ChartRow[] {
   return [...points]
     .map((p) => {
       const ym = p.competencia.slice(0, 7);
+      const receita = Number(p.total_revenue ?? p.revenue_total ?? 0);
+      const lucro = Number(p.net_profit ?? p.profit ?? 0);
       return {
         month: ym,
         monthLabel: formatMonthLabel(ym),
-        receita: Number(p.total_revenue ?? p.revenue_total ?? 0),
-        custo: Number(p.total_cost ?? p.cost_total ?? 0),
-        lucro: Number(p.net_profit ?? p.profit ?? 0),
+        receita,
+        custo: chartCostTotal(p, receita, lucro),
+        lucro,
       };
     })
     .sort((a, b) => a.month.localeCompare(b.month));
