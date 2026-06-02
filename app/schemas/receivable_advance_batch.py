@@ -48,6 +48,7 @@ class AdvanceBatchRead(UUIDTimestampRead):
     receive_date: date
     repayment_date: date
     observation: str | None = None
+    include_in_dashboard: bool = True
     status: AdvanceBatchStatus
     created_by_id: UUID | None = None
     items: list[AdvanceBatchItemRead] = Field(default_factory=list)
@@ -88,6 +89,10 @@ class AdvanceBatchCreate(BaseModel):
         if self.repayment_date < self.receive_date:
             raise ValueError("A data de devolução não pode ser anterior à data de recebimento.")
         return self
+
+
+class AdvanceBatchUpdate(BaseModel):
+    include_in_dashboard: bool
 
 
 class AdvanceBatchSummaryRead(BaseModel):

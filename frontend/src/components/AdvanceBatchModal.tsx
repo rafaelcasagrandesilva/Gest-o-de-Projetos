@@ -6,6 +6,7 @@ import {
   fetchEligibleInvoicesForBatch,
   cancelAdvanceBatch,
   deleteAdvanceBatchHard,
+  updateAdvanceBatchDashboardInclusion,
   type AdvanceBatch,
   type AdvanceBatchEligibleInvoice,
 } from "@/services/receivableAdvanceBatches";
@@ -48,6 +49,8 @@ export function AdvanceBatchModal({ open, onClose, onCreated, viewBatchId }: Pro
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<AdvanceBatch | null>(null);
+  const [includeInDashboard, setIncludeInDashboard] = useState(true);
+  const [dashboardSaving, setDashboardSaving] = useState(false);
 
   const [institution, setInstitution] = useState("");
   const [operationCode, setOperationCode] = useState("");
@@ -81,6 +84,7 @@ export function AdvanceBatchModal({ open, onClose, onCreated, viewBatchId }: Pro
     try {
       const b = await fetchAdvanceBatch(viewBatchId);
       setDetail(b);
+      setIncludeInDashboard(b.include_in_dashboard !== false);
     } catch (e) {
       setError(isAxiosError(e) ? formatApiError(e) : "Não foi possível carregar o borderô.");
     } finally {
@@ -163,6 +167,21 @@ export function AdvanceBatchModal({ open, onClose, onCreated, viewBatchId }: Pro
     if (code) return code;
     if ((detail.batch_number ?? "").trim()) return detail.batch_number;
     return `ANTECIPACAO-${detail.id.slice(0, 8)}`;
+  }
+
+  async function handleSaveDashboardInclusion() {
+    if (!detail) return;
+    setDashboardSaving(true);
+    setError(null);
+    try {
+      const updated = await updateAdvanceBatchDashboardInclusion(detail.id, includeInDashboard);
+      setDetail(updated);
+      onCreated();
+    } catch (e) {
+      setError(isAxiosError(e) ? formatApiError(e) : "Não foi possível salvar.");
+    } finally {
+      setDashboardSaving(false);
+    }
   }
 
   async function handleCancelBatch() {
@@ -291,6 +310,27 @@ export function AdvanceBatchModal({ open, onClose, onCreated, viewBatchId }: Pro
                 <span className="font-medium">Obs.:</span> {detail.observation}
               </p>
             ) : null}
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={includeInDashboard}
+                  onChange={(e) => setIncludeInDashboard(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                <span className="text-slate-700">Considerar no Dashboard Financeiro</span>
+              </label>
+              {includeInDashboard !== (detail.include_in_dashboard !== false) ? (
+                <button
+                  type="button"
+                  disabled={dashboardSaving}
+                  onClick={() => void handleSaveDashboardInclusion()}
+                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {dashboardSaving ? "Salvando…" : "Salvar participação no dashboard"}
+                </button>
+              ) : null}
+            </div>
             <div className="overflow-x-auto rounded-lg border border-slate-200">
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-600">

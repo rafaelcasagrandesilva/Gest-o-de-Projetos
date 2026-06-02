@@ -16,7 +16,7 @@ from app.api.deps import (
     user_sees_all_projects,
 )
 from app.core.config import settings
-from app.core.permission_codes import INVOICES_EDIT, INVOICES_VIEW
+from app.core.permission_codes import INVOICES_EDIT, INVOICES_REACTIVATE, INVOICES_VIEW
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.receivable import (
@@ -33,6 +33,7 @@ from app.schemas.receivable_advance_batch import (
     AdvanceBatchCreate,
     AdvanceBatchEligibleInvoiceRead,
     AdvanceBatchRead,
+    AdvanceBatchUpdate,
 )
 from app.services.receivable_advance_batch_service import ReceivableAdvanceBatchService
 from app.services.receivable_service import ReceivableService
@@ -41,6 +42,11 @@ from app.models.receivable import ReceivableInvoiceFile
 
 def _actor_email(user: User) -> str:
     return user.email
+
+
+def _actor_display(user: User) -> str:
+    name = (user.full_name or "").strip()
+    return name if name else _actor_email(user)
 
 
 def _pdf_disk_path(stored: str) -> Path:
@@ -255,6 +261,29 @@ async def create_advance_batch(
     return AdvanceBatchRead.model_validate(batch_svc.batch_to_read(loaded))
 
 
+@invoices_router.patch(
+    "/advance-batches/{batch_id}",
+    response_model=AdvanceBatchRead,
+    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+)
+async def update_advance_batch(
+    batch_id: UUID,
+    payload: AdvanceBatchUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> AdvanceBatchRead:
+    batch_svc = ReceivableAdvanceBatchService(db)
+    row = await batch_svc.update_dashboard_inclusion(
+        batch_id, include_in_dashboard=payload.include_in_dashboard
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Borderô não encontrado.")
+    await db.commit()
+    loaded = await batch_svc.get_batch(batch_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Borderô não encontrado.")
+    return AdvanceBatchRead.model_validate(batch_svc.batch_to_read(loaded))
+
+
 @invoices_router.delete(
     "/advance-batches/{batch_id}",
     status_code=204,
@@ -304,6 +333,39 @@ async def create_invoice(
     loaded = await svc.get_invoice(row.id)
     if loaded is None:
         raise HTTPException(status_code=500, detail="Falha ao carregar NF")
+    prefix = settings.api_v1_prefix.rstrip("/")
+    return ReceivableInvoiceRead.model_validate(svc.invoice_to_read(loaded, api_prefix=prefix))
+
+
+@invoices_router.post(
+    "/{invoice_id}/reactivate",
+    response_model=ReceivableInvoiceRead,
+    dependencies=[Depends(require_permission(INVOICES_REACTIVATE))],
+)
+async def reactivate_invoice(
+    invoice_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> ReceivableInvoiceRead:
+    svc = ReceivableService(db)
+    inv = await svc.get_invoice(invoice_id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="NF não encontrada.")
+    await ensure_project_access(user=actor, project_id=inv.project_id, db=db)
+    try:
+        row = await svc.reactivate_invoice(
+            invoice_id,
+            actor_display=_actor_display(actor),
+            log_user=_actor_email(actor),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if row is None:
+        raise HTTPException(status_code=404, detail="NF não encontrada.")
+    await db.commit()
+    loaded = await svc.get_invoice(invoice_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="NF não encontrada.")
     prefix = settings.api_v1_prefix.rstrip("/")
     return ReceivableInvoiceRead.model_validate(svc.invoice_to_read(loaded, api_prefix=prefix))
 
@@ -384,6 +446,7 @@ async def add_anticipation(
             received_date=payload.data_recebimento,
             due_date=payload.due_date,
             log_user=_actor_email(actor),
+            include_in_dashboard=payload.include_in_dashboard,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -395,6 +458,7 @@ async def add_anticipation(
             "created_at": row.created_at,
             "updated_at": row.updated_at,
             "invoice_id": row.invoice_id,
+            "include_in_dashboard": bool(getattr(row, "include_in_dashboard", True)),
             "institution": row.institution,
             "amount_received": float(row.amount_received or 0),
             "amount_to_repay": float(row.amount_to_repay or 0),
@@ -457,6 +521,7 @@ async def update_anticipation(
             received_date=payload.data_recebimento,
             due_date=payload.due_date,
             log_user=_actor_email(actor),
+            include_in_dashboard=payload.include_in_dashboard,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -469,6 +534,7 @@ async def update_anticipation(
             "created_at": row.created_at,
             "updated_at": row.updated_at,
             "invoice_id": row.invoice_id,
+            "include_in_dashboard": bool(getattr(row, "include_in_dashboard", True)),
             "institution": row.institution,
             "amount_received": float(row.amount_received or 0),
             "amount_to_repay": float(row.amount_to_repay or 0),

@@ -220,7 +220,7 @@ class FinancialService:
         net_profit = operational_profit - total_retention
         margin_operational = 0.0 if receita == 0 else float(operational_profit / receita)
         margin_net = 0.0 if receita == 0 else float(net_profit / receita)
-        ebitda = receita - parts["operational_cost"]
+        ebitda = receita - parts["operational_cost"] - overhead
         ebitda_margin = 0.0 if receita == 0 else float(ebitda / receita)
         p = custo_percentual_receita
         return {
@@ -272,7 +272,7 @@ class FinancialService:
         net_profit = operational_profit - total_retention
         margin_operational = 0.0 if receita == 0 else float(operational_profit / receita)
         margin_net = 0.0 if receita == 0 else float(net_profit / receita)
-        ebitda = receita - parts["operational_cost"]
+        ebitda = receita - parts["operational_cost"] - overhead
         ebitda_margin = 0.0 if receita == 0 else float(ebitda / receita)
         p = custo_percentual_receita
         return {

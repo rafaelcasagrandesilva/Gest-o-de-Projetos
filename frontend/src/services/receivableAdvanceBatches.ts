@@ -47,6 +47,7 @@ export interface AdvanceBatch {
   receive_date: string;
   repayment_date: string;
   observation: string | null;
+  include_in_dashboard: boolean;
   status: AdvanceBatchStatus;
   created_by_id: string | null;
   items: AdvanceBatchItem[];
@@ -79,6 +80,16 @@ export async function createAdvanceBatch(payload: {
   invoice_ids: string[];
 }): Promise<AdvanceBatch> {
   const { data } = await api.post<AdvanceBatch>("/invoices/advance-batches", payload);
+  return data;
+}
+
+export async function updateAdvanceBatchDashboardInclusion(
+  batchId: string,
+  include_in_dashboard: boolean,
+): Promise<AdvanceBatch> {
+  const { data } = await api.patch<AdvanceBatch>(`/invoices/advance-batches/${batchId}`, {
+    include_in_dashboard,
+  });
   return data;
 }
 

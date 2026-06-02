@@ -4,7 +4,7 @@ import enum
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import Date, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -39,6 +39,7 @@ class ReceivableAdvanceBatch(TimestampUUIDMixin, Base):
     status: Mapped[ReceivableAdvanceBatchStatus] = mapped_column(
         BATCH_STATUS_DB, nullable=False, default=ReceivableAdvanceBatchStatus.OPEN, index=True
     )
+    include_in_dashboard: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     created_by_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )

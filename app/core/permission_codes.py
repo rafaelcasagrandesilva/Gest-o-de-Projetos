@@ -35,6 +35,8 @@ RECEIVABLES_VIEW = "receivables.view"
 
 INVOICES_VIEW = "invoices.view"
 INVOICES_EDIT = "invoices.edit"
+# Concedida apenas por marcação explícita em user_permissions (não herda de ADMIN/superuser).
+INVOICES_REACTIVATE = "invoices.reactivate"
 
 DEBTS_VIEW = "debts.view"
 DEBTS_EDIT = "debts.edit"
@@ -49,6 +51,8 @@ USERS_MANAGE = "users.manage"
 
 REPORTS_VIEW = "reports.view"
 REPORTS_EXPORT = "reports.export"
+# Concedida apenas por marcação explícita (exportação do log de auditoria do sistema).
+AUDIT_EXPORT = "audit.export"
 
 ALERTS_VIEW = "alerts.view"
 
@@ -81,6 +85,7 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     RECEIVABLES_VIEW,
     INVOICES_VIEW,
     INVOICES_EDIT,
+    INVOICES_REACTIVATE,
     DEBTS_VIEW,
     DEBTS_EDIT,
     COSTS_VIEW,
@@ -90,6 +95,7 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     USERS_MANAGE,
     REPORTS_VIEW,
     REPORTS_EXPORT,
+    AUDIT_EXPORT,
     ALERTS_VIEW,
     COMPANY_FINANCE_VIEW,
     COMPANY_FINANCE_EDIT,
@@ -97,8 +103,11 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     ASSETS_EDIT,
 )
 
+# Permissões que só valem se estiverem em user_permissions (checkbox na gestão de usuários).
+EXPLICIT_GRANT_ONLY_PERMISSIONS = frozenset({INVOICES_REACTIVATE, AUDIT_EXPORT})
+
 # Compatibilidade com perfis legados (seed / ajuste em massa)
-PRESET_ADMIN = frozenset(ALL_PERMISSION_CODES)
+PRESET_ADMIN = frozenset(ALL_PERMISSION_CODES) - EXPLICIT_GRANT_ONLY_PERMISSIONS
 
 PRESET_GESTOR = frozenset(
     {

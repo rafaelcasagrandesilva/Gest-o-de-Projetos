@@ -20,10 +20,19 @@ const items: {
   { to: "/settings", label: "Configurações", end: false, perm: "settings.view" },
 ];
 
+function visibleSidebarItems(perms: string[] | undefined) {
+  return items.filter((i) => {
+    if (i.to === "/settings") {
+      return hasPermission(perms, "settings.view") || hasPermission(perms, "audit.export");
+    }
+    return hasPermission(perms, i.perm);
+  });
+}
+
 export function FinanceSidebar() {
   const { user } = useAuth();
   const perms = user?.permission_names;
-  const visible = items.filter((i) => hasPermission(perms, i.perm));
+  const visible = visibleSidebarItems(perms);
 
   return (
     <AppSidebarShell subtitle="Workspace: Financeiro">

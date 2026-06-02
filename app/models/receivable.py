@@ -42,6 +42,7 @@ class ReceivableInvoice(TimestampUUIDMixin, Base):
     received_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     invoice_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True, default="EMITIDA")
+    include_in_dashboard: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     pdf_path: Mapped[str | None] = mapped_column(String(512))
     activity_log: Mapped[str | None] = mapped_column(Text)
 
@@ -86,6 +87,7 @@ class ReceivableInvoiceAnticipation(TimestampUUIDMixin, Base):
     amount_to_repay: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     received_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     due_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    include_in_dashboard: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
     invoice: Mapped["ReceivableInvoice"] = relationship(back_populates="anticipations")
 

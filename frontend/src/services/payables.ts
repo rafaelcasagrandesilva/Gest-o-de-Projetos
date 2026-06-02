@@ -62,6 +62,7 @@ export interface PayableSnapshotRow {
   paid: boolean;
 
   observation: string | null;
+  include_in_dashboard: boolean;
   status: PayableSnapshotStatus;
   /** Data do último pagamento ativo (evento de caixa). */
   last_payment_date: string | null;
@@ -92,7 +93,12 @@ export async function listPayableSnapshots(params?: {
 
 export async function updatePayableSnapshot(
   id: string,
-  payload: Partial<{ amount_final: number; due_date: string; observation: string | null }>,
+  payload: Partial<{
+    amount_final: number;
+    due_date: string;
+    observation: string | null;
+    include_in_dashboard: boolean;
+  }>,
 ): Promise<PayableSnapshotRow> {
   const { data } = await api.patch<PayableSnapshotRow>(`/financial/payables/${id}/`, payload);
   return data;
@@ -126,6 +132,7 @@ export async function createManualPayableSnapshot(payload: {
   due_date: string;
   category: string;
   cost_center: string;
+  include_in_dashboard?: boolean;
 }): Promise<PayableSnapshotRow> {
   const body = {
     ...payload,

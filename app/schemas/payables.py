@@ -47,6 +47,7 @@ class PayableSnapshotRead(UUIDTimestampRead):
     paid: bool
 
     observation: str | None = None
+    include_in_dashboard: bool = True
     status: PayableSnapshotStatus
     last_payment_date: date | None = None
     # Valor pago com payment_date no mês da listagem (fluxo de caixa do período).
@@ -88,6 +89,7 @@ class PayableSnapshotUpdate(BaseModel):
     amount_final: float | None = Field(None, gt=0)
     due_date: date | None = None
     observation: str | None = Field(None, max_length=4000)
+    include_in_dashboard: bool | None = None
 
 
 class PayableSnapshotManualCreate(BaseModel):
@@ -97,6 +99,7 @@ class PayableSnapshotManualCreate(BaseModel):
     category: str = Field(..., min_length=1, max_length=120)
     cost_center: str = Field(..., min_length=1, max_length=255)
     month: date = Field(..., description="Mês de competência do pagamento (YYYY-MM-01).")
+    include_in_dashboard: bool = True
 
     @field_validator("month")
     @classmethod

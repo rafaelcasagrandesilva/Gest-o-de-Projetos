@@ -9,6 +9,7 @@ import {
   fetchReceivableInvoices,
   fetchReceivableKpis,
   openPdfBlobInNewTab,
+  reactivateReceivableInvoice,
   updateReceivableInvoice,
   updateInvoiceAnticipation,
   uploadInvoicePdf,
@@ -115,6 +116,7 @@ type EditDraft = {
   notes: string;
   received_date: string;
   received: boolean;
+  include_in_dashboard: boolean;
 };
 
 function emptyEditDraft(): EditDraft {
@@ -128,11 +130,14 @@ function emptyEditDraft(): EditDraft {
     notes: "",
     received_date: "",
     received: false,
+    include_in_dashboard: true,
   };
 }
 
 export function Invoices() {
   const canEditInvoices = usePermission("invoices.edit");
+  const canReactivateInvoices = usePermission("invoices.reactivate");
+  const [reactivatingId, setReactivatingId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [periodMode, setPeriodMode] = useState<"MONTH" | "ALL">("MONTH");
   const [period, setPeriod] = useState(() => monthToYm(new Date()));
@@ -155,6 +160,7 @@ export function Invoices() {
     amount_to_repay: "",
     data_recebimento: "",
     due_date: "",
+    include_in_dashboard: true,
   });
   const [editingAnticipationId, setEditingAnticipationId] = useState<string | null>(null);
   const [antBusy, setAntBusy] = useState(false);
@@ -172,6 +178,7 @@ export function Invoices() {
     net_amount: "",
     client_name: "",
     notes: "",
+    include_in_dashboard: true,
   });
 
   const { sortedRows, headerSort } = useTableSort(rows, INVOICE_SORT_COLUMNS, {
@@ -240,6 +247,7 @@ export function Invoices() {
         amount_to_repay: "",
         data_recebimento: "",
         due_date: "",
+        include_in_dashboard: true,
       });
       setEditingAnticipationId(null);
       return;
@@ -262,6 +270,7 @@ export function Invoices() {
       notes: row.notes ?? "",
       received_date: row.received_date ? row.received_date.slice(0, 10) : "",
       received: row.status === "RECEBIDA",
+      include_in_dashboard: row.include_in_dashboard !== false,
     });
   }, [expandedId, rows]);
 
@@ -286,6 +295,7 @@ export function Invoices() {
         net_amount: net,
         client_name: form.client_name.trim() || null,
         notes: form.notes.trim() || null,
+        include_in_dashboard: form.include_in_dashboard,
       });
       setShowForm(false);
       setForm({
@@ -297,6 +307,7 @@ export function Invoices() {
         net_amount: "",
         client_name: "",
         notes: "",
+        include_in_dashboard: true,
       });
       await load();
     } catch (err) {
@@ -353,6 +364,7 @@ export function Invoices() {
         notes: editDraft.notes.trim() || null,
         received_amount: editDraft.received ? net : 0,
         received_date: editDraft.received ? editDraft.received_date : null,
+        include_in_dashboard: editDraft.include_in_dashboard,
       });
       await load();
     } catch (e) {
@@ -406,6 +418,7 @@ export function Invoices() {
           amount_to_repay: ad,
           data_recebimento: recvDate,
           due_date: due,
+          include_in_dashboard: antForm.include_in_dashboard,
         });
       } else {
         await addInvoiceAnticipation(row.id, {
@@ -414,9 +427,17 @@ export function Invoices() {
           amount_to_repay: ad,
           data_recebimento: recvDate,
           due_date: due,
+          include_in_dashboard: antForm.include_in_dashboard,
         });
       }
-      setAntForm({ institution: "", amount_received: "", amount_to_repay: "", data_recebimento: "", due_date: "" });
+      setAntForm({
+        institution: "",
+        amount_received: "",
+        amount_to_repay: "",
+        data_recebimento: "",
+        due_date: "",
+        include_in_dashboard: true,
+      });
       setEditingAnticipationId(null);
       await load();
     } catch (e) {
@@ -450,6 +471,27 @@ export function Invoices() {
       await load();
     } catch (e) {
       setError(formatAxiosDetail(e));
+    }
+  }
+
+  async function handleReactivateInvoice(invoiceId: string, nfNumber: string) {
+    if (!canReactivateInvoices) return;
+    if (
+      !window.confirm(
+        `Reativar a NF ${nfNumber}? O status voltará de CANCELADA para EMITIDA (ou derivado dos recebimentos).`,
+      )
+    ) {
+      return;
+    }
+    setReactivatingId(invoiceId);
+    setError(null);
+    try {
+      await reactivateReceivableInvoice(invoiceId);
+      await load();
+    } catch (e) {
+      setError(formatAxiosDetail(e));
+    } finally {
+      setReactivatingId(null);
     }
   }
 
@@ -705,6 +747,15 @@ export function Invoices() {
               rows={2}
             />
           </Field>
+          <label className="flex items-center gap-2 text-sm sm:col-span-2 lg:col-span-3">
+            <input
+              type="checkbox"
+              checked={form.include_in_dashboard}
+              onChange={(e) => setForm((f) => ({ ...f, include_in_dashboard: e.target.checked }))}
+              className="h-4 w-4 rounded border-slate-300"
+            />
+            <span className="text-slate-700">Considerar no Dashboard Financeiro</span>
+          </label>
           <div className="sm:col-span-2 lg:col-span-3">
             <button
               type="submit"
@@ -882,6 +933,16 @@ export function Invoices() {
                         >
                           {expandedId === row.id ? "Ocultar" : "Detalhes"}
                         </button>
+                        {row.status === "CANCELADA" && canReactivateInvoices ? (
+                          <button
+                            type="button"
+                            disabled={reactivatingId === row.id}
+                            onClick={() => void handleReactivateInvoice(row.id, row.number)}
+                            className="mr-2 rounded border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-900 hover:bg-indigo-100 disabled:opacity-50"
+                          >
+                            {reactivatingId === row.id ? "Reativando…" : "Reativar NF"}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           disabled={!canEditInvoices}
@@ -978,6 +1039,18 @@ export function Invoices() {
                                     className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                                     rows={2}
                                   />
+                                </label>
+                                <label className="flex items-center gap-2 text-xs sm:col-span-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={editDraft.include_in_dashboard}
+                                    onChange={(e) =>
+                                      setEditDraft((d) => ({ ...d, include_in_dashboard: e.target.checked }))
+                                    }
+                                    disabled={!canEditInvoices}
+                                    className="h-4 w-4 rounded border-slate-300"
+                                  />
+                                  <span className="text-slate-700">Considerar no Dashboard Financeiro</span>
                                 </label>
                               </div>
 
@@ -1080,6 +1153,7 @@ export function Invoices() {
                                                 amount_to_repay: String(a.amount_to_repay ?? ""),
                                                 data_recebimento: (a.data_recebimento || "").slice(0, 10),
                                                 due_date: (a.due_date || "").slice(0, 10),
+                                                include_in_dashboard: a.include_in_dashboard !== false,
                                               });
                                             }}
                                             className="rounded px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
@@ -1163,6 +1237,18 @@ export function Invoices() {
                                         className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                                       />
                                     </label>
+                                    <label className="flex items-center gap-2 text-xs sm:col-span-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={antForm.include_in_dashboard}
+                                        onChange={(e) =>
+                                          setAntForm((s) => ({ ...s, include_in_dashboard: e.target.checked }))
+                                        }
+                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
+                                        className="h-4 w-4 rounded border-slate-300"
+                                      />
+                                      <span className="text-slate-700">Considerar no Dashboard Financeiro</span>
+                                    </label>
                                   </div>
                                   <div className="mt-3 flex justify-end">
                                     {editingAnticipationId && (
@@ -1177,6 +1263,7 @@ export function Invoices() {
                                             amount_to_repay: "",
                                             data_recebimento: "",
                                             due_date: "",
+                                            include_in_dashboard: true,
                                           });
                                         }}
                                         className="mr-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
@@ -1210,7 +1297,7 @@ export function Invoices() {
                                 >
                                   Salvar alterações
                                 </button>
-                                {row.status !== "CANCELADA" && (
+                                {row.status !== "CANCELADA" ? (
                                   <button
                                     type="button"
                                     disabled={!canEditInvoices}
@@ -1219,7 +1306,16 @@ export function Invoices() {
                                   >
                                     Cancelar NF
                                   </button>
-                                )}
+                                ) : canReactivateInvoices ? (
+                                  <button
+                                    type="button"
+                                    disabled={reactivatingId === row.id}
+                                    onClick={() => void handleReactivateInvoice(row.id, row.number)}
+                                    className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-900 hover:bg-indigo-100 disabled:opacity-50"
+                                  >
+                                    {reactivatingId === row.id ? "Reativando…" : "Reativar NF"}
+                                  </button>
+                                ) : null}
                               </div>
                             </div>
 

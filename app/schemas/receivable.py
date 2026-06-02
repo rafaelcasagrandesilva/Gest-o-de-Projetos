@@ -88,6 +88,7 @@ class ReceivableInvoiceRead(UUIDTimestampRead):
     pdf_url: str | None = None
     pdf_files: list[ReceivableInvoiceFileRead] = Field(default_factory=list)
     activity_log: str | None = None
+    include_in_dashboard: bool = True
     advance_batch_id: UUID | None = None
     advance_batch: AdvanceBatchSummaryRead | None = None
 
@@ -101,6 +102,7 @@ class ReceivableInvoiceCreate(BaseModel):
     net_amount: float | None = Field(default=None, gt=0)
     client_name: str | None = Field(None, max_length=512)
     notes: str | None = None
+    include_in_dashboard: bool = True
 
     @field_validator("due_days")
     @classmethod
@@ -126,6 +128,7 @@ class ReceivableInvoiceUpdate(BaseModel):
     received_amount: float | None = Field(None, ge=0)
     received_date: date | None = None
     status: InvoiceStatus | None = Field(None, description="Use CANCELADA para cancelar manualmente.")
+    include_in_dashboard: bool | None = None
 
     @field_validator("due_days")
     @classmethod
@@ -158,6 +161,7 @@ class ReceivableInvoiceUpdate(BaseModel):
 
 class InvoiceAnticipationRead(UUIDTimestampRead):
     invoice_id: UUID
+    include_in_dashboard: bool = True
     institution: str
     amount_received: float
     amount_to_repay: float
@@ -175,6 +179,7 @@ class InvoiceAnticipationCreate(BaseModel):
     amount_to_repay: float = Field(..., gt=0)
     data_recebimento: date
     due_date: date
+    include_in_dashboard: bool = True
 
     @model_validator(mode="after")
     def ok(self) -> "InvoiceAnticipationCreate":
@@ -189,6 +194,7 @@ class InvoiceAnticipationUpdate(BaseModel):
     amount_to_repay: float = Field(..., gt=0)
     data_recebimento: date
     due_date: date = Field(..., alias="repayment_date")
+    include_in_dashboard: bool | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -228,7 +234,9 @@ class ReceivableViewRead(UUIDTimestampRead):
     total_received: float
     remaining: float
     status: ReceivableViewStatus
+    invoice_status: str | None = None
     observacao: str | None = None
+    include_in_dashboard: bool = True
 
 
 class ReceivableManualItemCreate(BaseModel):
@@ -241,6 +249,7 @@ class ReceivableManualItemCreate(BaseModel):
     valor_recebido: float | None = Field(default=None, ge=0)
     data_recebimento: date | None = None
     observacao: str | None = None
+    include_in_dashboard: bool = True
 
     @model_validator(mode="after")
     def ok(self) -> "ReceivableManualItemCreate":
@@ -261,6 +270,7 @@ class ReceivableManualItemUpdate(BaseModel):
     valor_recebido: float | None = Field(default=None, ge=0)
     data_recebimento: date | None = None
     observacao: str | None = None
+    include_in_dashboard: bool | None = None
 
     @model_validator(mode="after")
     def ok(self) -> "ReceivableManualItemUpdate":
@@ -281,4 +291,5 @@ class ReceivableManualItemRead(UUIDTimestampRead):
     valor_recebido: float
     data_recebimento: date | None = None
     observacao: str | None = None
+    include_in_dashboard: bool = True
     status: ReceivableViewStatus

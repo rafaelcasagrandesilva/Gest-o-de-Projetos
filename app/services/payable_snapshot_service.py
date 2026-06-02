@@ -22,7 +22,6 @@ from app.models.project_operational import (
     ProjectLabor,
     ProjectOperationalFixed,
     ProjectSystemCost,
-    ProjectVehicle,
 )
 from app.models.receivable import ReceivableInvoice, ReceivableInvoiceAnticipation
 from app.repositories.projects import ProjectRepository
@@ -30,6 +29,7 @@ from app.models.project import Project
 from app.services.company_finance_cost_center import CompanyFinanceCostCenterService
 from app.services.employee_cost_service import project_labor_payable_snapshot_components
 from app.services.settings_service import SettingsService
+from app.utils.dashboard_inclusion import apply_dashboard_inclusion_change
 from app.utils.date_utils import next_competencia, normalize_competencia, previous_competencia
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,8 @@ PAYABLE_PAYMENT_TOLERANCE = Decimal("0.02")
 _MONEY_QUANT = Decimal("0.01")
 PAYABLE_MANUAL_ADJUSTMENT_TAG = "[ajuste manual]"
 PAYABLE_CONCILIATED_TAG = "[conciliado]"
+# Projetos > Realizado > Veículos: apropriação de custo por projeto (não obrigação financeira).
+VEHICLE_AUTO_PAYABLE_NAME = "Custo com veículos"
 
 
 def _money2(value: object) -> Decimal:
@@ -320,6 +322,42 @@ class PayableSnapshotService:
             )
             or 0
         )
+
+    async def _purge_obsolete_vehicle_snapshots(self, *, month: date) -> int:
+        """
+        Remove snapshots legados type=VEHICLE sem pagamento (integração descontinuada no CAP).
+
+        Não altera MANUAL nem outros tipos automáticos.
+        """
+        comp = normalize_competencia(month)
+        rows = list(
+            (
+                await self.session.execute(
+                    select(PayableSnapshot).where(
+                        PayableSnapshot.month == comp,
+                        PayableSnapshot.type == PayableSnapshotType.VEHICLE,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        removed = 0
+        for row in rows:
+            if _money2(row.amount_paid) > 0:
+                continue
+            if await _has_active_payments(self.session, snapshot_id=row.id):
+                continue
+            await self.session.delete(row)
+            removed += 1
+        if removed:
+            logger.info(
+                "payables purged obsolete VEHICLE snapshots month=%s removed=%d",
+                comp,
+                removed,
+            )
+        await self.session.flush()
+        return removed
 
     async def invalidate_months(self, *, months: set[date] | list[date] | tuple[date, ...]) -> int:
         """
@@ -1442,6 +1480,7 @@ class PayableSnapshotService:
                     )
                 # Regeneração explícita: remove linhas automáticas + marcador. MANUAL preservado (como em invalidate).
                 logger.warning("force_regenerate payables snapshot month=%s source_month=%s", comp, source_month)
+                await self._purge_obsolete_vehicle_snapshots(month=comp)
                 await self.session.execute(
                     delete(PayableSnapshot).where(
                         PayableSnapshot.month == comp,
@@ -1493,13 +1532,12 @@ class PayableSnapshotService:
                 created,
             )
 
-            if created <= 0:
-                # Mês só com despesas manuais preservadas: ainda assim congela se houver linhas.
-                if (await self.count_for_month(month=comp)) <= 0:
-                    raise ValueError(
-                        f"Snapshot não gerado para {comp:%Y-%m}: nenhuma linha foi criada "
-                        f"(sees_all={sees_all_projects}, accessible_projects={project_count})."
-                    )
+            if created <= 0 and (await self.count_for_month(month=comp)) <= 0:
+                logger.info(
+                    "payables snapshot month=%s finalized with 0 rows (empty month is valid) force=%s",
+                    comp,
+                    force_regenerate,
+                )
 
             # Proteção: se algum marker existir (estado inconsistente), substitui.
             await self.session.execute(
@@ -1529,6 +1567,12 @@ class PayableSnapshotService:
         accessible_project_ids: set[UUID] | None,
         sees_all_projects: bool,
     ) -> int:
+        """
+        Gera linhas automáticas do contas a pagar para o mês de pagamento.
+
+        Custos de veículos (Projetos > Realizado > Veículos) são excluídos: são
+        apropriação operacional por projeto; combustível/locação é faturado em lote.
+        """
         source_month = previous_competencia(payment_month)
         try:
             settings = await SettingsService(self.session).get_or_create()
@@ -1640,36 +1684,6 @@ class PayableSnapshotService:
                         snapshot_name,
                         amount,
                     )
-
-            # --- Vehicles (aggregated) ---
-            # Regra nova: distribuir por projeto (centro de custo real) — nunca usar "Operacional".
-            vehicle_by_project = await self._sum_vehicle_monthly_cost_by_project(
-                competencia=source_month,
-                project_ids=project_filter,
-            )
-            for project_id, project_name, total in vehicle_by_project:
-                amount = float(total or 0.0)
-                if amount <= 0:
-                    continue
-                self.session.add(
-                    PayableSnapshot(
-                        month=payment_month,
-                        type=PayableSnapshotType.VEHICLE,
-                        ref_id=None,
-                        project_id=project_id,
-                        name="Custo com veículos",
-                        cost_center=project_name,
-                        category="Combustível / veículos",
-                        amount_original=Decimal(str(round(amount, 2))),
-                        amount_final=Decimal(str(round(amount, 2))),
-                        amount_paid=Decimal("0"),
-                        due_date=due,
-                        paid=False,
-                        payment_date=None,
-                        observation=None,
-                    )
-                )
-                created += 1
 
             # --- Company finance (manual entries only): custos diversos + endividamento ---
             # Regra nova: NÃO gerar automaticamente pelo valor de referência.
@@ -1871,13 +1885,12 @@ class PayableSnapshotService:
 
             logger.info(
                 "payables _generate_snapshot month=%s source_month=%s sees_all=%s accessible_projects=%s labor_keys=%d "
-                "vehicle_total=%.2f fixed_items=%d created=%d",
+                "fixed_items=%d created=%d",
                 payment_month,
                 source_month,
                 sees_all_projects,
                 "ALL" if sees_all_projects else (len(project_filter) if project_filter is not None else 0),
                 len(keys),
-                float(sum(v for _, __, v in vehicle_by_project)),
                 len(fixed_rows),
                 created,
             )
@@ -1909,53 +1922,6 @@ class PayableSnapshotService:
             .limit(1)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
-
-    async def _sum_vehicle_monthly_cost(self, *, competencia: date, project_ids: set[UUID] | None) -> float:
-        stmt = select(func.coalesce(func.sum(ProjectVehicle.monthly_cost), 0)).where(
-            ProjectVehicle.competencia == competencia,
-            ProjectVehicle.scenario == scenario_pg_rhs(Scenario.REALIZADO),
-        )
-        if project_ids is not None:
-            stmt = stmt.where(ProjectVehicle.project_id.in_(sorted(project_ids)))
-        return float((await self.session.execute(stmt)).scalar_one())
-
-    async def _sum_vehicle_monthly_cost_by_project(
-        self,
-        *,
-        competencia: date,
-        project_ids: set[UUID] | None,
-    ) -> list[tuple[UUID, str, float]]:
-        """
-        Soma custo mensal de veículos por projeto na competência.
-
-        Regra (caixa real): considerar SOMENTE valores informados no mês (REALIZADO).
-        Retorna lista (project_id, project_name, total_cost).
-        """
-        stmt = (
-            select(
-                ProjectVehicle.project_id,
-                func.coalesce(func.sum(ProjectVehicle.monthly_cost), 0),
-            )
-            .where(
-                ProjectVehicle.competencia == competencia,
-                ProjectVehicle.scenario == scenario_pg_rhs(Scenario.REALIZADO),
-                ProjectVehicle.monthly_cost.is_not(None),
-                ProjectVehicle.monthly_cost > 0,
-            )
-            .group_by(ProjectVehicle.project_id)
-        )
-        if project_ids is not None:
-            stmt = stmt.where(ProjectVehicle.project_id.in_(sorted(project_ids)))
-        pairs = (await self.session.execute(stmt)).all()
-        if not pairs:
-            return []
-        ids = [pid for pid, _ in pairs]
-        projects = (await self.session.execute(select(Project).where(Project.id.in_(ids)))).scalars().all()
-        name_map = {p.id: str(p.name).strip() for p in projects}
-        out: list[tuple[UUID, str, float]] = []
-        for pid, total in pairs:
-            out.append((pid, name_map.get(pid, str(pid)), float(total or 0.0)))
-        return out
 
     async def _project_fixed_cost_legacy_rows(
         self, *, competencia: date, project_ids: set[UUID] | None
@@ -2044,6 +2010,7 @@ class PayableSnapshotService:
         due_date: date,
         observation: str | None = None,
         snapshot_type: PayableSnapshotType = PayableSnapshotType.MANUAL,
+        include_in_dashboard: bool = True,
     ) -> PayableSnapshot:
         # Manual: competência = mês do vencimento (obrigação), não o mês do filtro da tela.
         comp = normalize_competencia(due_date)
@@ -2065,12 +2032,21 @@ class PayableSnapshotService:
             paid=False,
             payment_date=None,
             observation=obs,
+            include_in_dashboard=bool(include_in_dashboard),
         )
         self.session.add(row)
         await self.session.flush()
         return row
 
-    async def update_row(self, *, row: PayableSnapshot, amount_final: float | None, due_date: date | None, observation: str | None) -> PayableSnapshot:
+    async def update_row(
+        self,
+        *,
+        row: PayableSnapshot,
+        amount_final: float | None,
+        due_date: date | None,
+        observation: str | None,
+        include_in_dashboard: bool | None = None,
+    ) -> PayableSnapshot:
         if amount_final is not None:
             row.amount_final = Decimal(str(round(float(amount_final), 2)))
             self._append_observation(row, PAYABLE_MANUAL_ADJUSTMENT_TAG)
@@ -2078,6 +2054,12 @@ class PayableSnapshotService:
             row.due_date = due_date
         if observation is not None:
             row.observation = observation
+        apply_dashboard_inclusion_change(
+            before=bool(row.include_in_dashboard),
+            after=include_in_dashboard,
+            set_value=lambda v: setattr(row, "include_in_dashboard", v),
+            append_line=lambda line: self._append_observation(row, line),
+        )
         await self.session.flush()
         await self._recalculate_amount_paid(row)
         if amount_final is not None:

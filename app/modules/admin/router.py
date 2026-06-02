@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, require_admin_role
+from app.api.deps import get_db, require_permission
+from app.core.permission_codes import AUDIT_EXPORT
 from app.models.user import User
 from app.services.audit_export_service import stream_audit_export_txt
 
@@ -18,7 +19,7 @@ router = APIRouter()
 @router.get("/audit/export", summary="Exportar logs de auditoria em .txt (streaming)")
 async def export_audit_logs(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_admin_role),
+    _: User = Depends(require_permission(AUDIT_EXPORT)),
     date_start: datetime | None = Query(default=None, description="Início (created_at >=), UTC"),
     date_end: datetime | None = Query(default=None, description="Fim (created_at <=), UTC"),
     user_id: UUID | None = Query(default=None, description="Filtrar por autor do evento"),

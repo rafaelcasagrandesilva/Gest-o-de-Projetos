@@ -18,10 +18,12 @@ from app.api.deps import (
     get_current_workspace,
     is_app_superuser,
     require_permission,
+    user_has_permission,
     user_sees_all_projects,
 )
 from app.core.permission_codes import (
     BILLING_VIEW,
+    INVOICES_REACTIVATE,
     COSTS_EDIT,
     INVOICES_EDIT,
     INVOICES_VIEW,
@@ -120,6 +122,7 @@ async def list_receivables_view(
     allowed = None if sees_all else await get_accessible_project_ids(user, db)
 
     out: list[ReceivableViewRead] = []
+    can_see_cancelled = user_has_permission(user, INVOICES_REACTIVATE)
     if tipo is None or tipo == "NF":
         svc = ReceivableService(db)
         rows = await svc.list_invoices(
@@ -132,9 +135,10 @@ async def list_receivables_view(
             period_field=period_field,
         )
         for inv in rows:
-            # NF cancelada nunca deve aparecer na visão de contas a receber.
-            if (inv.invoice_status or "").upper() == "CANCELADA":
-                continue
+            inv_status = (inv.invoice_status or "").upper()
+            if inv_status == "CANCELADA":
+                if not can_see_cancelled:
+                    continue
             net = float(inv.net_amount or 0.0)
             recv_customer = float(inv.received_amount or 0.0)
             try:
@@ -163,6 +167,8 @@ async def list_receivables_view(
                     total_received=total_recv,
                     remaining=remaining,
                     status=_receivable_view_status(net_value=net, total_received=total_recv),  # type: ignore[arg-type]
+                    invoice_status=inv_status if inv_status == "CANCELADA" else None,
+                    include_in_dashboard=bool(getattr(inv, "include_in_dashboard", True)),
                 )
             )
 
@@ -200,6 +206,7 @@ async def list_receivables_view(
                     remaining=remaining,
                     status=str(it.status.value if hasattr(it.status, "value") else it.status),
                     observacao=it.observacao,
+                    include_in_dashboard=bool(getattr(it, "include_in_dashboard", True)),
                 )
             )
 
@@ -256,6 +263,7 @@ async def list_receivables_view(
                         total_received=round(val, 2),
                         remaining=0.0,
                         status="RECEBIDO",
+                        include_in_dashboard=bool(getattr(a, "include_in_dashboard", True)),
                     )
                 )
 
@@ -320,6 +328,7 @@ async def list_receivables_view(
                     remaining=0.0,
                     status="RECEBIDO",
                     observacao=b.observation,
+                    include_in_dashboard=bool(getattr(b, "include_in_dashboard", True)),
                 )
             )
     return out
@@ -681,6 +690,7 @@ def _snapshot_to_read(
         payment_date=row.payment_date,
         paid=st == "PAGO",
         observation=row.observation,
+        include_in_dashboard=bool(getattr(row, "include_in_dashboard", True)),
         status=st,
         last_payment_date=last_payment_date,
         paid_in_period=paid_in_period,
@@ -813,6 +823,7 @@ async def update_payables_snapshot(
         amount_final=data.get("amount_final"),
         due_date=data.get("due_date"),
         observation=data.get("observation"),
+        include_in_dashboard=data.get("include_in_dashboard"),
     )
     await db.commit()
     dates = await FinanceService(db).payable_snapshots.last_payment_dates_by_snapshot_ids([updated.id])
@@ -1159,6 +1170,7 @@ async def create_manual_payables_snapshot(
             cost_center=payload.cost_center,
             amount=payload.amount,
             due_date=payload.due_date,
+            include_in_dashboard=payload.include_in_dashboard,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

@@ -112,6 +112,7 @@ class FinancialDashboardService:
                 func.coalesce(func.sum(ReceivableInvoice.received_amount), 0).label("v"),
             )
             .where(
+                ReceivableInvoice.include_in_dashboard.is_(True),
                 ReceivableInvoice.invoice_status != "CANCELADA",
                 ReceivableInvoice.received_date.is_not(None),
                 ReceivableInvoice.received_date >= period_start,
@@ -132,6 +133,7 @@ class FinancialDashboardService:
                 func.coalesce(func.sum(ReceivableInvoiceAnticipation.amount_received), 0).label("v"),
             )
             .where(
+                ReceivableInvoiceAnticipation.include_in_dashboard.is_(True),
                 ReceivableInvoiceAnticipation.received_date.is_not(None),
                 ReceivableInvoiceAnticipation.received_date >= period_start,
                 ReceivableInvoiceAnticipation.received_date <= period_end,
@@ -149,6 +151,7 @@ class FinancialDashboardService:
                 func.coalesce(func.sum(ReceivableAdvanceBatch.received_amount), 0).label("v"),
             )
             .where(
+                ReceivableAdvanceBatch.include_in_dashboard.is_(True),
                 ReceivableAdvanceBatch.status != ReceivableAdvanceBatchStatus.CANCELLED,
                 ReceivableAdvanceBatch.receive_date >= period_start,
                 ReceivableAdvanceBatch.receive_date <= period_end,
@@ -166,6 +169,7 @@ class FinancialDashboardService:
                 func.coalesce(func.sum(ReceivableManualItem.valor_recebido), 0).label("v"),
             )
             .where(
+                ReceivableManualItem.include_in_dashboard.is_(True),
                 ReceivableManualItem.workspace_id == workspace_id,
                 ReceivableManualItem.data_recebimento.is_not(None),
                 ReceivableManualItem.data_recebimento >= period_start,
@@ -186,10 +190,13 @@ class FinancialDashboardService:
                 pay_month,
                 func.coalesce(func.sum(PayablePayment.amount), 0).label("v"),
             )
+            .select_from(PayablePayment)
+            .join(PayableSnapshot, PayableSnapshot.id == PayablePayment.payable_snapshot_id)
             .where(
                 PayablePayment.reversed_at.is_(None),
                 PayablePayment.payment_date >= period_start,
                 PayablePayment.payment_date <= period_end,
+                PayableSnapshot.include_in_dashboard.is_(True),
             )
             .group_by("m")
         )
@@ -245,6 +252,7 @@ class FinancialDashboardService:
                 .select_from(ReceivableInvoice)
                 .join(Project, Project.id == ReceivableInvoice.project_id)
                 .where(
+                    ReceivableInvoice.include_in_dashboard.is_(True),
                     ReceivableInvoice.invoice_status != "CANCELADA",
                     ReceivableInvoice.received_date.is_not(None),
                     ReceivableInvoice.received_date >= start,
@@ -264,6 +272,7 @@ class FinancialDashboardService:
                     func.coalesce(func.sum(ReceivableManualItem.valor_recebido), 0).label("v"),
                 )
                 .where(
+                    ReceivableManualItem.include_in_dashboard.is_(True),
                     ReceivableManualItem.workspace_id == workspace_id,
                     ReceivableManualItem.data_recebimento.is_not(None),
                     ReceivableManualItem.data_recebimento >= start,
@@ -293,6 +302,7 @@ class FinancialDashboardService:
                     PayablePayment.reversed_at.is_(None),
                     PayablePayment.payment_date >= start,
                     PayablePayment.payment_date <= end,
+                    PayableSnapshot.include_in_dashboard.is_(True),
                 )
                 .group_by(PayableSnapshot.cost_center)
                 .order_by(func.sum(PayablePayment.amount).desc())

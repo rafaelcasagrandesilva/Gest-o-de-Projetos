@@ -680,7 +680,6 @@ class ProjectStructureService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erro ao carregar alocação de veículo.",
             )
-        await self._invalidate_next_payable_if_realizado(competencia=competencia, scenario=scenario)
         await self.session.commit()
         return self.project_vehicle_to_read(loaded, settings)
 
@@ -753,7 +752,6 @@ class ProjectStructureService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erro ao carregar alocação de veículo.",
             )
-        await self._invalidate_next_payable_if_realizado(competencia=comp, scenario=row.scenario)
         await self.session.commit()
         return self.project_vehicle_to_read(loaded, settings)
 
@@ -764,8 +762,6 @@ class ProjectStructureService:
         comp = normalize_competencia(row.competencia)
         scenario = row.scenario
         await self.vehicles.delete(row)
-        await self.session.commit()
-        await self._invalidate_next_payable_if_realizado(competencia=comp, scenario=scenario)
         await self.session.commit()
 
     # --- Systems ---

@@ -112,6 +112,7 @@ export function Payables() {
     due_date: "",
     category: "",
     cost_center: PAYABLES_MANUAL_CC_ADMIN,
+    include_in_dashboard: true,
   });
 
   const [projectOptions, setProjectOptions] = useState<Project[]>([]);
@@ -119,6 +120,7 @@ export function Payables() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState(0);
   const [editDate, setEditDate] = useState("");
+  const [editIncludeInDashboard, setEditIncludeInDashboard] = useState(true);
 
   const [actionModal, setActionModal] = useState<ActionModal>({ open: false });
   const [modalAmount, setModalAmount] = useState("");
@@ -414,6 +416,7 @@ export function Payables() {
         due_date: form.due_date,
         category: form.category.trim(),
         cost_center: form.cost_center.trim(),
+        include_in_dashboard: form.include_in_dashboard,
       });
       setShowForm(false);
       setForm({
@@ -422,6 +425,7 @@ export function Payables() {
         due_date: "",
         category: "",
         cost_center: PAYABLES_MANUAL_CC_ADMIN,
+        include_in_dashboard: true,
       });
       await load();
     } catch (e) {
@@ -438,6 +442,7 @@ export function Payables() {
     setEditingId(row.id);
     setEditValue(Number(row.amount_final));
     setEditDate(row.due_date.slice(0, 10));
+    setEditIncludeInDashboard(row.include_in_dashboard !== false);
   }
 
   function cancelEdit() {
@@ -465,6 +470,7 @@ export function Payables() {
       const updated = await updatePayableSnapshot(editingId, {
         amount_final: editValue,
         due_date: editDate,
+        include_in_dashboard: editIncludeInDashboard,
       });
       setRows((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setEditingId(null);
@@ -493,6 +499,8 @@ export function Payables() {
     editSaving,
     editValue,
     editDate,
+    editIncludeInDashboard,
+    setEditIncludeInDashboard,
     setEditValue,
     setEditDate,
     onSaveEdit: () => void saveEdit(),
@@ -670,6 +678,15 @@ export function Payables() {
                 ))}
             </select>
           </Field>
+          <label className="flex items-center gap-2 text-sm sm:col-span-2 lg:col-span-3">
+            <input
+              type="checkbox"
+              checked={form.include_in_dashboard}
+              onChange={(e) => setForm((f) => ({ ...f, include_in_dashboard: e.target.checked }))}
+              className="h-4 w-4 rounded border-slate-300"
+            />
+            <span className="text-slate-700">Considerar no Dashboard Financeiro</span>
+          </label>
           <div className="sm:col-span-2 lg:col-span-3">
             <button
               type="submit"
@@ -891,6 +908,8 @@ type PayablesSnapshotTableProps = {
   editSaving: boolean;
   editValue: number;
   editDate: string;
+  editIncludeInDashboard: boolean;
+  setEditIncludeInDashboard: (v: boolean) => void;
   setEditValue: (n: number) => void;
   setEditDate: (d: string) => void;
   onSaveEdit: () => void;
@@ -910,6 +929,8 @@ function PayablesSnapshotTable({
   editSaving,
   editValue,
   editDate,
+  editIncludeInDashboard,
+  setEditIncludeInDashboard,
   setEditValue,
   setEditDate,
   onSaveEdit,
@@ -1049,7 +1070,17 @@ function PayablesSnapshotTable({
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right">
                     {isEditing ? (
-                      <span className="inline-flex items-center justify-end gap-1 whitespace-nowrap">
+                      <span className="inline-flex flex-col items-end gap-1 whitespace-nowrap">
+                        <label className="flex items-center gap-1.5 text-[10px] text-slate-600">
+                          <input
+                            type="checkbox"
+                            checked={editIncludeInDashboard}
+                            onChange={(e) => setEditIncludeInDashboard(e.target.checked)}
+                            className="h-3.5 w-3.5 rounded border-slate-300"
+                          />
+                          Dashboard
+                        </label>
+                        <span className="inline-flex items-center gap-1">
                         <button
                           type="button"
                           disabled={!canEdit || editSaving}
@@ -1066,9 +1097,15 @@ function PayablesSnapshotTable({
                         >
                           Cancelar
                         </button>
+                        </span>
                       </span>
                     ) : (
                       <span className="inline-flex items-center justify-end gap-x-1 whitespace-nowrap">
+                        {!r.include_in_dashboard ? (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600" title="Excluído do Dashboard Financeiro">
+                            Fora do dash.
+                          </span>
+                        ) : null}
                         <button
                           type="button"
                           disabled={!canEdit}

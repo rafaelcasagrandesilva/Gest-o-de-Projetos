@@ -2,7 +2,7 @@ import type { ReceivableViewRow, ReceivableViewType } from "@/services/receivabl
 import { compareDateIso, compareText } from "@/utils/sortComparators";
 import type { SortColumnDef } from "@/utils/sortTableRows";
 
-export type ReceivableUiStatus = "ABERTO" | "RECEBIDO" | "EM_ATRASO";
+export type ReceivableUiStatus = "ABERTO" | "RECEBIDO" | "EM_ATRASO" | "CANCELADA";
 
 export type ReceivableViewItem = {
   r: ReceivableViewRow;
@@ -27,6 +27,7 @@ export type ReceivableViewSortColumn =
   | "status";
 
 const RECEIVABLE_UI_STATUS_ORDER: Record<ReceivableUiStatus, number> = {
+  CANCELADA: 0,
   EM_ATRASO: 1,
   ABERTO: 2,
   RECEBIDO: 3,

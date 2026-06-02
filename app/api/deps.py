@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.permission_codes import (
+    EXPLICIT_GRANT_ONLY_PERMISSIONS,
     ALERTS_VIEW,
     ASSETS_EDIT,
     ASSETS_VIEW,
@@ -143,6 +144,8 @@ def effective_permission_names(user: User) -> frozenset[str]:
 
 def user_has_permission(user: User, code: str) -> bool:
     """Verifica permissão por código. Role ADMIN e e-mail superuser têm acesso total às ações."""
+    if code in EXPLICIT_GRANT_ONLY_PERMISSIONS:
+        return code in permission_names_from_user(user)
     if _is_superuser_email(user):
         return True
     if ROLE_ADMIN in _user_role_names(user):

@@ -4,11 +4,13 @@ import {
   fetchReceivablesView,
   createReceivableManualItem,
   deleteReceivableManualItem,
+  reactivateReceivableInvoice,
   updateReceivableManualItem,
   type PeriodField,
   type ReceivableViewRow,
   type ReceivableViewType,
 } from "@/services/receivables";
+import { usePermission } from "@/hooks/usePermission";
 import { PeriodFilter } from "@/components/PeriodFilter";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 import { formatApiError } from "@/utils/apiError";
@@ -44,6 +46,7 @@ function monthToYm(d: Date): string {
 }
 
 function computeUiStatus(inv: ReceivableViewRow): ReceivableUiStatus {
+  if ((inv.invoice_status || "").toUpperCase() === "CANCELADA") return "CANCELADA";
   const net = Number(inv.net_value ?? 0);
   const remaining = Number(inv.remaining ?? Math.max(0, net - Number(inv.total_received ?? 0)));
   if (remaining <= 0.01) return "RECEBIDO";
@@ -53,18 +56,22 @@ function computeUiStatus(inv: ReceivableViewRow): ReceivableUiStatus {
 }
 
 function statusLabel(s: ReceivableUiStatus): string {
+  if (s === "CANCELADA") return "Cancelada";
   if (s === "RECEBIDO") return "Recebido";
   if (s === "EM_ATRASO") return "Em atraso";
   return "Aberto";
 }
 
 function statusBadgeClass(s: ReceivableUiStatus): string {
+  if (s === "CANCELADA") return "bg-slate-200 text-slate-700 ring-slate-300";
   if (s === "RECEBIDO") return "bg-emerald-100 text-emerald-900 ring-emerald-200";
   if (s === "EM_ATRASO") return "bg-red-100 text-red-900 ring-red-200";
   return "bg-slate-100 text-slate-800 ring-slate-200";
 }
 
 export function Receivables() {
+  const canReactivateInvoices = usePermission("invoices.reactivate");
+  const [reactivatingId, setReactivatingId] = useState<string | null>(null);
   const [periodMode, setPeriodMode] = useState<"MONTH" | "ALL">("MONTH");
   const [period, setPeriod] = useState(() => monthToYm(new Date()));
   const [periodField, setPeriodField] = useState<PeriodField>("due");
@@ -136,6 +143,7 @@ export function Receivables() {
     let recebido = 0;
     let atraso = 0;
     for (const { r, net, recv, saldo, uiStatus } of viewRows) {
+      if (uiStatus === "CANCELADA") continue;
       // Evita dupla contagem quando ANTECIPACAO aparece como linha separada:
       // - NF: conta apenas o recebido do cliente (antecipação vem em linha própria)
       // - ANTECIPACAO: conta o próprio valor (net_value == total_received)
@@ -156,6 +164,12 @@ export function Receivables() {
       <div>
         <h1 className="text-2xl font-semibold text-slate-900">Contas a receber</h1>
         <p className="mt-1 text-sm text-slate-600">Visão financeira gerada a partir das NFs existentes.</p>
+        {canReactivateInvoices && (
+          <p className="mt-2 text-sm text-indigo-800">
+            Para reativar NFs canceladas: filtre por status <strong>Cancelada</strong> (ou use{" "}
+            <strong>Notas fiscais (NFs)</strong> com status Cancelada) e clique em <strong>Reativar NF</strong>.
+          </p>
+        )}
       </div>
 
       {error && (
@@ -196,6 +210,7 @@ export function Receivables() {
               <option value="ABERTO">Aberto</option>
               <option value="RECEBIDO">Recebido</option>
               <option value="EM_ATRASO">Em atraso</option>
+              {canReactivateInvoices && <option value="CANCELADA">Cancelada</option>}
             </select>
           </label>
 
@@ -364,6 +379,34 @@ export function Receivables() {
                           Excluir
                         </button>
                       </div>
+                    ) : uiStatus === "CANCELADA" && canReactivateInvoices ? (
+                      <button
+                        type="button"
+                        disabled={reactivatingId === r.id}
+                        onClick={async () => {
+                          if (
+                            !window.confirm(
+                              `Reativar a NF ${r.number}? O status voltará de CANCELADA para EMITIDA (ou derivado dos recebimentos).`,
+                            )
+                          ) {
+                            return;
+                          }
+                          setReactivatingId(r.id);
+                          setError(null);
+                          try {
+                            await reactivateReceivableInvoice(r.id);
+                            await load();
+                          } catch (e) {
+                            if (isAxiosError(e)) setError(formatApiError(e));
+                            else setError("Não foi possível reativar a NF.");
+                          } finally {
+                            setReactivatingId(null);
+                          }
+                        }}
+                        className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-900 hover:bg-indigo-100 disabled:opacity-50"
+                      >
+                        {reactivatingId === r.id ? "Reativando…" : "Reativar NF"}
+                      </button>
                     ) : (
                       <span className="text-xs text-slate-400">—</span>
                     )}
@@ -430,6 +473,7 @@ function ManualReceivableModal({
   const [valorRecebido, setValorRecebido] = useState("");
   const [dataReceb, setDataReceb] = useState("");
   const [observacao, setObservacao] = useState("");
+  const [includeInDashboard, setIncludeInDashboard] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -444,6 +488,7 @@ function ManualReceivableModal({
       setValorRecebido(String(initial.amount_received_customer ?? ""));
       setDataReceb(initial.received_at ?? "");
       setObservacao(initial.observacao ?? "");
+      setIncludeInDashboard(initial.include_in_dashboard !== false);
     } else {
       setDescricao("");
       setCliente("");
@@ -454,6 +499,7 @@ function ManualReceivableModal({
       setValorRecebido("");
       setDataReceb("");
       setObservacao("");
+      setIncludeInDashboard(true);
     }
   }, [open, isEdit, initial]);
 
@@ -504,6 +550,7 @@ function ManualReceivableModal({
                 data_recebimento:
                   received !== null && received > 0 && dr ? dr : null,
                 observacao: observacao.trim() ? observacao.trim() : null,
+                include_in_dashboard: includeInDashboard,
               };
 
               if (!payload.descricao) return onError("Informe a descrição.");
@@ -602,6 +649,16 @@ function ManualReceivableModal({
               />
             </label>
           </div>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={includeInDashboard}
+              onChange={(e) => setIncludeInDashboard(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300"
+            />
+            <span className="text-slate-700">Considerar no Dashboard Financeiro</span>
+          </label>
 
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium text-slate-700">Observação (opcional)</span>

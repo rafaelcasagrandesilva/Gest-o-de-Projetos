@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { FinancialDashboardCharts } from "@/components/FinancialDashboardCharts";
+import { FinancialEvolutionProjectChart } from "@/components/FinancialEvolutionProjectChart";
 import { useSeesAllProjects } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { fetchFinancialSummary, type FinancialDashboardSummary } from "@/services/dashboard";
@@ -171,7 +172,7 @@ export function Dashboard() {
   if (projectsError) {
     return (
       <div className="space-y-4">
-        <h2 className="text-xl font-semibold text-slate-900">Dashboard financeiro</h2>
+        <h2 className="text-xl font-semibold text-slate-900">Dashboard operacional</h2>
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {projectsError}
         </div>
@@ -191,7 +192,7 @@ export function Dashboard() {
   if (error || !dataPrevisto || !dataRealizado) {
     return (
       <div className="space-y-4">
-        <h2 className="text-xl font-semibold text-slate-900">Dashboard financeiro</h2>
+        <h2 className="text-xl font-semibold text-slate-900">Dashboard operacional</h2>
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{error}</div>
       </div>
     );
@@ -222,14 +223,14 @@ export function Dashboard() {
     <div className="space-y-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-slate-900">Dashboard financeiro</h2>
+          <h2 className="text-xl font-semibold text-slate-900">Dashboard operacional</h2>
           <p className="mt-2 rounded-md border border-indigo-100 bg-indigo-50/70 px-3 py-2 text-sm text-indigo-950">
             {scenarioHint}
           </p>
           <p className="mt-2 text-sm text-slate-500">
             {isGlobalView
-              ? "Visão consolidada. Cards principais e gráficos de barras / composição usam só o cenário selecionado. A primeira linha de cards e as curvas ao final comparam previsto × realizado."
-              : "Cards principais e gráficos de barras / composição usam só o cenário selecionado. A primeira linha de cards e as curvas ao final comparam previsto × realizado."}
+              ? "Visão consolidada. Cards principais e gráficos de composição usam o cenário selecionado; a primeira linha de cards compara previsto × realizado."
+              : "Cards principais e gráficos de composição usam o cenário selecionado; a primeira linha de cards compara previsto × realizado."}
           </p>
           {periodSubtitle ? (
             <p className="mt-1 text-xs font-medium text-indigo-700">{periodSubtitle}</p>
@@ -497,11 +498,14 @@ export function Dashboard() {
         </dl>
       </div>
 
+      <FinancialEvolutionProjectChart
+        monthlySeries={activeData.monthly_series}
+        scenario={dashboardScenario}
+        multiMonth={multiMonth}
+      />
+
       <FinancialDashboardCharts
         summary={s}
-        monthlySeries={activeData.monthly_series}
-        monthlySeriesPrevisto={activeData.monthly_series_previsto}
-        monthlySeriesRealizado={activeData.monthly_series_realizado}
         multiMonth={multiMonth}
         selectedScenario={dashboardScenario}
       />

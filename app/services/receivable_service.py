@@ -4,6 +4,7 @@ from calendar import monthrange
 from datetime import date, datetime, timezone
 from math import pow
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import MissingGreenlet
 from sqlalchemy import and_, func, or_, select
@@ -17,6 +18,7 @@ from app.models.receivable import (
     ReceivableInvoiceFile,
 )
 from app.services.payable_snapshot_service import PayableSnapshotService
+from app.utils.dashboard_inclusion import apply_dashboard_inclusion_change
 from app.utils.date_utils import normalize_competencia
 from app.schemas.receivable import (
     CENT_TOL,
@@ -226,6 +228,7 @@ class ReceivableService:
                 "created_at": a.created_at,
                 "updated_at": a.updated_at,
                 "invoice_id": a.invoice_id,
+                "include_in_dashboard": bool(getattr(a, "include_in_dashboard", True)),
                 "institution": a.institution,
                 "amount_received": _round2(_f(a.amount_received)),
                 "amount_to_repay": _round2(_f(a.amount_to_repay)),
@@ -284,6 +287,7 @@ class ReceivableService:
                 for f in files
             ],
             "activity_log": inv.activity_log,
+            "include_in_dashboard": bool(getattr(inv, "include_in_dashboard", True)),
             "advance_batch_id": inv.advance_batch_id,
             "advance_batch": batch_summary,
         }
@@ -444,6 +448,7 @@ class ReceivableService:
         received_date: date,
         due_date: date,
         log_user: str | None = None,
+        include_in_dashboard: bool = True,
     ) -> ReceivableInvoiceAnticipation:
         inv = await self.get_invoice(invoice_id)
         if inv is None:
@@ -472,6 +477,7 @@ class ReceivableService:
             amount_to_repay=round(ad, 2),
             received_date=received_date,
             due_date=due_date,
+            include_in_dashboard=bool(include_in_dashboard),
         )
         if log_user:
             self.append_log(inv, f"Antecipação adicionada: {inst} recv={round(ar,2)} repay={round(ad,2)} due={due_date.isoformat()} by={log_user}")
@@ -538,6 +544,7 @@ class ReceivableService:
         received_date: date,
         due_date: date,
         log_user: str | None = None,
+        include_in_dashboard: bool | None = None,
     ) -> ReceivableInvoiceAnticipation | None:
         inv = await self.get_invoice(invoice_id)
         if inv is None:
@@ -546,6 +553,13 @@ class ReceivableService:
         row = await self.db.get(ReceivableInvoiceAnticipation, anticipation_id)
         if row is None or row.invoice_id != invoice_id:
             return None
+
+        apply_dashboard_inclusion_change(
+            before=bool(row.include_in_dashboard),
+            after=include_in_dashboard,
+            set_value=lambda v: setattr(row, "include_in_dashboard", v),
+            append_line=lambda line: self.append_log(inv, line),
+        )
 
         inst = (institution or "").strip()
         if not inst:
@@ -608,6 +622,7 @@ class ReceivableService:
             is_anticipated=False,
             received_amount=0,
             invoice_status="EMITIDA",
+            include_in_dashboard=bool(data.get("include_in_dashboard", True)),
         )
         self._sync_effective_status(row)
         self.db.add(row)
@@ -630,6 +645,12 @@ class ReceivableService:
         if inv.invoice_status == "CANCELADA":
             if "notes" in data:
                 inv.notes = data["notes"]
+            apply_dashboard_inclusion_change(
+                before=bool(inv.include_in_dashboard),
+                after=data.get("include_in_dashboard"),
+                set_value=lambda v: setattr(inv, "include_in_dashboard", v),
+                append_line=lambda line: self.append_log(inv, line),
+            )
             inv.updated_at = datetime.now(timezone.utc)
             await self.db.flush()
             await self.db.refresh(inv, attribute_names=["project"])
@@ -667,6 +688,12 @@ class ReceivableService:
             inv.received_date = data["received_date"]
         if "status" in data and data["status"] is not None:
             inv.invoice_status = data["status"]
+        apply_dashboard_inclusion_change(
+            before=bool(inv.include_in_dashboard),
+            after=data.get("include_in_dashboard"),
+            set_value=lambda v: setattr(inv, "include_in_dashboard", v),
+            append_line=lambda line: self.append_log(inv, line),
+        )
 
         self._sync_due_date(inv)
         # Validar campos de antecipação legados SOMENTE se o payload mexeu neles.
@@ -691,6 +718,41 @@ class ReceivableService:
         has_anticipations_after = await self._has_anticipations(invoice_id)
         if had_anticipations_before or has_anticipations_after:
             await PayableSnapshotService(self.db).invalidate_months(months=months_before | months_after)
+        return inv
+
+    async def reactivate_invoice(
+        self,
+        invoice_id: UUID,
+        *,
+        actor_display: str,
+        log_user: str | None = None,
+    ) -> ReceivableInvoice | None:
+        """
+        Reativa NF cancelada por engano: CANCELADA → EMITIDA (ou status derivado dos recebimentos).
+
+        Não altera valores, cliente, projeto, anexos nem demais campos.
+        """
+        inv = await self.get_invoice(invoice_id)
+        if inv is None:
+            return None
+        prev_status = (inv.invoice_status or "").strip().upper()
+        if prev_status != "CANCELADA":
+            raise ValueError("Somente notas fiscais com status CANCELADA podem ser reativadas.")
+
+        inv.invoice_status = "EMITIDA"
+        self._sync_effective_status(inv)
+        new_status = (inv.invoice_status or "").strip().upper()
+        inv.updated_at = datetime.now(timezone.utc)
+
+        now_br = datetime.now(timezone.utc).astimezone(ZoneInfo("America/Sao_Paulo"))
+        who = (actor_display or log_user or "sistema").strip()
+        self.append_log(
+            inv,
+            f"NF {str(inv.nf_number).strip()} reativada por {who} em {now_br:%d/%m/%Y} às {now_br:%H:%M} "
+            f"(status {prev_status} → {new_status}).",
+        )
+        await self.db.flush()
+        await self.db.refresh(inv, attribute_names=["project"])
         return inv
 
     async def delete_invoice(self, invoice_id: UUID) -> bool:

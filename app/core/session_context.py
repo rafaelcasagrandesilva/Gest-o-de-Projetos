@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permission_codes import (
+    EXPLICIT_GRANT_ONLY_PERMISSIONS,
     ALERTS_VIEW,
     BILLING_VIEW,
     COMPANY_FINANCE_EDIT,
@@ -144,6 +145,8 @@ def _workspace_permission_from_module_permissions(names: frozenset[str], code: s
 
 
 def user_has_permission(user: User, code: str, *, is_superuser: bool = False) -> bool:
+    if code in EXPLICIT_GRANT_ONLY_PERMISSIONS:
+        return code in permission_names_from_user(user)
     if is_superuser:
         return True
     if "ADMIN" in role_name_set(user):
@@ -171,6 +174,8 @@ def accessible_workspaces(user: User, *, is_superuser: bool = False) -> list[Wor
 
 def session_permission_names(user: User, *, is_superuser: bool = False) -> list[str]:
     names = set(effective_permission_names(user))
+    # Garante que permissões explícitas (ex.: invoices.reactivate) apareçam na sessão/frontend.
+    names.update(permission_names_from_user(user))
     if user_has_permission(user, WORKSPACE_PROJECTS_ACCESS, is_superuser=is_superuser):
         names.add(WORKSPACE_PROJECTS_ACCESS)
     if user_has_permission(user, WORKSPACE_FINANCE_ACCESS, is_superuser=is_superuser):

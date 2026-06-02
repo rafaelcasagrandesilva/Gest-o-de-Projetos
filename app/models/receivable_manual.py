@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from enum import Enum
 
-from sqlalchemy import Date, Enum as SAEnum, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, Enum as SAEnum, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampUUIDMixin
@@ -31,6 +31,8 @@ class ReceivableManualItem(TimestampUUIDMixin, Base):
     data_recebimento: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    include_in_dashboard: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
     status: Mapped[ReceivableManualStatus] = mapped_column(
         SAEnum(ReceivableManualStatus, name="receivable_manual_status"),

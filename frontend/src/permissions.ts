@@ -1,3 +1,6 @@
+/** Permissões concedidas apenas por checkbox explícito (não herdam de admin/superuser). */
+const EXPLICIT_GRANT_ONLY = new Set(["invoices.reactivate", "audit.export"]);
+
 /** Espelha `app/core/permission_codes.ALL_PERMISSION_CODES` (ordem estável para UI). */
 export const ALL_PERMISSION_CODES: string[] = [
   "system.admin",
@@ -22,6 +25,7 @@ export const ALL_PERMISSION_CODES: string[] = [
   "billing.view",
   "invoices.view",
   "invoices.edit",
+  "invoices.reactivate",
   "debts.view",
   "debts.edit",
   "costs.view",
@@ -31,6 +35,7 @@ export const ALL_PERMISSION_CODES: string[] = [
   "users.manage",
   "reports.view",
   "reports.export",
+  "audit.export",
   "alerts.view",
   "company_finance.view",
   "company_finance.edit",
@@ -61,6 +66,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "billing.view": "Faturamento",
   "invoices.view": "Notas fiscais (visualizar)",
   "invoices.edit": "Notas fiscais (editar)",
+  "invoices.reactivate": "Reativar Notas Fiscais Canceladas",
   "debts.view": "Endividamento (visualizar)",
   "debts.edit": "Endividamento (editar)",
   "costs.view": "Custos (visualizar)",
@@ -70,6 +76,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "users.manage": "Gerenciar usuários",
   "reports.view": "Relatórios (visualizar)",
   "reports.export": "Relatórios (exportar)",
+  "audit.export": "Exportar log de auditoria do sistema",
   "alerts.view": "Alertas",
   "company_finance.view": "Finanças empresa (visualizar)",
   "company_finance.edit": "Finanças empresa (editar)",
@@ -79,6 +86,9 @@ export const PERMISSION_LABELS: Record<string, string> = {
 
 export function hasPermission(permissionNames: string[] | undefined, code: string): boolean {
   if (!permissionNames?.length) return false;
+  if (EXPLICIT_GRANT_ONLY.has(code)) {
+    return permissionNames.includes(code);
+  }
   if (permissionNames.includes("system.admin")) return true;
   if (permissionNames.includes(code)) return true;
   if (
@@ -142,7 +152,7 @@ export function hasPermission(permissionNames: string[] | undefined, code: strin
 
 /** Presets alinhados a `app/core/permission_codes.ROLE_PRESET` (para aplicar ao mudar perfil na UI). */
 export const ROLE_PERMISSION_PRESET: Record<"ADMIN" | "GESTOR" | "CONSULTA", string[]> = {
-  ADMIN: [...ALL_PERMISSION_CODES],
+  ADMIN: ALL_PERMISSION_CODES.filter((c) => !EXPLICIT_GRANT_ONLY.has(c)),
   GESTOR: ALL_PERMISSION_CODES.filter(
     (c) => c !== "users.manage" && c !== "system.admin" && c !== "system.all_projects",
   ),

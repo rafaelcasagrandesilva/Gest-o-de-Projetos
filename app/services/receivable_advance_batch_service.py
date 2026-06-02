@@ -20,6 +20,7 @@ from app.models.payable_snapshot import PayableSnapshotType
 from app.schemas.receivable import CENT_TOL, derive_invoice_status
 from app.services.payable_snapshot_service import PayableSnapshotService
 from app.services.receivable_service import ReceivableService, get_affected_months
+from app.utils.dashboard_inclusion import apply_dashboard_inclusion_change, append_observation_line
 from app.utils.date_utils import normalize_competencia
 
 
@@ -439,6 +440,20 @@ class ReceivableAdvanceBatchService:
         await self.db.refresh(batch)
         return batch
 
+    async def update_dashboard_inclusion(self, batch_id: UUID, *, include_in_dashboard: bool) -> ReceivableAdvanceBatch | None:
+        batch = await self.get_batch(batch_id)
+        if batch is None:
+            return None
+        apply_dashboard_inclusion_change(
+            before=bool(batch.include_in_dashboard),
+            after=include_in_dashboard,
+            set_value=lambda v: setattr(batch, "include_in_dashboard", v),
+            append_line=lambda line: setattr(batch, "observation", append_observation_line(batch.observation, line)),
+        )
+        await self.db.flush()
+        await self.db.refresh(batch)
+        return batch
+
     def batch_to_read(self, batch: ReceivableAdvanceBatch) -> dict:
         gross = float(batch.gross_amount or 0)
         disc = float(batch.discount_amount or 0)
@@ -479,6 +494,7 @@ class ReceivableAdvanceBatchService:
             "receive_date": batch.receive_date,
             "repayment_date": batch.repayment_date,
             "observation": batch.observation,
+            "include_in_dashboard": bool(getattr(batch, "include_in_dashboard", True)),
             "status": batch.status.value,
             "created_by_id": batch.created_by_id,
             "items": items_out,

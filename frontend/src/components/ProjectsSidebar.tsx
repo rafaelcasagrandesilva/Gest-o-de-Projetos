@@ -9,7 +9,7 @@ const items: {
   end: boolean;
   perm: string;
 }[] = [
-  { to: "/projects/dashboard", label: "Dashboard financeiro", end: true, perm: "dashboard.view" },
+  { to: "/projects/dashboard", label: "Dashboard operacional", end: true, perm: "dashboard.view" },
   { to: "/projects/reports", label: "Relatórios", end: false, perm: "reports.view" },
   { to: "/projects/list", label: "Projetos", end: false, perm: "projects.view" },
   { to: "/projects/users", label: "Usuários", end: false, perm: "users.manage" },
@@ -19,10 +19,19 @@ const items: {
   { to: "/settings", label: "Configurações", end: false, perm: "settings.view" },
 ];
 
+function visibleSidebarItems(perms: string[] | undefined) {
+  return items.filter((i) => {
+    if (i.to === "/settings") {
+      return hasPermission(perms, "settings.view") || hasPermission(perms, "audit.export");
+    }
+    return hasPermission(perms, i.perm);
+  });
+}
+
 export function ProjectsSidebar() {
   const { user } = useAuth();
   const perms = user?.permission_names;
-  const visible = items.filter((i) => hasPermission(perms, i.perm));
+  const visible = visibleSidebarItems(perms);
 
   return (
     <AppSidebarShell subtitle="Workspace: Projetos">

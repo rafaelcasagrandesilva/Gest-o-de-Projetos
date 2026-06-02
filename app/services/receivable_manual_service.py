@@ -8,6 +8,7 @@ from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.receivable_manual import ReceivableManualItem, ReceivableManualStatus
+from app.utils.dashboard_inclusion import apply_dashboard_inclusion_change, append_observation_line
 
 
 CENT_TOL = 0.009
@@ -93,6 +94,7 @@ class ReceivableManualService:
             data_recebimento=data.get("data_recebimento"),
             observacao=data.get("observacao"),
             status=status,
+            include_in_dashboard=bool(data.get("include_in_dashboard", True)),
         )
         self.session.add(row)
         await self.session.commit()
@@ -104,8 +106,15 @@ class ReceivableManualService:
         if not row:
             raise LookupError("Receita manual não encontrada.")
 
+        include_new = data.pop("include_in_dashboard", None)
         for k, v in data.items():
             setattr(row, k, v)
+        apply_dashboard_inclusion_change(
+            before=bool(row.include_in_dashboard),
+            after=include_new,
+            set_value=lambda v: setattr(row, "include_in_dashboard", v),
+            append_line=lambda line: setattr(row, "observacao", append_observation_line(row.observacao, line)),
+        )
 
         liq = _as_money(row.valor_liquido)
         rec = _as_money(row.valor_recebido)

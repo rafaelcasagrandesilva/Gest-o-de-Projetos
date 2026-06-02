@@ -67,6 +67,8 @@ class PayableSnapshot(TimestampUUIDMixin, Base):
     payment_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     paid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
 
+    include_in_dashboard: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+
     observation: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     payments: Mapped[list["PayablePayment"]] = relationship(  # noqa: F821

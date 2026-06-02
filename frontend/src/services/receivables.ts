@@ -36,6 +36,7 @@ export interface ReceivableInvoice {
   has_pdf: boolean;
   pdf_url: string | null;
   activity_log: string | null;
+  include_in_dashboard: boolean;
   advance_batch_id?: string | null;
   advance_batch?: AdvanceBatchSummary | null;
 }
@@ -61,6 +62,7 @@ export interface InvoiceAnticipation {
   taxa_percentual?: number | null;
   taxa_mensal?: number | null;
   dias?: number | null;
+  include_in_dashboard?: boolean;
 }
 
 export interface ReceivableKpis {
@@ -115,7 +117,10 @@ export interface ReceivableViewRow {
   total_received: number;
   remaining: number;
   status: ReceivableViewStatus;
+  /** Preenchido quando a NF está cancelada (visível só com invoices.reactivate). */
+  invoice_status?: InvoiceStatus | null;
   observacao?: string | null;
+  include_in_dashboard?: boolean;
 }
 
 export async function fetchReceivablesView(params: {
@@ -145,6 +150,7 @@ export interface ReceivableManualItem {
   valor_recebido: number;
   data_recebimento?: string | null;
   observacao?: string | null;
+  include_in_dashboard?: boolean;
   status: ReceivableViewStatus;
 }
 
@@ -158,6 +164,7 @@ export async function createReceivableManualItem(payload: {
   valor_recebido?: number | null;
   data_recebimento?: string | null;
   observacao?: string | null;
+  include_in_dashboard?: boolean;
 }): Promise<ReceivableManualItem> {
   const { data } = await api.post<ReceivableManualItem>("/financial/receivables/manual", payload);
   return data;
@@ -175,6 +182,7 @@ export async function updateReceivableManualItem(
     valor_recebido: number | null;
     data_recebimento: string | null;
     observacao: string | null;
+    include_in_dashboard: boolean;
   }>,
 ): Promise<ReceivableManualItem> {
   const { data } = await api.patch<ReceivableManualItem>(`/financial/receivables/manual/${id}`, payload);
@@ -194,8 +202,14 @@ export async function createReceivableInvoice(payload: {
   net_amount?: number | null;
   client_name?: string | null;
   notes?: string | null;
+  include_in_dashboard?: boolean;
 }): Promise<ReceivableInvoice> {
   const { data } = await api.post<ReceivableInvoice>("/invoices/", payload);
+  return data;
+}
+
+export async function reactivateReceivableInvoice(id: string): Promise<ReceivableInvoice> {
+  const { data } = await api.post<ReceivableInvoice>(`/invoices/${id}/reactivate/`);
   return data;
 }
 
@@ -217,6 +231,7 @@ export async function updateReceivableInvoice(
     received_amount: number;
     received_date: string | null;
     status: InvoiceStatus;
+    include_in_dashboard: boolean;
   }>,
 ): Promise<ReceivableInvoice> {
   const { data } = await api.patch<ReceivableInvoice>(`/invoices/${id}/`, payload);
@@ -231,6 +246,7 @@ export async function addInvoiceAnticipation(
     amount_to_repay: number;
     data_recebimento: string;
     due_date: string;
+    include_in_dashboard?: boolean;
   },
 ): Promise<InvoiceAnticipation> {
   const { data } = await api.post<InvoiceAnticipation>(`/invoices/${invoiceId}/anticipations/`, payload);
@@ -250,6 +266,7 @@ export async function updateInvoiceAnticipation(
     amount_to_repay: number;
     data_recebimento: string;
     due_date: string;
+    include_in_dashboard?: boolean;
   },
 ): Promise<InvoiceAnticipation> {
   const { data } = await api.patch<InvoiceAnticipation>(

@@ -20,7 +20,7 @@ export interface DirectorSummary {
   profit: number;
   /** Igual a margin_operational (compat) */
   margin: number;
-  /** Receita − custos operacionais (mão de obra, veículos, sistemas, fixos operacionais) */
+  /** Receita − operacional total − rateio/overhead */
   ebitda?: number;
   /** Fração da receita (ex.: 0,15 = 15%) */
   ebitda_margin?: number;
