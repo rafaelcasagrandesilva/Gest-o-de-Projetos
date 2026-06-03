@@ -26,6 +26,7 @@ import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
 import { usePermission } from "@/hooks/usePermission";
 import { useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
+import { parseCurrencyInput } from "@/utils/currency";
 
 function monthStartIso(): string {
   const d = new Date();
@@ -71,9 +72,9 @@ const emptyForm: FormState = {
 };
 
 function parseOptionalMoney(s: string): number | null {
-  const t = s.trim().replace(",", ".");
+  const t = s.trim();
   if (t === "") return null;
-  const n = Number(t);
+  const n = parseCurrencyInput(t);
   return Number.isFinite(n) ? n : null;
 }
 

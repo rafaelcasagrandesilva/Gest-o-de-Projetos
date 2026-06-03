@@ -3,6 +3,7 @@ import { usePermission } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { listProjects, type Project } from "@/services/projects";
 import { createRevenue, deleteRevenue, listRevenues, type Revenue } from "@/services/financial";
+import { normalizeCurrencyForApi, sanitizeCurrencyTyping } from "@/utils/currency";
 import { isAxiosError } from "axios";
 
 function monthStartInput(): string {
@@ -89,7 +90,7 @@ export function RevenuePage() {
       await createRevenue({
         project_id: projectId,
         competencia: `${competencia}-01`,
-        amount: Number(amount),
+        amount: normalizeCurrencyForApi(amount),
         description: description.trim() || null,
         status,
         has_retention: hasRetention,
@@ -239,7 +240,7 @@ export function RevenuePage() {
                   step="0.01"
                   disabled={!canEditBilling}
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => setAmount(sanitizeCurrencyTyping(e.target.value))}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
                 />
               </div>

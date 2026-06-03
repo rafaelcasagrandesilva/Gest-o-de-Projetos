@@ -26,6 +26,11 @@ import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
 import { defaultInvoiceSort, INVOICE_SORT_COLUMNS } from "@/tableSort/invoices";
+import {
+  formatCurrency,
+  formatCurrencyInputFromApi,
+  normalizeCurrencyForApi,
+} from "@/utils/currency";
 
 function formatAxiosDetail(e: unknown): string {
   if (!isAxiosError(e)) return "Erro inesperado.";
@@ -42,7 +47,7 @@ function formatAxiosDetail(e: unknown): string {
 }
 
 function formatBRL(n: number): string {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return formatCurrency(n);
 }
 
 function formatDateBr(iso: string): string {
@@ -56,9 +61,7 @@ function formatPct2(n: number): string {
 }
 
 function parseMoneyInput(raw: string): number {
-  const t = raw.replace(/\s/g, "").replace(/R\$\s?/i, "");
-  const n = Number.parseFloat(t.replace(/\./g, "").replace(",", "."));
-  return Number.isFinite(n) ? Math.max(0, n) : 0;
+  return normalizeCurrencyForApi(raw);
 }
 
 function addCalendarDays(isoDate: string, days: number): string {
@@ -258,14 +261,8 @@ export function Invoices() {
       number: row.number,
       issue_date: row.issue_date.slice(0, 10),
       due_days: row.due_days as DueChoice,
-      gross_amount: row.gross_amount.toLocaleString("pt-BR", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }),
-      net_amount: row.net_amount.toLocaleString("pt-BR", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }),
+      gross_amount: formatCurrencyInputFromApi(row.gross_amount),
+      net_amount: formatCurrencyInputFromApi(row.net_amount),
       client_name: row.client_name ?? "",
       notes: row.notes ?? "",
       received_date: row.received_date ? row.received_date.slice(0, 10) : "",
@@ -1149,8 +1146,8 @@ export function Invoices() {
                                               setEditingAnticipationId(a.id);
                                               setAntForm({
                                                 institution: a.institution || "",
-                                                amount_received: String(a.amount_received ?? ""),
-                                                amount_to_repay: String(a.amount_to_repay ?? ""),
+                                                amount_received: formatCurrencyInputFromApi(a.amount_received),
+                                                amount_to_repay: formatCurrencyInputFromApi(a.amount_to_repay),
                                                 data_recebimento: (a.data_recebimento || "").slice(0, 10),
                                                 due_date: (a.due_date || "").slice(0, 10),
                                                 include_in_dashboard: a.include_in_dashboard !== false,

@@ -9,15 +9,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.receivable_manual import ReceivableManualItem, ReceivableManualStatus
 from app.utils.dashboard_inclusion import apply_dashboard_inclusion_change, append_observation_line
+from app.utils.money import money_to_float, normalize_money
 
 
 CENT_TOL = 0.009
 
 
-def _as_money(v: float | Decimal | None) -> float:
+def _as_money(v: float | Decimal | str | None) -> float:
     if v is None:
         return 0.0
-    return float(v)
+    return money_to_float(normalize_money(v))
 
 
 def derive_manual_status(*, valor_liquido: float, valor_recebido: float) -> ReceivableManualStatus:
@@ -77,8 +78,8 @@ class ReceivableManualService:
         return list(res.scalars().all())
 
     async def create(self, *, workspace_id: str, data: dict) -> ReceivableManualItem:
-        liq = float(data["valor_liquido"])
-        rec = float(data.get("valor_recebido") or 0.0)
+        liq = money_to_float(normalize_money(data["valor_liquido"]))
+        rec = money_to_float(normalize_money(data.get("valor_recebido") or 0))
         if rec > liq + CENT_TOL:
             raise ValueError("valor_recebido não pode ser maior que valor_liquido.")
         status = derive_manual_status(valor_liquido=liq, valor_recebido=rec)
@@ -108,7 +109,10 @@ class ReceivableManualService:
 
         include_new = data.pop("include_in_dashboard", None)
         for k, v in data.items():
-            setattr(row, k, v)
+            if k in ("valor_liquido", "valor_recebido"):
+                setattr(row, k, money_to_float(normalize_money(v)))
+            else:
+                setattr(row, k, v)
         apply_dashboard_inclusion_change(
             before=bool(row.include_in_dashboard),
             after=include_new,

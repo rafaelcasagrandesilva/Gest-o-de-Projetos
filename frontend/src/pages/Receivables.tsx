@@ -14,6 +14,11 @@ import { usePermission } from "@/hooks/usePermission";
 import { PeriodFilter } from "@/components/PeriodFilter";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 import { formatApiError } from "@/utils/apiError";
+import {
+  formatCurrencyInputFromApi,
+  normalizeCurrencyForApi,
+  sanitizeCurrencyTyping,
+} from "@/utils/currency";
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import {
@@ -443,10 +448,10 @@ function Kpi({ label, value, accent }: { label: string; value: string; accent?: 
 }
 
 function toNumberOrNull(v: string): number | null {
-  const s = v.replace(/\./g, "").replace(",", ".").trim();
-  if (!s) return null;
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
+  const t = v.trim();
+  if (!t) return null;
+  const n = normalizeCurrencyForApi(t);
+  return n > 0 ? n : null;
 }
 
 function ManualReceivableModal({
@@ -484,8 +489,8 @@ function ManualReceivableModal({
       setNumeroRef(initial.numero_referencia ?? "");
       setDataEmissao(initial.issue_date ?? todayIsoLocal());
       setDataVenc(initial.due_date ?? todayIsoLocal());
-      setValorLiquido(String(initial.net_value ?? ""));
-      setValorRecebido(String(initial.amount_received_customer ?? ""));
+      setValorLiquido(formatCurrencyInputFromApi(initial.net_value));
+      setValorRecebido(formatCurrencyInputFromApi(initial.amount_received_customer));
       setDataReceb(initial.received_at ?? "");
       setObservacao(initial.observacao ?? "");
       setIncludeInDashboard(initial.include_in_dashboard !== false);
@@ -634,7 +639,7 @@ function ManualReceivableModal({
               <span className="font-medium text-slate-700">Valor líquido</span>
               <input
                 value={valorLiquido}
-                onChange={(e) => setValorLiquido(e.target.value)}
+                onChange={(e) => setValorLiquido(sanitizeCurrencyTyping(e.target.value))}
                 className="rounded-lg border border-slate-300 px-3 py-2"
                 placeholder="0,00"
               />
@@ -643,7 +648,7 @@ function ManualReceivableModal({
               <span className="font-medium text-slate-700">Valor recebido (opcional)</span>
               <input
                 value={valorRecebido}
-                onChange={(e) => setValorRecebido(e.target.value)}
+                onChange={(e) => setValorRecebido(sanitizeCurrencyTyping(e.target.value))}
                 className="rounded-lg border border-slate-300 px-3 py-2"
                 placeholder="0,00"
               />

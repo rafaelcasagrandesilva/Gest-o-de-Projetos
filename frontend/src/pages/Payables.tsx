@@ -18,6 +18,7 @@ import { PeriodFilter } from "@/components/PeriodFilter";
 import { TruncatedCell } from "@/components/TruncatedText";
 import { listProjects, type Project } from "@/services/projects";
 import { formatApiError } from "@/utils/apiError";
+import { normalizeCurrencyForApi, parseCurrencyInput } from "@/utils/currency";
 import { PayablesImportModal } from "@/components/PayablesImportModal";
 import { SortableTh } from "@/components/table";
 import { useTableSort, type TableSortHeaderProps } from "@/hooks/useTableSort";
@@ -77,14 +78,6 @@ function typeLabel(t: PayableSnapshotType): string {
   if (t === "ENDIVIDAMENTO" || t === "FINANCIAL") return "Endividamento";
   if (t === "ANTECIPACAO") return "Antecipação";
   return "Manual";
-}
-
-function parseMoneyInput(raw: string): number {
-  const s0 = raw.trim().replace(/\s/g, "").replace(/R\$\s*/i, "");
-  if (s0.includes(",")) {
-    return Number.parseFloat(s0.replace(/\./g, "").replace(",", "."));
-  }
-  return Number.parseFloat(s0);
 }
 
 export function Payables() {
@@ -283,7 +276,7 @@ export function Payables() {
   const modalOverpaymentPreview = useMemo(() => {
     if (!actionModal.open || actionModal.mode !== "register") return null;
     const row = actionModal.row;
-    const amt = parseMoneyInput(modalAmount.trim());
+    const amt = parseCurrencyInput(modalAmount.trim());
     if (!Number.isFinite(amt) || amt <= 0) return null;
     const newPaid = Math.round((row.amount_paid + amt) * 100) / 100;
     const newRemaining = Math.round((row.amount_final - newPaid) * 100) / 100;
@@ -315,7 +308,7 @@ export function Payables() {
   async function submitPaymentModal() {
     if (!actionModal.open || actionModal.mode === "delete") return;
     const row = actionModal.row;
-    const amt = parseMoneyInput(modalAmount.trim());
+    const amt = parseCurrencyInput(modalAmount.trim());
     if (!Number.isFinite(amt) || amt <= 0) {
       setError("Informe um valor maior que zero.");
       return;
@@ -383,7 +376,7 @@ export function Payables() {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!canEdit) return;
-    const amount = Number.parseFloat(form.amount.replace(/\./g, "").replace(",", "."));
+    const amount = normalizeCurrencyForApi(form.amount);
     if (!Number.isFinite(amount) || amount <= 0) {
       setError("Informe um valor válido.");
       return;
@@ -440,7 +433,7 @@ export function Payables() {
     if (!canEdit) return;
     setError(null);
     setEditingId(row.id);
-    setEditValue(Number(row.amount_final));
+    setEditValue(row.amount_final);
     setEditDate(row.due_date.slice(0, 10));
     setEditIncludeInDashboard(row.include_in_dashboard !== false);
   }

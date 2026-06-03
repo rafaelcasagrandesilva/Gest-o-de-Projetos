@@ -11,6 +11,7 @@ import {
   type AdvanceBatchEligibleInvoice,
 } from "@/services/receivableAdvanceBatches";
 import { formatApiError } from "@/utils/apiError";
+import { normalizeCurrencyForApi } from "@/utils/currency";
 
 function formatBRL(n: number): string {
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -23,8 +24,7 @@ function formatDateBr(iso: string): string {
 }
 
 function parseMoney(raw: string): number {
-  const t = raw.replace(/\s/g, "").replace(/R\$\s?/i, "");
-  return Number.parseFloat(t.replace(/\./g, "").replace(",", ".")) || 0;
+  return normalizeCurrencyForApi(raw);
 }
 
 function todayIso(): string {

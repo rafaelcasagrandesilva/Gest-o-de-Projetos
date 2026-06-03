@@ -16,7 +16,7 @@ from app.models.receivable_advance_batch import (
     ReceivableAdvanceBatchItem,
     ReceivableAdvanceBatchStatus,
 )
-from app.models.payable_snapshot import PayableSnapshotType
+from app.models.payable_snapshot import PayableSnapshot
 from app.schemas.receivable import CENT_TOL, derive_invoice_status
 from app.services.payable_snapshot_service import PayableSnapshotService
 from app.services.receivable_service import ReceivableService, get_affected_months
@@ -40,6 +40,23 @@ def _next_batch_number(existing: list[str], *, year: int) -> str:
         except ValueError:
             continue
     return f"{prefix}{max_seq + 1:04d}"
+
+
+_BATCH_DISCOUNT_SUFFIX = " — Deságio"
+_BATCH_FEE_SUFFIX = " — Tarifas bancárias"
+
+
+def _batch_payable_observation(operation_tag: str) -> str:
+    return f"Operação={operation_tag}"
+
+
+def _is_bordero_operation_payable(row: PayableSnapshot, *, operation_tag: str) -> bool:
+    """Linhas de deságio/tarifa criadas por borderô (MANUAL atual ou ANTECIPACAO legado)."""
+    obs = str(getattr(row, "observation", "") or "")
+    if _batch_payable_observation(operation_tag) not in obs:
+        return False
+    name = str(getattr(row, "name", "") or "")
+    return _BATCH_DISCOUNT_SUFFIX in name or _BATCH_FEE_SUFFIX in name
 
 
 def _op_display_code(*, batch_number: str, operation_code: str | None, batch_id: UUID | None = None) -> str:
@@ -172,6 +189,22 @@ class ReceivableAdvanceBatchService:
         ).scalars().all()
         return _next_batch_number(list(rows), year=year)
 
+    async def _find_batch_payable_line(
+        self,
+        payables: PayableSnapshotService,
+        *,
+        month: date,
+        operation_tag: str,
+        name_suffix: str,
+    ) -> PayableSnapshot | None:
+        comp = normalize_competencia(month)
+        for row in await payables.list_for_month(month=comp):
+            if not _is_bordero_operation_payable(row, operation_tag=operation_tag):
+                continue
+            if name_suffix in str(getattr(row, "name", "") or ""):
+                return row
+        return None
+
     async def _ensure_payables_for_batch(
         self,
         *,
@@ -191,28 +224,41 @@ class ReceivableAdvanceBatchService:
                 accessible_project_ids=None,
             )
 
+        inst = institution.strip()
+        obs = _batch_payable_observation(batch_number)
+
         if discount_amount > 0.005:
-            await payables.create_manual(
+            if await self._find_batch_payable_line(
+                payables,
                 month=comp,
-                name=f"{institution.strip()} — Deságio",
-                category="Despesas financeiras",
-                cost_center="Financeiro",
-                amount=discount_amount,
-                due_date=receive_date,
-                observation=f"Operação={batch_number}",
-                snapshot_type=PayableSnapshotType.ANTECIPACAO,
-            )
+                operation_tag=batch_number,
+                name_suffix=_BATCH_DISCOUNT_SUFFIX,
+            ) is None:
+                await payables.create_manual(
+                    month=comp,
+                    name=f"{inst}{_BATCH_DISCOUNT_SUFFIX}",
+                    category="Despesas financeiras",
+                    cost_center="Financeiro",
+                    amount=discount_amount,
+                    due_date=receive_date,
+                    observation=obs,
+                )
         if fee_amount > 0.005:
-            await payables.create_manual(
+            if await self._find_batch_payable_line(
+                payables,
                 month=comp,
-                name=f"{institution.strip()} — Tarifas bancárias",
-                category="Despesas financeiras",
-                cost_center="Financeiro",
-                amount=fee_amount,
-                due_date=receive_date,
-                observation=f"Operação={batch_number}",
-                snapshot_type=PayableSnapshotType.ANTECIPACAO,
-            )
+                operation_tag=batch_number,
+                name_suffix=_BATCH_FEE_SUFFIX,
+            ) is None:
+                await payables.create_manual(
+                    month=comp,
+                    name=f"{inst}{_BATCH_FEE_SUFFIX}",
+                    category="Despesas financeiras",
+                    cost_center="Financeiro",
+                    amount=fee_amount,
+                    due_date=receive_date,
+                    observation=obs,
+                )
 
     async def cancel_batch(
         self,
@@ -242,11 +288,7 @@ class ReceivableAdvanceBatchService:
         )
         candidates = []
         for row in await payables.list_all():
-            if row.type != PayableSnapshotType.ANTECIPACAO:
-                continue
-            name = str(getattr(row, "name", "") or "")
-            obs = str(getattr(row, "observation", "") or "")
-            if f"Operação={tag}" not in obs:
+            if not _is_bordero_operation_payable(row, operation_tag=tag):
                 continue
             if float(getattr(row, "amount_paid", 0) or 0) > 0.005:
                 raise ValueError(
@@ -310,10 +352,7 @@ class ReceivableAdvanceBatchService:
         )
         payables = PayableSnapshotService(self.db)
         for row in await payables.list_all():
-            if row.type != PayableSnapshotType.ANTECIPACAO:
-                continue
-            obs = str(getattr(row, "observation", "") or "")
-            if f"Operação={tag}" not in obs:
+            if not _is_bordero_operation_payable(row, operation_tag=tag):
                 continue
             if float(getattr(row, "amount_paid", 0) or 0) > 0.005:
                 raise ValueError("Não é possível excluir: despesas do borderô já possuem pagamento registrado.")

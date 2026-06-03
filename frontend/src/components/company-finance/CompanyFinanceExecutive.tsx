@@ -41,6 +41,11 @@ import { CollapsiblePanel, PrimaryAddButton } from "@/components/ExpandableFormS
 import { isAxiosError } from "axios";
 import { GESTOR_GLOBAL_EDIT_TOOLTIP, useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
 import { usePermission } from "@/hooks/usePermission";
+import {
+  formatCurrency,
+  formatCurrencyInputFromApi,
+  normalizeCurrencyForApi,
+} from "@/utils/currency";
 
 const MONTH_SHORT = [
   "JAN",
@@ -58,14 +63,11 @@ const MONTH_SHORT = [
 ];
 
 function formatBRL(n: number): string {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return formatCurrency(n);
 }
 
 function parseBRLInput(raw: string): number {
-  const t = raw.replace(/\s/g, "").replace(/R\$\s?/i, "");
-  const normalized = t.replace(/\./g, "").replace(",", ".");
-  const n = Number.parseFloat(normalized);
-  return Number.isFinite(n) ? Math.max(0, n) : 0;
+  return normalizeCurrencyForApi(raw);
 }
 
 /** Só envia meses com valor ou que tinham pagamento (evita zerar os outros 11 meses da janela). */
@@ -747,7 +749,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             <input
               value={
                 tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ"
-                  ? String(calculatedRef).replace(".", ",")
+                  ? formatCurrencyInputFromApi(calculatedRef)
                   : draftRef
               }
               onChange={(e) => setDraftRef(e.target.value)}
@@ -1092,14 +1094,14 @@ function FinanceItemCard({
   const [localPayments, setLocalPayments] = useState<Record<string, string>>(() => {
     const m: Record<string, string> = {};
     for (const p of item.pagamentos) {
-      m[p.mes] = p.valor > 0 ? String(p.valor).replace(".", ",") : "";
+      m[p.mes] = p.valor > 0 ? formatCurrencyInputFromApi(p.valor) : "";
     }
     return m;
   });
   const [editingStructure, setEditingStructure] = useState(false);
   const [structureSaving, setStructureSaving] = useState(false);
   const [structureName, setStructureName] = useState(item.nome);
-  const [structureRef, setStructureRef] = useState(String(item.valor_referencia).replace(".", ","));
+  const [structureRef, setStructureRef] = useState(formatCurrencyInputFromApi(item.valor_referencia));
   const [structureCategory, setStructureCategory] = useState(item.category ?? defaultCategory(tipo));
   const [structureCostCenterRef, setStructureCostCenterRef] = useState(() =>
     itemCostCenterRef(item, tipo, projectOptions),
@@ -1112,7 +1114,7 @@ function FinanceItemCard({
   const [structureHasLegal, setStructureHasLegal] = useState(Boolean(item.has_legal_process));
   const [structureHasReneg, setStructureHasReneg] = useState(Boolean(item.has_renegotiation));
   const [structureRenegAmount, setStructureRenegAmount] = useState(
-    typeof item.renegotiated_amount === "number" ? String(item.renegotiated_amount).replace(".", ",") : "",
+    typeof item.renegotiated_amount === "number" ? formatCurrencyInputFromApi(item.renegotiated_amount) : "",
   );
   const [structureRenegType, setStructureRenegType] = useState<RenegotiationType>(
     item.renegotiation_type ?? "UNIQUE",
@@ -1121,7 +1123,7 @@ function FinanceItemCard({
     typeof item.installment_count === "number" ? String(item.installment_count) : "",
   );
   const [structureInstallmentValue, setStructureInstallmentValue] = useState(
-    typeof item.installment_value === "number" ? String(item.installment_value).replace(".", ",") : "",
+    typeof item.installment_value === "number" ? formatCurrencyInputFromApi(item.installment_value) : "",
   );
   const [structureError, setStructureError] = useState<string | null>(null);
   const [structureSuccess, setStructureSuccess] = useState<string | null>(null);
@@ -1132,7 +1134,7 @@ function FinanceItemCard({
   useEffect(() => {
     const m: Record<string, string> = {};
     for (const p of item.pagamentos) {
-      m[p.mes] = p.valor > 0 ? String(p.valor).replace(".", ",") : "";
+      m[p.mes] = p.valor > 0 ? formatCurrencyInputFromApi(p.valor) : "";
     }
     setLocalPayments(m);
   }, [item.id, paymentsSyncKey]);
@@ -1140,7 +1142,7 @@ function FinanceItemCard({
   useEffect(() => {
     if (editingStructure) return;
     setStructureName(item.nome);
-    setStructureRef(String(item.valor_referencia).replace(".", ","));
+    setStructureRef(formatCurrencyInputFromApi(item.valor_referencia));
     setStructureCategory(item.category ?? defaultCategory(tipo));
     setStructureCostCenterRef(itemCostCenterRef(item, tipo, projectOptions));
     setStructureDescription(item.description ?? "");
@@ -1149,12 +1151,12 @@ function FinanceItemCard({
     setStructureHasLegal(Boolean(item.has_legal_process));
     setStructureHasReneg(Boolean(item.has_renegotiation));
     setStructureRenegAmount(
-      typeof item.renegotiated_amount === "number" ? String(item.renegotiated_amount).replace(".", ",") : "",
+      typeof item.renegotiated_amount === "number" ? formatCurrencyInputFromApi(item.renegotiated_amount) : "",
     );
     setStructureRenegType(item.renegotiation_type ?? "UNIQUE");
     setStructureInstallments(typeof item.installment_count === "number" ? String(item.installment_count) : "");
     setStructureInstallmentValue(
-      typeof item.installment_value === "number" ? String(item.installment_value).replace(".", ",") : "",
+      typeof item.installment_value === "number" ? formatCurrencyInputFromApi(item.installment_value) : "",
     );
     setStructureError(null);
     setStructureSuccess(null);
@@ -1193,7 +1195,7 @@ function FinanceItemCard({
       const saved = await replaceCompanyFinancePayments(item.id, pagamentos, competencia);
       const m: Record<string, string> = {};
       for (const p of saved.pagamentos) {
-        m[p.mes] = p.valor > 0 ? String(p.valor).replace(".", ",") : "";
+        m[p.mes] = p.valor > 0 ? formatCurrencyInputFromApi(p.valor) : "";
       }
       setLocalPayments(m);
       await onSaved();
