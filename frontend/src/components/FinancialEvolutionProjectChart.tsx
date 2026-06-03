@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { MonthlyPoint } from "@/services/dashboard";
 import type { ScenarioKind } from "@/context/ScenarioContext";
+import { chartCostTotal, chartNetProfit, chartOperationalProfit } from "@/utils/projectDashboardCost";
 import {
   Bar,
   BarChart,
@@ -74,6 +75,7 @@ type ChartRow = {
   monthLabel: string;
   receita: number;
   custo: number;
+  lucroOperacional: number;
   lucro: number;
 };
 
@@ -83,31 +85,20 @@ type SingleBarRow = {
   color: string;
 };
 
-/** Custo total alinhado ao lucro líquido: operacional + impostos + rateio + antecipação + retenção. */
-function chartCostTotal(p: MonthlyPoint, receita: number, lucro: number): number {
-  const fromComponents =
-    Number(p.operational_cost ?? 0) +
-    Number(p.tax_amount ?? 0) +
-    Number(p.overhead_amount ?? 0) +
-    Number(p.anticipation_amount ?? 0) +
-    Number(p.total_retention ?? 0);
-  if (fromComponents > 0) return fromComponents;
-  const withRetention = Number(p.total_cost ?? p.cost_total ?? 0) + Number(p.total_retention ?? 0);
-  if (withRetention > 0) return withRetention;
-  return receita - lucro;
-}
-
 function monthlyPointsToRows(points: MonthlyPoint[]): ChartRow[] {
   return [...points]
     .map((p) => {
       const ym = p.competencia.slice(0, 7);
       const receita = Number(p.total_revenue ?? p.revenue_total ?? 0);
-      const lucro = Number(p.net_profit ?? p.profit ?? 0);
+      const custo = chartCostTotal(p);
+      const lucroOperacional = chartOperationalProfit(receita, custo, p);
+      const lucro = chartNetProfit(lucroOperacional, p);
       return {
         month: ym,
         monthLabel: formatMonthLabel(ym),
         receita,
-        custo: chartCostTotal(p, receita, lucro),
+        custo,
+        lucroOperacional,
         lucro,
       };
     })
@@ -151,6 +142,10 @@ function EvolutionTooltip({ active, payload }: TooltipProps<number, string>) {
           <dd className="font-medium tabular-nums text-slate-900">{formatBRL(row.custo)}</dd>
         </div>
         <div className="flex justify-between gap-4 border-t border-slate-100 pt-1.5">
+          <dt>Lucro operacional</dt>
+          <dd className="font-medium tabular-nums text-slate-900">{formatBRL(row.lucroOperacional)}</dd>
+        </div>
+        <div className="flex justify-between gap-4">
           <dt className={lucroNeg ? "font-medium text-red-800" : ""}>Lucro líquido</dt>
           <dd className={`font-semibold tabular-nums ${lucroNeg ? "text-red-700" : "text-emerald-700"}`}>
             {formatBRL(row.lucro)}
