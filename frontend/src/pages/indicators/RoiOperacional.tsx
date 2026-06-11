@@ -13,6 +13,7 @@ import {
   type ProjectRoi,
   type RoiEvolutionPoint,
 } from "@/services/indicators";
+import { DashboardToolbar } from "@/components/dashboard/DashboardToolbar";
 import { ConsolidatedRoiCard } from "@/components/indicators/ConsolidatedRoiCard";
 import { ProjectFilterDropdown } from "@/components/indicators/ProjectFilterDropdown";
 import { RoiProjectCard } from "@/components/indicators/RoiProjectCard";
@@ -150,17 +151,17 @@ export function RoiOperacional() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold text-slate-900">ROI Operacional</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Lucro Operacional ÷ Custo Total{" "}
-          {isRange ? "(acumulado no período selecionado)" : "(competência selecionada)"}. Consolidado, cards e
-          gráficos respondem ao mesmo período e aos projetos selecionados.
-        </p>
-      </div>
-
-      {/* FILTROS — período, projetos e cenário (única fonte) */}
-      <div className="flex flex-wrap items-end gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      {/* BARRA ÚNICA — título + filtros (período, projetos e cenário) */}
+      <DashboardToolbar
+        title="ROI Operacional"
+        hint={
+          <p>
+            Lucro Operacional ÷ Custo Total{" "}
+            {isRange ? "(acumulado no período selecionado)" : "(competência selecionada)"}. Consolidado, cards e
+            gráficos respondem ao mesmo período e aos projetos selecionados.
+          </p>
+        }
+      >
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-slate-600">Data inicial</span>
           <input
@@ -233,7 +234,7 @@ export function RoiOperacional() {
             ))}
           </div>
         </div>
-      </div>
+      </DashboardToolbar>
 
       {error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>

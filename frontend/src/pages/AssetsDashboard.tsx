@@ -4,6 +4,8 @@ import { AssetOperationalAlertCard } from "@/components/assets/AssetOperationalA
 import { AssetsDashboardCharts } from "@/components/assets/AssetsDashboardCharts";
 import { formatBRL, PHYSICAL_CONDITION_LABELS } from "@/components/assets/assetLabels";
 import { useWorkspace } from "@/context/WorkspaceContext";
+import { DashboardToolbar } from "@/components/dashboard/DashboardToolbar";
+import { KpiStrip } from "@/components/dashboard/KpiStrip";
 import {
   fetchAssetsDashboard,
   type AssetDashboardCountValue,
@@ -20,19 +22,19 @@ function KpiDual({
   accent?: string;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className={`mt-2 text-2xl font-semibold tabular-nums text-slate-900 ${accent ?? ""}`}>{data.count}</p>
-      <p className="mt-1 text-sm tabular-nums text-slate-600">{formatBRL(data.value)}</p>
+    <div className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 shadow-sm">
+      <p className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</p>
+      <p className={`mt-0.5 text-2xl font-semibold tabular-nums text-slate-900 ${accent ?? ""}`}>{data.count}</p>
+      <p className="text-sm tabular-nums text-slate-600">{formatBRL(data.value)}</p>
     </div>
   );
 }
 
 function KpiSimple({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className={`mt-2 text-lg font-semibold tabular-nums text-slate-900 ${accent ?? ""}`}>{value}</p>
+    <div className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 shadow-sm">
+      <p className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</p>
+      <p className={`mt-0.5 text-lg font-semibold tabular-nums text-slate-900 ${accent ?? ""}`}>{value}</p>
     </div>
   );
 }
@@ -79,19 +81,19 @@ export function AssetsDashboard() {
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Dashboard Patrimonial</h1>
-          <p className="mt-1 text-sm text-slate-600">Visão consolidada de ativos, valores e alertas operacionais.</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="h-[42px] rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-800 hover:bg-slate-50"
-        >
-          Atualizar
-        </button>
-      </div>
+      <DashboardToolbar
+        title="Dashboard Patrimonial"
+        hint={<p>Visão consolidada de ativos, valores e alertas operacionais.</p>}
+        actions={
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
+          >
+            Atualizar
+          </button>
+        }
+      />
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
@@ -99,31 +101,23 @@ export function AssetsDashboard() {
 
       {s ? (
         <>
-          <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Quantidade</h2>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <KpiStrip cols={5} label="Quantidade">
               <KpiDual label="Total de ativos" data={s.total} />
               <KpiDual label="Em uso" data={s.in_use} />
               <KpiDual label="Disponíveis" data={s.available} />
               <KpiDual label="Em manutenção" data={s.maintenance} />
               <KpiDual label="Perdidos / baixados" data={s.lost_or_discarded} accent="text-red-800" />
-            </div>
-          </section>
+          </KpiStrip>
 
-          <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Financeiro</h2>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <KpiStrip cols={5} label="Financeiro">
               <KpiSimple label="Valor patrimonial total" value={formatBRL(s.total.value)} />
               <KpiSimple label="Valor em uso" value={formatBRL(s.in_use.value)} />
               <KpiSimple label="Valor disponível" value={formatBRL(s.available.value)} />
               <KpiSimple label="Valor em manutenção" value={formatBRL(s.maintenance.value)} />
               <KpiSimple label="Valor perdido / baixado" value={formatBRL(s.lost_or_discarded.value)} accent="text-red-800" />
-            </div>
-          </section>
+          </KpiStrip>
 
-          <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Estado físico</h2>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiStrip cols={4} label="Estado físico">
               {(data?.physical_condition ?? []).map((row) => (
                 <KpiDual
                   key={row.condition}
@@ -142,8 +136,7 @@ export function AssetsDashboard() {
                   }
                 />
               ))}
-            </div>
-          </section>
+          </KpiStrip>
         </>
       ) : null}
 

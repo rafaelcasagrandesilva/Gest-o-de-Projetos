@@ -24,6 +24,7 @@ import {
 } from "recharts";
 import type { TooltipProps } from "recharts";
 import { CHART_COLORS, formatBRLAxis } from "@/utils/chartTheme";
+import { DashboardToolbar } from "@/components/dashboard/DashboardToolbar";
 
 const MONTH_SHORT_PT = [
   "Jan",
@@ -280,53 +281,51 @@ export function FinancialDashboard() {
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Dashboard Financeiro</h1>
-          <p className="mt-1 text-sm text-slate-600">Resumo, evolução e detalhamento por mês.</p>
-          <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+      <DashboardToolbar
+        title="Dashboard Financeiro"
+        hint={
+          <p>
             <span className="font-medium text-slate-900">Caixa</span> = Faturamento recebido − Pagamentos realizados
             no período. Valores acima da linha de <span className="font-medium">R$ 0</span> indicam superávit; abaixo,
             déficit operacional.
           </p>
-        </div>
-
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-slate-700">Mês</span>
-            <input
-              type="month"
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-2"
-            />
-          </label>
-
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-slate-700">Histórico</span>
-            <select
-              value={monthsBack}
-              onChange={(e) => setMonthsBack(Number(e.target.value))}
-              className="rounded-lg border border-slate-300 px-3 py-2"
+        }
+        actions={
+          <>
+            <label className="flex items-center gap-2 text-sm">
+              <span className="font-medium text-slate-700">Mês</span>
+              <input
+                type="month"
+                value={month}
+                onChange={(e) => setMonth(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-1.5"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <span className="font-medium text-slate-700">Histórico</span>
+              <select
+                value={monthsBack}
+                onChange={(e) => setMonthsBack(Number(e.target.value))}
+                className="rounded-lg border border-slate-300 px-3 py-1.5"
+              >
+                <option value={1}>1 mês</option>
+                <option value={3}>3 meses</option>
+                <option value={6}>6 meses</option>
+                <option value={12}>12 meses</option>
+                <option value={18}>18 meses</option>
+                <option value={24}>24 meses</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
             >
-              <option value={1}>1 mês</option>
-              <option value={3}>3 meses</option>
-              <option value={6}>6 meses</option>
-              <option value={12}>12 meses</option>
-              <option value={18}>18 meses</option>
-              <option value={24}>24 meses</option>
-            </select>
-          </label>
-
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="h-[42px] rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-800 hover:bg-slate-50"
-          >
-            Atualizar
-          </button>
-        </div>
-      </div>
+              Atualizar
+            </button>
+          </>
+        }
+      />
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { FinancialDashboardCharts } from "@/components/FinancialDashboardCharts";
 import { FinancialEvolutionProjectChart } from "@/components/FinancialEvolutionProjectChart";
+import { DashboardToolbar } from "@/components/dashboard/DashboardToolbar";
 import { useSeesAllProjects } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { fetchFinancialSummary, type FinancialDashboardSummary } from "@/services/dashboard";
@@ -221,22 +222,20 @@ export function Dashboard() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold text-slate-900">Dashboard operacional</h2>
-          <p className="mt-2 rounded-md border border-indigo-100 bg-indigo-50/70 px-3 py-2 text-sm text-indigo-950">
-            {scenarioHint}
-          </p>
-          <p className="mt-2 text-sm text-slate-500">
-            {isGlobalView
-              ? "Visão consolidada. Cards principais e gráficos de composição usam o cenário selecionado; a primeira linha de cards compara previsto × realizado."
-              : "Cards principais e gráficos de composição usam o cenário selecionado; a primeira linha de cards compara previsto × realizado."}
-          </p>
-          {periodSubtitle ? (
-            <p className="mt-1 text-xs font-medium text-indigo-700">{periodSubtitle}</p>
-          ) : null}
-        </div>
-        <div className="flex max-w-2xl flex-col gap-3">
+      <DashboardToolbar
+        title="Dashboard operacional"
+        meta={periodSubtitle}
+        hint={
+          <>
+            <p>{scenarioHint}</p>
+            <p className="mt-1">
+              {isGlobalView
+                ? "Visão consolidada. Cards principais e gráficos de composição usam o cenário selecionado; a primeira linha de cards compara previsto × realizado."
+                : "Cards principais e gráficos de composição usam o cenário selecionado; a primeira linha de cards compara previsto × realizado."}
+            </p>
+          </>
+        }
+      >
           <div>
             <span className="mb-1 block text-xs font-medium text-slate-500">Cenário</span>
             <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
@@ -378,8 +377,7 @@ export function Dashboard() {
               </>
             ) : null}
           </div>
-        </div>
-      </div>
+      </DashboardToolbar>
 
       {multiMonth ? (
         <p className="text-xs text-slate-600">
@@ -406,7 +404,7 @@ export function Dashboard() {
         />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
         <KpiCard
           label={multiMonth ? `Receita (${scenarioLabelShort}) — período` : `Receita (${scenarioLabelShort})`}
           value={formatMoney(s.total_revenue ?? s.revenue_total)}
