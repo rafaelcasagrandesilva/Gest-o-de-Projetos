@@ -10,9 +10,15 @@ SYSTEM_ALL_PROJECTS = "system.all_projects"
 WORKSPACE_PROJECTS_ACCESS = "workspace.projects.access"
 WORKSPACE_FINANCE_ACCESS = "workspace.finance.access"
 WORKSPACE_ASSETS_ACCESS = "workspace.assets.access"
+WORKSPACE_INDICATORS_ACCESS = "workspace.indicators.access"
 
 DASHBOARD_VIEW = "dashboard.view"
 DASHBOARD_DIRECTOR = "dashboard.director"
+
+# Indicadores (KPIs): view = ver indicadores dos projetos visíveis;
+# director = ranking global / consolidado de todos os projetos.
+INDICATORS_VIEW = "indicators.view"
+INDICATORS_DIRECTOR = "indicators.director"
 
 PROJECTS_VIEW = "projects.view"
 # Granularidade futura: listagem vs detalhe (hoje equivalentes a projects.view no backend).
@@ -68,8 +74,11 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     WORKSPACE_PROJECTS_ACCESS,
     WORKSPACE_FINANCE_ACCESS,
     WORKSPACE_ASSETS_ACCESS,
+    WORKSPACE_INDICATORS_ACCESS,
     DASHBOARD_VIEW,
     DASHBOARD_DIRECTOR,
+    INDICATORS_VIEW,
+    INDICATORS_DIRECTOR,
     PROJECTS_VIEW,
     PROJECTS_VIEW_LIST,
     PROJECTS_VIEW_DETAIL,
@@ -115,6 +124,9 @@ PRESET_GESTOR = frozenset(
         WORKSPACE_FINANCE_ACCESS,
         DASHBOARD_VIEW,
         DASHBOARD_DIRECTOR,
+        WORKSPACE_INDICATORS_ACCESS,
+        INDICATORS_VIEW,
+        INDICATORS_DIRECTOR,
         PROJECTS_VIEW,
         PROJECTS_VIEW_LIST,
         PROJECTS_VIEW_DETAIL,
@@ -152,6 +164,8 @@ PRESET_CONSULTA = frozenset(
         WORKSPACE_PROJECTS_ACCESS,
         WORKSPACE_FINANCE_ACCESS,
         DASHBOARD_VIEW,
+        WORKSPACE_INDICATORS_ACCESS,
+        INDICATORS_VIEW,
         PROJECTS_VIEW,
         PROJECTS_VIEW_LIST,
         PROJECTS_VIEW_DETAIL,

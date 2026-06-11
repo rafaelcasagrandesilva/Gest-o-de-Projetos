@@ -23,15 +23,7 @@ import {
   LabelList,
 } from "recharts";
 import type { TooltipProps } from "recharts";
-
-const CHART_COLORS = {
-  faturamento: "#2563eb",
-  custos: "#dc2626",
-  caixaPos: "#16a34a",
-  caixaNeg: "#b91c1c",
-  zeroLine: "#0f172a",
-  grid: "#E5E7EB",
-} as const;
+import { CHART_COLORS, formatBRLAxis } from "@/utils/chartTheme";
 
 const MONTH_SHORT_PT = [
   "Jan",
@@ -50,16 +42,6 @@ const MONTH_SHORT_PT = [
 
 function formatBRL(n: number): string {
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
-
-function formatBRLAxis(value: unknown): string {
-  const n = Number(value ?? 0);
-  if (!Number.isFinite(n)) return "R$ 0";
-  const abs = Math.abs(n);
-  const sign = n < 0 ? "-" : "";
-  if (abs >= 1_000_000) return `${sign}R$ ${(abs / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1000) return `${sign}R$ ${Math.round(abs / 1000)}k`;
-  return `${sign}R$ ${Math.round(abs)}`;
 }
 
 function formatPct(n: number): string {

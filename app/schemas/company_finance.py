@@ -54,6 +54,7 @@ class CompanyFinancialItemCreate(BaseModel):
     item_type: CompanyFinancialItemType = "MANUAL"
     employee_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
+    is_monthly_required: bool = False
 
     has_legal_process: bool = False
     has_renegotiation: bool = False
@@ -109,6 +110,7 @@ class CompanyFinancialItemUpdate(BaseModel):
     item_type: CompanyFinancialItemType | None = None
     employee_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
+    is_monthly_required: bool | None = None
 
     has_legal_process: bool | None = None
     has_renegotiation: bool | None = None
@@ -191,6 +193,7 @@ class CompanyFinancialItemRead(BaseModel):
     cost_center_system: CompanyFinancialCostCenterSystem | None = None
     description: str | None = None
     recurrence: str | None = None
+    is_monthly_required: bool = False
     has_legal_process: bool = False
     has_renegotiation: bool = False
     renegotiated_amount: float | None = None
@@ -223,6 +226,29 @@ class KpiCustosFixosRead(BaseModel):
     total_esperado_mes: float
     total_pago_mes: float
     quantidade_itens: int
+
+
+class PendenciaLancamentoRead(BaseModel):
+    """Item obrigatório mensal sem valor lançado na competência selecionada.
+
+    Apenas monitoramento operacional: não representa lançamento financeiro,
+    conta a pagar ou título com valor zero.
+    """
+
+    item_id: UUID
+    nome: str
+    competencia: str  # YYYY-MM
+    category: str | None = None
+    cost_center: str | None = None
+    valor_referencia: float
+    ultimo_valor: float | None = None  # último valor lançado em competência anterior
+    ultimo_mes: str | None = None  # YYYY-MM da última competência com valor
+
+
+class PendenciasCustosFixosRead(BaseModel):
+    competencia: str  # YYYY-MM
+    quantidade: int
+    pendencias: list[PendenciaLancamentoRead]
 
 
 class ChartPoint(BaseModel):

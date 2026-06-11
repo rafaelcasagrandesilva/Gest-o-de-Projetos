@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-export type WorkspaceName = "projects" | "finance" | "assets";
+export type WorkspaceName = "projects" | "finance" | "assets" | "indicators";
 
 const STORAGE_KEY = "sgp_workspace";
 
@@ -8,6 +8,7 @@ function readStoredWorkspace(): WorkspaceName {
   const v = (localStorage.getItem(STORAGE_KEY) ?? "").toLowerCase();
   if (v === "finance") return "finance";
   if (v === "assets") return "assets";
+  if (v === "indicators") return "indicators";
   return "projects";
 }
 

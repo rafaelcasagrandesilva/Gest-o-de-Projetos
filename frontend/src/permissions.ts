@@ -8,8 +8,11 @@ export const ALL_PERMISSION_CODES: string[] = [
   "workspace.projects.access",
   "workspace.finance.access",
   "workspace.assets.access",
+  "workspace.indicators.access",
   "dashboard.view",
   "dashboard.director",
+  "indicators.view",
+  "indicators.director",
   "payables.view",
   "receivables.view",
   "projects.view",
@@ -49,6 +52,9 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "workspace.projects.access": "Workspace Projetos",
   "workspace.finance.access": "Workspace Financeiro",
   "workspace.assets.access": "Workspace Gestão de Ativos",
+  "workspace.indicators.access": "Workspace Indicadores",
+  "indicators.view": "Indicadores (visualizar)",
+  "indicators.director": "Indicadores diretoria (ranking global)",
   "dashboard.view": "Dashboard (visualizar)",
   "dashboard.director": "Dashboard diretoria",
   "payables.view": "Contas a pagar (visualizar)",
@@ -146,6 +152,9 @@ export function hasPermission(permissionNames: string[] | undefined, code: strin
     return permissionNames.some((p) =>
       ["assets.view", "assets.edit", "settings.view", "settings.edit"].includes(p),
     );
+  }
+  if (code === "workspace.indicators.access") {
+    return permissionNames.some((p) => ["indicators.view", "indicators.director"].includes(p));
   }
   return false;
 }

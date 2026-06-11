@@ -49,8 +49,11 @@ from app.core.permission_codes import (
     USERS_MANAGE,
     VEHICLES_EDIT,
     VEHICLES_VIEW,
+    INDICATORS_DIRECTOR,
+    INDICATORS_VIEW,
     WORKSPACE_ASSETS_ACCESS,
     WORKSPACE_FINANCE_ACCESS,
+    WORKSPACE_INDICATORS_ACCESS,
     WORKSPACE_PROJECTS_ACCESS,
 )
 from app.core.scenario import Scenario
@@ -209,6 +212,13 @@ def user_has_permission(user: User, code: str) -> bool:
         }
     ):
         return True
+    if code == WORKSPACE_INDICATORS_ACCESS and names.intersection(
+        {
+            INDICATORS_VIEW,
+            INDICATORS_DIRECTOR,
+        }
+    ):
+        return True
     return False
 
 
@@ -333,7 +343,14 @@ async def get_current_user(
     return user
 
 
-WorkspaceName = Literal["projects", "finance"]
+WorkspaceName = Literal["projects", "finance", "assets", "indicators"]
+
+_WORKSPACE_ACCESS_PERMISSION: dict[str, str] = {
+    "projects": WORKSPACE_PROJECTS_ACCESS,
+    "finance": WORKSPACE_FINANCE_ACCESS,
+    "assets": WORKSPACE_ASSETS_ACCESS,
+    "indicators": WORKSPACE_INDICATORS_ACCESS,
+}
 
 
 async def get_current_workspace(
@@ -362,7 +379,7 @@ def require_workspace_access(workspace: WorkspaceName) -> Callable:
     Não é aplicada em endpoints existentes (migração incremental).
     """
 
-    perm = WORKSPACE_PROJECTS_ACCESS if workspace == "projects" else WORKSPACE_FINANCE_ACCESS
+    perm = _WORKSPACE_ACCESS_PERMISSION.get(workspace, WORKSPACE_PROJECTS_ACCESS)
 
     async def _dep(user: User = Depends(get_current_user)) -> User:
         if not user_has_any_permission(user, perm):

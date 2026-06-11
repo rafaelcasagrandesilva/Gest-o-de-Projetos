@@ -4,6 +4,7 @@ import { SidebarProvider } from "@/context/SidebarContext";
 import { Header } from "./Header";
 import { AssetsSidebar } from "./AssetsSidebar";
 import { FinanceSidebar } from "./FinanceSidebar";
+import { IndicatorsSidebar } from "./IndicatorsSidebar";
 import { ProjectsSidebar } from "./ProjectsSidebar";
 import { useWorkspace } from "@/context/WorkspaceContext";
 
@@ -17,6 +18,8 @@ export function Layout() {
             <ProjectsSidebar />
           ) : workspace === "assets" ? (
             <AssetsSidebar />
+          ) : workspace === "indicators" ? (
+            <IndicatorsSidebar />
           ) : (
             <FinanceSidebar />
           )}

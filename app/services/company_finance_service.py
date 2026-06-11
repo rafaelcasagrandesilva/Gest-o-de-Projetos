@@ -56,6 +56,22 @@ def _default_recurrence(tipo: str) -> str:
     return "INSTALLMENTS" if tipo == "endividamento" else "MONTHLY"
 
 
+def is_lancamento_pendente(*, is_monthly_required: bool, has_value_in_competencia: bool) -> bool:
+    """Regra pura: há pendência quando o item é obrigatório e não tem valor no mês.
+
+    Não cria lançamento; apenas sinaliza ausência de valor na competência.
+    """
+    return bool(is_monthly_required) and not has_value_in_competencia
+
+
+def last_known_payment(payments: list[tuple[date, float]], competencia: date) -> tuple[date, float] | None:
+    """Último valor conhecido: competência anterior mais recente com valor > 0."""
+    prior = [(comp, val) for comp, val in payments if comp < competencia and val > 0]
+    if not prior:
+        return None
+    return max(prior, key=lambda cv: cv[0])
+
+
 class CompanyFinanceService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -156,6 +172,7 @@ class CompanyFinanceService:
                 **cc_fields,
                 "description": getattr(it, "description", None),
                 "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
+                "is_monthly_required": bool(getattr(it, "is_monthly_required", False)),
                 "has_legal_process": bool(getattr(it, "has_legal_process", False)),
                 "has_renegotiation": bool(getattr(it, "has_renegotiation", False)),
                 "renegotiated_amount": _f(it.renegotiated_amount) if getattr(it, "renegotiated_amount", None) is not None else None,
@@ -188,6 +205,7 @@ class CompanyFinanceService:
             **cc_fields,
             "description": getattr(it, "description", None),
             "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
+            "is_monthly_required": bool(getattr(it, "is_monthly_required", False)),
             "has_legal_process": bool(getattr(it, "has_legal_process", False)),
             "has_renegotiation": bool(getattr(it, "has_renegotiation", False)),
             "renegotiated_amount": _f(it.renegotiated_amount) if getattr(it, "renegotiated_amount", None) is not None else None,
@@ -223,6 +241,7 @@ class CompanyFinanceService:
             item_type=item_type,
             employee_id=employee_id,
             percentual=percentual,
+            is_monthly_required=bool(data.get("is_monthly_required") or False),
             has_legal_process=bool(data.get("has_legal_process") or False),
             has_renegotiation=bool(data.get("has_renegotiation") or False),
             renegotiated_amount=data.get("renegotiated_amount"),
@@ -270,6 +289,8 @@ class CompanyFinanceService:
             row.description = str(raw).strip() if raw is not None and str(raw).strip() else None
         if "recurrence" in data:
             row.recurrence = (data.get("recurrence") or _default_recurrence(row.tipo)).strip()
+        if data.get("is_monthly_required") is not None:
+            row.is_monthly_required = bool(data["is_monthly_required"])
         if data.get("has_legal_process") is not None:
             row.has_legal_process = bool(data["has_legal_process"])
         if data.get("has_renegotiation") is not None:
@@ -476,6 +497,64 @@ class CompanyFinanceService:
             "total_esperado_mes": total_esperado_mes,
             "total_pago_mes": total_pago_mes,
             "quantidade_itens": len(items),
+        }
+
+    async def pendencias_custos_fixos(self, competencia: str) -> dict:
+        """Itens obrigatórios mensais sem valor lançado na competência.
+
+        Apenas monitoramento operacional: não cria lançamento, conta a pagar
+        ou título com valor zero. Para cada pendência inclui o último valor
+        conhecido (competência anterior mais recente com valor preenchido).
+        """
+        comp = parse_month(competencia)
+        items = (
+            (
+                await self.db.execute(
+                    select(CompanyFinancialItem)
+                    .where(
+                        CompanyFinancialItem.tipo == "custo_fixo",
+                        CompanyFinancialItem.is_monthly_required.is_(True),
+                    )
+                    .options(
+                        selectinload(CompanyFinancialItem.payments),
+                        selectinload(CompanyFinancialItem.employee),
+                        selectinload(CompanyFinancialItem.cost_center_project),
+                    )
+                    .order_by(CompanyFinancialItem.nome)
+                )
+            )
+            .scalars()
+            .unique()
+            .all()
+        )
+
+        pendencias: list[dict] = []
+        for it in items:
+            has_value = any(p.competencia == comp and _f(p.valor) > 0 for p in it.payments)
+            if is_lancamento_pendente(
+                is_monthly_required=bool(it.is_monthly_required),
+                has_value_in_competencia=has_value,
+            ) is False:
+                continue
+            last = last_known_payment([(p.competencia, _f(p.valor)) for p in it.payments], comp)
+            read = await self._item_to_read(it, comp)
+            pendencias.append(
+                {
+                    "item_id": it.id,
+                    "nome": it.nome,
+                    "competencia": competencia,
+                    "category": read.get("category"),
+                    "cost_center": read.get("cost_center"),
+                    "valor_referencia": read.get("valor_referencia", 0.0),
+                    "ultimo_valor": last[1] if last is not None else None,
+                    "ultimo_mes": month_key(last[0]) if last is not None else None,
+                }
+            )
+
+        return {
+            "competencia": competencia,
+            "quantidade": len(pendencias),
+            "pendencias": pendencias,
         }
 
     async def chart_series(self, tipo: str, mes_inicio: str, mes_fim: str) -> list[dict]:

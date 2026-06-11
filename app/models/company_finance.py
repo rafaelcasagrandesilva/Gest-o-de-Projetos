@@ -50,6 +50,12 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     recurrence: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
+    # Controle operacional (custos fixos): sinaliza itens obrigatórios mensais
+    # para detectar competências sem valor lançado. NÃO afeta cálculos/lançamentos.
+    is_monthly_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     # Campos adicionais (endividamento)
     has_legal_process: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     has_renegotiation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")

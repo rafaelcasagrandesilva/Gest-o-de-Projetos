@@ -24,6 +24,7 @@ from app.schemas.company_finance import (
     KpiCustosFixosRead,
     KpiEndividamentoRead,
     PagamentosReplace,
+    PendenciasCustosFixosRead,
 )
 from app.services.company_finance_service import CompanyFinanceService, parse_month
 
@@ -223,6 +224,16 @@ async def kpis_custos_fixos(
     svc = CompanyFinanceService(db)
     data = await svc.kpis_custos_fixos(competencia=competencia)
     return KpiCustosFixosRead.model_validate(data)
+
+
+@router.get("/pendencias/custos-fixos", response_model=PendenciasCustosFixosRead, dependencies=_read)
+async def pendencias_custos_fixos(
+    competencia: str = Query(..., description="YYYY-MM"),
+    db: AsyncSession = Depends(get_db),
+) -> PendenciasCustosFixosRead:
+    svc = CompanyFinanceService(db)
+    data = await svc.pendencias_custos_fixos(competencia=competencia)
+    return PendenciasCustosFixosRead.model_validate(data)
 
 
 @router.get("/chart-series", response_model=ChartSeriesRead, dependencies=_read)

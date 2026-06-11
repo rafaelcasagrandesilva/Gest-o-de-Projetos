@@ -27,6 +27,7 @@ import { Assets } from "@/pages/Assets";
 import { AssetsDashboard } from "@/pages/AssetsDashboard";
 import { AssetDetailPage } from "@/pages/AssetDetail";
 import { Epis } from "@/pages/Epis";
+import { RoiOperacional } from "@/pages/indicators/RoiOperacional";
 
 function LegacyProjectDetailRedirect() {
   const { projectId } = useParams();
@@ -40,7 +41,9 @@ function WorkspaceNotFoundRedirect() {
       ? "/projects/dashboard"
       : workspace === "assets"
         ? "/assets/dashboard"
-        : "/finance/dashboard";
+        : workspace === "indicators"
+          ? "/indicators/roi"
+          : "/finance/dashboard";
   return <Navigate to={target} replace />;
 }
 
@@ -102,6 +105,8 @@ export default function App() {
               <Route path="assets/:assetId" element={<AssetDetailPage />} />
               <Route path="epis" element={<Epis />} />
               <Route path="epis/:assetId" element={<AssetDetailPage />} />
+
+              <Route path="indicators/roi" element={<RoiOperacional />} />
 
               {/* Compat: rotas antigas (mantidas via redirect) */}
               <Route index element={<WorkspaceNotFoundRedirect />} />

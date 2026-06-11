@@ -17,11 +17,13 @@ import {
   fetchChartSeries,
   fetchKpiCustosFixos,
   fetchKpiEndividamento,
+  fetchPendenciasCustosFixos,
   listCompanyFinanceItems,
   replaceCompanyFinancePayments,
   updateCompanyFinanceItem,
   type ChartPoint,
   type CompanyFinancialItem,
+  type PendenciaLancamento,
   type RenegotiationType,
   type TipoFinanceiro,
 } from "@/services/companyFinance";
@@ -36,6 +38,8 @@ import {
   itemCostCenterRef,
 } from "@/components/company-finance/costCenter";
 import { CostCenterSelect } from "@/components/company-finance/CostCenterSelect";
+import { CompanyFinanceAnalyticTable } from "@/components/company-finance/CompanyFinanceAnalyticTable";
+import { ViewModeToggle } from "@/components/finance/ViewModeToggle";
 import { itemMatchesSearch } from "@/components/company-finance/itemSearch";
 import { CollapsiblePanel, PrimaryAddButton } from "@/components/ExpandableFormSection";
 import { isAxiosError } from "axios";
@@ -170,12 +174,14 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [items, setItems] = useState<CompanyFinancialItem[]>([]);
   const [kpiDebt, setKpiDebt] = useState<Awaited<ReturnType<typeof fetchKpiEndividamento>> | null>(null);
   const [kpiFixed, setKpiFixed] = useState<Awaited<ReturnType<typeof fetchKpiCustosFixos>> | null>(null);
+  const [pendencias, setPendencias] = useState<PendenciaLancamento[]>([]);
   const [chartPoints, setChartPoints] = useState<ChartPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCharts, setShowCharts] = useState(false);
   const [creditorFilter, setCreditorFilter] = useState<DebtCreditorFilter>("ALL");
+  const [view, setView] = useState<"executive" | "analytic">("executive");
   const [draftName, setDraftName] = useState("");
   const [draftRef, setDraftRef] = useState("");
   const [draftCategory, setDraftCategory] = useState(() => defaultCategory(tipo));
@@ -190,6 +196,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [draftEmployeeLoading, setDraftEmployeeLoading] = useState(false);
   const [draftEmployeeId, setDraftEmployeeId] = useState("");
   const [draftPercentual, setDraftPercentual] = useState("100");
+  const [draftIsMonthlyRequired, setDraftIsMonthlyRequired] = useState(false);
   const [draftHasLegalProcess, setDraftHasLegalProcess] = useState(false);
   const [draftHasRenegotiation, setDraftHasRenegotiation] = useState(false);
   const [draftRenegotiatedAmount, setDraftRenegotiatedAmount] = useState("");
@@ -214,6 +221,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     setDraftEmployeeOptions([]);
     setDraftEmployeeId("");
     setDraftPercentual("100");
+    setDraftIsMonthlyRequired(false);
     setDraftHasLegalProcess(false);
     setDraftHasRenegotiation(false);
     setDraftRenegotiatedAmount("");
@@ -341,10 +349,15 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         const k = await fetchKpiEndividamento(competencia);
         setKpiDebt(k);
         setKpiFixed(null);
+        setPendencias([]);
       } else {
-        const k = await fetchKpiCustosFixos(competencia);
+        const [k, pend] = await Promise.all([
+          fetchKpiCustosFixos(competencia),
+          fetchPendenciasCustosFixos(competencia),
+        ]);
         setKpiFixed(k);
         setKpiDebt(null);
+        setPendencias(pend.pendencias);
       }
     } catch (e) {
       if (isAxiosError(e)) setError(e.response?.data?.detail ?? "Erro ao carregar dados.");
@@ -464,6 +477,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         item_type: tipo === "custo_fixo" ? draftItemType : "MANUAL",
         employee_id: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? draftEmployeeId : null,
         percentual: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? percentualN : null,
+        is_monthly_required: tipo === "custo_fixo" ? draftIsMonthlyRequired : false,
         has_legal_process: tipo === "endividamento" ? draftHasLegalProcess : false,
         has_renegotiation: tipo === "endividamento" ? draftHasRenegotiation : false,
         renegotiated_amount: tipo === "endividamento" && draftHasRenegotiation ? renegotiatedAmountN : null,
@@ -500,6 +514,45 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       setError("Não foi possível excluir.");
     }
   }
+
+  /** Alterna `is_monthly_required` direto na tabela: otimista + persiste + atualiza pendências. */
+  const handleToggleRequired = useCallback(
+    async (itemId: string, value: boolean) => {
+      if (financeReadOnly) return;
+      setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, is_monthly_required: value } : it)));
+      try {
+        await updateCompanyFinanceItem(itemId, { is_monthly_required: value }, competencia);
+        const pend = await fetchPendenciasCustosFixos(competencia);
+        setPendencias(pend.pendencias);
+      } catch (e) {
+        setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, is_monthly_required: !value } : it)));
+        if (isAxiosError(e)) {
+          const detail = e.response?.data?.detail;
+          setError(typeof detail === "string" ? detail : "Não foi possível atualizar 'Obrigatório mensal'.");
+        } else {
+          setError("Não foi possível atualizar 'Obrigatório mensal'.");
+        }
+      }
+    },
+    [financeReadOnly, competencia],
+  );
+
+  const pendingItemIds = useMemo(() => new Set(pendencias.map((p) => p.item_id)), [pendencias]);
+
+  /** Ação rápida: abre a estrutura do item já posicionada na competência atual. */
+  function handlePreencherValor(itemId: string) {
+    setView("executive");
+    setItemSearch("");
+    setExpandedId(itemId);
+    window.requestAnimationFrame(() => {
+      const el = document.getElementById(`cf-item-${itemId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+  }
+
+  const pendenciasCount = pendencias.length;
 
   return (
     <div className="space-y-8">
@@ -574,6 +627,11 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                   : "—"
               }
             />
+            <KpiCard
+              label="Pendências"
+              value={String(pendenciasCount)}
+              accent={pendenciasCount > 0 ? "text-amber-600" : "text-emerald-600"}
+            />
           </>
         )}
         {loading && !kpiDebt && !kpiFixed && (
@@ -581,6 +639,40 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         )}
       </section>
 
+      {/* Pendências de Lançamento (apenas custos fixos) — controle operacional */}
+      {tipo === "custo_fixo" && (
+        <PendingEntriesSection
+          pendencias={pendencias}
+          competencia={competencia}
+          readOnly={financeReadOnly}
+          readOnlyTitle={financeReadOnlyTitle}
+          onPreencher={handlePreencherValor}
+        />
+      )}
+
+      {/* Seletor de visão (logo abaixo dos cards principais) */}
+      <ViewModeToggle
+        value={view}
+        onChange={setView}
+        options={[
+          { value: "executive", label: "Visão Executiva" },
+          { value: "analytic", label: "Extrato Analítico" },
+        ]}
+      />
+
+      {view === "analytic" ? (
+        <CompanyFinanceAnalyticTable
+          items={filteredItems}
+          tipo={tipo}
+          search={itemSearch}
+          onSearch={setItemSearch}
+          readOnly={financeReadOnly}
+          readOnlyTitle={financeReadOnlyTitle}
+          pendingItemIds={pendingItemIds}
+          onToggleRequired={handleToggleRequired}
+        />
+      ) : (
+        <>
       {/* Gráficos (recolhível) */}
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-2">
@@ -801,6 +893,24 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               disabled={financeReadOnly}
             />
           </label>
+
+          {tipo === "custo_fixo" && (
+            <label className="flex w-full items-start gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={draftIsMonthlyRequired}
+                onChange={(e) => setDraftIsMonthlyRequired(e.target.checked)}
+                disabled={financeReadOnly}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300"
+              />
+              <span>
+                Obrigatório mensal
+                <span className="ml-2 text-xs text-slate-500">
+                  Sinaliza pendência quando a competência ficar sem valor (não cria lançamento).
+                </span>
+              </span>
+            </label>
+          )}
 
           {tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" && (
             <div className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -1039,6 +1149,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
           ))
         )}
       </section>
+        </>
+      )}
     </div>
   );
 }
@@ -1057,6 +1169,116 @@ function KpiCard({
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
       <p className={`mt-2 text-xl font-semibold tabular-nums text-slate-900 ${accent ?? ""}`}>{value}</p>
     </div>
+  );
+}
+
+function PendingEntriesSection({
+  pendencias,
+  competencia,
+  readOnly,
+  readOnlyTitle,
+  onPreencher,
+}: {
+  pendencias: PendenciaLancamento[];
+  competencia: string;
+  readOnly: boolean;
+  readOnlyTitle?: string;
+  onPreencher: (itemId: string) => void;
+}) {
+  if (pendencias.length === 0) {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-medium text-slate-800">Pendências de Lançamento</h2>
+            <p className="text-xs text-slate-500">
+              Itens obrigatórios mensais sem valor lançado na competência selecionada.
+            </p>
+          </div>
+          <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800">
+            Tudo em dia
+          </span>
+        </div>
+        <p className="mt-3 text-sm text-slate-500">
+          Nenhuma pendência para {mesLabel(competencia)}/{competencia.split("-")[0]}.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-medium text-amber-900">Pendências de Lançamento</h2>
+          <p className="text-xs text-amber-800/80">
+            Itens obrigatórios mensais sem valor lançado na competência selecionada. Apenas
+            monitoramento — nenhum lançamento financeiro é criado automaticamente.
+          </p>
+        </div>
+        <span className="rounded-full bg-amber-200 px-2.5 py-1 text-xs font-semibold text-amber-900">
+          {pendencias.length} {pendencias.length === 1 ? "pendência" : "pendências"}
+        </span>
+      </div>
+      <div className="mt-3 overflow-x-auto rounded-lg border border-amber-200 bg-white">
+        <table className="w-full min-w-[640px] text-left text-sm">
+          <thead className="border-b border-amber-100 bg-amber-50/60 text-xs uppercase tracking-wide text-amber-900/70">
+            <tr>
+              <th className="px-3 py-2 font-medium">Item</th>
+              <th className="px-3 py-2 font-medium">Competência</th>
+              <th className="px-3 py-2 text-right font-medium">Último Valor</th>
+              <th className="px-3 py-2 font-medium">Status</th>
+              <th className="px-3 py-2 font-medium" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {pendencias.map((p) => (
+              <tr key={p.item_id} className="hover:bg-amber-50/40">
+                <td className="px-3 py-2">
+                  <span className="font-medium text-slate-900">{p.nome}</span>
+                  {p.cost_center ? (
+                    <span className="ml-2 text-xs text-slate-500">{p.cost_center}</span>
+                  ) : null}
+                </td>
+                <td className="px-3 py-2 tabular-nums text-slate-700">
+                  {mesLabel(p.competencia)}/{p.competencia.split("-")[0]}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                  {typeof p.ultimo_valor === "number" ? (
+                    <span>
+                      {formatBRL(p.ultimo_valor)}
+                      {p.ultimo_mes ? (
+                        <span className="ml-1 text-xs text-slate-400">
+                          ({mesLabel(p.ultimo_mes)}/{p.ultimo_mes.split("-")[0]})
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">Sem histórico</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-900">
+                    ⚠ Aguardando valor
+                  </span>
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => onPreencher(p.item_id)}
+                    disabled={readOnly}
+                    title={readOnly ? readOnlyTitle : "Preencher valor na competência atual"}
+                    className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-amber-600 disabled:opacity-50"
+                  >
+                    Preencher valor
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -1108,6 +1330,9 @@ function FinanceItemCard({
   );
   const [structureDescription, setStructureDescription] = useState(item.description ?? "");
   const [structureRecurrence, setStructureRecurrence] = useState(item.recurrence ?? defaultRecurrence(tipo));
+  const [structureIsMonthlyRequired, setStructureIsMonthlyRequired] = useState(
+    Boolean(item.is_monthly_required),
+  );
   const [structurePercentual, setStructurePercentual] = useState(
     typeof item.percentual === "number" ? String(item.percentual).replace(".", ",") : "",
   );
@@ -1147,6 +1372,7 @@ function FinanceItemCard({
     setStructureCostCenterRef(itemCostCenterRef(item, tipo, projectOptions));
     setStructureDescription(item.description ?? "");
     setStructureRecurrence(item.recurrence ?? defaultRecurrence(tipo));
+    setStructureIsMonthlyRequired(Boolean(item.is_monthly_required));
     setStructurePercentual(typeof item.percentual === "number" ? String(item.percentual).replace(".", ",") : "");
     setStructureHasLegal(Boolean(item.has_legal_process));
     setStructureHasReneg(Boolean(item.has_renegotiation));
@@ -1250,6 +1476,9 @@ function FinanceItemCard({
     if (isMatrixCollaborator) {
       payload.percentual = Number(String(structurePercentual || "0").replace(",", "."));
     }
+    if (tipo === "custo_fixo") {
+      payload.is_monthly_required = structureIsMonthlyRequired;
+    }
     if (tipo === "endividamento") {
       payload.has_legal_process = structureHasLegal;
       payload.has_renegotiation = structureHasReneg;
@@ -1291,7 +1520,10 @@ function FinanceItemCard({
   }
 
   return (
-    <article className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <article
+      id={`cf-item-${item.id}`}
+      className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+    >
       <button
         type="button"
         onClick={onToggle}
@@ -1300,6 +1532,11 @@ function FinanceItemCard({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-semibold text-slate-900">{item.nome}</h3>
+            {tipo === "custo_fixo" && item.is_monthly_required && (
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-200">
+                Obrigatório mensal
+              </span>
+            )}
             {tipo === "endividamento" && item.status === "quitado" && (
               <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">Quitado</span>
             )}
@@ -1392,6 +1629,12 @@ function FinanceItemCard({
                   <dt className="text-xs text-slate-500">Recorrência</dt>
                   <dd className="font-medium text-slate-900">{item.recurrence ?? defaultRecurrence(tipo)}</dd>
                 </div>
+                {tipo === "custo_fixo" && (
+                  <div>
+                    <dt className="text-xs text-slate-500">Obrigatório mensal</dt>
+                    <dd className="font-medium text-slate-900">{item.is_monthly_required ? "Sim" : "Não"}</dd>
+                  </div>
+                )}
                 <div className="sm:col-span-2 lg:col-span-4">
                   <dt className="text-xs text-slate-500">Descrição</dt>
                   <dd className="whitespace-pre-wrap text-slate-900">{item.description?.trim() || "—"}</dd>
@@ -1452,6 +1695,17 @@ function FinanceItemCard({
                     <option value="VARIABLE">Variável</option>
                   </select>
                 </label>
+                {tipo === "custo_fixo" && (
+                  <label className="flex items-center gap-2 pt-6 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={structureIsMonthlyRequired}
+                      onChange={(e) => setStructureIsMonthlyRequired(e.target.checked)}
+                      disabled={readOnly || structureSaving}
+                    />
+                    <span>Obrigatório mensal</span>
+                  </label>
+                )}
                 {isMatrixCollaborator && (
                   <label className="flex flex-col gap-1 text-sm">
                     <span className="text-slate-600">Percentual (%)</span>

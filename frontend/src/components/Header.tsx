@@ -12,6 +12,7 @@ export function Header() {
 
   const canProjects = hasPermission(perms, "workspace.projects.access");
   const canFinance = hasPermission(perms, "workspace.finance.access");
+  const canIndicators = hasPermission(perms, "workspace.indicators.access");
   const canAssets = hasPermission(perms, "workspace.assets.access");
 
   function go(w: WorkspaceName) {
@@ -19,6 +20,7 @@ export function Header() {
     setWorkspace(w);
     if (w === "projects") navigate("/projects/dashboard");
     else if (w === "assets") navigate("/assets/dashboard");
+    else if (w === "indicators") navigate("/indicators/roi");
     else navigate("/finance/dashboard");
   }
 
@@ -27,7 +29,7 @@ export function Header() {
       <div className="flex items-center gap-4">
         <SidebarToggleButton className="md:hidden" />
         <h1 className="hidden text-sm font-medium text-slate-500 sm:block">Área logada</h1>
-        {(canProjects || canFinance || canAssets) && (
+        {(canProjects || canFinance || canIndicators || canAssets) && (
           <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 bg-white">
             {canProjects && (
               <button
@@ -53,6 +55,19 @@ export function Header() {
                 }`}
               >
                 Financeiro
+              </button>
+            )}
+            {canIndicators && (
+              <button
+                type="button"
+                onClick={() => go("indicators")}
+                className={`px-3 py-1.5 text-sm font-medium ${
+                  workspace === "indicators"
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Indicadores
               </button>
             )}
             {canAssets && (

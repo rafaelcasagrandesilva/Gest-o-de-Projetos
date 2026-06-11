@@ -25,6 +25,7 @@ export interface CompanyFinancialItem {
   cost_center_system?: "ADMINISTRATIVO" | "FINANCEIRO" | "ALMOXARIFADO" | "RH" | null;
   description?: string | null;
   recurrence?: string | null;
+  is_monthly_required?: boolean;
   has_legal_process?: boolean;
   has_renegotiation?: boolean;
   renegotiated_amount?: number | null;
@@ -51,6 +52,23 @@ export interface KpiCustosFixos {
   total_esperado_mes: number;
   total_pago_mes: number;
   quantidade_itens: number;
+}
+
+export interface PendenciaLancamento {
+  item_id: string;
+  nome: string;
+  competencia: string;
+  category?: string | null;
+  cost_center?: string | null;
+  valor_referencia: number;
+  ultimo_valor?: number | null;
+  ultimo_mes?: string | null;
+}
+
+export interface PendenciasCustosFixos {
+  competencia: string;
+  quantidade: number;
+  pendencias: PendenciaLancamento[];
 }
 
 export interface ChartPoint {
@@ -80,6 +98,7 @@ export async function createCompanyFinanceItem(payload: {
   item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
   employee_id?: string | null;
   percentual?: number | null;
+  is_monthly_required?: boolean;
   has_legal_process?: boolean;
   has_renegotiation?: boolean;
   renegotiated_amount?: number | null;
@@ -105,6 +124,7 @@ export async function updateCompanyFinanceItem(
     item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
     employee_id?: string | null;
     percentual?: number | null;
+    is_monthly_required?: boolean;
     has_legal_process?: boolean;
     has_renegotiation?: boolean;
     renegotiated_amount?: number | null;
@@ -158,6 +178,15 @@ export async function fetchKpiEndividamento(competencia: string): Promise<KpiEnd
 
 export async function fetchKpiCustosFixos(competencia: string): Promise<KpiCustosFixos> {
   const { data } = await api.get<KpiCustosFixos>("/company-finance/kpis/custos-fixos/", {
+    params: { competencia },
+  });
+  return data;
+}
+
+export async function fetchPendenciasCustosFixos(
+  competencia: string,
+): Promise<PendenciasCustosFixos> {
+  const { data } = await api.get<PendenciasCustosFixos>("/company-finance/pendencias/custos-fixos/", {
     params: { competencia },
   });
   return data;

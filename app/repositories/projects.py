@@ -65,6 +65,16 @@ class ProjectRepository(Repository[Project]):
         res = await self.session.execute(stmt)
         return list(res.scalars().all())
 
+    async def list_active(self) -> list[Project]:
+        """Todos os projetos ativos (sem paginação), ordenados por nome.
+
+        Usado por visões executivas (ex.: ranking de indicadores) que precisam de
+        TODOS os projetos ativos — `list()` pagina com `limit=50` e truncaria.
+        """
+        stmt = self._base_stmt(include_deleted=False, status="ACTIVE")
+        res = await self.session.execute(stmt)
+        return list(res.scalars().all())
+
     async def user_has_access(self, *, user_id: UUID, project_id: UUID) -> bool:
         stmt = select(ProjectUser.id).where(ProjectUser.user_id == user_id, ProjectUser.project_id == project_id)
         res = await self.session.execute(stmt)
