@@ -165,7 +165,7 @@ export function Receivables() {
   }, [viewRows]);
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-6">
+    <div className="mx-auto max-w-[1400px] space-y-5">
       <div>
         <h1 className="text-2xl font-semibold text-slate-900">Contas a receber</h1>
         <p className="mt-1 text-sm text-slate-600">Visão financeira gerada a partir das NFs existentes.</p>

@@ -158,7 +158,7 @@ export function Settings() {
     : "Exportação do histórico de alterações rastreadas pelo sistema";
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-5">
       <div>
         <h2 className="text-xl font-semibold text-slate-900">{pageTitle}</h2>
         <p className="text-sm text-slate-500">{pageSubtitle}</p>
@@ -238,7 +238,7 @@ export function Settings() {
             </div>
           )}
 
-          <form onSubmit={handleSave} className="space-y-8">
+          <form onSubmit={handleSave} className="space-y-4">
             <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
               <h3 className="text-sm font-semibold text-slate-800">Percentuais (0–1)</h3>
               <p className="mb-4 text-xs text-slate-500">Ex.: 9% imposto → 0,09</p>

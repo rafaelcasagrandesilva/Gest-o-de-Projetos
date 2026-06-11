@@ -24,8 +24,8 @@ export function SortableTh({
 
   const thBase =
     variant === "finance"
-      ? `px-2 py-3 text-xs font-semibold uppercase tracking-wide ${align === "right" ? "text-right" : "text-left"}`
-      : `px-4 py-3 font-medium text-slate-600 ${align === "right" ? "text-right" : "text-left"}`;
+      ? `px-2 py-2 text-xs font-semibold uppercase tracking-wide ${align === "right" ? "text-right" : "text-left"}`
+      : `px-4 py-2 font-medium text-slate-600 ${align === "right" ? "text-right" : "text-left"}`;
 
   const btnBase =
     variant === "finance"

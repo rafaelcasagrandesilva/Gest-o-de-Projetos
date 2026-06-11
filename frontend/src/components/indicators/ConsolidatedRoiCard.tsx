@@ -48,7 +48,7 @@ export function ConsolidatedRoiCard({
         </span>
       </div>
 
-      <div className="mt-4 flex flex-col gap-4 lg:flex-row lg:items-end lg:gap-8">
+      <div className="mt-4 flex flex-col gap-4 lg:flex-row lg:items-end lg:gap-4">
         <div className="shrink-0">
           <p className="text-xs font-medium uppercase tracking-wide text-indigo-100/80">
             ROI Operacional Consolidado

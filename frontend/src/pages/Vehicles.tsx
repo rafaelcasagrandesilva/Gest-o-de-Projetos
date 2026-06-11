@@ -232,7 +232,7 @@ export function Vehicles() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div>
         <h2 className="text-xl font-semibold text-slate-900">Veículos</h2>
         <p className="text-sm text-slate-500">
@@ -335,7 +335,7 @@ export function Vehicles() {
       {loading ? (
         <div className="text-slate-500">Carregando…</div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-5">
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-slate-900">Resumo da frota</h3>
             <p className="text-sm text-slate-500">

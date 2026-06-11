@@ -6,7 +6,7 @@ import { formatRoiPct, roiTone } from "@/utils/roiFormat";
 export function RoiProjectCard({ item }: { item: ProjectRoi }) {
   const tone = roiTone(item.roi);
   return (
-    <div className={`w-full rounded-xl border bg-white p-5 shadow-sm ${tone.card}`}>
+    <div className={`w-full rounded-xl border bg-white p-4 shadow-sm ${tone.card}`}>
       <div className="flex items-start justify-between gap-3">
         <h3 className="min-w-0 truncate text-sm font-semibold text-slate-900" title={item.project_name}>
           {item.project_name}

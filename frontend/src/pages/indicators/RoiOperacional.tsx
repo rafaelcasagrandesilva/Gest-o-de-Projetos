@@ -149,7 +149,7 @@ export function RoiOperacional() {
   const hasCardData = cards.some((i) => i.roi !== null);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div>
         <h1 className="text-xl font-semibold text-slate-900">ROI Operacional</h1>
         <p className="mt-1 text-sm text-slate-500">

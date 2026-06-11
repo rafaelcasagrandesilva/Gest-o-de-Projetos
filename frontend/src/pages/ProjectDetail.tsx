@@ -661,7 +661,7 @@ export function ProjectDetail() {
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <Link to="/projects/list" className="text-sm text-indigo-600 hover:underline">
@@ -933,7 +933,7 @@ function LaborTab({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <fieldset disabled={structureReadOnly} className="m-0 min-w-0 border-0 p-0">
       <form onSubmit={submit} className="max-w-xl space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="font-medium text-slate-900">Vincular colaborador ao projeto</h3>
@@ -1422,7 +1422,7 @@ function VehiclesTab({
     (isPrevisto ? km.trim() === "" || Number(km) < 0 : fuelRealized.trim() === "" || Number(fuelRealized) < 0);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <fieldset disabled={structureReadOnly} className="m-0 min-w-0 border-0 p-0">
       <form onSubmit={submit} className="max-w-xl space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="font-medium text-slate-900">Alocar veículo da frota</h3>
@@ -1763,7 +1763,7 @@ function SystemsTab({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <fieldset disabled={structureReadOnly} className="m-0 min-w-0 border-0 p-0">
       <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3 max-w-xl">
         <h3 className="font-medium text-slate-900">Sistema / licença</h3>
@@ -1893,7 +1893,7 @@ function FixedTab({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <fieldset disabled={structureReadOnly} className="m-0 min-w-0 border-0 p-0">
       <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3 max-w-xl">
         <h3 className="font-medium text-slate-900">Custos diversos</h3>

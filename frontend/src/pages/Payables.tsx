@@ -505,7 +505,7 @@ export function Payables() {
   };
 
   return (
-    <div className="mx-auto max-w-full overflow-x-hidden space-y-6">
+    <div className="mx-auto max-w-full overflow-x-hidden space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Contas a pagar</h1>

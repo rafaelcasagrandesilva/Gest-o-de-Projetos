@@ -304,7 +304,7 @@ export function CompanyFinanceAnalyticTable({
                   return (
                     <th
                       key={col.key}
-                      className={`px-3 py-3 text-xs font-semibold uppercase tracking-wide ${col.align === "right" ? "text-right" : "text-left"} ${col.sortable ? "" : "text-slate-600"}`}
+                      className={`px-3 py-2 text-xs font-semibold uppercase tracking-wide ${col.align === "right" ? "text-right" : "text-left"} ${col.sortable ? "" : "text-slate-600"}`}
                       aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
                     >
                       {col.sortable ? (
@@ -330,7 +330,7 @@ export function CompanyFinanceAnalyticTable({
                   );
                 })}
                 {showRequiredColumn && (
-                  <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                     Obrigatório
                   </th>
                 )}
@@ -340,12 +340,12 @@ export function CompanyFinanceAnalyticTable({
               {visibleRows.map((item) => (
                 <tr key={item.id} className="hover:bg-slate-50/60">
                   {columns.map((col) => (
-                    <td key={col.key} className={`px-3 py-3 ${col.align === "right" ? "text-right" : "text-left"}`}>
+                    <td key={col.key} className={`px-3 py-2 ${col.align === "right" ? "text-right" : "text-left"}`}>
                       {col.cell(item)}
                     </td>
                   ))}
                   {showRequiredColumn && (
-                    <td className="px-3 py-3 text-left">
+                    <td className="px-3 py-2 text-left">
                       <label
                         className={`inline-flex items-center gap-2 ${readOnly ? "cursor-not-allowed" : "cursor-pointer"}`}
                         title={readOnly ? readOnlyTitle : "Marcar/desmarcar custo fixo obrigatório mensal"}

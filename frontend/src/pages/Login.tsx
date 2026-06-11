@@ -70,7 +70,7 @@ export function Login() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-100 to-indigo-50 p-4">
       <div className="w-full max-w-md rounded-2xl border border-slate-200/80 bg-white p-8 shadow-xl shadow-slate-200/50">
-        <div className="mb-8 text-center">
+        <div className="mb-4 text-center">
           <h1 className="text-xl font-semibold leading-snug tracking-tight text-slate-900 sm:text-2xl">
             Sistema de Gestão de Contratos
           </h1>

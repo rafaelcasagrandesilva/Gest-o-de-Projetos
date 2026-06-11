@@ -555,8 +555,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const pendenciasCount = pendencias.length;
 
   return (
-    <div className="space-y-8">
-      <header className="flex flex-col gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end sm:justify-between">
+    <div className="space-y-4">
+      <header className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{title}</h1>
           <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
@@ -695,7 +695,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
 
         <CollapsiblePanel open={showCharts} className="pt-4">
           {showCharts ? (
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-5 lg:grid-cols-2">
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>

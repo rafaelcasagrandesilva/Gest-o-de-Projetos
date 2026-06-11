@@ -259,7 +259,7 @@ export function Reports() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-5">
       <div>
         <h2 className="text-xl font-semibold text-slate-900">Relatórios</h2>
         <p className="mt-1 text-sm text-slate-600">

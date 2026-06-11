@@ -385,7 +385,7 @@ export function AssetDetailPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="mx-auto max-w-4xl space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link to={listPath} className="text-sm text-indigo-600 hover:underline">
@@ -679,7 +679,7 @@ export function AssetDetailPage() {
         ) : null}
 
         {tab === "assignments" ? (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {openAssignment ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
                 <p>
@@ -933,7 +933,7 @@ export function AssetDetailPage() {
         ) : null}
 
         {tab === "inspections" ? (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {canEdit ? (
               <div className="grid gap-3 rounded-lg border border-slate-200 p-4 sm:grid-cols-3">
                 <input id="insp-type" placeholder="Tipo (ensaio, CA, calibração…)" className="rounded border px-3 py-2 text-sm" />

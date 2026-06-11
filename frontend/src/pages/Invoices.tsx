@@ -547,7 +547,7 @@ export function Invoices() {
   }
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-6">
+    <div className="mx-auto max-w-[1400px] space-y-5">
       <div>
         <h1 className="text-2xl font-semibold text-slate-900">Notas fiscais (contas a receber)</h1>
         <p className="mt-1 text-sm text-slate-600">
@@ -953,7 +953,7 @@ export function Invoices() {
                     {expandedId === row.id && (
                       <tr className="bg-slate-50/90">
                         <td colSpan={12} className="px-4 py-4">
-                          <div className="grid gap-6 lg:grid-cols-2">
+                          <div className="grid gap-5 lg:grid-cols-2">
                             <div className="space-y-4">
                               <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Dados da NF</p>
                               <div className="grid gap-3 sm:grid-cols-2">

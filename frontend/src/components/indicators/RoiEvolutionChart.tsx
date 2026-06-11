@@ -263,7 +263,7 @@ export function RoiEvolutionChart({ points }: { points: RoiEvolutionPoint[] }) {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <RoiPercentChart data={data} />
       <FinancialEvolutionChart data={data} />
     </div>

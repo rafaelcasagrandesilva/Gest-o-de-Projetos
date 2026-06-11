@@ -167,14 +167,14 @@ export function FinancialDashboardCharts({
   ];
 
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid gap-5 lg:grid-cols-2">
       <div className={chartCardClass}>
         <h3 className="text-sm font-medium text-slate-700">Composição de custos</h3>
         <p className="mt-0.5 text-xs text-slate-500">
           Cenário <strong>{scLabel}</strong> — proporção dos custos sobre a receita{" "}
           {multiMonth ? "no período" : "do mês"}; legenda com percentuais
         </p>
-        <div className="mt-2 flex min-h-[280px] w-full flex-1 flex-col gap-5 md:flex-row md:items-center md:justify-between md:gap-6">
+        <div className="mt-2 flex min-h-[280px] w-full flex-1 flex-col gap-5 md:flex-row md:items-center md:justify-between md:gap-5">
           <div className="flex min-h-[240px] w-full flex-1 items-center justify-center md:min-h-[280px] md:max-w-[min(100%,280px)] md:flex-[0_1_280px]">
             {pieData.length === 0 ? (
               <p className="text-center text-sm text-slate-500">

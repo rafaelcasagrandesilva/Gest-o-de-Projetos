@@ -279,7 +279,7 @@ export function FinancialDashboard() {
   const summaryCaixaNeg = (summary?.caixa ?? 0) < -0.01;
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-6">
+    <div className="mx-auto max-w-[1400px] space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Dashboard Financeiro</h1>
@@ -585,7 +585,7 @@ export function FinancialDashboard() {
               ) : !breakdown ? (
                 <div className="text-sm text-slate-500">Sem dados.</div>
               ) : (
-                <div className="space-y-6">
+                <div className="space-y-5">
                   <div>
                     {breakdown.type !== "caixa" ? (
                       <>
@@ -618,7 +618,7 @@ export function FinancialDashboard() {
                         </div>
                       </>
                     ) : (
-                      <div className="space-y-6">
+                      <div className="space-y-5">
                         <div>
                           <p className="text-sm font-semibold text-slate-900">RECEBIDO - MÊS (por projeto)</p>
                           <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200">
@@ -715,7 +715,7 @@ function Kpi({
 }) {
   return (
     <div
-      className={`rounded-xl border p-4 shadow-sm ${
+      className={`rounded-xl border p-3.5 shadow-sm ${
         negative ? "border-red-300 bg-red-50 ring-1 ring-red-200" : "border-slate-200 bg-white"
       }`}
     >
@@ -723,7 +723,7 @@ function Kpi({
         {label}
       </p>
       <p
-        className={`mt-2 text-lg font-semibold tabular-nums ${
+        className={`mt-1 text-lg font-semibold tabular-nums ${
           negative ? "text-red-800" : accent ?? "text-slate-900"
         }`}
       >
