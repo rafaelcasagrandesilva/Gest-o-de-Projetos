@@ -4,7 +4,12 @@ import { FinancialEvolutionProjectChart } from "@/components/FinancialEvolutionP
 import { DashboardToolbar } from "@/components/dashboard/DashboardToolbar";
 import { useSeesAllProjects } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
-import { fetchFinancialSummary, type FinancialDashboardSummary } from "@/services/dashboard";
+import {
+  fetchFinancialSummary,
+  fetchProjectsBreakdown,
+  type FinancialDashboardSummary,
+  type ProjectBreakdownRow,
+} from "@/services/dashboard";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
 
@@ -66,6 +71,21 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const [breakdown, setBreakdown] = useState<ProjectBreakdownRow[]>([]);
+  const [breakdownLoading, setBreakdownLoading] = useState(false);
+
+  /** Filtros de período no formato do endpoint (sem project_id/scenario). */
+  function buildPeriodParams(): {
+    competencia?: string;
+    start_date?: string;
+    end_date?: string;
+    months?: number;
+  } {
+    if (periodMode === "single") return { competencia };
+    if (periodMode === "range") return { start_date: rangeStart, end_date: rangeEnd };
+    return { competencia, months: lastNMonths };
+  }
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -108,18 +128,10 @@ export function Dashboard() {
       setLoading(true);
       setError(null);
       try {
-        const base: Parameters<typeof fetchFinancialSummary>[0] = selectedProjectId
-          ? { project_id: selectedProjectId }
-          : {};
-        if (periodMode === "single") {
-          base.competencia = competencia;
-        } else if (periodMode === "range") {
-          base.start_date = rangeStart;
-          base.end_date = rangeEnd;
-        } else {
-          base.competencia = competencia;
-          base.months = lastNMonths;
-        }
+        const base: Parameters<typeof fetchFinancialSummary>[0] = {
+          ...buildPeriodParams(),
+          ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
+        };
         const [prev, real] = await Promise.all([
           fetchFinancialSummary({ ...base, scenario: "PREVISTO" }),
           fetchFinancialSummary({ ...base, scenario: "REALIZADO" }),
@@ -159,6 +171,60 @@ export function Dashboard() {
     canViewGlobal,
     projectsLoaded,
     projects.length,
+  ]);
+
+  // Quebra por projeto (gráficos “por projeto”), usando o cenário/período ativos.
+  // Projeto único: derivado dos dados já carregados. Visão “Todos”: 1 request por projeto.
+  useEffect(() => {
+    if (!dataPrevisto || !dataRealizado) return;
+    let cancelled = false;
+
+    if (selectedProjectId) {
+      const proj = projects.find((p) => p.id === selectedProjectId);
+      const src = dashboardScenario === "PREVISTO" ? dataPrevisto.summary : dataRealizado.summary;
+      setBreakdown([
+        {
+          projectId: selectedProjectId,
+          name: proj?.name ?? "Projeto",
+          revenue: src.total_revenue ?? src.revenue_total,
+          operationalCost: src.operational_cost ?? 0,
+        },
+      ]);
+      setBreakdownLoading(false);
+      return;
+    }
+
+    if (projects.length === 0) {
+      setBreakdown([]);
+      return;
+    }
+
+    setBreakdownLoading(true);
+    (async () => {
+      try {
+        const rows = await fetchProjectsBreakdown(projects, buildPeriodParams(), dashboardScenario);
+        if (!cancelled) setBreakdown(rows);
+      } catch {
+        if (!cancelled) setBreakdown([]);
+      } finally {
+        if (!cancelled) setBreakdownLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    dataPrevisto,
+    dataRealizado,
+    dashboardScenario,
+    selectedProjectId,
+    projects,
+    periodMode,
+    competencia,
+    rangeStart,
+    rangeEnd,
+    lastNMonths,
   ]);
 
   if (!projectsLoaded) {
@@ -396,6 +462,7 @@ export function Dashboard() {
           label={multiMonth ? "Custo total (soma no período)" : "Custo total (regras)"}
           previsto={sp.total_cost ?? sp.cost_total}
           realizado={sr.total_cost ?? sr.cost_total}
+          higherIsWorse
         />
         <ScenarioCompareCard
           label={multiMonth ? "Lucro líquido (soma no período)" : "Lucro líquido"}
@@ -503,7 +570,8 @@ export function Dashboard() {
       />
 
       <FinancialDashboardCharts
-        summary={s}
+        breakdown={breakdown}
+        loading={breakdownLoading}
         multiMonth={multiMonth}
         selectedScenario={dashboardScenario}
       />
@@ -515,15 +583,25 @@ function ScenarioCompareCard({
   label,
   previsto,
   realizado,
+  higherIsWorse = false,
 }: {
   label: string;
   previsto: number;
   realizado: number;
+  /**
+   * Para métricas em que “realizado maior que previsto” é desfavorável (ex.: Custo total),
+   * inverte a cor do Δ: estouro (realizado &gt; previsto) fica vermelho; economia, verde.
+   * Receita e Lucro mantêm o padrão (maior = melhor = verde).
+   */
+  higherIsWorse?: boolean;
 }) {
   const delta = realizado - previsto;
   const pct = previsto !== 0 ? (delta / previsto) * 100 : null;
-  const deltaCls =
-    delta > 0 ? "text-emerald-700" : delta < 0 ? "text-red-700" : "text-slate-700";
+  let deltaCls = "text-slate-700";
+  if (delta !== 0) {
+    const favorable = higherIsWorse ? delta < 0 : delta > 0;
+    deltaCls = favorable ? "text-emerald-700" : "text-red-700";
+  }
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <p className="text-sm font-medium text-slate-700">{label}</p>

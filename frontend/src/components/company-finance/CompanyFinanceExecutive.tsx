@@ -552,8 +552,6 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     });
   }
 
-  const pendenciasCount = pendencias.length;
-
   return (
     <div className="space-y-4">
       <header className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-end sm:justify-between">
@@ -626,11 +624,6 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                   ? `${((kpiFixed.total_pago_mes / kpiFixed.total_esperado_mes) * 100).toFixed(1)}%`
                   : "—"
               }
-            />
-            <KpiCard
-              label="Pendências"
-              value={String(pendenciasCount)}
-              accent={pendenciasCount > 0 ? "text-amber-600" : "text-emerald-600"}
             />
           </>
         )}

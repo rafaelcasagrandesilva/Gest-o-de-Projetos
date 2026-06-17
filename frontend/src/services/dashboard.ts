@@ -110,6 +110,41 @@ export async function fetchFinancialSummary(params: {
   return data;
 }
 
+/** Linha por projeto para os gráficos “por projeto” do dashboard operacional. */
+export interface ProjectBreakdownRow {
+  projectId: string;
+  name: string;
+  /** Receita do cenário ativo (total_revenue) no período/filtro selecionado. */
+  revenue: number;
+  /** Custo operacional total do cenário ativo (operational_cost) no período/filtro. */
+  operationalCost: number;
+}
+
+/**
+ * Constrói a quebra por projeto reaproveitando o endpoint `/dashboard/summary/`
+ * (um request por projeto, mesmo cenário/período/competência do dashboard).
+ * Somar estas linhas reproduz exatamente os cards consolidados — nenhuma regra
+ * financeira é recalculada no front; apenas reagrupamos os valores existentes.
+ */
+export async function fetchProjectsBreakdown(
+  projects: ReadonlyArray<{ id: string; name: string }>,
+  base: { competencia?: string; start_date?: string; end_date?: string; months?: number },
+  scenario: string,
+): Promise<ProjectBreakdownRow[]> {
+  return Promise.all(
+    projects.map(async (p) => {
+      const data = await fetchFinancialSummary({ ...base, project_id: p.id, scenario });
+      const s = data.summary;
+      return {
+        projectId: p.id,
+        name: p.name,
+        revenue: s.total_revenue ?? s.revenue_total,
+        operationalCost: s.operational_cost ?? 0,
+      };
+    }),
+  );
+}
+
 export interface ProjectSummary {
   project_id: string;
   competencia: string;
