@@ -63,6 +63,10 @@ export interface PayableSnapshotRow {
 
   observation: string | null;
   include_in_dashboard: boolean;
+  /** Reconciliação: lançamento automático cuja origem foi removida (resíduo). */
+  is_obsolete: boolean;
+  obsolete_reason: string | null;
+  reconciled_at: string | null;
   status: PayableSnapshotStatus;
   /** Data do último pagamento ativo (evento de caixa). */
   last_payment_date: string | null;
@@ -144,6 +148,23 @@ export async function createManualPayableSnapshot(payload: {
 
 export async function deletePayableSnapshot(id: string): Promise<void> {
   await api.delete(`/financial/payables/${id}/`);
+}
+
+export interface PayableReconcileResult {
+  month: string;
+  checked: number;
+  marked_obsolete: number;
+  cleared: number;
+  obsolete_total: number;
+}
+
+/** Reconcilia o snapshot do mês: marca obsoletos os automáticos sem origem atual. */
+export async function reconcilePayableSnapshot(month: string | Date): Promise<PayableReconcileResult> {
+  const m = typeof month === "string" ? normalizePayablesMonthQuery(month) : formatMonthToYYYYMM(month);
+  const { data } = await api.post<PayableReconcileResult>("/financial/payables/reconcile", null, {
+    params: { month: m },
+  });
+  return data;
 }
 
 export type PayableImportRowStatus = "valid" | "duplicate" | "error" | "empty";

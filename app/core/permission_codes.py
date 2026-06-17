@@ -38,6 +38,10 @@ BILLING_VIEW = "billing.view"
 
 PAYABLES_VIEW = "payables.view"
 RECEIVABLES_VIEW = "receivables.view"
+# Reconciliar snapshot de Contas a Pagar: marcar lançamentos automáticos cuja
+# origem foi removida (resíduos) e permitir limpeza manual. Operação sensível,
+# separada de payables.view e do superusuário do "Regenerar Snapshot".
+PAYABLE_SNAPSHOT_RECONCILE = "payable_snapshot.reconcile"
 
 INVOICES_VIEW = "invoices.view"
 INVOICES_EDIT = "invoices.edit"
@@ -92,6 +96,7 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     BILLING_VIEW,
     PAYABLES_VIEW,
     RECEIVABLES_VIEW,
+    PAYABLE_SNAPSHOT_RECONCILE,
     INVOICES_VIEW,
     INVOICES_EDIT,
     INVOICES_REACTIVATE,
@@ -140,6 +145,7 @@ PRESET_GESTOR = frozenset(
         BILLING_VIEW,
         PAYABLES_VIEW,
         RECEIVABLES_VIEW,
+        PAYABLE_SNAPSHOT_RECONCILE,
         INVOICES_VIEW,
         INVOICES_EDIT,
         DEBTS_VIEW,

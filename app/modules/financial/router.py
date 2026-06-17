@@ -28,6 +28,7 @@ from app.core.permission_codes import (
     INVOICES_EDIT,
     INVOICES_VIEW,
     PAYABLES_VIEW,
+    PAYABLE_SNAPSHOT_RECONCILE,
     RECEIVABLES_VIEW,
 )
 from app.core.scenario import coerce_scenario, parse_scenario
@@ -55,6 +56,7 @@ from app.schemas.payable_import import (
 from app.services.cost_center_alias_service import CostCenterAliasService
 from app.schemas.payables import (
     PayableSnapshotManualCreate,
+    PayableSnapshotReconcileResult,
     PayableSnapshotRegisterPaymentBody,
     PayableSnapshotReversePaymentBody,
     PayableSnapshotRead,
@@ -691,6 +693,9 @@ def _snapshot_to_read(
         paid=st == "PAGO",
         observation=row.observation,
         include_in_dashboard=bool(getattr(row, "include_in_dashboard", True)),
+        is_obsolete=bool(getattr(row, "is_obsolete", False)),
+        obsolete_reason=getattr(row, "obsolete_reason", None),
+        reconciled_at=getattr(row, "reconciled_at", None),
         status=st,
         last_payment_date=last_payment_date,
         paid_in_period=paid_in_period,
@@ -1200,3 +1205,26 @@ async def delete_payables_snapshot(
     await _ensure_payable_snapshot_edit_access(row=row, user=user, db=db)
     await svc.delete_row(row=row)
     await db.commit()
+
+
+@router.post(
+    "/payables/reconcile",
+    response_model=PayableSnapshotReconcileResult,
+    dependencies=[Depends(require_permission(PAYABLE_SNAPSHOT_RECONCILE))],
+)
+async def reconcile_payables_snapshot(
+    month: str = Query(..., description="Mês do snapshot a reconciliar (YYYY-MM)."),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> PayableSnapshotReconcileResult:
+    """Marca lançamentos automáticos cujo origem foi removida como obsoletos
+    (resíduos), sem apagar histórico. Restrito à competência informada."""
+    comp = _parse_month(month)
+    svc = FinanceService(db).payable_snapshots
+    if not await svc.is_generated(month=comp):
+        raise HTTPException(
+            status_code=409, detail="Gere o snapshot do mês antes de reconciliar."
+        )
+    result = await svc.reconcile_snapshot(month=comp, user_id=user.id)
+    await db.commit()
+    return PayableSnapshotReconcileResult.model_validate(result)

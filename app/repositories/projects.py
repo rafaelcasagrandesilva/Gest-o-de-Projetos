@@ -75,6 +75,18 @@ class ProjectRepository(Repository[Project]):
         res = await self.session.execute(stmt)
         return list(res.scalars().all())
 
+    async def list_not_deleted(self) -> list[Project]:
+        """Todos os projetos não-deletados (ativos + encerrados), ordenados por nome.
+
+        Usado pelo módulo Indicadores, cuja elegibilidade é econômica (receita ou
+        custo no período), e NÃO pelo status — projetos encerrados com
+        movimentação histórica relevante devem permanecer visíveis. A única
+        exclusão é `deleted_at IS NOT NULL` (`is_active`/`closed_at` são ignorados).
+        """
+        stmt = select(Project).where(Project.deleted_at.is_(None)).order_by(Project.name.asc())
+        res = await self.session.execute(stmt)
+        return list(res.scalars().all())
+
     async def user_has_access(self, *, user_id: UUID, project_id: UUID) -> bool:
         stmt = select(ProjectUser.id).where(ProjectUser.user_id == user_id, ProjectUser.project_id == project_id)
         res = await self.session.execute(stmt)

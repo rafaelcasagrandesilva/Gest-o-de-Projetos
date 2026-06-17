@@ -13,6 +13,24 @@ from app.utils.date_utils import iter_competencias_inclusive, normalize_competen
 
 # --- Regras puras (testáveis sem banco) -------------------------------------
 
+# Tolerância monetária: valores até meio centavo são tratados como zero
+# (alinhado ao arredondamento de 2 casas em app/utils/money.py).
+MOVEMENT_TOLERANCE = 0.005
+
+
+def is_economically_relevant(
+    revenue: float, cost: float, *, tol: float = MOVEMENT_TOLERANCE
+) -> bool:
+    """Regra única de elegibilidade de um projeto para os Indicadores.
+
+    Elegível quando houve movimentação econômica no período:
+        receita_total_periodo > 0  OU  custo_total_periodo > 0
+    (com tolerância monetária). Independe de `is_active`, `closed_at` ou status
+    operacional — a única exclusão obrigatória (feita antes, na origem dos
+    projetos) é `deleted_at IS NOT NULL`.
+    """
+    return revenue > tol or cost > tol
+
 
 def compute_roi(operational_profit: float, total_cost: float) -> float | None:
     """ROI Operacional = lucro operacional / custo total.
@@ -119,6 +137,29 @@ class IndicatorsService:
             "roi_pct": None if roi is None else roi * 100.0,
         }
 
+    async def eligible_projects_for_indicators(
+        self, *, start: date, end: date, scenario: Scenario
+    ) -> list[dict]:
+        """Conjunto ÚNICO de projetos elegíveis para os Indicadores no período.
+
+        Candidatos = todos os projetos não-deletados (ativos + encerrados);
+        mantém-se apenas os economicamente relevantes no intervalo [start, end]
+        (`is_economically_relevant`). Cada item é o dict de ROI acumulado do
+        projeto, pronto para ranking/consolidado/contagem — toda receita/custo
+        vem do FinancialService (regras financeiras intocadas).
+
+        Esta é a função reutilizável que centraliza a regra `receita>0 OR custo>0`,
+        evitando espalhá-la pelo módulo.
+        """
+        projects = await self._projects.list_not_deleted()
+        rows = [
+            await self._project_roi_range_dict(
+                project_id=p.id, project_name=p.name, start=start, end=end, scenario=scenario
+            )
+            for p in projects
+        ]
+        return [r for r in rows if is_economically_relevant(r["revenue"], r["cost"])]
+
     async def roi_operacional_projeto(
         self, *, project_id: UUID, competencia: date, scenario: str | Scenario = Scenario.REALIZADO
     ) -> dict | None:
@@ -136,17 +177,17 @@ class IndicatorsService:
     async def roi_operacional_ranking(
         self, *, competencia: date, scenario: str | Scenario = Scenario.REALIZADO
     ) -> dict:
+        """Ranking de ROI dos projetos elegíveis no mês (receita ou custo > 0)."""
         sc = coerce_scenario(scenario)
-        projects = await self._projects.list_active()
-        items = [
-            await self._project_roi_dict(
-                project_id=p.id, project_name=p.name, competencia=competencia, scenario=sc
-            )
-            for p in projects
-        ]
+        items = await self.eligible_projects_for_indicators(
+            start=competencia, end=competencia, scenario=sc
+        )
         return {
             "competencia": competencia,
             "scenario": sc.value,
+            # only_active: mantido por compatibilidade da API/frontend. NÃO significa
+            # mais "projeto ativo" — agora indica "projeto elegível para indicadores"
+            # (movimentação econômica no período; encerrados com movimento entram).
             "only_active": True,
             "items": sort_roi_desc(items),
         }
@@ -154,18 +195,13 @@ class IndicatorsService:
     async def roi_operacional_ranking_range(
         self, *, start: date, end: date, scenario: str | Scenario = Scenario.REALIZADO
     ) -> dict:
-        """Ranking de ROI acumulado dos projetos ativos no intervalo [start, end]."""
+        """Ranking de ROI acumulado dos projetos elegíveis no intervalo [start, end]."""
         sc = coerce_scenario(scenario)
-        projects = await self._projects.list_active()
-        items = [
-            await self._project_roi_range_dict(
-                project_id=p.id, project_name=p.name, start=start, end=end, scenario=sc
-            )
-            for p in projects
-        ]
+        items = await self.eligible_projects_for_indicators(start=start, end=end, scenario=sc)
         return {
             "competencia": start,
             "scenario": sc.value,
+            # Ver nota em roi_operacional_ranking: "elegível", não "ativo".
             "only_active": True,
             "items": sort_roi_desc(items),
         }
@@ -180,7 +216,7 @@ class IndicatorsService:
     ) -> dict:
         """Consolidado acumulado no intervalo [start, end]. ROI = Σlucro/Σcusto."""
         sc = coerce_scenario(scenario)
-        targets = await self._resolve_project_ids(project_ids)
+        targets = await self._resolve_project_ids(project_ids, start=start, end=end, scenario=sc)
         rows = [
             await self._project_roi_range_dict(
                 project_id=pid, project_name=name, start=start, end=end, scenario=sc
@@ -200,11 +236,21 @@ class IndicatorsService:
             "project_count": agg["project_count"],
         }
 
-    async def _resolve_project_ids(self, project_ids: list[UUID] | None) -> list[tuple[UUID, str]]:
-        """Resolve a lista de (id, nome) a consolidar. None/vazio = todos os ativos."""
+    async def _resolve_project_ids(
+        self, project_ids: list[UUID] | None, *, start: date, end: date, scenario: Scenario
+    ) -> list[tuple[UUID, str]]:
+        """Resolve a lista de (id, nome) a consolidar.
+
+        Sem ids = todos os projetos ELEGÍVEIS no período (receita ou custo > 0),
+        não mais "todos os ativos". Com ids explícitos = respeita a seleção do
+        usuário (que já vem da lista elegível do ranking), excluindo apenas
+        projetos inexistentes ou deletados.
+        """
         if not project_ids:
-            projects = await self._projects.list_active()
-            return [(p.id, p.name) for p in projects]
+            rows = await self.eligible_projects_for_indicators(
+                start=start, end=end, scenario=scenario
+            )
+            return [(r["project_id"], r["project_name"]) for r in rows]
         out: list[tuple[UUID, str]] = []
         for pid in project_ids:
             project = await self._projects.get(pid)
@@ -220,7 +266,9 @@ class IndicatorsService:
         project_ids: list[UUID] | None = None,
     ) -> dict:
         sc = coerce_scenario(scenario)
-        targets = await self._resolve_project_ids(project_ids)
+        targets = await self._resolve_project_ids(
+            project_ids, start=competencia, end=competencia, scenario=sc
+        )
         rows = [
             await self._project_roi_dict(
                 project_id=pid, project_name=name, competencia=competencia, scenario=sc
@@ -250,10 +298,14 @@ class IndicatorsService:
     ) -> list[dict]:
         """Série mensal consolidada entre start e end (inclusive)."""
         sc = coerce_scenario(scenario)
-        targets = await self._resolve_project_ids(project_ids)
+        norm_start = normalize_competencia(start)
+        norm_end = normalize_competencia(end)
+        targets = await self._resolve_project_ids(
+            project_ids, start=norm_start, end=norm_end, scenario=sc
+        )
         target_ids = [pid for pid, _ in targets]
         out: list[dict] = []
-        for comp in iter_competencias_inclusive(normalize_competencia(start), normalize_competencia(end)):
+        for comp in iter_competencias_inclusive(norm_start, norm_end):
             rows = [
                 await self._project_roi_dict(
                     project_id=pid, project_name=name, competencia=comp, scenario=sc

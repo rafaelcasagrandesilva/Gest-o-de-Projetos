@@ -2221,6 +2221,165 @@ class PayableSnapshotService:
         await self.session.flush()
         return row
 
+    async def _collaborator_labor_exists(
+        self, *, employee_id: UUID, project_id: UUID, source_month: date
+    ) -> bool:
+        """Existe a folha (ProjectLabor) que originou o snapshot COLLABORATOR?
+
+        Espelha EXATAMENTE a chave da geração (service: keys_stmt): mesmo
+        employee_id + project_id, no `source_month`, cenário REALIZADO e
+        alocação > 0. Um mesmo ProjectLabor pode gerar várias linhas (componentes
+        no nome); a chave cobre todas de forma consistente.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(ProjectLabor)
+            .where(
+                ProjectLabor.employee_id == employee_id,
+                ProjectLabor.project_id == project_id,
+                ProjectLabor.competencia == source_month,
+                ProjectLabor.scenario == scenario_pg_rhs(Scenario.REALIZADO),
+                ProjectLabor.allocation_percentage > 0,
+            )
+        )
+        return int((await self.session.execute(stmt)).scalar_one() or 0) > 0
+
+    async def origin_is_missing(self, *, row: PayableSnapshot) -> bool | None:
+        """Regra ÚNICA de orfandade: a origem atual do lançamento automático sumiu?
+
+        Retorno:
+        - True  → origem removida (lançamento é resíduo/obsoleto);
+        - False → origem ainda existe (manter);
+        - None  → não rastreável até uma origem única (MANUAL, ref_id ausente,
+                  FIXED_COST legado agregado, VEHICLE legado) → não decidir.
+
+        Mapeamento por tipo (espelha exatamente a geração do snapshot):
+        - COLLABORATOR  → employees.id
+        - ANTECIPACAO   → receivable_invoice_anticipations.id
+        - FIXED_COST    → CompanyFinancialItem (corporativo, project_id nulo) /
+                          ProjectSystemCost / ProjectOperationalFixed (por tag)
+        - ENDIVIDAMENTO/FINANCIAL → CompanyFinancialItem
+        """
+        if row.type == PayableSnapshotType.MANUAL:
+            return None
+        if row.ref_id is None:
+            return None
+
+        if row.type == PayableSnapshotType.COLLABORATOR:
+            # A origem econômica real é a folha (ProjectLabor) do mês-origem usado
+            # na geração (source_month = mês anterior ao pagamento), NÃO a mera
+            # existência do Employee — um colaborador pode permanecer no cadastro
+            # após ter sua folha/alocação removida. Sem project_id não há folha
+            # rastreável até uma origem única.
+            if row.project_id is None:
+                return None
+            source_month = previous_competencia(row.month)
+            return not await self._collaborator_labor_exists(
+                employee_id=row.ref_id,
+                project_id=row.project_id,
+                source_month=source_month,
+            )
+
+        if row.type == PayableSnapshotType.ANTECIPACAO:
+            return await self.session.get(ReceivableInvoiceAnticipation, row.ref_id) is None
+
+        if row.type == PayableSnapshotType.FIXED_COST:
+            if row.project_id is None:
+                src = await self._get_company_financial_item(row.ref_id)
+                return src is None or str(getattr(src, "tipo", "")).strip() != "custo_fixo"
+            obs = row.observation or ""
+            if SOURCE_TAG_PROJECT_SYSTEM in obs:
+                return await self.session.get(ProjectSystemCost, row.ref_id) is None
+            if SOURCE_TAG_PROJECT_MISC in obs:
+                return await self.session.get(ProjectOperationalFixed, row.ref_id) is None
+            # FIXED_COST legado / desconhecido: sem prova de orfandade.
+            return None
+
+        if row.type in PAYABLE_DEBT_TYPES:  # ENDIVIDAMENTO, FINANCIAL
+            src = await self._get_company_financial_item(row.ref_id)
+            return src is None
+
+        return None
+
+    @staticmethod
+    def _obsolete_reason_for(row: PayableSnapshot) -> str:
+        if row.type == PayableSnapshotType.COLLABORATOR:
+            return "Colaborador removido da origem (folha/alocação)."
+        if row.type == PayableSnapshotType.ANTECIPACAO:
+            return "Antecipação/NF removida da origem."
+        if row.type == PayableSnapshotType.FIXED_COST:
+            obs = row.observation or ""
+            if SOURCE_TAG_PROJECT_SYSTEM in obs:
+                return "Sistema do projeto removido da origem."
+            if SOURCE_TAG_PROJECT_MISC in obs:
+                return "Custo diverso do projeto removido da origem."
+            return "Custo fixo removido da origem."
+        if row.type in PAYABLE_DEBT_TYPES:
+            return "Endividamento removido da origem."
+        return "Origem removida."
+
+    async def reconcile_snapshot(self, *, month: date, user_id: UUID | None) -> dict:
+        """Reconcilia o snapshot do mês: marca como obsoletos os lançamentos
+        automáticos cuja origem foi removida; reativa os que voltaram a existir.
+
+        Preserva integralmente histórico financeiro: NÃO altera amount_*,
+        pagamentos, estornos nem lançamentos MANUAL, e não toca outros meses.
+        Ao marcar obsoleto, remove a linha do dashboard (include_in_dashboard=False)
+        para não poluir análises; ao reativar, devolve a inclusão.
+        """
+        comp = normalize_competencia(month)
+        rows = await self.list_for_month(month=comp)
+        now = datetime.now(timezone.utc)
+        marked = 0
+        cleared = 0
+        checked = 0
+        obsolete_total = 0
+
+        for row in rows:
+            missing = await self.origin_is_missing(row=row)
+            if missing is None:
+                # MANUAL, ref_id ausente ou tipo não rastreável: nunca tocar.
+                if row.is_obsolete:
+                    obsolete_total += 1
+                continue
+            checked += 1
+            if missing:
+                if not row.is_obsolete:
+                    row.is_obsolete = True
+                    row.obsolete_reason = self._obsolete_reason_for(row)
+                    row.reconciled_at = now
+                    row.reconciled_by = user_id
+                    row.include_in_dashboard = False
+                    marked += 1
+                obsolete_total += 1
+            else:
+                # Origem reapareceu: reverte a marcação (idempotente e reversível).
+                if row.is_obsolete:
+                    row.is_obsolete = False
+                    row.obsolete_reason = None
+                    row.reconciled_at = now
+                    row.reconciled_by = user_id
+                    row.include_in_dashboard = True
+                    cleared += 1
+
+        await self.session.flush()
+        logger.info(
+            "payables reconcile month=%s checked=%d marked_obsolete=%d cleared=%d obsolete_total=%d by=%s",
+            comp,
+            checked,
+            marked,
+            cleared,
+            obsolete_total,
+            user_id,
+        )
+        return {
+            "month": comp,
+            "checked": checked,
+            "marked_obsolete": marked,
+            "cleared": cleared,
+            "obsolete_total": obsolete_total,
+        }
+
     async def can_delete_orphaned_row(self, *, row: PayableSnapshot) -> bool:
         """
         Exclusão segura de linhas órfãs/extornadas no snapshot.
@@ -2229,7 +2388,9 @@ class PayableSnapshotService:
         - não pode ser ANTECIPACAO
         - não pode estar pago (status derivado != PAGO)
         - amount_paid ativo atual == 0 (pagamentos ativos inexistentes)
-        - deve estar órfã (fonte removida) para tipos automáticos suportados
+        - deve estar órfã (fonte removida) — usa a regra única `origin_is_missing`,
+          que cobre COLLABORATOR (colaborador removido), FIXED_COST e
+          ENDIVIDAMENTO/FINANCIAL.
         """
         if row.type == PayableSnapshotType.ANTECIPACAO:
             return False
@@ -2247,30 +2408,7 @@ class PayableSnapshotService:
         if _money2(row.amount_paid) > 0:
             return False
 
-        if row.ref_id is None:
-            return False
-
-        # Orfandade: FIXED_COST corporativo (CompanyFinancialItem) ou operacional do projeto.
-        if row.type == PayableSnapshotType.FIXED_COST:
-            if row.project_id is None:
-                src = await self._get_company_financial_item(row.ref_id)
-                return src is None or str(getattr(src, "tipo", "")).strip() != "custo_fixo"
-            obs = (row.observation or "")
-            if SOURCE_TAG_PROJECT_SYSTEM in obs:
-                src = await self.session.get(ProjectSystemCost, row.ref_id)
-                return src is None
-            if SOURCE_TAG_PROJECT_MISC in obs:
-                src = await self.session.get(ProjectOperationalFixed, row.ref_id)
-                return src is None
-            # FIXED_COST legado / desconhecido: não liberar (sem prova de orfandade)
-            return False
-
-        # ENDIVIDAMENTO/FINANCIAL corporativo: também pode ficar órfão se item foi removido/substituído.
-        if row.type in PAYABLE_DEBT_TYPES and row.project_id is None:
-            src = await self._get_company_financial_item(row.ref_id)
-            return src is None
-
-        return False
+        return await self.origin_is_missing(row=row) is True
 
     async def delete_row(self, *, row: PayableSnapshot) -> None:
         await self.session.delete(row)

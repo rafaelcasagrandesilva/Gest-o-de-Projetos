@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import enum
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -70,6 +70,19 @@ class PayableSnapshot(TimestampUUIDMixin, Base):
     include_in_dashboard: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
     observation: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # --- Reconciliação de snapshot (resíduos cuja origem foi removida) ---
+    # Apenas marcação operacional/auditoria: NÃO altera amount_*, pagamentos,
+    # estornos ou lançamentos manuais. Permite limpeza manual e remoção do
+    # dashboard sem regenerar o mês (que apagaria histórico de pagamentos).
+    is_obsolete: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", index=True
+    )
+    obsolete_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reconciled_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     payments: Mapped[list["PayablePayment"]] = relationship(  # noqa: F821
         "PayablePayment",

@@ -5,6 +5,7 @@ import {
   deletePayableSnapshot,
   formatMonthToYYYYMM,
   listPayableSnapshots,
+  reconcilePayableSnapshot,
   registerPayablePayment,
   reversePayablePayment,
   updatePayableSnapshot,
@@ -85,6 +86,7 @@ export function Payables() {
   const canView = usePermission("payables.view");
   const canEdit = usePermission("costs.edit");
   const canRegenerateSnapshot = Boolean(user?.is_superuser);
+  const canReconcileSnapshot = usePermission("payable_snapshot.reconcile");
 
   const [periodMode, setPeriodMode] = useState<"MONTH" | "ALL">("MONTH");
   const [period, setPeriod] = useState(() => formatMonthToYYYYMM(new Date()));
@@ -122,6 +124,7 @@ export function Payables() {
   const [modalObs, setModalObs] = useState("");
   const [modalBusy, setModalBusy] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
   useEffect(() => {
@@ -214,6 +217,40 @@ export function Payables() {
       setEmptyMessage(null);
     } finally {
       setRegenerating(false);
+    }
+  }
+
+  async function reconcileMonthSnapshot() {
+    if (!canReconcileSnapshot || periodMode !== "MONTH") return;
+    const ok = window.confirm(
+      "Reconciliar o snapshot deste mês?\n\n" +
+        "Verifica os lançamentos automáticos cuja origem (colaborador, custo fixo, " +
+        "alocação, antecipação) foi removida e os marca como obsoletos.\n\n" +
+        "Não altera valores, pagamentos ou estornos; apenas sinaliza resíduos para limpeza.",
+    );
+    if (!ok) return;
+    setReconciling(true);
+    setError(null);
+    try {
+      const result = await reconcilePayableSnapshot(period);
+      const list = await listPayableSnapshots({ month: period });
+      setRows(list);
+      setEmptyMessage(list.length === 0 ? "Nenhuma conta a pagar neste período." : null);
+      window.alert(
+        `Reconciliação concluída.\n\n` +
+          `Avaliados: ${result.checked}\n` +
+          `Marcados como obsoletos: ${result.marked_obsolete}\n` +
+          `Reativados (origem voltou): ${result.cleared}\n` +
+          `Obsoletos no mês: ${result.obsolete_total}`,
+      );
+    } catch (e) {
+      if (isAxiosError(e)) {
+        setError(formatApiError(e));
+      } else {
+        setError("Não foi possível reconciliar o snapshot.");
+      }
+    } finally {
+      setReconciling(false);
     }
   }
 
@@ -488,6 +525,7 @@ export function Payables() {
 
   const tableProps = {
     canEdit,
+    canReconcile: canReconcileSnapshot,
     editingId,
     editSaving,
     editValue,
@@ -605,6 +643,17 @@ export function Payables() {
               className="w-fit rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-950 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {regenerating ? "Regerando…" : "Regerar snapshot deste mês"}
+            </button>
+          )}
+          {periodMode === "MONTH" && canReconcileSnapshot && (
+            <button
+              type="button"
+              disabled={reconciling}
+              onClick={() => void reconcileMonthSnapshot()}
+              className="w-fit rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Marca lançamentos automáticos sem origem atual como obsoletos (sem apagar histórico)."
+            >
+              {reconciling ? "Reconciliando…" : "Reconciliar snapshot"}
             </button>
           )}
         </div>
@@ -897,6 +946,7 @@ type PayablesSnapshotTableProps = {
   headerSort: TableSortHeaderProps;
   emptyLabel: string;
   canEdit: boolean;
+  canReconcile: boolean;
   editingId: string | null;
   editSaving: boolean;
   editValue: number;
@@ -918,6 +968,7 @@ function PayablesSnapshotTable({
   headerSort,
   emptyLabel,
   canEdit,
+  canReconcile,
   editingId,
   editSaving,
   editValue,
@@ -1057,6 +1108,14 @@ function PayablesSnapshotTable({
                       {r.status}
                       {r.is_overpaid ? "+" : ""}
                     </span>
+                    {r.is_obsolete ? (
+                      <span
+                        className="ml-1 inline-flex rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-medium text-rose-700 ring-1 ring-rose-200"
+                        title={r.obsolete_reason ?? "Origem removida"}
+                      >
+                        Origem removida
+                      </span>
+                    ) : null}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">
                     {r.last_payment_date ? formatDateBr(r.last_payment_date) : "—"}
@@ -1125,9 +1184,19 @@ function PayablesSnapshotTable({
                         </button>
                         <button
                           type="button"
-                          disabled={!canEdit || r.type !== "MANUAL" || editingId === r.id}
+                          disabled={
+                            editingId === r.id ||
+                            (r.is_obsolete
+                              ? !canReconcile
+                              : !canEdit || r.type !== "MANUAL")
+                          }
                           onClick={() => onDeleteManual(r)}
                           className="rounded px-1.5 py-0.5 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          title={
+                            r.is_obsolete
+                              ? "Excluir resíduo obsoleto (apenas sem pagamentos registrados)."
+                              : undefined
+                          }
                         >
                           Excluir
                         </button>

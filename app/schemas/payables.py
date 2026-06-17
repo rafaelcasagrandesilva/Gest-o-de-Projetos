@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -48,6 +48,10 @@ class PayableSnapshotRead(UUIDTimestampRead):
 
     observation: str | None = None
     include_in_dashboard: bool = True
+    # Reconciliação: lançamento automático cuja origem foi removida (resíduo).
+    is_obsolete: bool = False
+    obsolete_reason: str | None = None
+    reconciled_at: datetime | None = None
     status: PayableSnapshotStatus
     last_payment_date: date | None = None
     # Valor pago com payment_date no mês da listagem (fluxo de caixa do período).
@@ -105,6 +109,16 @@ class PayableSnapshotManualCreate(BaseModel):
     @classmethod
     def normalize_month(cls, v: date) -> date:
         return normalize_competencia(v)
+
+
+class PayableSnapshotReconcileResult(BaseModel):
+    """Resumo da reconciliação de um snapshot mensal."""
+
+    month: date
+    checked: int = Field(..., description="Lançamentos automáticos rastreáveis avaliados.")
+    marked_obsolete: int = Field(..., description="Marcados como obsoletos nesta execução.")
+    cleared: int = Field(..., description="Reativados (origem voltou a existir).")
+    obsolete_total: int = Field(..., description="Total de linhas obsoletas no mês após a reconciliação.")
 
 
 class PayableCreate(BaseModel):

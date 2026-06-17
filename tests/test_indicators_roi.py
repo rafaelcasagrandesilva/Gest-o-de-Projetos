@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.indicators_service import aggregate_consolidado, compute_roi, sort_roi_desc
+from app.services.indicators_service import (
+    aggregate_consolidado,
+    compute_roi,
+    is_economically_relevant,
+    sort_roi_desc,
+)
 
 
 class TestComputeRoi(unittest.TestCase):
@@ -120,6 +125,33 @@ class TestRangeAccumulationSemantics(unittest.TestCase):
         mes = [{"revenue": 440511.77, "cost": 331971.9963, "operational_profit": 108539.7737}]
         agg = aggregate_consolidado(mes)
         self.assertAlmostEqual(agg["roi"], 108539.7737 / 331971.9963)
+
+
+class TestIsEconomicallyRelevant(unittest.TestCase):
+    """Regra de elegibilidade: receita>0 OU custo>0 (com tolerância de meio centavo)."""
+
+    def test_receita_e_custo_positivos_aparece(self) -> None:
+        # Projeto A: receita 100k, custo 50k
+        self.assertTrue(is_economically_relevant(100_000.0, 50_000.0))
+
+    def test_so_custo_positivo_aparece(self) -> None:
+        # Projeto B: receita 0, custo 30k (encerrado com custo ainda lançado)
+        self.assertTrue(is_economically_relevant(0.0, 30_000.0))
+
+    def test_so_receita_positiva_aparece(self) -> None:
+        # Projeto D: encerrado com receita 20k, custo 10k -> mesmo só a receita basta
+        self.assertTrue(is_economically_relevant(20_000.0, 0.0))
+
+    def test_sem_receita_e_sem_custo_nao_aparece(self) -> None:
+        # Projeto C: receita 0, custo 0 -> não elegível
+        self.assertFalse(is_economically_relevant(0.0, 0.0))
+
+    def test_valores_dentro_da_tolerancia_nao_aparecem(self) -> None:
+        # Resíduos sub-centavo são tratados como zero.
+        self.assertFalse(is_economically_relevant(0.004, 0.004))
+
+    def test_valor_acima_da_tolerancia_aparece(self) -> None:
+        self.assertTrue(is_economically_relevant(0.0, 0.01))
 
 
 if __name__ == "__main__":

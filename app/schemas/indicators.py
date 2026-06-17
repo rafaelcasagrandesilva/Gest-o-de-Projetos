@@ -25,10 +25,18 @@ class ProjectRoi(BaseModel):
 
 
 class RoiRanking(BaseModel):
-    """Ranking de ROI Operacional dos projetos ativos (ordenado desc; None ao fim)."""
+    """Ranking de ROI Operacional dos projetos ELEGÍVEIS (ordenado desc; None ao fim).
+
+    Elegibilidade = movimentação econômica no período (receita ou custo > 0),
+    independente de status; exclui apenas projetos deletados.
+    """
 
     competencia: date
     scenario: str
+    # DEPRECADO SEMANTICAMENTE: mantido por compatibilidade de API/frontend.
+    # NÃO significa mais "apenas projetos ativos" — agora indica "apenas projetos
+    # elegíveis para indicadores" (com movimentação econômica no período; projetos
+    # encerrados com receita/custo entram, ativos sem movimentação saem).
     only_active: bool
     items: list[ProjectRoi]
 
