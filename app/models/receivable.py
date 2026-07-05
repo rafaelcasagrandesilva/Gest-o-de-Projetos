@@ -24,11 +24,19 @@ class ReceivableInvoice(TimestampUUIDMixin, Base):
     due_days: Mapped[int] = mapped_column(Integer, nullable=False)
     due_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
 
+    # Competência: mês/ano em que o serviço foi executado (primeiro-de-mês),
+    # independente da emissão. NULL em registros antigos. Obrigatório só em novas NFs.
+    competence_month: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+
     gross_amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     net_amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
 
     client_name: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
     notes: Mapped[str | None] = mapped_column(Text)
+
+    # Classificação Oficial (True) / Não Oficial (False). Substitui a convenção
+    # manual de escrever "NÃO OFICIAL" no número da NF. Puramente classificatório.
+    is_official: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true", index=True)
 
     is_anticipated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     institution: Mapped[str | None] = mapped_column(String(255))

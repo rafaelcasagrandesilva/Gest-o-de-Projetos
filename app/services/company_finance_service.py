@@ -72,6 +72,44 @@ def last_known_payment(payments: list[tuple[date, float]], competencia: date) ->
     return max(prior, key=lambda cv: cv[0])
 
 
+# Dia de vencimento assumido para renegociações sem dia configurado (dados legados).
+DEFAULT_RENEGOTIATION_DUE_DAY = 20
+
+
+def first_of_month(d: date) -> date:
+    return date(d.year, d.month, 1)
+
+
+def add_months(base: date, n: int) -> date:
+    """Soma `n` meses a um primeiro-de-mês, retornando outro primeiro-de-mês."""
+    total = (base.year * 12 + (base.month - 1)) + n
+    y, m = divmod(total, 12)
+    return date(y, m + 1, 1)
+
+
+def months_between(a: date, b: date) -> int:
+    """Diferença em meses (b - a), ignorando o dia."""
+    return (b.year - a.year) * 12 + (b.month - a.month)
+
+
+def renegotiation_installment_count(*, renegotiation_type: object, installment_count: object) -> int:
+    """Quantidade de parcelas do cronograma: INSTALLMENTS usa a contagem; senão, parcela única."""
+    rt = getattr(renegotiation_type, "value", renegotiation_type)
+    if rt == "INSTALLMENTS" and installment_count:
+        return int(installment_count)
+    return 1
+
+
+def parcela_prevista_na_competencia(*, anchor_month: date, installment_count: int, competencia: date) -> bool:
+    """Regra pura: há parcela prevista na competência se ela cai dentro do cronograma.
+
+    Cronograma mensal a partir de `anchor_month` (primeiro-de-mês da 1ª parcela),
+    por `installment_count` meses. Não cria lançamento; apenas sinaliza expectativa.
+    """
+    diff = months_between(anchor_month, competencia)
+    return 0 <= diff < max(1, int(installment_count))
+
+
 class CompanyFinanceService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -181,6 +219,9 @@ class CompanyFinanceService:
                 else None,
                 "installment_count": getattr(it, "installment_count", None),
                 "installment_value": _f(it.installment_value) if getattr(it, "installment_value", None) is not None else None,
+                "renegotiation_agreement_date": getattr(it, "renegotiation_agreement_date", None),
+                "renegotiation_first_payment_date": getattr(it, "renegotiation_first_payment_date", None),
+                "renegotiation_due_day": getattr(it, "renegotiation_due_day", None),
                 "pagamentos": pagamentos,
                 "total_pago": total_pago,
                 "restante": restante,
@@ -214,6 +255,9 @@ class CompanyFinanceService:
             else None,
             "installment_count": getattr(it, "installment_count", None),
             "installment_value": _f(it.installment_value) if getattr(it, "installment_value", None) is not None else None,
+            "renegotiation_agreement_date": getattr(it, "renegotiation_agreement_date", None),
+            "renegotiation_first_payment_date": getattr(it, "renegotiation_first_payment_date", None),
+            "renegotiation_due_day": getattr(it, "renegotiation_due_day", None),
             "pagamentos": pagamentos,
             "total_pago": total_pago,
             "restante": None,
@@ -248,6 +292,9 @@ class CompanyFinanceService:
             renegotiation_type=renegotiation_type,
             installment_count=data.get("installment_count"),
             installment_value=data.get("installment_value"),
+            renegotiation_agreement_date=data.get("renegotiation_agreement_date"),
+            renegotiation_first_payment_date=data.get("renegotiation_first_payment_date"),
+            renegotiation_due_day=data.get("renegotiation_due_day"),
             cost_center=default_label_for_tipo(data["tipo"]),
             cost_center_system=default_system_for_tipo(data["tipo"]),
         )
@@ -304,6 +351,12 @@ class CompanyFinanceService:
             row.installment_count = data.get("installment_count")
         if "installment_value" in data:
             row.installment_value = data.get("installment_value")
+        if "renegotiation_agreement_date" in data:
+            row.renegotiation_agreement_date = data.get("renegotiation_agreement_date")
+        if "renegotiation_first_payment_date" in data:
+            row.renegotiation_first_payment_date = data.get("renegotiation_first_payment_date")
+        if "renegotiation_due_day" in data:
+            row.renegotiation_due_day = data.get("renegotiation_due_day")
 
         if row.tipo != "endividamento":
             row.has_legal_process = False
@@ -312,6 +365,9 @@ class CompanyFinanceService:
             row.renegotiation_type = None
             row.installment_count = None
             row.installment_value = None
+            row.renegotiation_agreement_date = None
+            row.renegotiation_first_payment_date = None
+            row.renegotiation_due_day = None
 
         if row.tipo != "custo_fixo" or row.item_type != CompanyFinancialItemType.COLABORADOR_MATRIZ:
             row.employee_id = None
@@ -322,6 +378,9 @@ class CompanyFinanceService:
             row.renegotiation_type = None
             row.installment_count = None
             row.installment_value = None
+            row.renegotiation_agreement_date = None
+            row.renegotiation_first_payment_date = None
+            row.renegotiation_due_day = None
         row.updated_at = datetime.now(timezone.utc)
         await self.db.flush()
         await self.db.refresh(row)
@@ -499,22 +558,59 @@ class CompanyFinanceService:
             "quantidade_itens": len(items),
         }
 
-    async def pendencias_custos_fixos(self, competencia: str) -> dict:
-        """Itens obrigatórios mensais sem valor lançado na competência.
+    def _renegotiation_anchor_month(self, it: CompanyFinancialItem) -> date | None:
+        """Primeiro-de-mês da 1ª parcela da renegociação.
 
-        Apenas monitoramento operacional: não cria lançamento, conta a pagar
-        ou título com valor zero. Para cada pendência inclui o último valor
-        conhecido (competência anterior mais recente com valor preenchido).
+        Prioridade: data do 1º pagamento → competência mais antiga já lançada →
+        data do acordo → mês de criação do item. Para dados legados sem datas,
+        ancora no mês de criação (dia de vencimento default tratado à parte).
+        """
+        fpd = getattr(it, "renegotiation_first_payment_date", None)
+        if fpd is not None:
+            return first_of_month(fpd)
+        if it.payments:
+            return min(p.competencia for p in it.payments)
+        agr = getattr(it, "renegotiation_agreement_date", None)
+        if agr is not None:
+            return first_of_month(agr)
+        created = getattr(it, "created_at", None)
+        if created is not None:
+            return first_of_month(created.date() if hasattr(created, "date") else created)
+        return None
+
+    def _renegotiation_parcela_value(self, it: CompanyFinancialItem) -> float:
+        """Valor previsto da parcela: installment_value (parcelado) ou saldo renegociado (única)."""
+        rt = getattr(it, "renegotiation_type", None)
+        rt_val = getattr(rt, "value", rt)
+        if rt_val == "INSTALLMENTS" and getattr(it, "installment_value", None) is not None:
+            return _f(it.installment_value)
+        return _debt_base_amount(it)
+
+    async def pendencias(self, tipo: str, competencia: str) -> dict:
+        """Pendências de lançamento (obrigatoriedades sem valor na competência).
+
+        Apenas monitoramento operacional — não cria lançamento, conta a pagar
+        ou título com valor zero. As obrigatoriedades de uma competência são:
+        - manuais: itens com `is_monthly_required` (ambos os tipos);
+        - automáticas (endividamento): renegociações com parcela prevista no mês,
+          enquanto não quitadas.
+        Retorna também os totais previsto/pago das obrigatoriedades no mês.
         """
         comp = parse_month(competencia)
+        where = [CompanyFinancialItem.tipo == tipo]
+        if tipo == "endividamento":
+            where.append(
+                CompanyFinancialItem.is_monthly_required.is_(True)
+                | CompanyFinancialItem.has_renegotiation.is_(True)
+            )
+        else:
+            where.append(CompanyFinancialItem.is_monthly_required.is_(True))
+
         items = (
             (
                 await self.db.execute(
                     select(CompanyFinancialItem)
-                    .where(
-                        CompanyFinancialItem.tipo == "custo_fixo",
-                        CompanyFinancialItem.is_monthly_required.is_(True),
-                    )
+                    .where(*where)
                     .options(
                         selectinload(CompanyFinancialItem.payments),
                         selectinload(CompanyFinancialItem.employee),
@@ -529,13 +625,46 @@ class CompanyFinanceService:
         )
 
         pendencias: list[dict] = []
+        total_previsto = 0.0
+        total_pago = 0.0
         for it in items:
-            has_value = any(p.competencia == comp and _f(p.valor) > 0 for p in it.payments)
-            if is_lancamento_pendente(
-                is_monthly_required=bool(it.is_monthly_required),
-                has_value_in_competencia=has_value,
-            ) is False:
+            # Define se o item é obrigatoriedade nesta competência e o valor previsto.
+            is_auto = False
+            valor_previsto: float
+            if tipo == "endividamento" and bool(getattr(it, "has_renegotiation", False)):
+                anchor = self._renegotiation_anchor_month(it)
+                count = renegotiation_installment_count(
+                    renegotiation_type=getattr(it, "renegotiation_type", None),
+                    installment_count=getattr(it, "installment_count", None),
+                )
+                total_pago_item = sum(_f(p.valor) for p in it.payments)
+                quitado = total_pago_item >= _debt_base_amount(it) and _debt_base_amount(it) > 0
+                if (
+                    anchor is not None
+                    and not quitado
+                    and parcela_prevista_na_competencia(
+                        anchor_month=anchor, installment_count=count, competencia=comp
+                    )
+                ):
+                    is_auto = True
+                    valor_previsto = self._renegotiation_parcela_value(it)
+                elif bool(getattr(it, "is_monthly_required", False)):
+                    valor_previsto = _f(it.valor_referencia)
+                else:
+                    continue  # renegociação sem parcela neste mês e não-manual
+            elif bool(getattr(it, "is_monthly_required", False)):
+                read = await self._item_to_read(it, comp)
+                valor_previsto = float(read.get("valor_referencia", 0.0))
+            else:
                 continue
+
+            pago_mes = next((_f(p.valor) for p in it.payments if p.competencia == comp), 0.0)
+            total_previsto += valor_previsto
+            total_pago += pago_mes
+
+            if pago_mes > 0:
+                continue  # já lançado → não é pendência (mas conta nos totais)
+
             last = last_known_payment([(p.competencia, _f(p.valor)) for p in it.payments], comp)
             read = await self._item_to_read(it, comp)
             pendencias.append(
@@ -545,9 +674,10 @@ class CompanyFinanceService:
                     "competencia": competencia,
                     "category": read.get("category"),
                     "cost_center": read.get("cost_center"),
-                    "valor_referencia": read.get("valor_referencia", 0.0),
+                    "valor_referencia": round(valor_previsto, 2),
                     "ultimo_valor": last[1] if last is not None else None,
                     "ultimo_mes": month_key(last[0]) if last is not None else None,
+                    "origem": "renegociacao" if is_auto else "manual",
                 }
             )
 
@@ -555,7 +685,13 @@ class CompanyFinanceService:
             "competencia": competencia,
             "quantidade": len(pendencias),
             "pendencias": pendencias,
+            "total_previsto": round(total_previsto, 2),
+            "total_pago": round(total_pago, 2),
         }
+
+    async def pendencias_custos_fixos(self, competencia: str) -> dict:
+        """Compat: pendências de custos fixos (delega à implementação genérica)."""
+        return await self.pendencias("custo_fixo", competencia)
 
     async def chart_series(self, tipo: str, mes_inicio: str, mes_fim: str) -> list[dict]:
         items = (

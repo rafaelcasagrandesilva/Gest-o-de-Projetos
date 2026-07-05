@@ -66,10 +66,12 @@ class ReceivableInvoiceRead(UUIDTimestampRead):
     issue_date: date
     due_days: int
     due_date: date
+    competence_month: date | None = None
     gross_amount: float
     net_amount: float
     client_name: str | None = None
     notes: str | None = None
+    is_official: bool = True
     is_anticipated: bool
     institution: str | None = None
     advance_amount_received: float | None = None
@@ -98,10 +100,12 @@ class ReceivableInvoiceCreate(BaseModel):
     number: str = Field(..., min_length=1, max_length=64)
     issue_date: date
     due_days: int = Field(..., description="Prazo em dias: 30, 60 ou 90")
+    competence_month: date = Field(..., description="Competência (mês/ano do serviço). Normalizada para o dia 1.")
     gross_amount: float = Field(gt=0)
     net_amount: float | None = Field(default=None, gt=0)
     client_name: str | None = Field(None, max_length=512)
     notes: str | None = None
+    is_official: bool = True
     include_in_dashboard: bool = True
 
     @field_validator("due_days")
@@ -111,15 +115,22 @@ class ReceivableInvoiceCreate(BaseModel):
             raise ValueError("due_days deve ser 30, 60 ou 90.")
         return v
 
+    @field_validator("competence_month")
+    @classmethod
+    def competence_first_of_month(cls, v: date) -> date:
+        return v.replace(day=1)
+
 
 class ReceivableInvoiceUpdate(BaseModel):
     number: str | None = Field(None, min_length=1, max_length=64)
     issue_date: date | None = None
     due_days: int | None = None
+    competence_month: date | None = None
     gross_amount: float | None = Field(None, gt=0)
     net_amount: float | None = Field(None, gt=0)
     client_name: str | None = Field(None, max_length=512)
     notes: str | None = None
+    is_official: bool | None = None
     is_anticipated: bool | None = None
     institution: str | None = Field(None, max_length=255)
     advance_amount_received: float | None = Field(None, gt=0)
@@ -138,6 +149,11 @@ class ReceivableInvoiceUpdate(BaseModel):
         if v not in DUE_DAYS_CHOICES:
             raise ValueError("due_days deve ser 30, 60 ou 90.")
         return v
+
+    @field_validator("competence_month")
+    @classmethod
+    def competence_first_of_month(cls, v: date | None) -> date | None:
+        return v.replace(day=1) if v is not None else None
 
     @model_validator(mode="after")
     def status_ok(self) -> ReceivableInvoiceUpdate:

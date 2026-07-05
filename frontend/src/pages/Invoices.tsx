@@ -1,8 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  addInvoiceAnticipation,
   createReceivableInvoice,
-  deleteInvoiceAnticipation,
   deleteReceivableInvoice,
   deleteInvoicePdf,
   downloadInvoicePdfBlob,
@@ -11,10 +9,9 @@ import {
   openPdfBlobInNewTab,
   reactivateReceivableInvoice,
   updateReceivableInvoice,
-  updateInvoiceAnticipation,
   uploadInvoicePdf,
   type InvoiceStatus,
-  type InvoiceAnticipation,
+  type OfficialFilter,
   type PeriodField,
   type ReceivableInvoice,
 } from "@/services/receivables";
@@ -54,10 +51,6 @@ function formatDateBr(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
   if (!y || !m || !d) return iso;
   return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`;
-}
-
-function formatPct2(n: number): string {
-  return `${n.toFixed(2).replace(".", ",")}%`;
 }
 
 function parseMoneyInput(raw: string): number {
@@ -103,6 +96,35 @@ const STATUS_LABELS: Record<InvoiceStatus, string> = {
   CANCELADA: "Cancelada",
 };
 
+/** Badge discreto de classificação Oficial / Não Oficial. */
+function officialBadgeClass(isOfficial: boolean): string {
+  return isOfficial
+    ? "bg-slate-100 text-slate-700 ring-slate-200"
+    : "bg-amber-50 text-amber-800 ring-amber-200";
+}
+
+/** Rótulo do status do lote de antecipação (módulo Antecipações). */
+function batchStatusLabel(s: string): string {
+  if (s === "OPEN") return "Em aberto";
+  if (s === "SETTLED") return "Liquidado";
+  if (s === "CANCELLED") return "Cancelado";
+  return s;
+}
+
+const MESES_BR = [
+  "JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
+  "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO",
+];
+
+/** Competência (primeiro-de-mês ISO) → rótulo MÊS/AAAA para exibição. */
+function formatCompetenceBr(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const [y, m] = iso.slice(0, 7).split("-");
+  const nome = MESES_BR[Number(m) - 1];
+  if (!nome) return `${m}/${y}`;
+  return `${nome}/${y}`;
+}
+
 function monthToYm(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
@@ -113,10 +135,12 @@ type EditDraft = {
   number: string;
   issue_date: string;
   due_days: DueChoice;
+  competence: string;
   gross_amount: string;
   net_amount: string;
   client_name: string;
   notes: string;
+  is_official: boolean;
   received_date: string;
   received: boolean;
   include_in_dashboard: boolean;
@@ -127,10 +151,12 @@ function emptyEditDraft(): EditDraft {
     number: "",
     issue_date: "",
     due_days: 30,
+    competence: "",
     gross_amount: "",
     net_amount: "",
     client_name: "",
     notes: "",
+    is_official: true,
     received_date: "",
     received: false,
     include_in_dashboard: true,
@@ -147,6 +173,7 @@ export function Invoices() {
   const [periodField, setPeriodField] = useState<PeriodField>("issue");
   const [projectId, setProjectId] = useState("");
   const [statusFilter, setStatusFilter] = useState<InvoiceStatus | "">("");
+  const [officialFilter, setOfficialFilter] = useState<OfficialFilter>("all");
   const [clienteFilter, setClienteFilter] = useState("");
 
   const [rows, setRows] = useState<ReceivableInvoice[]>([]);
@@ -157,16 +184,10 @@ export function Invoices() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft>(emptyEditDraft);
   const [pdfUploading, setPdfUploading] = useState<string | null>(null);
-  const [antForm, setAntForm] = useState({
-    institution: "",
-    amount_received: "",
-    amount_to_repay: "",
-    data_recebimento: "",
-    due_date: "",
-    include_in_dashboard: true,
-  });
-  const [editingAnticipationId, setEditingAnticipationId] = useState<string | null>(null);
-  const [antBusy, setAntBusy] = useState(false);
+
+  // Filtro de competência — independente do filtro de período (emissão/vencimento).
+  const [competenceMode, setCompetenceMode] = useState<"MONTH" | "ALL">("ALL");
+  const [competencePeriod, setCompetencePeriod] = useState(() => monthToYm(new Date()));
 
   const [showForm, setShowForm] = useState(false);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
@@ -177,10 +198,12 @@ export function Invoices() {
     number: "",
     issue_date: "",
     due_days: 30 as DueChoice,
+    competence: "",
     gross_amount: "",
     net_amount: "",
     client_name: "",
     notes: "",
+    is_official: true,
     include_in_dashboard: true,
   });
 
@@ -192,6 +215,11 @@ export function Invoices() {
     const [y, m] = period.split("-").map(Number);
     return { year: y, month: m };
   }, [period]);
+
+  const competenceYm = useMemo(() => {
+    const [y, m] = competencePeriod.split("-").map(Number);
+    return { year: y, month: m };
+  }, [competencePeriod]);
 
   const previewDue = useMemo(
     () => (form.issue_date ? addCalendarDays(form.issue_date, form.due_days) : ""),
@@ -205,22 +233,23 @@ export function Invoices() {
       const params: Parameters<typeof fetchReceivableInvoices>[0] = {
         project_id: projectId || undefined,
         period_field: periodField,
+        official: officialFilter,
       };
       if (periodMode === "MONTH") {
         params.year = ym.year;
         params.month = ym.month;
       }
+      if (competenceMode === "MONTH") {
+        params.competence_year = competenceYm.year;
+        params.competence_month = competenceYm.month;
+      }
       if (statusFilter) params.status = statusFilter;
       if (clienteFilter.trim()) params.client = clienteFilter.trim();
 
+      // Cards reutilizam exatamente os mesmos filtros da listagem.
       const [list, k] = await Promise.all([
         fetchReceivableInvoices(params),
-        fetchReceivableKpis({
-          project_id: projectId || undefined,
-          year: periodMode === "MONTH" ? ym.year : undefined,
-          month: periodMode === "MONTH" ? ym.month : undefined,
-          period_field: periodMode === "MONTH" ? periodField : undefined,
-        }),
+        fetchReceivableKpis(params),
       ]);
       setRows(list);
       setKpis(k);
@@ -229,7 +258,7 @@ export function Invoices() {
     } finally {
       setLoading(false);
     }
-  }, [projectId, statusFilter, clienteFilter, ym.year, ym.month, periodField, periodMode]);
+  }, [projectId, statusFilter, officialFilter, clienteFilter, ym.year, ym.month, periodField, periodMode, competenceMode, competenceYm.year, competenceYm.month]);
 
   useEffect(() => {
     void listProjects()
@@ -244,15 +273,6 @@ export function Invoices() {
   useEffect(() => {
     if (!expandedId) {
       setEditDraft(emptyEditDraft());
-      setAntForm({
-        institution: "",
-        amount_received: "",
-        amount_to_repay: "",
-        data_recebimento: "",
-        due_date: "",
-        include_in_dashboard: true,
-      });
-      setEditingAnticipationId(null);
       return;
     }
     const row = rows.find((r) => r.id === expandedId);
@@ -261,10 +281,12 @@ export function Invoices() {
       number: row.number,
       issue_date: row.issue_date.slice(0, 10),
       due_days: row.due_days as DueChoice,
+      competence: row.competence_month ? row.competence_month.slice(0, 7) : "",
       gross_amount: formatCurrencyInputFromApi(row.gross_amount),
       net_amount: formatCurrencyInputFromApi(row.net_amount),
       client_name: row.client_name ?? "",
       notes: row.notes ?? "",
+      is_official: row.is_official !== false,
       received_date: row.received_date ? row.received_date.slice(0, 10) : "",
       received: row.status === "RECEBIDA",
       include_in_dashboard: row.include_in_dashboard !== false,
@@ -275,6 +297,10 @@ export function Invoices() {
     e.preventDefault();
     if (!canEditInvoices) return;
     if (!form.project_id || !form.number.trim() || !form.issue_date) return;
+    if (!form.competence) {
+      setError("Informe a competência (mês/ano do serviço).");
+      return;
+    }
     const gross = parseMoneyInput(form.gross_amount);
     if (gross <= 0) return;
     const netRaw = form.net_amount.trim();
@@ -288,10 +314,12 @@ export function Invoices() {
         number: form.number.trim(),
         issue_date: form.issue_date,
         due_days: form.due_days,
+        competence_month: `${form.competence}-01`,
         gross_amount: gross,
         net_amount: net,
         client_name: form.client_name.trim() || null,
         notes: form.notes.trim() || null,
+        is_official: form.is_official,
         include_in_dashboard: form.include_in_dashboard,
       });
       setShowForm(false);
@@ -300,10 +328,12 @@ export function Invoices() {
         number: "",
         issue_date: "",
         due_days: 30,
+        competence: "",
         gross_amount: "",
         net_amount: "",
         client_name: "",
         notes: "",
+        is_official: true,
         include_in_dashboard: true,
       });
       await load();
@@ -355,10 +385,12 @@ export function Invoices() {
         number: editDraft.number.trim(),
         issue_date: editDraft.issue_date,
         due_days: editDraft.due_days,
+        competence_month: editDraft.competence ? `${editDraft.competence}-01` : null,
         gross_amount: gross,
         net_amount: net,
         client_name: editDraft.client_name.trim() || null,
         notes: editDraft.notes.trim() || null,
+        is_official: editDraft.is_official,
         received_amount: editDraft.received ? net : 0,
         received_date: editDraft.received ? editDraft.received_date : null,
         include_in_dashboard: editDraft.include_in_dashboard,
@@ -366,96 +398,6 @@ export function Invoices() {
       await load();
     } catch (e) {
       setError(formatAxiosDetail(e));
-    }
-  }
-
-  function sumAnticipationsReceived(ants: InvoiceAnticipation[] | undefined): number {
-    if (!ants || ants.length === 0) return 0;
-    let s = 0;
-    for (const a of ants) s += Number(a.amount_received ?? 0);
-    return Math.round(s * 100) / 100;
-  }
-
-  async function handleAddAnticipation(row: ReceivableInvoice) {
-    if (!canEditInvoices) return;
-    const inst = antForm.institution.trim();
-    const ar = parseMoneyInput(antForm.amount_received);
-    const ad = parseMoneyInput(antForm.amount_to_repay);
-    const recvDate = antForm.data_recebimento;
-    const due = antForm.due_date;
-    if (!inst) {
-      setError("Informe a instituição.");
-      return;
-    }
-    if (!recvDate) {
-      setError("Informe a data de recebimento.");
-      return;
-    }
-    if (!due) {
-      setError("Informe a data de devolução.");
-      return;
-    }
-    if (ar <= 0 || ad <= 0) {
-      setError("Valores devem ser maiores que zero.");
-      return;
-    }
-    if (ad + 0.01 < ar) {
-      setError("Valor a devolver deve ser maior ou igual ao valor recebido.");
-      return;
-    }
-    // Regra de negócio: permitir soma das antecipações exceder o valor líquido.
-    // Warning não-bloqueante fica na UI (ver abaixo no detalhe da NF).
-    setAntBusy(true);
-    setError(null);
-    try {
-      if (editingAnticipationId) {
-        await updateInvoiceAnticipation(row.id, editingAnticipationId, {
-          institution: inst,
-          amount_received: ar,
-          amount_to_repay: ad,
-          data_recebimento: recvDate,
-          due_date: due,
-          include_in_dashboard: antForm.include_in_dashboard,
-        });
-      } else {
-        await addInvoiceAnticipation(row.id, {
-          institution: inst,
-          amount_received: ar,
-          amount_to_repay: ad,
-          data_recebimento: recvDate,
-          due_date: due,
-          include_in_dashboard: antForm.include_in_dashboard,
-        });
-      }
-      setAntForm({
-        institution: "",
-        amount_received: "",
-        amount_to_repay: "",
-        data_recebimento: "",
-        due_date: "",
-        include_in_dashboard: true,
-      });
-      setEditingAnticipationId(null);
-      await load();
-    } catch (e) {
-      setError(formatAxiosDetail(e));
-    } finally {
-      setAntBusy(false);
-    }
-  }
-
-  async function handleRemoveAnticipation(row: ReceivableInvoice, antId: string) {
-    if (!canEditInvoices) return;
-    if (!window.confirm("Remover esta antecipação?")) return;
-    setAntBusy(true);
-    setError(null);
-    try {
-      await deleteInvoiceAnticipation(row.id, antId);
-      await load();
-    } catch (e) {
-      setError(formatAxiosDetail(e));
-    } finally {
-      setAntBusy(false);
     }
   }
 
@@ -547,7 +489,7 @@ export function Invoices() {
   }
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-5">
+    <div className="space-y-5">
       <div>
         <h1 className="text-2xl font-semibold text-slate-900">Notas fiscais (contas a receber)</h1>
         <p className="mt-1 text-sm text-slate-600">
@@ -585,6 +527,14 @@ export function Invoices() {
               <option value="due">Data de vencimento</option>
             </select>
           </label>
+          <PeriodFilter
+            label="Competência"
+            monthOptionLabel="Competência"
+            mode={competenceMode}
+            value={competencePeriod}
+            onModeChange={setCompetenceMode}
+            onChange={setCompetencePeriod}
+          />
           <label className="flex min-w-[200px] flex-col gap-1 text-sm">
             <span className="font-medium text-slate-700">Projeto</span>
             <select
@@ -613,6 +563,18 @@ export function Invoices() {
                   {STATUS_LABELS[k]}
                 </option>
               ))}
+            </select>
+          </label>
+          <label className="flex min-w-[160px] flex-col gap-1 text-sm">
+            <span className="font-medium text-slate-700">Tipo da NF</span>
+            <select
+              value={officialFilter}
+              onChange={(e) => setOfficialFilter(e.target.value as OfficialFilter)}
+              className="rounded-lg border border-slate-300 px-3 py-2"
+            >
+              <option value="all">Todos</option>
+              <option value="official">Oficiais</option>
+              <option value="unofficial">Não Oficiais</option>
             </select>
           </label>
           <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-sm">
@@ -693,6 +655,15 @@ export function Invoices() {
               className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
             />
           </Field>
+          <Field label="Competência *">
+            <input
+              type="month"
+              required
+              value={form.competence}
+              onChange={(e) => setForm((f) => ({ ...f, competence: e.target.value }))}
+              className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+            />
+          </Field>
           <Field label="Prazo (dias) *">
             <select
               value={form.due_days}
@@ -736,6 +707,17 @@ export function Invoices() {
               className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
             />
           </Field>
+          <Field label="Tipo da NF">
+            <label className="flex items-center gap-2 py-1.5 text-sm">
+              <input
+                type="checkbox"
+                checked={!form.is_official}
+                onChange={(e) => setForm((f) => ({ ...f, is_official: !e.target.checked }))}
+                className="h-4 w-4 rounded border-slate-300"
+              />
+              <span className="text-slate-700">NF Não Oficial</span>
+            </label>
+          </Field>
           <Field label="Observações">
             <textarea
               value={form.notes}
@@ -767,7 +749,7 @@ export function Invoices() {
 
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="min-w-[1000px] w-full divide-y divide-slate-200 text-sm">
-          <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+          <thead className="bg-slate-50 text-left text-xs font-semibold tracking-wide text-slate-600">
             <tr>
               <SortableTh
                 label="Projeto"
@@ -791,6 +773,7 @@ export function Invoices() {
                 direction={headerSort.direction}
                 onSort={headerSort.onSort}
               />
+              <th className="px-2 py-3">Competência</th>
               <SortableTh
                 label="Prazo"
                 column="due_days"
@@ -836,6 +819,7 @@ export function Invoices() {
                 direction={headerSort.direction}
                 onSort={headerSort.onSort}
               />
+              <th className="px-2 py-3">Tipo</th>
               <th className="px-2 py-3">PDF</th>
               <th className="px-2 py-3 text-right">Ações</th>
             </tr>
@@ -843,13 +827,13 @@ export function Invoices() {
           <tbody className="divide-y divide-slate-100">
             {loading && rows.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={14} className="px-3 py-8 text-center text-slate-500">
                   Carregando…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={14} className="px-3 py-8 text-center text-slate-500">
                   {periodMode === "ALL" ? "Nenhuma NF encontrada." : "Nenhuma NF no período."}
                 </td>
               </tr>
@@ -871,6 +855,7 @@ export function Invoices() {
                       <td className="max-w-[160px] truncate px-2 py-2 text-slate-700">{row.client_name || "—"}</td>
                       <td className="whitespace-nowrap px-2 py-2 font-medium">{row.number}</td>
                       <td className="whitespace-nowrap px-2 py-2">{formatDateBr(row.issue_date)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 tabular-nums">{formatCompetenceBr(row.competence_month)}</td>
                       <td className="whitespace-nowrap px-2 py-2">{row.due_days} d</td>
                       <td className="whitespace-nowrap px-2 py-2">{formatDateBr(row.due_date)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatBRL(row.gross_amount)}</td>
@@ -896,9 +881,18 @@ export function Invoices() {
                               setBatchModalOpen(true);
                             }}
                           >
-                            Antecipação
+                            {row.advance_batch.sgc_number != null
+                              ? `Antecipação SGC ${row.advance_batch.sgc_number}`
+                              : "Antecipação"}
                           </button>
                         ) : null}
+                      </td>
+                      <td className="px-2 py-2">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${officialBadgeClass(row.is_official)}`}
+                        >
+                          {row.is_official ? "OFICIAL" : "NÃO OFICIAL"}
+                        </span>
                       </td>
                       <td className="whitespace-nowrap px-2 py-2">
                         {row.has_pdf ? (
@@ -952,11 +946,11 @@ export function Invoices() {
                     </tr>
                     {expandedId === row.id && (
                       <tr className="bg-slate-50/90">
-                        <td colSpan={12} className="px-4 py-4">
-                          <div className="grid gap-5 lg:grid-cols-2">
+                        <td colSpan={14} className="px-4 py-4">
+                          <div className="space-y-5">
                             <div className="space-y-4">
                               <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Dados da NF</p>
-                              <div className="grid gap-3 sm:grid-cols-2">
+                              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                                 <label className="flex flex-col gap-1 text-xs">
                                   <span className="font-medium text-slate-700">Nº NF</span>
                                   <input
@@ -972,6 +966,16 @@ export function Invoices() {
                                     type="date"
                                     value={editDraft.issue_date}
                                     onChange={(e) => setEditDraft((d) => ({ ...d, issue_date: e.target.value }))}
+                                    disabled={!canEditInvoices || row.status === "CANCELADA"}
+                                    className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                                  />
+                                </label>
+                                <label className="flex flex-col gap-1 text-xs">
+                                  <span className="font-medium text-slate-700">Competência</span>
+                                  <input
+                                    type="month"
+                                    value={editDraft.competence}
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, competence: e.target.value }))}
                                     disabled={!canEditInvoices || row.status === "CANCELADA"}
                                     className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                                   />
@@ -1019,7 +1023,7 @@ export function Invoices() {
                                     inputMode="decimal"
                                   />
                                 </label>
-                                <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+                                <label className="flex flex-col gap-1 text-xs sm:col-span-2 lg:col-span-4">
                                   <span className="font-medium text-slate-700">Cliente</span>
                                   <input
                                     value={editDraft.client_name}
@@ -1028,16 +1032,28 @@ export function Invoices() {
                                     className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                                   />
                                 </label>
-                                <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+                                <label className="flex items-center gap-2 text-xs sm:col-span-2 lg:col-span-4">
+                                  <input
+                                    type="checkbox"
+                                    checked={!editDraft.is_official}
+                                    onChange={(e) =>
+                                      setEditDraft((d) => ({ ...d, is_official: !e.target.checked }))
+                                    }
+                                    disabled={!canEditInvoices || row.status === "CANCELADA"}
+                                    className="h-4 w-4 rounded border-slate-300"
+                                  />
+                                  <span className="text-slate-700">NF Não Oficial</span>
+                                </label>
+                                <label className="flex flex-col gap-1 text-xs sm:col-span-2 lg:col-span-4">
                                   <span className="font-medium text-slate-700">Observações</span>
                                   <textarea
                                     value={editDraft.notes}
                                     onChange={(e) => setEditDraft((d) => ({ ...d, notes: e.target.value }))}
                                     className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                                    rows={2}
+                                    rows={4}
                                   />
                                 </label>
-                                <label className="flex items-center gap-2 text-xs sm:col-span-2">
+                                <label className="flex items-center gap-2 text-xs sm:col-span-2 lg:col-span-4">
                                   <input
                                     type="checkbox"
                                     checked={editDraft.include_in_dashboard}
@@ -1086,203 +1102,57 @@ export function Invoices() {
                                 </label>
                               </div>
 
-                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                                Antecipações
-                              </p>
+                              <div className="flex items-center justify-between">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                                  Antecipações
+                                </p>
+                                <span className="text-[11px] text-slate-400">somente leitura — gerencie no módulo Antecipações</span>
+                              </div>
                               <div className="space-y-3">
-                                {(() => {
-                                  const net = Number(row.net_amount ?? 0);
-                                  const cur = sumAnticipationsReceived(row.anticipations);
-                                  if (cur > net + 0.01) {
-                                    return (
-                                      <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                                        Atenção: soma das antecipações excede o valor líquido da NF.
-                                      </div>
-                                    );
-                                  }
-                                  return null;
-                                })()}
-                                {(row.anticipations?.length ?? 0) === 0 ? (
-                                  <p className="text-xs text-slate-500">Nenhuma antecipação registrada.</p>
-                                ) : (
-                                  <ul className="space-y-2">
-                                    {row.anticipations?.map((a) => (
-                                      <li
-                                        key={a.id}
-                                        className={`flex flex-wrap items-center justify-between gap-2 rounded border bg-white px-3 py-2 text-xs ${
-                                          editingAnticipationId === a.id
-                                            ? "border-blue-300 ring-2 ring-blue-100"
-                                            : "border-slate-200"
-                                        }`}
-                                      >
-                                        <div className="min-w-0">
-                                          <p className="font-medium text-slate-800">{a.institution}</p>
-                                          <p className="text-slate-600">
-                                            {formatBRL(Number(a.amount_received ?? 0))} →{" "}
-                                            {formatBRL(Number(a.amount_to_repay ?? 0))}
-                                          </p>
-                                          {typeof a.juros_total === "number" &&
-                                          typeof a.taxa_percentual === "number" &&
-                                          typeof a.dias === "number" ? (
-                                            <p
-                                              className="text-slate-600"
-                                              title="Juros calculado com base no valor líquido da antecipação e prazo até o vencimento"
-                                            >
-                                              Juros: {formatBRL(a.juros_total)} ({formatPct2(a.taxa_percentual)})
-                                            </p>
-                                          ) : null}
-                                          <p className="text-slate-600">
-                                            Prazo:{" "}
-                                            {typeof a.dias === "number" ? `${a.dias} dias` : "—"} |{" "}
-                                            {typeof a.taxa_mensal === "number" ? `${formatPct2(a.taxa_mensal)} a.m.` : "—"} (
-                                            {formatDateBr(a.due_date)})
-                                          </p>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                          <button
-                                            type="button"
-                                            disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
-                                            onClick={() => {
-                                              setEditingAnticipationId(a.id);
-                                              setAntForm({
-                                                institution: a.institution || "",
-                                                amount_received: formatCurrencyInputFromApi(a.amount_received),
-                                                amount_to_repay: formatCurrencyInputFromApi(a.amount_to_repay),
-                                                data_recebimento: (a.data_recebimento || "").slice(0, 10),
-                                                due_date: (a.due_date || "").slice(0, 10),
-                                                include_in_dashboard: a.include_in_dashboard !== false,
-                                              });
-                                            }}
-                                            className="rounded px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
-                                          >
-                                            Editar
-                                          </button>
-                                          <button
-                                            type="button"
-                                            disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
-                                            onClick={() => void handleRemoveAnticipation(row, a.id)}
-                                            className="rounded px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
-                                          >
-                                            Remover
-                                          </button>
-                                        </div>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                )}
-
                                 {row.advance_batch ? (
-                                  <p className="mb-2 text-xs text-indigo-800">
-                                    NF em operação de antecipação. Use antecipação individual apenas
-                                    fora do lote.
-                                  </p>
-                                ) : null}
-
-                                <div className="rounded border border-slate-200 bg-white p-3">
-                                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                                    + Adicionar antecipação
-                                  </p>
-                                  <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                                    <label className="flex flex-col gap-1 text-xs sm:col-span-2">
-                                      <span className="font-medium text-slate-700">Instituição</span>
-                                      <input
-                                        value={antForm.institution}
-                                        onChange={(e) => setAntForm((s) => ({ ...s, institution: e.target.value }))}
-                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
-                                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                                      />
-                                    </label>
-                                    <label className="flex flex-col gap-1 text-xs">
-                                      <span className="font-medium text-slate-700">Valor recebido</span>
-                                      <input
-                                        value={antForm.amount_received}
-                                        onChange={(e) => setAntForm((s) => ({ ...s, amount_received: e.target.value }))}
-                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
-                                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                                        inputMode="decimal"
-                                        placeholder="0,00"
-                                      />
-                                    </label>
-                                    <label className="flex flex-col gap-1 text-xs">
-                                      <span className="font-medium text-slate-700">Valor a devolver</span>
-                                      <input
-                                        value={antForm.amount_to_repay}
-                                        onChange={(e) => setAntForm((s) => ({ ...s, amount_to_repay: e.target.value }))}
-                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
-                                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                                        inputMode="decimal"
-                                        placeholder="0,00"
-                                      />
-                                    </label>
-                                    <label className="flex flex-col gap-1 text-xs sm:col-span-2">
-                                      <span className="font-medium text-slate-700">Data de recebimento</span>
-                                      <input
-                                        type="date"
-                                        value={antForm.data_recebimento}
-                                        onChange={(e) => setAntForm((s) => ({ ...s, data_recebimento: e.target.value }))}
-                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
-                                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                                      />
-                                    </label>
-                                    <label className="flex flex-col gap-1 text-xs sm:col-span-2">
-                                      <span className="font-medium text-slate-700">Data de devolução</span>
-                                      <input
-                                        type="date"
-                                        value={antForm.due_date}
-                                        onChange={(e) => setAntForm((s) => ({ ...s, due_date: e.target.value }))}
-                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
-                                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                                      />
-                                    </label>
-                                    <label className="flex items-center gap-2 text-xs sm:col-span-2">
-                                      <input
-                                        type="checkbox"
-                                        checked={antForm.include_in_dashboard}
-                                        onChange={(e) =>
-                                          setAntForm((s) => ({ ...s, include_in_dashboard: e.target.checked }))
-                                        }
-                                        disabled={!canEditInvoices || antBusy || row.status === "CANCELADA"}
-                                        className="h-4 w-4 rounded border-slate-300"
-                                      />
-                                      <span className="text-slate-700">Considerar no Dashboard Financeiro</span>
-                                    </label>
+                                  <div className="overflow-x-auto rounded border border-slate-200 bg-white">
+                                    <table className="w-full min-w-[560px] text-left text-xs">
+                                      <thead className="border-b border-slate-100 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                                        <tr>
+                                          <th className="px-3 py-2 font-medium">Operação SGC</th>
+                                          <th className="px-3 py-2 font-medium">Data</th>
+                                          <th className="px-3 py-2 font-medium">Instituição</th>
+                                          <th className="px-3 py-2 text-right font-medium">Valor recebido</th>
+                                          <th className="px-3 py-2 text-right font-medium">Valor devolvido</th>
+                                          <th className="px-3 py-2 font-medium">Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        <tr className="text-slate-700">
+                                          <td className="px-3 py-2 font-semibold">
+                                            {row.advance_batch.sgc_number ?? "—"}
+                                          </td>
+                                          <td className="px-3 py-2 tabular-nums">
+                                            {row.advance_batch.receive_date ? formatDateBr(row.advance_batch.receive_date) : "—"}
+                                          </td>
+                                          <td className="px-3 py-2">{row.advance_batch.institution}</td>
+                                          <td className="px-3 py-2 text-right tabular-nums">
+                                            {typeof row.advance_batch.received_amount === "number"
+                                              ? formatBRL(row.advance_batch.received_amount)
+                                              : "—"}
+                                          </td>
+                                          <td className="px-3 py-2 text-right tabular-nums">
+                                            {typeof row.advance_batch.gross_amount === "number"
+                                              ? formatBRL(row.advance_batch.gross_amount)
+                                              : "—"}
+                                          </td>
+                                          <td className="px-3 py-2">
+                                            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                                              {batchStatusLabel(row.advance_batch.status)}
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      </tbody>
+                                    </table>
                                   </div>
-                                  <div className="mt-3 flex justify-end">
-                                    {editingAnticipationId && (
-                                      <button
-                                        type="button"
-                                        disabled={antBusy || !canEditInvoices}
-                                        onClick={() => {
-                                          setEditingAnticipationId(null);
-                                          setAntForm({
-                                            institution: "",
-                                            amount_received: "",
-                                            amount_to_repay: "",
-                                            data_recebimento: "",
-                                            due_date: "",
-                                            include_in_dashboard: true,
-                                          });
-                                        }}
-                                        className="mr-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                                      >
-                                        Cancelar edição
-                                      </button>
-                                    )}
-                                    <button
-                                      type="button"
-                                      disabled={
-                                        !canEditInvoices ||
-                                        antBusy ||
-                                        row.status === "CANCELADA" ||
-                                        Boolean(row.advance_batch)
-                                      }
-                                      onClick={() => void handleAddAnticipation(row)}
-                                      className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
-                                    >
-                                      {antBusy ? "Salvando…" : editingAnticipationId ? "Salvar edição" : "Adicionar antecipação"}
-                                    </button>
-                                  </div>
-                                </div>
+                                ) : (
+                                  <p className="text-xs text-slate-500">Nenhuma antecipação registrada.</p>
+                                )}
                               </div>
 
                               <div className="flex flex-wrap gap-2">

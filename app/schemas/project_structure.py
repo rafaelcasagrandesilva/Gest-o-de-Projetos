@@ -62,6 +62,43 @@ class ProjectLaborCopyFromPreviousResult(BaseModel):
     skipped_allocation_cap: int
 
 
+# --- Inicializar Competência (reutilizável para todas as abas de custo) ---
+
+
+class InitializeCompetenciaBody(BaseModel):
+    """Requisição de inicialização: competência destino + origem + categorias."""
+
+    competencia: date
+    origin: Literal["previous_realizado", "current_previsto", "previous_previsto"]
+    categories: list[Literal["labor", "vehicles", "systems", "misc"]] = Field(min_length=1)
+
+    @field_validator("categories")
+    @classmethod
+    def _dedup(cls, v: list[str]) -> list[str]:
+        # Remove duplicatas preservando a ordem.
+        seen: set[str] = set()
+        out: list[str] = []
+        for c in v:
+            if c not in seen:
+                seen.add(c)
+                out.append(c)
+        return out
+
+
+class CategoryCopyResultRead(BaseModel):
+    category: str  # labor | vehicles | systems | misc
+    label: str  # rótulo plural (ex.: "colaboradores")
+    copied: int
+
+
+class InitializeCompetenciaResult(BaseModel):
+    source_competencia: date
+    source_scenario: str
+    target_competencia: date
+    target_scenario: str
+    results: list[CategoryCopyResultRead]
+
+
 def _coerce_optional_cost_number(v: Any) -> float | None:
     if v is None:
         return None

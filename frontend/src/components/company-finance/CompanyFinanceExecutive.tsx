@@ -17,7 +17,7 @@ import {
   fetchChartSeries,
   fetchKpiCustosFixos,
   fetchKpiEndividamento,
-  fetchPendenciasCustosFixos,
+  fetchPendencias,
   listCompanyFinanceItems,
   replaceCompanyFinancePayments,
   updateCompanyFinanceItem,
@@ -38,7 +38,14 @@ import {
   itemCostCenterRef,
 } from "@/components/company-finance/costCenter";
 import { CostCenterSelect } from "@/components/company-finance/CostCenterSelect";
-import { CompanyFinanceAnalyticTable } from "@/components/company-finance/CompanyFinanceAnalyticTable";
+import {
+  CompanyFinanceAnalyticTable,
+  matchesStatusFilter,
+  REQUIRED_FILTER_OPTIONS,
+  STATUS_FILTER_OPTIONS,
+  type RequiredFilter,
+  type StatusFilter,
+} from "@/components/company-finance/CompanyFinanceAnalyticTable";
 import { ViewModeToggle } from "@/components/finance/ViewModeToggle";
 import { itemMatchesSearch } from "@/components/company-finance/itemSearch";
 import { CollapsiblePanel, PrimaryAddButton } from "@/components/ExpandableFormSection";
@@ -175,12 +182,16 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [kpiDebt, setKpiDebt] = useState<Awaited<ReturnType<typeof fetchKpiEndividamento>> | null>(null);
   const [kpiFixed, setKpiFixed] = useState<Awaited<ReturnType<typeof fetchKpiCustosFixos>> | null>(null);
   const [pendencias, setPendencias] = useState<PendenciaLancamento[]>([]);
+  const [pendTotals, setPendTotals] = useState<{ previsto: number; pago: number }>({ previsto: 0, pago: 0 });
   const [chartPoints, setChartPoints] = useState<ChartPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCharts, setShowCharts] = useState(false);
   const [creditorFilter, setCreditorFilter] = useState<DebtCreditorFilter>("ALL");
+  // Filtros globais da tela (Tipo/Status): aplicados à Visão Executiva e ao Extrato Analítico.
+  const [requiredFilter, setRequiredFilter] = useState<RequiredFilter>("ALL");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [view, setView] = useState<"executive" | "analytic">("executive");
   const [draftName, setDraftName] = useState("");
   const [draftRef, setDraftRef] = useState("");
@@ -203,6 +214,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [draftRenegotiationType, setDraftRenegotiationType] = useState<RenegotiationType>("UNIQUE");
   const [draftInstallmentCount, setDraftInstallmentCount] = useState("");
   const [draftInstallmentValue, setDraftInstallmentValue] = useState("");
+  const [draftRenegAgreementDate, setDraftRenegAgreementDate] = useState("");
+  const [draftRenegFirstPaymentDate, setDraftRenegFirstPaymentDate] = useState("");
+  const [draftRenegDueDay, setDraftRenegDueDay] = useState("");
   const [saving, setSaving] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [itemSearch, setItemSearch] = useState("");
@@ -228,6 +242,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     setDraftRenegotiationType("UNIQUE");
     setDraftInstallmentCount("");
     setDraftInstallmentValue("");
+    setDraftRenegAgreementDate("");
+    setDraftRenegFirstPaymentDate("");
+    setDraftRenegDueDay("");
   }, [tipo]);
 
   useEffect(() => {
@@ -345,19 +362,17 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       ]);
       setItems(list);
       setChartPoints(series.points);
+      const pend = await fetchPendencias(tipo, competencia);
+      setPendencias(pend.pendencias);
+      setPendTotals({ previsto: pend.total_previsto ?? 0, pago: pend.total_pago ?? 0 });
       if (tipo === "endividamento") {
         const k = await fetchKpiEndividamento(competencia);
         setKpiDebt(k);
         setKpiFixed(null);
-        setPendencias([]);
       } else {
-        const [k, pend] = await Promise.all([
-          fetchKpiCustosFixos(competencia),
-          fetchPendenciasCustosFixos(competencia),
-        ]);
+        const k = await fetchKpiCustosFixos(competencia);
         setKpiFixed(k);
         setKpiDebt(null);
-        setPendencias(pend.pendencias);
       }
     } catch (e) {
       if (isAxiosError(e)) setError(e.response?.data?.detail ?? "Erro ao carregar dados.");
@@ -403,6 +418,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     [chartPoints],
   );
 
+  const pendingItemIds = useMemo(() => new Set(pendencias.map((p) => p.item_id)), [pendencias]);
+
   const filteredItems = useMemo(() => {
     let list = items;
     if (tipo === "endividamento") {
@@ -424,11 +441,22 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         }
       });
     }
+    // Tipo (Todos / Obrigatórios / Pendentes) — filtro global; aplica a ambos os tipos.
+    if (requiredFilter !== "ALL") {
+      list =
+        requiredFilter === "REQUIRED"
+          ? list.filter((it) => it.is_monthly_required)
+          : list.filter((it) => pendingItemIds.has(it.id));
+    }
+    // Status — filtro global (apenas endividamento), mesmos critérios do extrato analítico.
+    if (tipo === "endividamento" && statusFilter !== "ALL") {
+      list = list.filter((it) => matchesStatusFilter(it, statusFilter));
+    }
     if (itemSearch.trim()) {
       list = list.filter((it) => itemMatchesSearch(it, itemSearch, projectOptions, tipo));
     }
     return list;
-  }, [tipo, items, creditorFilter, itemSearch, projectOptions]);
+  }, [tipo, items, creditorFilter, requiredFilter, statusFilter, pendingItemIds, itemSearch, projectOptions]);
 
   const { sortedRows: sortedFilteredItems, headerSort } = useTableSort(
     filteredItems,
@@ -477,7 +505,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         item_type: tipo === "custo_fixo" ? draftItemType : "MANUAL",
         employee_id: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? draftEmployeeId : null,
         percentual: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? percentualN : null,
-        is_monthly_required: tipo === "custo_fixo" ? draftIsMonthlyRequired : false,
+        is_monthly_required: draftIsMonthlyRequired,
         has_legal_process: tipo === "endividamento" ? draftHasLegalProcess : false,
         has_renegotiation: tipo === "endividamento" ? draftHasRenegotiation : false,
         renegotiated_amount: tipo === "endividamento" && draftHasRenegotiation ? renegotiatedAmountN : null,
@@ -490,6 +518,14 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         installment_value:
           tipo === "endividamento" && draftHasRenegotiation && draftRenegotiationType === "INSTALLMENTS"
             ? installmentValueN
+            : null,
+        renegotiation_agreement_date:
+          tipo === "endividamento" && draftHasRenegotiation ? draftRenegAgreementDate || null : null,
+        renegotiation_first_payment_date:
+          tipo === "endividamento" && draftHasRenegotiation ? draftRenegFirstPaymentDate || null : null,
+        renegotiation_due_day:
+          tipo === "endividamento" && draftHasRenegotiation && draftRenegDueDay
+            ? Number(draftRenegDueDay)
             : null,
       });
       resetCreateForm();
@@ -522,8 +558,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, is_monthly_required: value } : it)));
       try {
         await updateCompanyFinanceItem(itemId, { is_monthly_required: value }, competencia);
-        const pend = await fetchPendenciasCustosFixos(competencia);
+        const pend = await fetchPendencias(tipo, competencia);
         setPendencias(pend.pendencias);
+        setPendTotals({ previsto: pend.total_previsto ?? 0, pago: pend.total_pago ?? 0 });
       } catch (e) {
         setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, is_monthly_required: !value } : it)));
         if (isAxiosError(e)) {
@@ -534,10 +571,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         }
       }
     },
-    [financeReadOnly, competencia],
+    [financeReadOnly, competencia, tipo],
   );
-
-  const pendingItemIds = useMemo(() => new Set(pendencias.map((p) => p.item_id)), [pendencias]);
 
   /** Ação rápida: abre a estrutura do item já posicionada na competência atual. */
   function handlePreencherValor(itemId: string) {
@@ -554,15 +589,29 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
 
   return (
     <div className="space-y-4">
-      <header className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{title}</h1>
-          <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
+      <header className="flex flex-col gap-4 border-b border-slate-200 pb-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{title}</h1>
+            <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
+          </div>
+          <PrimaryAddButton
+            open={showCreateForm}
+            disabled={financeReadOnly}
+            onToggle={() => {
+              setShowCreateForm((open) => {
+                if (open) resetCreateForm();
+                return !open;
+              });
+            }}
+          />
         </div>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-end">
+
+        {/* Filtros globais da tela — aplicados igualmente à Visão Executiva e ao Extrato Analítico. */}
+        <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
           {tipo === "endividamento" && (
             <label className="flex flex-col gap-1 text-sm">
-              <span className="font-medium text-slate-700">Filtro de credores</span>
+              <span className="font-medium text-slate-700">Credor</span>
               <select
                 value={creditorFilter}
                 onChange={(e) => setCreditorFilter(e.target.value as DebtCreditorFilter)}
@@ -577,7 +626,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             </label>
           )}
           <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-slate-700">Competência (mês de referência)</span>
+            <span className="font-medium text-slate-700">Competência</span>
             <input
               type="month"
               value={competencia}
@@ -585,16 +634,46 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               className="rounded-lg border border-slate-300 px-3 py-2 text-slate-900 shadow-sm"
             />
           </label>
-          <PrimaryAddButton
-            open={showCreateForm}
-            disabled={financeReadOnly}
-            onToggle={() => {
-              setShowCreateForm((open) => {
-                if (open) resetCreateForm();
-                return !open;
-              });
-            }}
-          />
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-slate-700">Tipo</span>
+            <select
+              value={requiredFilter}
+              onChange={(e) => setRequiredFilter(e.target.value as RequiredFilter)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm"
+            >
+              {REQUIRED_FILTER_OPTIONS.map((opt) => (
+                <option key={opt.key} value={opt.key}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {tipo === "endividamento" && (
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-slate-700">Status</span>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm"
+              >
+                {STATUS_FILTER_OPTIONS.map((opt) => (
+                  <option key={opt.key} value={opt.key}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-sm md:max-w-xs">
+            <span className="font-medium text-slate-700">Busca</span>
+            <input
+              type="search"
+              value={itemSearch}
+              onChange={(e) => setItemSearch(e.target.value)}
+              placeholder="Buscar item, fornecedor ou descrição..."
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm"
+            />
+          </label>
         </div>
       </header>
 
@@ -632,16 +711,16 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         )}
       </section>
 
-      {/* Pendências de Lançamento (apenas custos fixos) — controle operacional */}
-      {tipo === "custo_fixo" && (
-        <PendingEntriesSection
-          pendencias={pendencias}
-          competencia={competencia}
-          readOnly={financeReadOnly}
-          readOnlyTitle={financeReadOnlyTitle}
-          onPreencher={handlePreencherValor}
-        />
-      )}
+      {/* Pendências de Lançamento (custos fixos e endividamento) — controle operacional */}
+      <PendingEntriesSection
+        pendencias={pendencias}
+        competencia={competencia}
+        readOnly={financeReadOnly}
+        readOnlyTitle={financeReadOnlyTitle}
+        onPreencher={handlePreencherValor}
+        totalPrevisto={pendTotals.previsto}
+        totalPago={pendTotals.pago}
+      />
 
       {/* Seletor de visão (logo abaixo dos cards principais) */}
       <ViewModeToggle
@@ -658,10 +737,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
           items={filteredItems}
           tipo={tipo}
           search={itemSearch}
-          onSearch={setItemSearch}
           readOnly={financeReadOnly}
           readOnlyTitle={financeReadOnlyTitle}
-          pendingItemIds={pendingItemIds}
           onToggleRequired={handleToggleRequired}
         />
       ) : (
@@ -887,23 +964,22 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             />
           </label>
 
-          {tipo === "custo_fixo" && (
-            <label className="flex w-full items-start gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={draftIsMonthlyRequired}
-                onChange={(e) => setDraftIsMonthlyRequired(e.target.checked)}
-                disabled={financeReadOnly}
-                className="mt-0.5 h-4 w-4 rounded border-slate-300"
-              />
-              <span>
-                Obrigatório mensal
-                <span className="ml-2 text-xs text-slate-500">
-                  Sinaliza pendência quando a competência ficar sem valor (não cria lançamento).
-                </span>
+          <label className="flex w-full items-start gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={draftIsMonthlyRequired}
+              onChange={(e) => setDraftIsMonthlyRequired(e.target.checked)}
+              disabled={financeReadOnly}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300"
+            />
+            <span>
+              Obrigatório mensal
+              <span className="ml-2 text-xs text-slate-500">
+                Sinaliza pendência quando a competência ficar sem valor (não cria lançamento).
               </span>
-            </label>
-          )}
+            </span>
+          </label>
+
 
           {tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" && (
             <div className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -1030,6 +1106,38 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                 </select>
               </label>
 
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-slate-600">Data do acordo</span>
+                <input
+                  type="date"
+                  value={draftRenegAgreementDate}
+                  onChange={(e) => setDraftRenegAgreementDate(e.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2"
+                  disabled={financeReadOnly}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-slate-600">Data do 1º pagamento</span>
+                <input
+                  type="date"
+                  value={draftRenegFirstPaymentDate}
+                  onChange={(e) => setDraftRenegFirstPaymentDate(e.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2"
+                  disabled={financeReadOnly}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-slate-600">Dia do vencimento</span>
+                <input
+                  value={draftRenegDueDay}
+                  onChange={(e) => setDraftRenegDueDay(e.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2"
+                  placeholder="Ex.: 10"
+                  inputMode="numeric"
+                  disabled={financeReadOnly}
+                />
+              </label>
+
               {draftRenegotiationType === "INSTALLMENTS" && (
                 <>
                   <label className="flex flex-col gap-1 text-sm">
@@ -1086,16 +1194,6 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       <section className="space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
           <h2 className="text-lg font-medium text-slate-900">Itens</h2>
-          <label className="flex min-w-[min(100%,280px)] flex-1 flex-col gap-1 text-sm sm:max-w-md">
-            <span className="font-medium text-slate-700">Buscar</span>
-            <input
-              type="search"
-              value={itemSearch}
-              onChange={(e) => setItemSearch(e.target.value)}
-              placeholder="Buscar item, fornecedor ou descrição..."
-              className="rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm"
-            />
-          </label>
         </div>
         {!loading && sortedFilteredItems.length > 0 ? (
           <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
@@ -1171,13 +1269,24 @@ function PendingEntriesSection({
   readOnly,
   readOnlyTitle,
   onPreencher,
+  totalPrevisto,
+  totalPago,
 }: {
   pendencias: PendenciaLancamento[];
   competencia: string;
   readOnly: boolean;
   readOnlyTitle?: string;
   onPreencher: (itemId: string) => void;
+  totalPrevisto: number;
+  totalPago: number;
 }) {
+  // Accordion: ≤ 3 pendências inicia expandido; > 3 inicia recolhido.
+  // Reavalia ao trocar de competência (componente permanece montado).
+  const [open, setOpen] = useState(pendencias.length <= 3);
+  useEffect(() => {
+    setOpen(pendencias.length <= 3);
+  }, [competencia, pendencias.length]);
+
   if (pendencias.length === 0) {
     return (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1204,16 +1313,50 @@ function PendingEntriesSection({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="text-sm font-medium text-amber-900">Pendências de Lançamento</h2>
-          <p className="text-xs text-amber-800/80">
-            Itens obrigatórios mensais sem valor lançado na competência selecionada. Apenas
-            monitoramento — nenhum lançamento financeiro é criado automaticamente.
-          </p>
+          {open ? (
+            <p className="text-xs text-amber-800/80">
+              Itens obrigatórios mensais sem valor lançado na competência selecionada. Apenas
+              monitoramento — nenhum lançamento financeiro é criado automaticamente.
+            </p>
+          ) : (
+            <p className="text-xs text-amber-800/80">
+              {pendencias.length} {pendencias.length === 1 ? "item aguardando" : "itens aguardando"} valor
+              nesta competência.
+            </p>
+          )}
         </div>
-        <span className="rounded-full bg-amber-200 px-2.5 py-1 text-xs font-semibold text-amber-900">
-          {pendencias.length} {pendencias.length === 1 ? "pendência" : "pendências"}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-amber-200 px-2.5 py-1 text-xs font-semibold text-amber-900">
+            {pendencias.length} {pendencias.length === 1 ? "pendência" : "pendências"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-50"
+            aria-expanded={open}
+          >
+            <span>{open ? "Recolher" : "Expandir"}</span>
+            <span className={`select-none text-amber-700 transition-transform ${open ? "rotate-90" : ""}`}>
+              ›
+            </span>
+          </button>
+        </div>
       </div>
-      <div className="mt-3 overflow-x-auto rounded-lg border border-amber-200 bg-white">
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="rounded-lg border border-amber-200 bg-white px-3 py-2">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-amber-900/60">
+            Total previsto no mês (obrigatoriedades)
+          </p>
+          <p className="text-sm font-semibold tabular-nums text-slate-900">{formatBRL(totalPrevisto)}</p>
+        </div>
+        <div className="rounded-lg border border-amber-200 bg-white px-3 py-2">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-amber-900/60">
+            Total já pago no mês (obrigatoriedades)
+          </p>
+          <p className="text-sm font-semibold tabular-nums text-emerald-700">{formatBRL(totalPago)}</p>
+        </div>
+      </div>
+      <CollapsiblePanel open={open} className="mt-3 overflow-x-auto rounded-lg border border-amber-200 bg-white">
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="border-b border-amber-100 bg-amber-50/60 text-xs uppercase tracking-wide text-amber-900/70">
             <tr>
@@ -1270,7 +1413,7 @@ function PendingEntriesSection({
             ))}
           </tbody>
         </table>
-      </div>
+      </CollapsiblePanel>
     </section>
   );
 }
@@ -1343,6 +1486,15 @@ function FinanceItemCard({
   const [structureInstallmentValue, setStructureInstallmentValue] = useState(
     typeof item.installment_value === "number" ? formatCurrencyInputFromApi(item.installment_value) : "",
   );
+  const [structureRenegAgreementDate, setStructureRenegAgreementDate] = useState(
+    item.renegotiation_agreement_date ?? "",
+  );
+  const [structureRenegFirstPaymentDate, setStructureRenegFirstPaymentDate] = useState(
+    item.renegotiation_first_payment_date ?? "",
+  );
+  const [structureRenegDueDay, setStructureRenegDueDay] = useState(
+    typeof item.renegotiation_due_day === "number" ? String(item.renegotiation_due_day) : "",
+  );
   const [structureError, setStructureError] = useState<string | null>(null);
   const [structureSuccess, setStructureSuccess] = useState<string | null>(null);
 
@@ -1376,6 +1528,11 @@ function FinanceItemCard({
     setStructureInstallments(typeof item.installment_count === "number" ? String(item.installment_count) : "");
     setStructureInstallmentValue(
       typeof item.installment_value === "number" ? formatCurrencyInputFromApi(item.installment_value) : "",
+    );
+    setStructureRenegAgreementDate(item.renegotiation_agreement_date ?? "");
+    setStructureRenegFirstPaymentDate(item.renegotiation_first_payment_date ?? "");
+    setStructureRenegDueDay(
+      typeof item.renegotiation_due_day === "number" ? String(item.renegotiation_due_day) : "",
     );
     setStructureError(null);
     setStructureSuccess(null);
@@ -1469,9 +1626,7 @@ function FinanceItemCard({
     if (isMatrixCollaborator) {
       payload.percentual = Number(String(structurePercentual || "0").replace(",", "."));
     }
-    if (tipo === "custo_fixo") {
-      payload.is_monthly_required = structureIsMonthlyRequired;
-    }
+    payload.is_monthly_required = structureIsMonthlyRequired;
     if (tipo === "endividamento") {
       payload.has_legal_process = structureHasLegal;
       payload.has_renegotiation = structureHasReneg;
@@ -1481,6 +1636,14 @@ function FinanceItemCard({
         payload.installment_count = Number.parseInt(structureInstallments || "0", 10);
         payload.installment_value = parseBRLInput(structureInstallmentValue);
       }
+      payload.renegotiation_agreement_date = structureHasReneg
+        ? structureRenegAgreementDate || null
+        : null;
+      payload.renegotiation_first_payment_date = structureHasReneg
+        ? structureRenegFirstPaymentDate || null
+        : null;
+      payload.renegotiation_due_day =
+        structureHasReneg && structureRenegDueDay ? Number(structureRenegDueDay) : null;
     }
 
     setStructureSaving(true);
@@ -1688,17 +1851,15 @@ function FinanceItemCard({
                     <option value="VARIABLE">Variável</option>
                   </select>
                 </label>
-                {tipo === "custo_fixo" && (
-                  <label className="flex items-center gap-2 pt-6 text-sm text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={structureIsMonthlyRequired}
-                      onChange={(e) => setStructureIsMonthlyRequired(e.target.checked)}
-                      disabled={readOnly || structureSaving}
-                    />
-                    <span>Obrigatório mensal</span>
-                  </label>
-                )}
+                <label className="flex items-center gap-2 pt-6 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={structureIsMonthlyRequired}
+                    onChange={(e) => setStructureIsMonthlyRequired(e.target.checked)}
+                    disabled={readOnly || structureSaving}
+                  />
+                  <span>Obrigatório mensal</span>
+                </label>
                 {isMatrixCollaborator && (
                   <label className="flex flex-col gap-1 text-sm">
                     <span className="text-slate-600">Percentual (%)</span>
@@ -1756,6 +1917,37 @@ function FinanceItemCard({
                         <option value="UNIQUE">Única</option>
                         <option value="INSTALLMENTS">Parcelada</option>
                       </select>
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Data do acordo</span>
+                      <input
+                        type="date"
+                        value={structureRenegAgreementDate}
+                        onChange={(e) => setStructureRenegAgreementDate(e.target.value)}
+                        className="rounded border border-slate-300 px-2 py-1.5"
+                        disabled={readOnly || structureSaving}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">1º pagamento</span>
+                      <input
+                        type="date"
+                        value={structureRenegFirstPaymentDate}
+                        onChange={(e) => setStructureRenegFirstPaymentDate(e.target.value)}
+                        className="rounded border border-slate-300 px-2 py-1.5"
+                        disabled={readOnly || structureSaving}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Dia vencimento</span>
+                      <input
+                        value={structureRenegDueDay}
+                        onChange={(e) => setStructureRenegDueDay(e.target.value)}
+                        className="rounded border border-slate-300 px-2 py-1.5"
+                        placeholder="Ex.: 10"
+                        inputMode="numeric"
+                        disabled={readOnly || structureSaving}
+                      />
                     </label>
                     {structureRenegType === "INSTALLMENTS" && (
                       <>

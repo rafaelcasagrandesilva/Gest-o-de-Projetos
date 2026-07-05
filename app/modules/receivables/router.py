@@ -20,9 +20,6 @@ from app.core.permission_codes import INVOICES_EDIT, INVOICES_REACTIVATE, INVOIC
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.receivable import (
-    InvoiceAnticipationCreate,
-    InvoiceAnticipationRead,
-    InvoiceAnticipationUpdate,
     ReceivableInvoiceCreate,
     ReceivableInvoiceRead,
     ReceivableInvoiceUpdate,
@@ -35,6 +32,12 @@ from app.schemas.receivable_advance_batch import (
     AdvanceBatchRead,
     AdvanceBatchUpdate,
 )
+from app.schemas.advance_institution import (
+    AdvanceInstitutionCreate,
+    AdvanceInstitutionRead,
+    AdvanceInstitutionUpdate,
+)
+from app.services.advance_institution_service import AdvanceInstitutionService
 from app.services.receivable_advance_batch_service import ReceivableAdvanceBatchService
 from app.services.receivable_service import ReceivableService
 from app.models.receivable import ReceivableInvoiceFile
@@ -76,13 +79,22 @@ async def list_invoices(
         pattern="^(issue|due)$",
         description="Filtrar período por data de emissão (issue) ou vencimento (due).",
     ),
+    official: str = Query(
+        default="all",
+        pattern="^(all|official|unofficial)$",
+        description="Filtra por tipo da NF: all (todas), official (oficiais) ou unofficial (não oficiais).",
+    ),
     year: int | None = Query(default=None, ge=2000, le=2100),
     month: int | None = Query(default=None, ge=1, le=12),
+    competence_year: int | None = Query(default=None, ge=2000, le=2100),
+    competence_month: int | None = Query(default=None, ge=1, le=12),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[ReceivableInvoiceRead]:
     if (year is None) != (month is None):
         raise HTTPException(status_code=400, detail="Informe ano e mês juntos para o período, ou deixe ambos vazios.")
+    if (competence_year is None) != (competence_month is None):
+        raise HTTPException(status_code=400, detail="Informe ano e mês juntos para a competência, ou deixe ambos vazios.")
     svc = ReceivableService(db)
     pf = "issue" if period_field == "issue" else "due"
 
@@ -95,6 +107,9 @@ async def list_invoices(
             year=year,
             month=month,
             period_field=pf,
+            competence_year=competence_year,
+            competence_month=competence_month,
+            official=official,
         )
         prefix = settings.api_v1_prefix.rstrip("/")
         return [
@@ -115,26 +130,44 @@ async def list_invoices(
 @invoices_router.get("/kpis", response_model=ReceivableKpisRead, dependencies=_read_view)
 async def get_kpis(
     project_id: UUID | None = Query(default=None),
+    status: str | None = Query(default=None, pattern="^(EMITIDA|ANTECIPADA|RECEBIDA|CANCELADA)$"),
+    client: str | None = Query(default=None, max_length=255),
     year: int | None = Query(default=None, ge=2000, le=2100),
     month: int | None = Query(default=None, ge=1, le=12),
     period_field: str = Query(default="issue", pattern="^(issue|due)$"),
+    official: str = Query(default="all", pattern="^(all|official|unofficial)$"),
+    competence_year: int | None = Query(default=None, ge=2000, le=2100),
+    competence_month: int | None = Query(default=None, ge=1, le=12),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> ReceivableKpisRead:
     if (year is None) != (month is None):
         raise HTTPException(status_code=400, detail="Informe ano e mês juntos para o período, ou deixe ambos vazios.")
+    if (competence_year is None) != (competence_month is None):
+        raise HTTPException(status_code=400, detail="Informe ano e mês juntos para a competência, ou deixe ambos vazios.")
     svc = ReceivableService(db)
     pf = "issue" if period_field == "issue" else "due"
+    # Mesmos filtros da listagem para que os cards reflitam exatamente o mesmo conjunto.
+    common = dict(
+        year=year,
+        month=month,
+        period_field=pf,
+        official=official,
+        status=status,
+        client_busca=client,
+        competence_year=competence_year,
+        competence_month=competence_month,
+    )
     if not user_sees_all_projects(user):
         allowed = await get_accessible_project_ids(user, db)
         if project_id is not None:
             if project_id not in allowed:
                 raise HTTPException(status_code=403, detail="Sem permissão.")
-            data = await svc.kpis(project_id=project_id, project_ids=None, year=year, month=month, period_field=pf)
+            data = await svc.kpis(project_id=project_id, project_ids=None, **common)
         else:
-            data = await svc.kpis(project_id=None, project_ids=allowed, year=year, month=month, period_field=pf)
+            data = await svc.kpis(project_id=None, project_ids=allowed, **common)
     else:
-        data = await svc.kpis(project_id=project_id, project_ids=None, year=year, month=month, period_field=pf)
+        data = await svc.kpis(project_id=project_id, project_ids=None, **common)
     return ReceivableKpisRead.model_validate(data)
 
 
@@ -188,6 +221,80 @@ async def list_eligible_invoices_for_batch(
     return out
 
 
+# --- Instituições de Antecipação (cadastro próprio do domínio financeiro) ---
+
+_edit_view = [Depends(require_permission(INVOICES_EDIT))]
+
+
+@invoices_router.get(
+    "/advance-institutions",
+    response_model=list[AdvanceInstitutionRead],
+    dependencies=_read_view,
+)
+async def list_advance_institutions(
+    only_active: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+) -> list[AdvanceInstitutionRead]:
+    svc = AdvanceInstitutionService(db)
+    rows = await svc.list(only_active=only_active)
+    return [AdvanceInstitutionRead.model_validate(r) for r in rows]
+
+
+@invoices_router.post(
+    "/advance-institutions",
+    response_model=AdvanceInstitutionRead,
+    dependencies=_edit_view,
+)
+async def create_advance_institution(
+    payload: AdvanceInstitutionCreate,
+    db: AsyncSession = Depends(get_db),
+) -> AdvanceInstitutionRead:
+    svc = AdvanceInstitutionService(db)
+    try:
+        row = await svc.create(payload.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return AdvanceInstitutionRead.model_validate(row)
+
+
+@invoices_router.patch(
+    "/advance-institutions/{institution_id}",
+    response_model=AdvanceInstitutionRead,
+    dependencies=_edit_view,
+)
+async def update_advance_institution(
+    institution_id: UUID,
+    payload: AdvanceInstitutionUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> AdvanceInstitutionRead:
+    svc = AdvanceInstitutionService(db)
+    try:
+        row = await svc.update(institution_id, payload.model_dump(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Instituição não encontrada.")
+    return AdvanceInstitutionRead.model_validate(row)
+
+
+@invoices_router.delete(
+    "/advance-institutions/{institution_id}",
+    status_code=204,
+    dependencies=_edit_view,
+)
+async def delete_advance_institution(
+    institution_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    svc = AdvanceInstitutionService(db)
+    try:
+        ok = await svc.delete(institution_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Instituição não encontrada.")
+
+
 @invoices_router.get(
     "/advance-batches",
     response_model=list[AdvanceBatchRead],
@@ -227,9 +334,10 @@ async def create_advance_batch(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> AdvanceBatchRead:
+    effective_ids = list(payload.invoice_ids) or [it.invoice_id for it in payload.items]
     if not user_sees_all_projects(actor):
         allowed = await get_accessible_project_ids(actor, db)
-        for iid in payload.invoice_ids:
+        for iid in effective_ids:
             inv = await ReceivableService(db).get_invoice(iid)
             if inv is None:
                 raise HTTPException(status_code=404, detail="NF não encontrada.")
@@ -241,14 +349,16 @@ async def create_advance_batch(
         batch = await batch_svc.create_batch(
             operation_type=getattr(payload, "operation_type", "BORDERO"),
             operation_code=getattr(payload, "operation_code", None),
-            institution=payload.institution,
+            institution_id=payload.institution_id,
             received_amount=payload.received_amount,
             discount_amount=payload.discount_amount,
             fee_amount=payload.fee_amount,
+            repasse_enabled=payload.repasse_enabled,
             receive_date=payload.receive_date,
             repayment_date=payload.repayment_date,
             observation=payload.observation,
             invoice_ids=payload.invoice_ids,
+            items_config=[it.model_dump() for it in payload.items] or None,
             created_by_id=actor.id,
             log_user=_actor_email(actor),
         )
@@ -261,6 +371,28 @@ async def create_advance_batch(
     return AdvanceBatchRead.model_validate(batch_svc.batch_to_read(loaded))
 
 
+@invoices_router.post(
+    "/advance-batches/{batch_id}/confirm",
+    response_model=AdvanceBatchRead,
+    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+)
+async def confirm_advance_batch(
+    batch_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> AdvanceBatchRead:
+    batch_svc = ReceivableAdvanceBatchService(db)
+    try:
+        await batch_svc.confirm_batch(batch_id=batch_id, log_user=_actor_email(actor))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    loaded = await batch_svc.get_batch(batch_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Operação não encontrada.")
+    return AdvanceBatchRead.model_validate(batch_svc.batch_to_read(loaded))
+
+
 @invoices_router.patch(
     "/advance-batches/{batch_id}",
     response_model=AdvanceBatchRead,
@@ -270,13 +402,28 @@ async def update_advance_batch(
     batch_id: UUID,
     payload: AdvanceBatchUpdate,
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> AdvanceBatchRead:
     batch_svc = ReceivableAdvanceBatchService(db)
-    row = await batch_svc.update_dashboard_inclusion(
-        batch_id, include_in_dashboard=payload.include_in_dashboard
-    )
+    row = None
+    try:
+        if payload.actual_received_amount is not None:
+            row = await batch_svc.set_actual_received(
+                batch_id=batch_id,
+                actual=payload.actual_received_amount,
+                log_user=_actor_email(actor),
+            )
+        if payload.include_in_dashboard is not None:
+            row = await batch_svc.update_dashboard_inclusion(
+                batch_id, include_in_dashboard=payload.include_in_dashboard
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if row is None:
-        raise HTTPException(status_code=404, detail="Borderô não encontrado.")
+        # Nenhum campo informado ou operação inexistente — valida existência.
+        row = await batch_svc.get_batch(batch_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Borderô não encontrado.")
     await db.commit()
     loaded = await batch_svc.get_batch(batch_id)
     if loaded is None:
@@ -421,127 +568,38 @@ async def delete_invoice(
     await db.commit()
 
 
+# Antecipações individuais da NF foram descontinuadas. A fonte oficial única
+# passou a ser o módulo Antecipações (lotes/borderô). Os endpoints abaixo
+# permanecem registrados apenas para responder 410 Gone de forma explícita;
+# os registros legados continuam no banco somente para preservação histórica.
+_ANTICIPATION_DISCONTINUED_MSG = (
+    "Antecipações individuais foram descontinuadas. Toda criação, edição e "
+    "cancelamento de antecipações deve ser realizada exclusivamente pelo módulo Antecipações."
+)
+
+
 @invoices_router.post(
     "/{invoice_id}/anticipations",
-    response_model=InvoiceAnticipationRead,
     dependencies=[Depends(require_permission(INVOICES_EDIT))],
 )
-async def add_anticipation(
-    invoice_id: UUID,
-    payload: InvoiceAnticipationCreate,
-    db: AsyncSession = Depends(get_db),
-    actor: User = Depends(get_current_user),
-) -> InvoiceAnticipationRead:
-    svc = ReceivableService(db)
-    inv = await svc.get_invoice(invoice_id)
-    if inv is None:
-        raise HTTPException(status_code=404, detail="NF não encontrada")
-    await ensure_project_access(user=actor, project_id=inv.project_id, db=db)
-    try:
-        row = await svc.add_anticipation(
-            invoice_id=invoice_id,
-            institution=payload.institution,
-            amount_received=payload.amount_received,
-            amount_to_repay=payload.amount_to_repay,
-            received_date=payload.data_recebimento,
-            due_date=payload.due_date,
-            log_user=_actor_email(actor),
-            include_in_dashboard=payload.include_in_dashboard,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    await db.commit()
-    # Resposta mapeada para expor `data_recebimento` (API).
-    return InvoiceAnticipationRead.model_validate(
-        {
-            "id": row.id,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-            "invoice_id": row.invoice_id,
-            "include_in_dashboard": bool(getattr(row, "include_in_dashboard", True)),
-            "institution": row.institution,
-            "amount_received": float(row.amount_received or 0),
-            "amount_to_repay": float(row.amount_to_repay or 0),
-            "data_recebimento": getattr(row, "received_date", None),
-            "due_date": row.due_date,
-        }
-    )
+async def add_anticipation(invoice_id: UUID) -> None:
+    raise HTTPException(status_code=410, detail=_ANTICIPATION_DISCONTINUED_MSG)
 
 
 @invoices_router.delete(
     "/{invoice_id}/anticipations/{anticipation_id}",
-    status_code=204,
     dependencies=[Depends(require_permission(INVOICES_EDIT))],
 )
-async def delete_anticipation(
-    invoice_id: UUID,
-    anticipation_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    actor: User = Depends(get_current_user),
-) -> None:
-    svc = ReceivableService(db)
-    inv = await svc.get_invoice(invoice_id)
-    if inv is None:
-        raise HTTPException(status_code=404, detail="NF não encontrada")
-    await ensure_project_access(user=actor, project_id=inv.project_id, db=db)
-    ok = await svc.delete_anticipation(
-        invoice_id=invoice_id,
-        anticipation_id=anticipation_id,
-        log_user=_actor_email(actor),
-    )
-    if not ok:
-        raise HTTPException(status_code=404, detail="Antecipação não encontrada")
-    await db.commit()
+async def delete_anticipation(invoice_id: UUID, anticipation_id: UUID) -> None:
+    raise HTTPException(status_code=410, detail=_ANTICIPATION_DISCONTINUED_MSG)
 
 
 @invoices_router.patch(
     "/{invoice_id}/anticipations/{anticipation_id}",
-    response_model=InvoiceAnticipationRead,
     dependencies=[Depends(require_permission(INVOICES_EDIT))],
 )
-async def update_anticipation(
-    invoice_id: UUID,
-    anticipation_id: UUID,
-    payload: InvoiceAnticipationUpdate,
-    db: AsyncSession = Depends(get_db),
-    actor: User = Depends(get_current_user),
-) -> InvoiceAnticipationRead:
-    svc = ReceivableService(db)
-    inv = await svc.get_invoice(invoice_id)
-    if inv is None:
-        raise HTTPException(status_code=404, detail="NF não encontrada")
-    await ensure_project_access(user=actor, project_id=inv.project_id, db=db)
-    try:
-        row = await svc.update_anticipation(
-            invoice_id=invoice_id,
-            anticipation_id=anticipation_id,
-            institution=payload.institution,
-            amount_received=payload.amount_received,
-            amount_to_repay=payload.amount_to_repay,
-            received_date=payload.data_recebimento,
-            due_date=payload.due_date,
-            log_user=_actor_email(actor),
-            include_in_dashboard=payload.include_in_dashboard,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    if row is None:
-        raise HTTPException(status_code=404, detail="Antecipação não encontrada")
-    await db.commit()
-    return InvoiceAnticipationRead.model_validate(
-        {
-            "id": row.id,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-            "invoice_id": row.invoice_id,
-            "include_in_dashboard": bool(getattr(row, "include_in_dashboard", True)),
-            "institution": row.institution,
-            "amount_received": float(row.amount_received or 0),
-            "amount_to_repay": float(row.amount_to_repay or 0),
-            "data_recebimento": getattr(row, "received_date", None),
-            "due_date": row.due_date,
-        }
-    )
+async def update_anticipation(invoice_id: UUID, anticipation_id: UUID) -> None:
+    raise HTTPException(status_code=410, detail=_ANTICIPATION_DISCONTINUED_MSG)
 
 
 @invoices_router.get("/{invoice_id}/pdf", dependencies=_read_view)

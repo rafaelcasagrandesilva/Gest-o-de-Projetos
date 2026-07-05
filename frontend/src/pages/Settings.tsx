@@ -158,7 +158,7 @@ export function Settings() {
     : "Exportação do histórico de alterações rastreadas pelo sistema";
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
+    <div className="space-y-5">
       <div>
         <h2 className="text-xl font-semibold text-slate-900">{pageTitle}</h2>
         <p className="text-sm text-slate-500">{pageSubtitle}</p>

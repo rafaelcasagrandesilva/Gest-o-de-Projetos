@@ -12,6 +12,8 @@ from app.core.permission_codes import INDICATORS_DIRECTOR, INDICATORS_VIEW
 from app.database.session import get_db
 from app.schemas.indicators import (
     ConsolidatedRoi,
+    FinancialEvolution,
+    IndicatorFilters,
     KpiCatalog,
     ProjectRoi,
     RoiEvolution,
@@ -27,6 +29,7 @@ router = APIRouter()
 # Catálogo de KPIs do módulo. Apenas ROI Operacional disponível; demais previstos.
 _KPI_CATALOG: list[dict] = [
     {"code": "roi_operacional", "name": "ROI Operacional", "status": "available"},
+    {"code": "evolucao_financeira", "name": "Evolução Financeira", "status": "available"},
     {"code": "roi_colaborador", "name": "ROI por Colaborador", "status": "coming_soon"},
     {"code": "roi_cliente", "name": "ROI por Cliente", "status": "coming_soon"},
     {"code": "payback", "name": "Payback", "status": "coming_soon"},
@@ -78,6 +81,14 @@ def _parse_project_ids(raw: str | None) -> list[UUID] | None:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"project_id inválido: {token}",
             )
+    return out or None
+
+
+def _parse_cost_centers(raw: str | None) -> list[str] | None:
+    """Centros de custo separados por vírgula (texto livre do cadastro de projetos)."""
+    if not raw or not raw.strip():
+        return None
+    out = [part.strip() for part in raw.split(",") if part.strip()]
     return out or None
 
 
@@ -181,6 +192,52 @@ async def roi_evolucao(
     ids = _parse_project_ids(project_ids)
     data = await IndicatorsService(db).evolucao(start=start, end=end, scenario=scenario_param, project_ids=ids)
     return RoiEvolution.model_validate(data)
+
+
+@router.get(
+    "/evolucao-financeira",
+    response_model=FinancialEvolution,
+    dependencies=[Depends(require_permission(INDICATORS_VIEW))],
+)
+async def evolucao_financeira(
+    data_inicial: date = Query(..., description="Início do intervalo (1º do mês)"),
+    data_final: date = Query(..., description="Fim do intervalo (1º do mês)"),
+    scenario_param: str | None = Query(
+        default=None, alias="scenario", description="PREVISTO ou REALIZADO; omitir = REALIZADO"
+    ),
+    project_ids: str | None = Query(
+        default=None, description="UUIDs separados por vírgula; omitir/vazio = todos elegíveis"
+    ),
+    cost_centers: str | None = Query(
+        default=None, description="Centros de custo separados por vírgula; omitir = todos"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> FinancialEvolution:
+    """Dashboard Executivo — Evolução Financeira (payload agregado único)."""
+    start = normalize_competencia(data_inicial)
+    end = normalize_competencia(data_final)
+    if start > end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="data_inicial não pode ser posterior a data_final.",
+        )
+    ids = _parse_project_ids(project_ids)
+    ccs = _parse_cost_centers(cost_centers)
+    data = await IndicatorsService(db).evolucao_financeira(
+        start=start, end=end, scenario=scenario_param, project_ids=ids, cost_centers=ccs
+    )
+    return FinancialEvolution.model_validate(data)
+
+
+@router.get(
+    "/filtros",
+    response_model=IndicatorFilters,
+    dependencies=[Depends(require_permission(INDICATORS_VIEW))],
+)
+async def indicator_filters(db: AsyncSession = Depends(get_db)) -> IndicatorFilters:
+    """Opções de filtro (projetos + centros de custo) alimentadas pelo cadastro atual."""
+    data = await IndicatorsService(db).filtros_disponiveis()
+    return IndicatorFilters.model_validate(data)
 
 
 @router.get(

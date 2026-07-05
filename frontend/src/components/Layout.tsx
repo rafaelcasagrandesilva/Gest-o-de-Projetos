@@ -26,7 +26,12 @@ export function Layout() {
           <div className="flex min-w-0 flex-1 flex-col">
             <Header />
             <main className="flex-1 overflow-auto p-4 sm:p-5">
-              <Outlet />
+              {/* Container oficial de largura das páginas (padrão "Contas a Pagar").
+                  Única fonte de verdade do aproveitamento horizontal: as páginas
+                  NÃO devem declarar max-width própria — herdam esta largura. */}
+              <div className="mx-auto w-full min-w-0 max-w-full">
+                <Outlet />
+              </div>
             </main>
           </div>
         </div>

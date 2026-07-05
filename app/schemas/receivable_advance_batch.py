@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -8,8 +8,16 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common import UUIDTimestampRead
 
-AdvanceBatchStatus = Literal["OPEN", "SETTLED", "CANCELLED"]
+AdvanceBatchStatus = Literal["DRAFT", "OPEN", "SETTLED", "CANCELLED"]
 AdvanceOperationType = Literal["BORDERO", "FACTORING", "FIDC", "OUTROS"]
+# Base de antecipação por NF. BRUTO/LIQUIDO/LIQUIDO_MENOS_10 (Lepta); MANUAL (Daycoval).
+AdvanceBasis = Literal["BRUTO", "LIQUIDO", "LIQUIDO_MENOS_10", "MANUAL"]
+
+
+class AdvanceBatchItemInput(BaseModel):
+    invoice_id: UUID
+    advance_basis: AdvanceBasis | None = None
+    advanced_amount: float | None = Field(default=None, ge=0)
 
 
 class AdvanceBatchEligibleInvoiceRead(BaseModel):
@@ -29,24 +37,39 @@ class AdvanceBatchItemRead(UUIDTimestampRead):
     batch_id: UUID
     invoice_id: UUID
     invoice_amount: float
+    advance_basis: str | None = None
+    advanced_amount: float | None = None
     invoice_number: str | None = None
     client_name: str | None = None
     project_name: str | None = None
+    competence_month: date | None = None
+    gross_amount: float | None = None
+    net_amount: float | None = None
     issue_date: date | None = None
     due_date: date | None = None
+    invoice_status: str | None = None
 
 
 class AdvanceBatchRead(UUIDTimestampRead):
+    # Número interno do SGC: identificador operacional oficial (sequência 1, 2, 3, …).
+    sgc_number: int
     batch_number: str
     operation_type: AdvanceOperationType = "BORDERO"
     operation_code: str | None = None
     institution: str
+    institution_id: UUID | None = None
+    institution_profile: str | None = None
     gross_amount: float
     received_amount: float
+    expected_amount: float | None = None
+    actual_received_amount: float | None = None
     discount_amount: float
     fee_amount: float
+    repasse_enabled: bool = False
+    repasse_amount: float | None = None
     receive_date: date
     repayment_date: date
+    confirmed_at: datetime | None = None
     observation: str | None = None
     include_in_dashboard: bool = True
     status: AdvanceBatchStatus
@@ -54,27 +77,27 @@ class AdvanceBatchRead(UUIDTimestampRead):
     items: list[AdvanceBatchItemRead] = Field(default_factory=list)
     invoice_count: int = 0
     discount_percent: float | None = None
+    # Indicador informativo do custo efetivo da antecipação (não afeta CAR/CAP/Dashboard).
+    invoices_net_total: float | None = None
+    finance_cost_amount: float | None = None
+    finance_cost_percent: float | None = None
 
 
 class AdvanceBatchCreate(BaseModel):
     operation_type: AdvanceOperationType = "BORDERO"
     operation_code: str | None = Field(default=None, max_length=64)
-    institution: str = Field(..., min_length=1, max_length=255)
-    received_amount: float = Field(..., ge=0)
+    institution_id: UUID
+    received_amount: float = Field(default=0, ge=0)
     discount_amount: float = Field(default=0, ge=0)
     fee_amount: float = Field(default=0, ge=0)
+    repasse_enabled: bool = False
     receive_date: date
-    repayment_date: date
+    # Opcional: perfis sem devolução (ex.: Daycoval) não a informam.
+    repayment_date: date | None = None
     observation: str | None = None
-    invoice_ids: list[UUID] = Field(..., min_length=2)
-
-    @field_validator("institution")
-    @classmethod
-    def strip_institution(cls, v: str) -> str:
-        s = v.strip()
-        if not s:
-            raise ValueError("Informe a instituição.")
-        return s
+    # Conjunto de NFs: simples (invoice_ids) ou estruturado por NF (items, com base/valor).
+    invoice_ids: list[UUID] = Field(default_factory=list)
+    items: list[AdvanceBatchItemInput] = Field(default_factory=list)
 
     @field_validator("operation_code")
     @classmethod
@@ -86,19 +109,33 @@ class AdvanceBatchCreate(BaseModel):
 
     @model_validator(mode="after")
     def dates_ok(self) -> AdvanceBatchCreate:
-        if self.repayment_date < self.receive_date:
+        # Sem validação de devolução quando ela não é informada (perfis sem devolução).
+        if self.repayment_date is not None and self.repayment_date < self.receive_date:
             raise ValueError("A data de devolução não pode ser anterior à data de recebimento.")
+        return self
+
+    @model_validator(mode="after")
+    def has_invoices(self) -> AdvanceBatchCreate:
+        if len(self.invoice_ids) + len(self.items) < 1:
+            raise ValueError("Selecione ao menos 1 nota fiscal para a operação.")
         return self
 
 
 class AdvanceBatchUpdate(BaseModel):
-    include_in_dashboard: bool
+    include_in_dashboard: bool | None = None
+    # Valor efetivamente recebido (realizado) — perfis com previsto×realizado (Daycoval).
+    actual_received_amount: float | None = Field(default=None, ge=0)
 
 
 class AdvanceBatchSummaryRead(BaseModel):
-    """Resumo discreto para exibição na NF."""
+    """Resumo discreto para exibição na NF (seção Antecipações, somente leitura)."""
 
     id: UUID
+    sgc_number: int | None = None
     batch_number: str
     institution: str
     status: AdvanceBatchStatus
+    receive_date: date | None = None
+    repayment_date: date | None = None
+    received_amount: float | None = None
+    gross_amount: float | None = None

@@ -23,6 +23,8 @@ _cors_kwargs: dict = {
     "allow_credentials": True,
     "allow_methods": ["*"],
     "allow_headers": ["*"],
+    # Expõe o nome do arquivo dos downloads (relatórios) para o JS ler o nome amigável.
+    "expose_headers": ["Content-Disposition"],
 }
 
 if _is_local and not _cors_raw:

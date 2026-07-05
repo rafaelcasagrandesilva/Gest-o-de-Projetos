@@ -226,11 +226,23 @@ async def kpis_custos_fixos(
     return KpiCustosFixosRead.model_validate(data)
 
 
+@router.get("/pendencias", response_model=PendenciasCustosFixosRead, dependencies=_read)
+async def pendencias(
+    tipo: str = Query(..., pattern="^(endividamento|custo_fixo)$"),
+    competencia: str = Query(..., description="YYYY-MM"),
+    db: AsyncSession = Depends(get_db),
+) -> PendenciasCustosFixosRead:
+    svc = CompanyFinanceService(db)
+    data = await svc.pendencias(tipo=tipo, competencia=competencia)
+    return PendenciasCustosFixosRead.model_validate(data)
+
+
 @router.get("/pendencias/custos-fixos", response_model=PendenciasCustosFixosRead, dependencies=_read)
 async def pendencias_custos_fixos(
     competencia: str = Query(..., description="YYYY-MM"),
     db: AsyncSession = Depends(get_db),
 ) -> PendenciasCustosFixosRead:
+    """Alias de compatibilidade — equivale a /pendencias?tipo=custo_fixo."""
     svc = CompanyFinanceService(db)
     data = await svc.pendencias_custos_fixos(competencia=competencia)
     return PendenciasCustosFixosRead.model_validate(data)

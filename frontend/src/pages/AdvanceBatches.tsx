@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { isAxiosError } from "axios";
 import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
 import {
   cancelAdvanceBatch,
+  confirmAdvanceBatch,
   deleteAdvanceBatchHard,
   fetchAdvanceBatches,
   type AdvanceBatch,
+  type AdvanceBatchStatus,
 } from "@/services/receivableAdvanceBatches";
 import { formatApiError } from "@/utils/apiError";
 import { usePermission } from "@/hooks/usePermission";
@@ -20,8 +23,16 @@ function formatDateBr(iso: string): string {
   return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`;
 }
 
+const STATUS_META: Record<AdvanceBatchStatus, { label: string; cls: string }> = {
+  DRAFT: { label: "Rascunho", cls: "bg-amber-100 text-amber-900 ring-amber-200" },
+  OPEN: { label: "Em aberto", cls: "bg-emerald-100 text-emerald-900 ring-emerald-200" },
+  SETTLED: { label: "Liquidada", cls: "bg-indigo-100 text-indigo-900 ring-indigo-200" },
+  CANCELLED: { label: "Cancelada", cls: "bg-slate-200 text-slate-700 ring-slate-300" },
+};
+
 export function AdvanceBatches() {
   const canEditInvoices = usePermission("invoices.edit");
+  const navigate = useNavigate();
   const [rows, setRows] = useState<AdvanceBatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,15 +63,35 @@ export function AdvanceBatches() {
   }, [rows]);
 
   const operationLabel = (b: AdvanceBatch) => {
-    const code = b.operation_code ?? null;
-    if (code && String(code).trim()) return String(code).trim();
+    // Identificador operacional oficial = número interno do SGC.
+    if (b.sgc_number != null) return String(b.sgc_number);
     if (b.batch_number) return b.batch_number;
     return `ANTECIPACAO-${String(b.id).slice(0, 8)}`;
   };
 
+  async function handleConfirm(b: AdvanceBatch) {
+    if (!canEditInvoices || b.status !== "DRAFT") return;
+    const ok = window.confirm(
+      `Confirmar a operação ${operationLabel(b)}?\n\n` +
+        `Isso efetiva a antecipação: marca as NFs, gera os lançamentos em Contas a Pagar/Receber e ` +
+        `passa a contar no fluxo financeiro.`,
+    );
+    if (!ok) return;
+    setBusyId(b.id);
+    setError(null);
+    try {
+      await confirmAdvanceBatch(b.id);
+      await load();
+    } catch (e) {
+      setError(isAxiosError(e) ? formatApiError(e) : "Não foi possível confirmar a operação.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function handleCancel(b: AdvanceBatch) {
     if (!canEditInvoices) return;
-    if (b.status !== "OPEN") return;
+    if (b.status !== "OPEN" && b.status !== "DRAFT") return;
     const ok = window.confirm(
       `Cancelar a operação ${operationLabel(b)}?\n\n` +
         `Isso remove o vínculo das NFs e exclui as despesas automáticas (se não houver pagamento nelas).`,
@@ -103,7 +134,7 @@ export function AdvanceBatches() {
   }
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-5">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Operações de antecipação</h1>
@@ -139,7 +170,8 @@ export function AdvanceBatches() {
         <table className="min-w-[1200px] w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
             <tr>
-              <th className="px-2 py-2">Operação</th>
+              <th className="px-2 py-2">Operação SGC</th>
+              <th className="px-2 py-2">Nº instituição</th>
               <th className="px-2 py-2">Instituição</th>
               <th className="px-2 py-2 text-right">Qtd NFs</th>
               <th className="px-2 py-2 text-right">Bruto</th>
@@ -155,20 +187,23 @@ export function AdvanceBatches() {
           <tbody className="divide-y divide-slate-100">
             {loading ? (
               <tr>
-                <td colSpan={11} className="px-3 py-10 text-center text-slate-500">
+                <td colSpan={12} className="px-3 py-10 text-center text-slate-500">
                   Carregando…
                 </td>
               </tr>
             ) : sorted.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
                   Nenhum borderô criado ainda.
                 </td>
               </tr>
             ) : (
               sorted.map((b) => (
                 <tr key={b.id} className="hover:bg-slate-50/80">
-                  <td className="whitespace-nowrap px-2 py-1.5 font-medium text-slate-900">{operationLabel(b)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 font-semibold text-slate-900">{operationLabel(b)}</td>
+                  <td className="max-w-[160px] truncate px-2 py-1.5 text-slate-600" title={b.operation_code ?? undefined}>
+                    {b.operation_code?.trim() ? b.operation_code : "—"}
+                  </td>
                   <td className="max-w-[220px] truncate px-2 py-1.5 text-slate-700" title={b.institution}>
                     {b.institution}
                   </td>
@@ -179,21 +214,37 @@ export function AdvanceBatches() {
                   <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(b.fee_amount)}</td>
                   <td className="whitespace-nowrap px-2 py-1.5">{formatDateBr(b.receive_date)}</td>
                   <td className="whitespace-nowrap px-2 py-1.5">{formatDateBr(b.repayment_date)}</td>
-                  <td className="px-2 py-1.5 text-xs">{b.status}</td>
+                  <td className="px-2 py-1.5">
+                    <span
+                      className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${STATUS_META[b.status].cls}`}
+                    >
+                      {STATUS_META[b.status].label}
+                    </span>
+                  </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right">
+                    {b.status === "DRAFT" ? (
+                      <button
+                        type="button"
+                        disabled={!canEditInvoices || busyId === b.id}
+                        onClick={() => void handleConfirm(b)}
+                        className="rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {busyId === b.id ? "Confirmando…" : "Confirmar"}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => {
                         setViewBatchId(b.id);
                         setModalOpen(true);
                       }}
-                      className="rounded px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
+                      className="ml-1 rounded px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
                     >
                       Ver detalhes
                     </button>
                     <button
                       type="button"
-                      disabled={!canEditInvoices || b.status !== "OPEN" || busyId === b.id}
+                      disabled={!canEditInvoices || (b.status !== "OPEN" && b.status !== "DRAFT") || busyId === b.id}
                       onClick={() => void handleCancel(b)}
                       className="ml-1 rounded px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -223,6 +274,11 @@ export function AdvanceBatches() {
           setViewBatchId(null);
         }}
         onCreated={() => void load()}
+        onOpenInvoice={() => {
+          setModalOpen(false);
+          setViewBatchId(null);
+          navigate("/finance/invoices");
+        }}
       />
     </div>
   );

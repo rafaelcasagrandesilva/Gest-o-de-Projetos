@@ -47,6 +47,10 @@ class MonthlyPoint(BaseModel):
     ebitda: float = 0
     ebitda_margin: float = 0
     operational_cost: float = 0
+    labor_cost: float = 0
+    vehicle_cost: float = 0
+    system_cost: float = 0
+    fixed_operational_cost: float = 0
     tax_amount: float = 0
     overhead_amount: float = 0
     anticipation_amount: float = 0

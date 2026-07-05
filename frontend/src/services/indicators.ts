@@ -110,6 +110,100 @@ export async function fetchRoiEvolution(params: {
   return data;
 }
 
+// --- Dashboard Executivo: Evolução Financeira -------------------------------
+
+export interface FinancialEvolutionPoint {
+  competencia: string;
+  faturamento: number;
+  custo_mo: number;
+  custo_veiculos: number;
+  lucro_operacional: number;
+  lucro_liquido: number;
+}
+
+export interface FinancialKpi {
+  total: number;
+  /** crescimento mês inicial→final (%). null = base zero (indefinido). */
+  growth_pct: number | null;
+}
+
+export interface FinancialKpis {
+  faturamento: FinancialKpi;
+  custo_mo: FinancialKpi;
+  lucro_operacional: FinancialKpi;
+  lucro_liquido: FinancialKpi;
+}
+
+export interface MonthlyHighlight {
+  competencia: string;
+  value: number;
+}
+
+export interface ProjectHighlight {
+  project_id: string;
+  project_name: string;
+  value: number;
+}
+
+export interface FinancialInsights {
+  maior_faturamento: MonthlyHighlight | null;
+  menor_faturamento: MonthlyHighlight | null;
+  maior_lucro_operacional: MonthlyHighlight | null;
+  maior_lucro_liquido: MonthlyHighlight | null;
+  projeto_maior_faturamento: ProjectHighlight | null;
+  projeto_maior_lucro: ProjectHighlight | null;
+  tendencia: "alta" | "baixa" | "estavel";
+  crescimento_acumulado_pct: number | null;
+}
+
+export interface FinancialEvolution {
+  scenario: string;
+  start: string;
+  end: string;
+  project_ids: string[];
+  cost_centers: string[];
+  project_count: number;
+  points: FinancialEvolutionPoint[];
+  kpis: FinancialKpis;
+  insights: FinancialInsights;
+}
+
+/** GET /api/v1/indicators/evolucao-financeira — payload agregado único do dashboard executivo. */
+export async function fetchFinancialEvolution(params: {
+  dataInicial: string;
+  dataFinal: string;
+  scenario?: string;
+  projectIds?: string[];
+  costCenters?: string[];
+}): Promise<FinancialEvolution> {
+  const q: Record<string, string> = {
+    data_inicial: params.dataInicial,
+    data_final: params.dataFinal,
+    scenario: params.scenario ?? DEFAULT_SCENARIO_QUERY,
+  };
+  if (params.projectIds && params.projectIds.length > 0) q.project_ids = params.projectIds.join(",");
+  if (params.costCenters && params.costCenters.length > 0) q.cost_centers = params.costCenters.join(",");
+  const { data } = await api.get<FinancialEvolution>("/indicators/evolucao-financeira", { params: q });
+  return data;
+}
+
+export interface FilterProject {
+  project_id: string;
+  project_name: string;
+  cost_center: string | null;
+}
+
+export interface IndicatorFilters {
+  projects: FilterProject[];
+  cost_centers: string[];
+}
+
+/** GET /api/v1/indicators/filtros — opções de filtro (projetos + centros de custo). */
+export async function fetchIndicatorFilters(): Promise<IndicatorFilters> {
+  const { data } = await api.get<IndicatorFilters>("/indicators/filtros");
+  return data;
+}
+
 export interface KpiCatalogEntry {
   code: string;
   name: string;

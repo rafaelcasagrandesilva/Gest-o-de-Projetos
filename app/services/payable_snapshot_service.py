@@ -55,6 +55,15 @@ def _money2(value: object) -> Decimal:
 MANUAL_PAYABLE_FIXED_COST_CENTERS = frozenset({"Administrativo", "Financeiro"})
 PAYABLE_DEBT_TYPES = (PayableSnapshotType.ENDIVIDAMENTO, PayableSnapshotType.FINANCIAL)
 
+# Tipos "manuais/preservados": não são regenerados a partir de uma origem mensal —
+# sobrevivem à invalidação/regeração do snapshot e ao sync automático, sendo removidos
+# apenas por ação explícita. Além do MANUAL histórico (despesa avulsa), inclui as
+# obrigações de uma OPERAÇÃO de antecipação (deságio/tarifas/repasse), criadas na
+# confirmação do borderô e removidas somente no cancelamento (por ref_id). Estender a
+# preservação a esse tipo mantém o comportamento idêntico ao que essas linhas já tinham
+# quando eram gravadas como MANUAL — sem alterar nenhuma regra/cálculo de snapshot.
+PAYABLE_PRESERVED_TYPES = (PayableSnapshotType.MANUAL, PayableSnapshotType.ANTECIPACAO_OPERACAO)
+
 SOURCE_TAG_PROJECT_MISC = "[source:project_misc_cost]"
 SOURCE_TAG_PROJECT_SYSTEM = "[source:project_system]"
 CATEGORY_PROJECT_MISC = "Custo diverso"
@@ -100,14 +109,14 @@ def payable_snapshot_derived_fields(*, amount_paid: Decimal, amount_final: Decim
 
 def _payable_row_is_protected_from_auto_delete(row: PayableSnapshot) -> bool:
     """MANUAL ou já com pagamento registrado — nunca remover no sync corporativo."""
-    if row.type == PayableSnapshotType.MANUAL:
+    if row.type in PAYABLE_PRESERVED_TYPES:
         return True
     return _money2(row.amount_paid) > 0
 
 
 def _payable_row_is_dynamic_sync_protected(row: PayableSnapshot) -> bool:
     """Snapshots que não devem ter valores recalculados automaticamente."""
-    if row.type == PayableSnapshotType.MANUAL:
+    if row.type in PAYABLE_PRESERVED_TYPES:
         return True
     obs = (row.observation or "").casefold()
     if PAYABLE_MANUAL_ADJUSTMENT_TAG.casefold() in obs:
@@ -315,7 +324,7 @@ class PayableSnapshotService:
                     .select_from(PayableSnapshot)
                     .where(
                         PayableSnapshot.month == comp,
-                        PayableSnapshot.type != PayableSnapshotType.MANUAL,
+                        PayableSnapshot.type.notin_(PAYABLE_PRESERVED_TYPES),
                         PayableSnapshot.amount_paid > 0,
                     )
                 )
@@ -385,7 +394,7 @@ class PayableSnapshotService:
             await self.session.execute(
                 delete(PayableSnapshot).where(
                     PayableSnapshot.month == comp,
-                    PayableSnapshot.type != PayableSnapshotType.MANUAL,
+                    PayableSnapshot.type.notin_(PAYABLE_PRESERVED_TYPES),
                 )
             )
             await self.session.execute(text("DELETE FROM payable_snapshot_generations WHERE month = :m"), {"m": comp})
@@ -1484,7 +1493,7 @@ class PayableSnapshotService:
                 await self.session.execute(
                     delete(PayableSnapshot).where(
                         PayableSnapshot.month == comp,
-                        PayableSnapshot.type != PayableSnapshotType.MANUAL,
+                        PayableSnapshot.type.notin_(PAYABLE_PRESERVED_TYPES),
                     )
                 )
                 await self.session.execute(
@@ -1503,7 +1512,7 @@ class PayableSnapshotService:
                             .select_from(PayableSnapshot)
                             .where(
                                 PayableSnapshot.month == comp,
-                                PayableSnapshot.type != PayableSnapshotType.MANUAL,
+                                PayableSnapshot.type.notin_(PAYABLE_PRESERVED_TYPES),
                             )
                         )
                     )
@@ -2011,6 +2020,7 @@ class PayableSnapshotService:
         observation: str | None = None,
         snapshot_type: PayableSnapshotType = PayableSnapshotType.MANUAL,
         include_in_dashboard: bool = True,
+        ref_id: UUID | None = None,
     ) -> PayableSnapshot:
         # Manual: competência = mês do vencimento (obrigação), não o mês do filtro da tela.
         comp = normalize_competencia(due_date)
@@ -2020,7 +2030,8 @@ class PayableSnapshotService:
         row = PayableSnapshot(
             month=comp,
             type=snapshot_type,
-            ref_id=uuid4(),
+            # ref_id permite vincular o lançamento à operação de antecipação (rastreabilidade).
+            ref_id=ref_id or uuid4(),
             project_id=None,
             name=str(name).strip(),
             cost_center=cc,
@@ -2260,7 +2271,7 @@ class PayableSnapshotService:
                           ProjectSystemCost / ProjectOperationalFixed (por tag)
         - ENDIVIDAMENTO/FINANCIAL → CompanyFinancialItem
         """
-        if row.type == PayableSnapshotType.MANUAL:
+        if row.type in PAYABLE_PRESERVED_TYPES:
             return None
         if row.ref_id is None:
             return None

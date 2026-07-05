@@ -141,6 +141,14 @@ async def list_receivables_view(
             if inv_status == "CANCELADA":
                 if not can_see_cancelled:
                     continue
+            # NF liquidada por uma operação de antecipação (ex.: Daycoval): quem recebeu foi
+            # o banco, não o cliente. A receita já é representada pela linha da própria
+            # operação (tipo BORDERO). A NF permanece como documento fiscal/histórico
+            # operacional (módulo de NFs), mas não gera linha financeira própria aqui —
+            # evitando dupla contagem da receita. Sinal: vinculada a um lote E RECEBIDA
+            # (LEPTA fica ANTECIPADA; recebimento normal do cliente não tem advance_batch_id).
+            if getattr(inv, "advance_batch_id", None) is not None and inv_status == "RECEBIDA":
+                continue
             net = float(inv.net_amount or 0.0)
             recv_customer = float(inv.received_amount or 0.0)
             try:
@@ -281,7 +289,11 @@ async def list_receivables_view(
 
         stmt = (
             select(ReceivableAdvanceBatch)
-            .where(ReceivableAdvanceBatch.status != ReceivableAdvanceBatchStatus.CANCELLED)
+            .where(
+                ReceivableAdvanceBatch.status.notin_(
+                    [ReceivableAdvanceBatchStatus.CANCELLED, ReceivableAdvanceBatchStatus.DRAFT]
+                )
+            )
             .order_by(ReceivableAdvanceBatch.receive_date.desc(), ReceivableAdvanceBatch.batch_number.desc())
         )
         if start and end:
@@ -308,8 +320,15 @@ async def list_receivables_view(
         rows = list((await db.execute(stmt)).scalars().unique().all())
         for b in rows:
             rd = b.receive_date
-            val = float(b.received_amount or 0.0)
-            if val <= 0:
+            # Linha derivada da operação (não persistida como receita independente).
+            # Uma operação de antecipação é um EVENTO DE CAIXA CONCLUÍDO: nunca há saldo a
+            # receber. A diferença previsto×realizado é custo financeiro da operação
+            # (juros/desconto/tarifas do banco), NÃO dinheiro a receber. Por isso a linha
+            # usa sempre o valor efetivamente recebido (received_amount) como líquido e
+            # recebido, com saldo zero e status RECEBIDO — independentemente do previsto.
+            realizado = float(b.received_amount or 0.0)
+            previsto = float(b.expected_amount if b.expected_amount is not None else realizado)
+            if previsto <= 0 and realizado <= 0:
                 continue
             out.append(
                 ReceivableViewRead(
@@ -318,15 +337,19 @@ async def list_receivables_view(
                     updated_at=b.updated_at,
                     tipo="BORDERO",
                     client=b.institution,
-                    number=(b.operation_code or b.batch_number or f"ANTECIPACAO-{str(b.id)[:8]}"),
-                    descricao="Antecipação",
+                    # NF / Referência padronizado para o número interno do SGC (localização
+                    # rápida no menu Antecipações). O número da instituição (operation_code)
+                    # permanece no detalhe da operação e na tela de Antecipações.
+                    number=f"SGC {b.sgc_number}",
+                    descricao=f"Antecipação de NF — {b.institution}",
+                    numero_referencia=f"SGC {b.sgc_number}",
                     issue_date=rd,
                     due_date=rd,
                     received_at=rd,
-                    net_value=round(val, 2),
-                    amount_received_advance=0.0,
-                    amount_received_customer=round(val, 2),
-                    total_received=round(val, 2),
+                    net_value=round(realizado, 2),
+                    amount_received_advance=round(realizado, 2),
+                    amount_received_customer=0.0,
+                    total_received=round(realizado, 2),
                     remaining=0.0,
                     status="RECEBIDO",
                     observacao=b.observation,
@@ -791,6 +814,7 @@ async def list_payables_snapshot(
                 PayableSnapshotType.FINANCIAL,
                 PayableSnapshotType.MANUAL,
                 PayableSnapshotType.ANTECIPACAO,
+                PayableSnapshotType.ANTECIPACAO_OPERACAO,
             ):
                 op_filtered.append(r)
                 continue

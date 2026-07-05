@@ -14,6 +14,7 @@ const items: {
   { to: "/finance/receivables", label: "Contas a receber", end: false, perm: "receivables.view" },
   { to: "/finance/invoices", label: "Notas fiscais (NFs)", end: false, perm: "invoices.view" },
   { to: "/finance/advance-batches", label: "Antecipações", end: false, perm: "invoices.view" },
+  { to: "/finance/advance-institutions", label: "Instituições de Antecipação", end: false, perm: "invoices.view" },
   { to: "/finance/debt", label: "Endividamento", end: false, perm: "debts.view" },
   { to: "/finance/fixed-costs", label: "Custos Fixos - Matriz", end: false, perm: "company_finance.view" },
   { to: "/finance/reports", label: "Relatórios", end: false, perm: "reports.view" },

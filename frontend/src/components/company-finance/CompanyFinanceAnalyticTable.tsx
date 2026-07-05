@@ -30,6 +30,7 @@ function formatPct(n: number): string {
 function statusOf(item: CompanyFinancialItem, tipo: TipoFinanceiro): { label: string; tone: StatusTone } {
   if (tipo === "endividamento") {
     if (item.status === "quitado" || pctQuitadoOf(item) >= 100) return { label: "Quitado", tone: "green" };
+    if (item.has_legal_process) return { label: "Judicial", tone: "red" };
     if (item.has_renegotiation) return { label: "Renegociado", tone: "blue" };
     if (item.total_pago > 0) return { label: "Parcial", tone: "amber" };
     return { label: "Em aberto", tone: "red" };
@@ -175,32 +176,64 @@ function buildColumns(tipo: TipoFinanceiro): Column[] {
   ];
 }
 
-type RequiredFilter = "ALL" | "REQUIRED" | "PENDING";
+export type RequiredFilter = "ALL" | "REQUIRED" | "PENDING";
+
+export type StatusFilter = "ALL" | "ABERTO" | "PARCIAL" | "RENEGOCIADO" | "JUDICIAL" | "QUITADO";
+
+export const REQUIRED_FILTER_OPTIONS: { key: RequiredFilter; label: string }[] = [
+  { key: "ALL", label: "Todos" },
+  { key: "REQUIRED", label: "Obrigatórios" },
+  { key: "PENDING", label: "Pendentes" },
+];
+
+export const STATUS_FILTER_OPTIONS: { key: StatusFilter; label: string }[] = [
+  { key: "ALL", label: "Todos" },
+  { key: "ABERTO", label: "Em aberto" },
+  { key: "PARCIAL", label: "Parcial" },
+  { key: "RENEGOCIADO", label: "Renegociado" },
+  { key: "JUDICIAL", label: "Judicial" },
+  { key: "QUITADO", label: "Quitado" },
+];
+
+/** Predicado do filtro de status (endividamento). Critérios multi (Judicial/Renegociado podem coexistir). */
+export function matchesStatusFilter(item: CompanyFinancialItem, key: StatusFilter): boolean {
+  if (key === "ALL") return true;
+  const quitado = item.status === "quitado" || pctQuitadoOf(item) >= 100;
+  switch (key) {
+    case "QUITADO":
+      return quitado;
+    case "JUDICIAL":
+      return !quitado && Boolean(item.has_legal_process);
+    case "RENEGOCIADO":
+      return !quitado && Boolean(item.has_renegotiation);
+    case "PARCIAL":
+      return !quitado && item.total_pago > 0;
+    case "ABERTO":
+      return !quitado && item.total_pago <= 0;
+    default:
+      return true;
+  }
+}
 
 export function CompanyFinanceAnalyticTable({
   items,
   tipo,
   search,
-  onSearch,
   readOnly = false,
   readOnlyTitle,
-  pendingItemIds,
   onToggleRequired,
 }: {
   items: CompanyFinancialItem[];
   tipo: TipoFinanceiro;
   search: string;
-  onSearch: (v: string) => void;
   readOnly?: boolean;
   readOnlyTitle?: string;
-  pendingItemIds?: Set<string>;
   onToggleRequired?: (itemId: string, value: boolean) => void | Promise<void>;
 }) {
   const columns = useMemo(() => buildColumns(tipo), [tipo]);
-  const showRequiredColumn = tipo === "custo_fixo";
+  const showRequiredColumn = true;
   const [sortKey, setSortKey] = useState<string>("nome");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [requiredFilter, setRequiredFilter] = useState<RequiredFilter>("ALL");
 
   function onSort(col: Column) {
     if (!col.sortable) return;
@@ -230,68 +263,24 @@ export function CompanyFinanceAnalyticTable({
     return rows;
   }, [items, columns, sortKey, sortDir]);
 
-  const visibleRows = useMemo(() => {
-    if (!showRequiredColumn || requiredFilter === "ALL") return sorted;
-    if (requiredFilter === "REQUIRED") return sorted.filter((i) => i.is_monthly_required);
-    return sorted.filter((i) => pendingItemIds?.has(i.id));
-  }, [sorted, showRequiredColumn, requiredFilter, pendingItemIds]);
+  // Filtros de Tipo/Status são globais (aplicados no componente pai antes de `items`);
+  // aqui só ordenamos. Mantém exatamente os mesmos registros que a Visão Executiva.
+  const visibleRows = sorted;
 
   const minWidth = tipo === "endividamento" ? "min-w-[860px]" : "min-w-[920px]";
 
   return (
     <section className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
-        <div>
-          <h2 className="text-lg font-medium text-slate-900">Extrato analítico</h2>
-          <p className="text-xs text-slate-500">Consulta tabular de todos os registros no mesmo período.</p>
-        </div>
-        <label className="flex min-w-[min(100%,280px)] flex-1 flex-col gap-1 text-sm sm:max-w-md">
-          <span className="font-medium text-slate-700">Buscar</span>
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => onSearch(e.target.value)}
-            placeholder="Buscar item, fornecedor ou descrição..."
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm"
-          />
-        </label>
+      <div>
+        <h2 className="text-lg font-medium text-slate-900">Extrato analítico</h2>
+        <p className="text-xs text-slate-500">Consulta tabular de todos os registros no mesmo período.</p>
       </div>
-
-      {showRequiredColumn && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Filtrar:</span>
-          {([
-            { key: "ALL", label: "Todos" },
-            { key: "REQUIRED", label: "Obrigatórios" },
-            { key: "PENDING", label: "Pendentes" },
-          ] as { key: RequiredFilter; label: string }[]).map((opt) => {
-            const active = requiredFilter === opt.key;
-            return (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => setRequiredFilter(opt.key)}
-                aria-pressed={active}
-                className={`rounded-full px-3 py-1 text-xs font-medium ring-1 transition ${
-                  active
-                    ? "bg-indigo-600 text-white ring-indigo-600"
-                    : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50"
-                }`}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
 
       {visibleRows.length === 0 ? (
         <p className="text-sm text-slate-500">
           {search.trim()
             ? "Nenhum item corresponde à busca."
-            : requiredFilter !== "ALL"
-              ? "Nenhum item corresponde ao filtro selecionado."
-              : "Nenhum item encontrado para este filtro."}
+            : "Nenhum item encontrado para este filtro."}
         </p>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">

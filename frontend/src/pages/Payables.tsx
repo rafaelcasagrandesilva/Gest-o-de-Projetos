@@ -77,7 +77,7 @@ function typeLabel(t: PayableSnapshotType): string {
   if (t === "VEHICLE") return "Veículos";
   if (t === "FIXED_COST") return "Custo diverso";
   if (t === "ENDIVIDAMENTO" || t === "FINANCIAL") return "Endividamento";
-  if (t === "ANTECIPACAO") return "Antecipação";
+  if (t === "ANTECIPACAO" || t === "ANTECIPACAO_OPERACAO") return "Antecipação";
   return "Manual";
 }
 
@@ -1035,7 +1035,12 @@ function PayablesSnapshotTable({
                 <tr key={r.id} className="hover:bg-slate-50/80">
                   <td className="whitespace-nowrap px-2 py-1.5 text-slate-700">{typeLabel(r.type)}</td>
                   <td className="min-w-0 px-2 py-1.5 align-middle text-slate-900">
-                    <div className="truncate max-w-[280px]" title={r.name}>
+                    {/* Tooltip com o nome completo (obrigações de operação de antecipação
+                        guardam o nome longo em observation; demais lançamentos usam o nome). */}
+                    <div
+                      className="truncate max-w-[280px]"
+                      title={r.type === "ANTECIPACAO_OPERACAO" ? r.observation ?? r.name : r.name}
+                    >
                       {r.name}
                     </div>
                   </td>

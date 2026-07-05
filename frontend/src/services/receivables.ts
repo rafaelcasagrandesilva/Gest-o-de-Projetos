@@ -5,6 +5,9 @@ export type InvoiceStatus = "EMITIDA" | "ANTECIPADA" | "RECEBIDA" | "CANCELADA";
 /** Alinha com query `period_field` da API: emissão ou vencimento. */
 export type PeriodField = "issue" | "due";
 
+/** Filtro de tipo da NF: todas, somente oficiais ou somente não oficiais. */
+export type OfficialFilter = "all" | "official" | "unofficial";
+
 export interface ReceivableInvoice {
   id: string;
   created_at: string;
@@ -15,10 +18,12 @@ export interface ReceivableInvoice {
   issue_date: string;
   due_days: number;
   due_date: string;
+  competence_month: string | null;
   gross_amount: number;
   net_amount: number;
   client_name: string | null;
   notes: string | null;
+  is_official: boolean;
   is_anticipated: boolean;
   institution: string | null;
   advance_amount_received: number | null;
@@ -43,9 +48,14 @@ export interface ReceivableInvoice {
 
 export interface AdvanceBatchSummary {
   id: string;
+  sgc_number?: number | null;
   batch_number: string;
   institution: string;
   status: string;
+  receive_date?: string | null;
+  repayment_date?: string | null;
+  received_amount?: number | null;
+  gross_amount?: number | null;
 }
 
 export interface InvoiceAnticipation {
@@ -78,8 +88,11 @@ export async function fetchReceivableInvoices(params: {
   status?: InvoiceStatus;
   client?: string;
   period_field?: PeriodField;
+  official?: OfficialFilter;
   year?: number;
   month?: number;
+  competence_year?: number;
+  competence_month?: number;
 }): Promise<ReceivableInvoice[]> {
   // NFs (CRUD) seguem no módulo dedicado de invoices
   const { data } = await api.get<ReceivableInvoice[]>("/invoices/", { params });
@@ -88,9 +101,14 @@ export async function fetchReceivableInvoices(params: {
 
 export async function fetchReceivableKpis(params: {
   project_id?: string;
+  status?: InvoiceStatus;
+  client?: string;
   year?: number;
   month?: number;
   period_field?: PeriodField;
+  official?: OfficialFilter;
+  competence_year?: number;
+  competence_month?: number;
 }): Promise<ReceivableKpis> {
   const { data } = await api.get<ReceivableKpis>("/invoices/kpis/", { params });
   return data;
@@ -198,10 +216,12 @@ export async function createReceivableInvoice(payload: {
   number: string;
   issue_date: string;
   due_days: 30 | 60 | 90;
+  competence_month: string;
   gross_amount: number;
   net_amount?: number | null;
   client_name?: string | null;
   notes?: string | null;
+  is_official?: boolean;
   include_in_dashboard?: boolean;
 }): Promise<ReceivableInvoice> {
   const { data } = await api.post<ReceivableInvoice>("/invoices/", payload);
@@ -219,10 +239,12 @@ export async function updateReceivableInvoice(
     number: string;
     issue_date: string;
     due_days: 30 | 60 | 90;
+    competence_month: string | null;
     gross_amount: number;
     net_amount: number;
     client_name: string | null;
     notes: string | null;
+    is_official: boolean;
     is_anticipated: boolean;
     institution: string | null;
     advance_amount_received: number | null;
@@ -238,50 +260,9 @@ export async function updateReceivableInvoice(
   return data;
 }
 
-export async function addInvoiceAnticipation(
-  invoiceId: string,
-  payload: {
-    institution: string;
-    amount_received: number;
-    amount_to_repay: number;
-    data_recebimento: string;
-    due_date: string;
-    include_in_dashboard?: boolean;
-  },
-): Promise<InvoiceAnticipation> {
-  const { data } = await api.post<InvoiceAnticipation>(`/invoices/${invoiceId}/anticipations/`, payload);
-  return data;
-}
-
-export async function deleteInvoiceAnticipation(invoiceId: string, anticipationId: string): Promise<void> {
-  await api.delete(`/invoices/${invoiceId}/anticipations/${anticipationId}/`);
-}
-
-export async function updateInvoiceAnticipation(
-  invoiceId: string,
-  anticipationId: string,
-  payload: {
-    institution: string;
-    amount_received: number;
-    amount_to_repay: number;
-    data_recebimento: string;
-    due_date: string;
-    include_in_dashboard?: boolean;
-  },
-): Promise<InvoiceAnticipation> {
-  const { data } = await api.patch<InvoiceAnticipation>(
-    `/invoices/${invoiceId}/anticipations/${anticipationId}/`,
-    {
-      institution: payload.institution,
-      amount_received: payload.amount_received,
-      amount_to_repay: payload.amount_to_repay,
-      data_recebimento: payload.data_recebimento,
-      repayment_date: payload.due_date,
-    },
-  );
-  return data;
-}
-
+// Antecipações individuais da NF foram descontinuadas (back-end responde 410 Gone).
+// Criação, edição e cancelamento de antecipações são feitos exclusivamente no
+// módulo Antecipações (lotes/borderô). Ver receivableAdvanceBatches.ts.
 
 export async function deleteReceivableInvoice(id: string): Promise<void> {
   await api.delete(`/invoices/${id}/`);

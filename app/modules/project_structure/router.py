@@ -18,6 +18,9 @@ from app.core.scenario import coerce_scenario, parse_scenario
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.project_structure import (
+    CategoryCopyResultRead,
+    InitializeCompetenciaBody,
+    InitializeCompetenciaResult,
     ProjectLaborCopyFromPreviousBody,
     ProjectLaborCopyFromPreviousResult,
     ProjectLaborCostUpdate,
@@ -33,6 +36,11 @@ from app.schemas.project_structure import (
     ProjectVehicleCreate,
     ProjectVehicleRead,
     ProjectVehicleUpdate,
+)
+from app.services.competencia_initialization_service import (
+    CompetenciaInitializationService,
+    CostCategory,
+    InitializationOrigin,
 )
 from app.services.project_structure_service import ProjectStructureService
 
@@ -105,6 +113,50 @@ async def copy_structure_labors_from_previous(
     await assert_may_write_scenario(user=actor, scenario=sc, db=db, project_id=project_id)
     return await _svc(db).copy_labors_from_previous_month(
         project_id=project_id, competencia=payload.competencia, scenario=sc
+    )
+
+
+# --- Inicializar Competência (fluxo único reutilizável por todas as abas) ---
+
+
+@router.post(
+    "/{project_id}/structure/initialize-competencia",
+    response_model=InitializeCompetenciaResult,
+    dependencies=_write,
+)
+async def initialize_competencia(
+    project_id: UUID,
+    payload: InitializeCompetenciaBody,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+    _: User = Depends(require_project_access),
+) -> InitializeCompetenciaResult:
+    """Copia (substituindo) as categorias selecionadas de uma origem para a competência.
+
+    O cenário de destino é definido pela origem escolhida (Realizado/Previsto).
+    Reutiliza CompetenciaInitializationService (backend centraliza a lógica).
+    """
+    origin = InitializationOrigin(payload.origin)
+    categories = [CostCategory(c) for c in payload.categories]
+    # Cenário de destino vem da origem → valida a permissão de escrita nesse cenário.
+    await assert_may_write_scenario(
+        user=actor, scenario=origin.target_scenario, db=db, project_id=project_id
+    )
+    outcome = await CompetenciaInitializationService(db).initialize_from_origin(
+        project_id=project_id,
+        competencia=payload.competencia,
+        origin=origin,
+        categories=categories,
+    )
+    return InitializeCompetenciaResult(
+        source_competencia=outcome.source.competencia,
+        source_scenario=outcome.source.scenario.value,
+        target_competencia=outcome.target.competencia,
+        target_scenario=outcome.target.scenario.value,
+        results=[
+            CategoryCopyResultRead(category=r.category.value, label=r.label, copied=r.copied)
+            for r in outcome.results
+        ],
     )
 
 

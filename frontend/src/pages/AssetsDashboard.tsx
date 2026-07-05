@@ -80,7 +80,7 @@ export function AssetsDashboard() {
   const fair = alerts?.fair_condition;
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-5">
+    <div className="space-y-5">
       <DashboardToolbar
         title="Dashboard Patrimonial"
         hint={<p>Visão consolidada de ativos, valores e alertas operacionais.</p>}

@@ -4,7 +4,6 @@ import { listFleetVehiclesActive, type FleetVehicle } from "@/services/vehicles"
 import { Link, useParams } from "react-router-dom";
 import { getProject, type Project } from "@/services/projects";
 import {
-  copyLaborsFromPrevious,
   createFixedOperational,
   createLabor,
   createSystem,
@@ -20,11 +19,14 @@ import {
   listVehicles,
   updateLaborCosts,
   type LaborCostPatch,
+  type InitializeCompetenciaResult,
   type ProjectLaborDetail,
   type ProjectOperationalFixed,
   type ProjectSystemCost,
   type ProjectVehicle,
 } from "@/services/projectStructure";
+import { InitializeCompetenciaModal } from "@/components/project/InitializeCompetenciaModal";
+import { Toast } from "@/components/Toast";
 import {
   getMonthlyPayroll,
   listEmployees,
@@ -581,6 +583,9 @@ export function ProjectDetail() {
   const [fixed, setFixed] = useState<ProjectOperationalFixed[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // "Inicializar Competência": modal único reutilizado por todas as abas + toast.
+  const [initOpen, setInitOpen] = useState(false);
+  const [initResult, setInitResult] = useState<InitializeCompetenciaResult | null>(null);
 
   const competenciaApi = useMemo(() => normalizeCompetencia(competencia), [competencia]);
 
@@ -671,8 +676,9 @@ export function ProjectDetail() {
           <p className="text-sm text-slate-500">
             Estrutura por competência e cenário. Em <strong>Mão de obra</strong>, o custo mensal vem do{" "}
             <strong>cadastro do colaborador</strong> (salário, adicionais e encargos) aplicado ao percentual do
-            projeto; use os campos de override só quando precisar de excessão. Copie colaboradores do mês anterior pelo
-            botão na aba quando quiser preencher a competência.
+            projeto; use os campos de override só quando precisar de excessão. Use{" "}
+            <strong>Inicializar Competência</strong> para copiar os custos de outra competência (mês anterior ou
+            Previsto) para qualquer aba.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-4">
@@ -704,6 +710,14 @@ export function ProjectDetail() {
               className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
             />
           </div>
+          <button
+            type="button"
+            onClick={() => setInitOpen(true)}
+            disabled={structureReadOnly}
+            className="rounded-lg border border-indigo-600 bg-white px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+          >
+            Inicializar Competência
+          </button>
         </div>
       </div>
 
@@ -768,6 +782,38 @@ export function ProjectDetail() {
           onRefresh={reloadTab}
         />
       )}
+
+      <InitializeCompetenciaModal
+        open={initOpen}
+        onClose={() => setInitOpen(false)}
+        projectId={projectId}
+        competencia={competencia}
+        onDone={(result) => {
+          setInitResult(result);
+          // O cenário de destino é definido pela origem escolhida → alinha a visão.
+          setEditScenario(result.target_scenario === "PREVISTO" ? "PREVISTO" : "REALIZADO");
+          void reloadTab();
+        }}
+      />
+
+      <Toast
+        open={!!initResult}
+        title="Competência inicializada com sucesso."
+        onClose={() => setInitResult(null)}
+      >
+        <ul className="space-y-1">
+          {(initResult?.results ?? []).map((r) => (
+            <li key={r.category} className="flex items-start gap-2">
+              <span className="text-emerald-600" aria-hidden>✓</span>
+              <span>
+                {r.copied > 0
+                  ? `${r.copied} ${r.label}`
+                  : `${r.label.charAt(0).toUpperCase()}${r.label.slice(1)} — nenhum registro encontrado.`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </Toast>
     </div>
   );
 }
@@ -795,8 +841,6 @@ function LaborTab({
   const [allocationPct, setAllocationPct] = useState("100");
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const [copyBusy, setCopyBusy] = useState(false);
-  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
   const linkedIds = useMemo(() => new Set(rows.map((r) => r.employee_id)), [rows]);
 
@@ -886,49 +930,6 @@ function LaborTab({
       } else {
         setFormError("Não foi possível adicionar.");
       }
-    }
-  }
-
-  async function copyFromPrevious() {
-    if (structureReadOnly) return;
-    if (
-      !window.confirm(
-        "Isso irá copiar os colaboradores do mês anterior para este mês. Deseja continuar?"
-      )
-    ) {
-      return;
-    }
-    setCopyBusy(true);
-    setCopyFeedback(null);
-    try {
-      const res = await copyLaborsFromPrevious(projectId, {
-        competencia,
-        scenario: editScenario,
-      });
-      if (res.copied > 0) {
-        setCopyFeedback(
-          `${res.copied} colaborador(es) copiado(s).` +
-            (res.skipped_allocation_cap > 0
-              ? ` ${res.skipped_allocation_cap} omitido(s) por limite de alocação (>100%).`
-              : "")
-        );
-      } else {
-        setCopyFeedback(
-          "Nenhum colaborador novo foi copiado (já vinculados neste mês, mês anterior vazio ou limite de alocação)."
-        );
-      }
-      onRefresh();
-    } catch (err) {
-      if (isAxiosError(err) && err.response?.data?.detail) {
-        const d = err.response.data.detail;
-        setCopyFeedback(
-          typeof d === "string" ? d : "Não foi possível copiar. Tente novamente."
-        );
-      } else {
-        setCopyFeedback("Não foi possível copiar. Tente novamente.");
-      }
-    } finally {
-      setCopyBusy(false);
     }
   }
 
@@ -1023,40 +1024,15 @@ function LaborTab({
       {rows.length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50/60 p-6 text-center shadow-sm">
           <p className="text-sm text-slate-700">
-            Esta competência ainda não tem colaboradores vinculados. Você pode trazer os do mês anterior de uma vez.
+            Esta competência ainda não tem colaboradores vinculados. Use{" "}
+            <strong>Inicializar Competência</strong> (no topo) para trazer os dados de outra competência.
           </p>
-          <button
-            type="button"
-            disabled={copyBusy || structureReadOnly}
-            onClick={copyFromPrevious}
-            className="mt-4 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
-          >
-            {copyBusy ? "Copiando…" : "Inicializar mês com base no mês anterior"}
-          </button>
         </div>
       ) : null}
-
-      {copyFeedback && (
-        <p
-          className={`text-sm ${copyFeedback.startsWith("Não foi") || copyFeedback.includes("conflito") ? "text-red-600" : "text-slate-600"}`}
-        >
-          {copyFeedback}
-        </p>
-      )}
 
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-sm font-semibold text-slate-900">Participação na mão de obra</h3>
-          {rows.length > 0 ? (
-            <button
-              type="button"
-              disabled={copyBusy || structureReadOnly}
-              onClick={copyFromPrevious}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
-            >
-              {copyBusy ? "Copiando…" : "Copiar colaboradores do mês anterior"}
-            </button>
-          ) : null}
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

@@ -10,6 +10,7 @@ export function IndicatorsSidebar() {
   return (
     <AppSidebarShell subtitle="Workspace: Indicadores">
       {canView ? <SidebarNavItem to="/indicators/roi" label="ROI Operacional" /> : null}
+      {canView ? <SidebarNavItem to="/indicators/evolucao-financeira" label="Evolução Financeira" /> : null}
     </AppSidebarShell>
   );
 }

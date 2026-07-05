@@ -32,6 +32,9 @@ export interface CompanyFinancialItem {
   renegotiation_type?: RenegotiationType | null;
   installment_count?: number | null;
   installment_value?: number | null;
+  renegotiation_agreement_date?: string | null;
+  renegotiation_first_payment_date?: string | null;
+  renegotiation_due_day?: number | null;
   pagamentos: PagamentoMes[];
   total_pago: number;
   pago_mes: number;
@@ -63,12 +66,15 @@ export interface PendenciaLancamento {
   valor_referencia: number;
   ultimo_valor?: number | null;
   ultimo_mes?: string | null;
+  origem?: "manual" | "renegociacao";
 }
 
 export interface PendenciasCustosFixos {
   competencia: string;
   quantidade: number;
   pendencias: PendenciaLancamento[];
+  total_previsto?: number;
+  total_pago?: number;
 }
 
 export interface ChartPoint {
@@ -105,6 +111,9 @@ export async function createCompanyFinanceItem(payload: {
   renegotiation_type?: RenegotiationType | null;
   installment_count?: number | null;
   installment_value?: number | null;
+  renegotiation_agreement_date?: string | null;
+  renegotiation_first_payment_date?: string | null;
+  renegotiation_due_day?: number | null;
 }): Promise<CompanyFinancialItem> {
   const { data } = await api.post<CompanyFinancialItem>("/company-finance/items/", payload);
   return data;
@@ -131,6 +140,9 @@ export async function updateCompanyFinanceItem(
     renegotiation_type?: RenegotiationType | null;
     installment_count?: number | null;
     installment_value?: number | null;
+    renegotiation_agreement_date?: string | null;
+    renegotiation_first_payment_date?: string | null;
+    renegotiation_due_day?: number | null;
   },
   competencia: string,
 ): Promise<CompanyFinancialItem> {
@@ -188,6 +200,17 @@ export async function fetchPendenciasCustosFixos(
 ): Promise<PendenciasCustosFixos> {
   const { data } = await api.get<PendenciasCustosFixos>("/company-finance/pendencias/custos-fixos/", {
     params: { competencia },
+  });
+  return data;
+}
+
+/** Pendências de lançamento por tipo (custo_fixo manual; endividamento manual + renegociação). */
+export async function fetchPendencias(
+  tipo: TipoFinanceiro,
+  competencia: string,
+): Promise<PendenciasCustosFixos> {
+  const { data } = await api.get<PendenciasCustosFixos>("/company-finance/pendencias/", {
+    params: { tipo, competencia },
   });
   return data;
 }

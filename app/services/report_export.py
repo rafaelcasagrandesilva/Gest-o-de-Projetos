@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any, Sequence
 from xml.sax.saxutils import escape
 
@@ -19,13 +19,25 @@ from app.services.export.builders import (
     build_projects_summary_pdf_bytes,
     build_projects_summary_xlsx_bytes,
     build_xlsx_bytes,
-    export_filename,
     format_brl,
     format_date_br,
 )
+from app.services.export.report_meta import ReportContext, friendly_filename, header_lines, report_title
 
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MIME_PDF = "application/pdf"
+
+
+def _fname(report_type: str, ext: str, ctx: ReportContext | None) -> str:
+    return friendly_filename(report_type, ext, periodo_token=ctx.periodo_token if ctx else None)
+
+
+def _ident_meta(ctx: ReportContext | None, count: int | None = None) -> list[str]:
+    """Identificação para o cabeçalho do PDF (título/'Gerado em' já vêm do builder).
+
+    Usada apenas no PDF; o Excel abre direto nos dados, sem aba de identificação.
+    """
+    return header_lines(ctx, record_count=count, include_title=False, include_gen=False)
 
 _MONTH_LABELS = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"]
 
@@ -42,7 +54,9 @@ def _payment_sum_month(pagamentos: list[dict], month_key: str) -> float:
     return sum(float(p.get("valor") or 0) for p in pagamentos if p.get("mes") == month_key)
 
 
-def render_company_summary_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, str]:
+def render_company_summary_bytes(
+    data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
     summaries = data["rows"]
     competencia = data["competencia"]
     headers = [
@@ -131,20 +145,20 @@ def render_company_summary_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes,
             format_brl(0),
             _pct_br(0),
         ]
-    title = "Resumo financeiro por projeto"
-    meta = [
+    title = report_title("company_summary")
+    meta = _ident_meta(ctx, len(summaries)) + [
         f"Competência: {competencia}",
-        f"Projetos: {len(summaries)}",
         f"Cenário: {data.get('scenario') or 'REALIZADO'}",
     ]
-    suffix = competencia
     if fmt == "xlsx":
-        raw = build_projects_summary_xlsx_bytes(headers=headers, rows=xlsx_rows, totals_row=totals_xlsx)
-        return raw, export_filename("projects_summary", "xlsx", suffix), MIME_XLSX
+        raw = build_projects_summary_xlsx_bytes(
+            headers=headers, rows=xlsx_rows, totals_row=totals_xlsx
+        )
+        return raw, _fname("company_summary", "xlsx", ctx), MIME_XLSX
     raw = build_projects_summary_pdf_bytes(
         title=title, headers=headers, rows=pdf_rows, meta_lines=meta, totals_row=totals_pdf
     )
-    return raw, export_filename("projects_summary", "pdf", suffix), MIME_PDF
+    return raw, _fname("company_summary", "pdf", ctx), MIME_PDF
 
 
 def _summary_kpi_rows(s: dict[str, Any]) -> list[tuple[str, str]]:
@@ -164,11 +178,12 @@ def _summary_kpi_rows(s: dict[str, Any]) -> list[tuple[str, str]]:
     ]
 
 
-def render_project_summary_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, str]:
+def render_project_summary_bytes(
+    data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
     pname = data["project_name"]
     comp = data["competencia"][:7] if len(data["competencia"]) >= 7 else data["competencia"]
     s = data["summary"]
-    suffix = comp.replace("-", "_")[:7]
 
     if fmt == "xlsx":
         wb = Workbook()
@@ -235,7 +250,7 @@ def render_project_summary_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes,
         buf = io.BytesIO()
         wb.save(buf)
         buf.seek(0)
-        return buf.getvalue(), export_filename(f"project_{pname[:20]}", "xlsx", comp[:7]), MIME_XLSX
+        return buf.getvalue(), _fname("project_summary", "xlsx", ctx), MIME_XLSX
 
     # PDF
     buf = io.BytesIO()
@@ -256,6 +271,8 @@ def render_project_summary_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes,
     )
     gen = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
     story.append(Paragraph(f"Gerado em: {gen}", styles["Normal"]))
+    for line in _ident_meta(ctx):
+        story.append(Paragraph(escape(line), styles["Normal"]))
     story.append(Spacer(1, 0.3 * cm))
 
     kpi_data = [["Indicador", "Valor"]] + [[a, b] for a, b in _summary_kpi_rows(s)]
@@ -336,45 +353,83 @@ def render_project_summary_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes,
 
     doc.build(story)
     buf.seek(0)
-    return buf.getvalue(), export_filename(f"project_{pname[:20]}", "pdf", comp[:7]), MIME_PDF
+    return buf.getvalue(), _fname("project_summary", "pdf", ctx), MIME_PDF
 
 
-def render_employees_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, str]:
+def render_employees_bytes(
+    data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
     cref = data["competencia_ref"]
     comp_display = cref[:10] if len(cref) >= 10 else cref
-    headers = ["Nome", "Tipo", "Custo mensal"]
-    rows = [[r["nome"], r["tipo"], format_brl(r["custo"])] for r in data["rows"]]
-    meta = [
+    headers = [
+        "Nome", "E-mail", "Cargo", "Tipo", "Status",
+        "Projetos", "Centros de custo",
+        "Salário base", "Custos adicionais", "Custo total (cadastro)", "PJ horas/mês", "PJ custo adicional",
+        "Periculosidade", "Adicional dirigida",
+        "PIX tipo", "PIX chave",
+        "Custo projetos (folha)", "Custo administrativo (folha)", "Custo total (folha)",
+        "Criado em", "Atualizado em",
+    ]
+    rows = [
+        [
+            r["nome"], r.get("email") or "", r.get("cargo") or "", r["tipo"], r.get("status") or "",
+            r.get("projetos") or "", r.get("centros_custo") or "",
+            format_brl(r.get("salario_base")), format_brl(r.get("custos_adicionais")),
+            format_brl(r.get("custo_total_cadastro")), r.get("pj_horas_mes", ""), format_brl(r.get("pj_custo_adicional")),
+            r.get("periculosidade") or "", r.get("adicional_dirigida") or "",
+            r.get("pix_tipo") or "", r.get("pix_chave") or "",
+            format_brl(r.get("custo_projetos")), format_brl(r.get("custo_administrativo")), format_brl(r["custo"]),
+            format_date_br(r["criado_em"]) if r.get("criado_em") else "",
+            format_date_br(r["atualizado_em"]) if r.get("atualizado_em") else "",
+        ]
+        for r in data["rows"]
+    ]
+    meta = _ident_meta(ctx, len(rows)) + [
         f"Competência referência: {format_date_br(comp_display)}",
         f"Cenário: {data.get('scenario') or 'REALIZADO'}",
     ]
-    title = "Colaboradores"
-    suffix = cref[:7] if len(cref) >= 7 else date.today().strftime("%Y-%m")
+    title = report_title("employees")
     if fmt == "xlsx":
-        raw = build_xlsx_bytes(headers=headers, rows=rows, sheet_title="Colaboradores")
-        return raw, export_filename("employees", "xlsx", suffix), MIME_XLSX
+        raw = build_xlsx_bytes(
+            headers=headers, rows=rows, sheet_title="Colaboradores"
+        )
+        return raw, _fname("employees", "xlsx", ctx), MIME_XLSX
     raw = build_pdf_bytes(title=title, headers=headers, rows=rows, meta_lines=meta)
-    return raw, export_filename("employees", "pdf", suffix), MIME_PDF
+    return raw, _fname("employees", "pdf", ctx), MIME_PDF
 
 
-def render_vehicles_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, str]:
-    headers = ["Placa", "Tipo", "Custo mensal", "Status"]
+def render_vehicles_bytes(
+    data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
+    headers = ["Placa", "Modelo", "Descrição", "Tipo", "Condutor", "Custo mensal", "Status", "Criado em", "Atualizado em"]
     rows = [
-        [r["placa"], r["tipo"], format_brl(r["custo_mensal"]), "Ativo" if r["ativo"] else "Inativo"]
+        [
+            r["placa"],
+            r.get("modelo") or "",
+            r.get("descricao") or "",
+            r["tipo"],
+            r.get("condutor") or "—",
+            format_brl(r["custo_mensal"]),
+            "Ativo" if r["ativo"] else "Inativo",
+            format_date_br(r["criado_em"]) if r.get("criado_em") else "",
+            format_date_br(r["atualizado_em"]) if r.get("atualizado_em") else "",
+        ]
         for r in data["rows"]
     ]
-    meta = [f"Somente ativos: {'sim' if data['active_only'] else 'não'}"]
-    title = "Veículos"
-    suffix = date.today().strftime("%Y-%m")
+    meta = _ident_meta(ctx, len(rows)) + [f"Somente ativos: {'sim' if data['active_only'] else 'não'}"]
+    title = report_title("vehicles")
     if fmt == "xlsx":
-        raw = build_xlsx_bytes(headers=headers, rows=rows, sheet_title="Veículos")
-        return raw, export_filename("vehicles", "xlsx", suffix), MIME_XLSX
+        raw = build_xlsx_bytes(
+            headers=headers, rows=rows, sheet_title="Frota"
+        )
+        return raw, _fname("vehicles", "xlsx", ctx), MIME_XLSX
     raw = build_pdf_bytes(title=title, headers=headers, rows=rows, meta_lines=meta)
-    return raw, export_filename("vehicles", "pdf", suffix), MIME_PDF
+    return raw, _fname("vehicles", "pdf", ctx), MIME_PDF
 
 
-def render_invoices_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, str]:
-    f = data["filters"]
+def render_invoices_bytes(
+    data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
     headers = ["Projeto", "Nº NF", "Valor bruto", "Vencimento", "Recebido", "Saldo", "Status"]
     rows = []
     sum_bruto = sum_rec = sum_saldo = 0.0
@@ -396,25 +451,21 @@ def render_invoices_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, s
                 r["status"],
             ]
         )
-    if f.get("year") is not None and f.get("month") is not None:
-        meta = [
-            f"Filtros: projeto={f.get('project_id') or 'todos'}; status={f.get('status') or 'todos'}; "
-            f"emissão={int(f['year']):04d}-{int(f['month']):02d}",
-        ]
-        suffix = f"{int(f['year']):04d}-{int(f['month']):02d}"
-    else:
-        meta = [f"Filtros: projeto={f.get('project_id') or 'todos'}; status={f.get('status') or 'todos'}; emissão: todas"]
-        suffix = date.today().strftime("%Y-%m")
+    meta = _ident_meta(ctx, len(rows))
     totals = ["Totais", "", format_brl(sum_bruto), "", format_brl(sum_rec), format_brl(sum_saldo), ""]
-    title = "Notas fiscais (contas a receber)"
+    title = report_title("invoices")
     if fmt == "xlsx":
-        raw = build_xlsx_bytes(headers=headers, rows=rows, sheet_title="NFs", totals_row=totals)
-        return raw, export_filename("invoices", "xlsx", suffix), MIME_XLSX
+        raw = build_xlsx_bytes(
+            headers=headers, rows=rows, sheet_title="NFs", totals_row=totals
+        )
+        return raw, _fname("invoices", "xlsx", ctx), MIME_XLSX
     raw = build_pdf_bytes(title=title, headers=headers, rows=rows, meta_lines=meta, totals_row=totals)
-    return raw, export_filename("invoices", "pdf", suffix), MIME_PDF
+    return raw, _fname("invoices", "pdf", ctx), MIME_PDF
 
 
-def render_company_finance_matrix_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, str]:
+def render_company_finance_matrix_bytes(
+    data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
     tipo = data["tipo"]
     competencia = data["competencia"]
     year = int(str(competencia)[:4])
@@ -451,66 +502,101 @@ def render_company_finance_matrix_bytes(data: dict[str, Any], fmt: str) -> tuple
         xlsx_rows.append(row_x)
         pdf_rows.append(row_p)
 
-    meta = [f"Tipo: {tipo}; competência ref.: {competencia}; ano colunas: {year}"]
-    title = f"Empresa — {label}"
-    suffix = competencia[:7] if len(str(competencia)) >= 7 else date.today().strftime("%Y-%m")
-    slug = "company_debt" if is_debt else "company_fixed_costs"
+    report_type = "debt" if is_debt else "fixed_costs"
+    meta = _ident_meta(ctx, len(items)) + [f"Competência ref.: {competencia}; ano das colunas: {year}"]
+    title = report_title(report_type)
 
     if fmt == "xlsx":
-        raw = build_xlsx_bytes(headers=headers, rows=xlsx_rows, sheet_title=label[:31])
-        return raw, export_filename(slug, "xlsx", suffix), MIME_XLSX
+        raw = build_xlsx_bytes(
+            headers=headers, rows=xlsx_rows, sheet_title=label[:31]
+        )
+        return raw, _fname(report_type, "xlsx", ctx), MIME_XLSX
     raw = build_pdf_bytes(title=title, headers=headers, rows=pdf_rows, meta_lines=meta)
-    return raw, export_filename(slug, "pdf", suffix), MIME_PDF
+    return raw, _fname(report_type, "pdf", ctx), MIME_PDF
 
 
-def render_users_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, str]:
-    headers = ["E-mail", "Nome", "Ativo", "Papéis"]
-    rows = [[r["email"], r["nome"], "Sim" if r["ativo"] else "Não", r["papeis"]] for r in data["rows"]]
-    meta = ["Usuários do sistema."]
-    title = "Usuários"
-    suffix = date.today().strftime("%Y-%m")
+def render_users_bytes(
+    data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
+    headers = ["E-mail", "Nome", "Ativo", "Papéis", "Criado em", "Atualizado em"]
+    rows = [
+        [
+            r["email"],
+            r["nome"],
+            "Sim" if r["ativo"] else "Não",
+            r["papeis"],
+            format_date_br(r["criado_em"]) if r.get("criado_em") else "",
+            format_date_br(r["atualizado_em"]) if r.get("atualizado_em") else "",
+        ]
+        for r in data["rows"]
+    ]
+    meta = _ident_meta(ctx, len(rows))
+    title = report_title("users")
     if fmt == "xlsx":
-        raw = build_xlsx_bytes(headers=headers, rows=rows, sheet_title="Usuários")
-        return raw, export_filename("users", "xlsx", suffix), MIME_XLSX
+        raw = build_xlsx_bytes(
+            headers=headers, rows=rows, sheet_title="Usuários"
+        )
+        return raw, _fname("users", "xlsx", ctx), MIME_XLSX
     raw = build_pdf_bytes(title=title, headers=headers, rows=rows, meta_lines=meta)
-    return raw, export_filename("users", "pdf", suffix), MIME_PDF
+    return raw, _fname("users", "pdf", ctx), MIME_PDF
 
 
-def render_revenues_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, str]:
-    headers = ["Projeto ID", "Competência", "Valor", "Descrição", "Status", "Retenção"]
+def render_revenues_bytes(
+    data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
+    headers = ["Projeto", "Competência", "Cenário", "Valor", "Descrição", "Status", "Retenção", "Criado em", "Atualizado em"]
     rows = []
     for r in data["rows"]:
         c = r["competencia"]
         cd = c[:10] if len(c) >= 10 else c
         rows.append(
             [
-                r["project_id"],
+                r.get("projeto") or r.get("project_id") or "",
                 format_date_br(cd),
+                r.get("cenario") or "",
                 format_brl(r["valor"]),
-                r["descricao"][:200],
+                (r["descricao"] or "")[:200],
                 r["status"],
                 "Sim" if r["retencao"] else "Não",
+                format_date_br(r["criado_em"]) if r.get("criado_em") else "",
+                format_date_br(r["atualizado_em"]) if r.get("atualizado_em") else "",
             ]
         )
-    pf = data.get("filters") or {}
-    meta = [
-        f"Projeto: {pf.get('project_id') or 'todos'}",
-        f"Cenário: {pf.get('scenario') or 'REALIZADO'}",
-    ]
-    title = "Faturamento (receitas)"
-    suffix = date.today().strftime("%Y-%m")
+    meta = _ident_meta(ctx, len(rows))
+    title = report_title("revenues")
     if fmt == "xlsx":
-        raw = build_xlsx_bytes(headers=headers, rows=rows, sheet_title="Receitas")
-        return raw, export_filename("revenues", "xlsx", suffix), MIME_XLSX
+        raw = build_xlsx_bytes(
+            headers=headers, rows=rows, sheet_title="Receitas"
+        )
+        return raw, _fname("revenues", "xlsx", ctx), MIME_XLSX
     raw = build_pdf_bytes(title=title, headers=headers, rows=rows, meta_lines=meta)
-    return raw, export_filename("revenues", "pdf", suffix), MIME_PDF
+    return raw, _fname("revenues", "pdf", ctx), MIME_PDF
 
 
-def render_dashboard_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, str]:
+def render_dashboard_bytes(
+    data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
     summary = data["summary"]["summary"]
     series = data["summary"]["monthly_series"]
     months = data["months"]
-    headers = ["Mês", "Receita", "Custo total", "Lucro líquido", "Margem líquida %"]
+    headers = [
+        "Mês",
+        "Receita",
+        "Custo total",
+        "Custo operacional total",
+        "Mão de obra",
+        "Veículos",
+        "Sistemas",
+        "Fixos operacionais",
+        "Imposto",
+        "Rateio",
+        "Antecipação",
+        "Retenção",
+        "Lucro operacional",
+        "Lucro líquido",
+        "EBITDA",
+        "Margem líquida %",
+    ]
     data_rows = []
     for m in series:
         data_rows.append(
@@ -518,52 +604,61 @@ def render_dashboard_bytes(data: dict[str, Any], fmt: str) -> tuple[bytes, str, 
                 format_date_br(m["competencia"]),
                 format_brl(float(m["total_revenue"])),
                 format_brl(float(m["total_cost"])),
+                format_brl(float(m.get("operational_cost") or 0)),
+                format_brl(float(m.get("labor_cost") or 0)),
+                format_brl(float(m.get("vehicle_cost") or 0)),
+                format_brl(float(m.get("system_cost") or 0)),
+                format_brl(float(m.get("fixed_operational_cost") or 0)),
+                format_brl(float(m.get("tax_amount") or 0)),
+                format_brl(float(m.get("overhead_amount") or 0)),
+                format_brl(float(m.get("anticipation_amount") or 0)),
+                format_brl(float(m.get("total_retention") or 0)),
+                format_brl(float(m.get("operational_profit") or 0)),
                 format_brl(float(m["net_profit"])),
+                format_brl(float(m.get("ebitda") or 0)),
                 f"{float(m['margin_net']) * 100:.1f}%",
             ]
         )
     sm = summary
     scen = (data.get("summary") or {}).get("scenario") or "REALIZADO"
-    meta = [
+    meta = _ident_meta(ctx, len(data_rows)) + [
         f"Competência ref.: {format_date_br(sm['competencia'])}",
-        f"Projeto: {data.get('project_id') or 'consolidado'}",
         f"Cenário (série principal): {scen}",
         f"Série: últimos {months} meses",
         f"Receita: {format_brl(float(sm['total_revenue']))}; Custo: {format_brl(float(sm['total_cost']))}; "
         f"Lucro líq.: {format_brl(float(sm['net_profit']))}",
     ]
-    title = "Dashboard financeiro — série mensal"
-    comp = sm["competencia"]
-    if isinstance(comp, str):
-        suffix = comp[:7]
-    else:
-        suffix = f"{date.fromisoformat(str(comp)).year:04d}-{date.fromisoformat(str(comp)).month:02d}"
+    title = report_title("dashboard")
     if fmt == "xlsx":
-        raw = build_xlsx_bytes(headers=headers, rows=data_rows, sheet_title="Dashboard")
-        return raw, export_filename("dashboard", "xlsx", suffix), MIME_XLSX
+        raw = build_xlsx_bytes(
+            headers=headers, rows=data_rows, sheet_title="Dashboard"
+        )
+        return raw, _fname("dashboard", "xlsx", ctx), MIME_XLSX
     raw = build_pdf_bytes(title=title, headers=headers, rows=data_rows, meta_lines=meta, totals_row=None)
-    return raw, export_filename("dashboard", "pdf", suffix), MIME_PDF
+    return raw, _fname("dashboard", "pdf", ctx), MIME_PDF
 
 
-def render_report_bytes(report_type: str, payload: dict[str, Any], fmt: str) -> tuple[bytes, str, str]:
+def render_report_bytes(
+    report_type: str, payload: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
     if fmt not in ("xlsx", "pdf"):
         raise ValueError("formato inválido")
     if report_type == "project_summary":
-        return render_project_summary_bytes(payload, fmt)
+        return render_project_summary_bytes(payload, fmt, ctx)
     if report_type == "company_summary":
-        return render_company_summary_bytes(payload, fmt)
+        return render_company_summary_bytes(payload, fmt, ctx)
     if report_type == "employees":
-        return render_employees_bytes(payload, fmt)
+        return render_employees_bytes(payload, fmt, ctx)
     if report_type == "vehicles":
-        return render_vehicles_bytes(payload, fmt)
+        return render_vehicles_bytes(payload, fmt, ctx)
     if report_type == "invoices":
-        return render_invoices_bytes(payload, fmt)
+        return render_invoices_bytes(payload, fmt, ctx)
     if report_type in ("debt", "fixed_costs"):
-        return render_company_finance_matrix_bytes(payload, fmt)
+        return render_company_finance_matrix_bytes(payload, fmt, ctx)
     if report_type == "dashboard":
-        return render_dashboard_bytes(payload, fmt)
+        return render_dashboard_bytes(payload, fmt, ctx)
     if report_type == "users":
-        return render_users_bytes(payload, fmt)
+        return render_users_bytes(payload, fmt, ctx)
     if report_type == "revenues":
-        return render_revenues_bytes(payload, fmt)
+        return render_revenues_bytes(payload, fmt, ctx)
     raise ValueError(f"tipo de relatório desconhecido: {report_type}")

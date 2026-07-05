@@ -172,13 +172,13 @@ async def validate_schema_after_migrations(
         uq = await conn.fetchrow(
             """
             SELECT 1 FROM pg_constraint
-            WHERE conname = 'uq_project_labors_project_employee_competencia'
+            WHERE conname = 'uq_project_labors_proj_emp_comp_scenario'
               AND contype = 'u'
             """
         )
         if not uq:
             raise RuntimeError(
-                "Constraint UNIQUE uq_project_labors_project_employee_competencia ausente em project_labors."
+                "Constraint UNIQUE uq_project_labors_proj_emp_comp_scenario ausente em project_labors."
             )
 
         plate_uq = await conn.fetchrow(

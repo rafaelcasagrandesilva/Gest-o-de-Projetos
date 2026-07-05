@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -14,20 +15,34 @@ from app.api.deps import (
     require_project_access,
     user_sees_all_projects,
 )
+from app.core.config import settings
 from app.core.permission_codes import (
     EMPLOYEES_EDIT,
     EMPLOYEES_VIEW,
     PROJECTS_CREATE,
     PROJECTS_DELETE,
+    PROJECTS_DOCUMENTS_DELETE,
+    PROJECTS_DOCUMENTS_UPLOAD,
+    PROJECTS_DOCUMENTS_VIEW,
     PROJECTS_EDIT,
     PROJECTS_VIEW,
     USERS_MANAGE,
 )
+from app.models.project_document import ProjectDocument, ProjectDocumentCategory
 from app.core.scenario import coerce_scenario, parse_scenario
 from app.database.session import get_db
 from app.models.user import ProjectUser, User
 from app.schemas.employees import EmployeeAllocationCreate, EmployeeAllocationRead
-from app.schemas.projects import ProjectCreate, ProjectRead, ProjectUpdate
+from app.schemas.projects import (
+    ProjectContractAdditiveCreate,
+    ProjectContractAdditiveRead,
+    ProjectContractAdditiveUpdate,
+    ProjectCreate,
+    ProjectDetailRead,
+    ProjectDocumentRead,
+    ProjectRead,
+    ProjectUpdate,
+)
 from app.services.employees_service import EmployeesService
 from app.services.projects_service import ProjectsService
 
@@ -48,7 +63,13 @@ async def list_projects(
         rows = await svc.list_projects(offset=offset, limit=limit, status_filter=status_filter)
     else:
         rows = await svc.list_projects_for_user(user_id=user.id, offset=offset, limit=limit, status_filter=status_filter)
-    return [ProjectRead.model_validate(p) for p in rows]
+    months = await svc.additive_months_map([p.id for p in rows])
+    out: list[ProjectRead] = []
+    for p in rows:
+        r = ProjectRead.model_validate(p)
+        r.additive_months_total = months.get(p.id, 0)
+        out.append(r)
+    return out
 
 
 @router.get(
@@ -98,14 +119,185 @@ async def create_project_allocation(
     return EmployeeAllocationRead.model_validate(row)
 
 
-@router.get("/{project_id}", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_VIEW))])
+@router.get("/{project_id}", response_model=ProjectDetailRead, dependencies=[Depends(require_permission(PROJECTS_VIEW))])
 async def get_project(
     project_id: UUID,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_access),
-) -> ProjectRead:
-    proj = await ProjectsService(db).get_project(project_id)
-    return ProjectRead.model_validate(proj)
+) -> ProjectDetailRead:
+    proj = await ProjectsService(db).get_project_detail(project_id)
+    read = ProjectDetailRead.model_validate(proj)
+    # Vigência atual = início + prazo + Σ prazos dos aditivos já carregados.
+    read.additive_months_total = sum(
+        int("".join(ch for ch in str(a.additive_duration or "") if ch.isdigit()) or 0) for a in proj.additives
+    )
+    return read
+
+
+@router.get(
+    "/{project_id}/additives",
+    response_model=list[ProjectContractAdditiveRead],
+    dependencies=[Depends(require_permission(PROJECTS_VIEW))],
+)
+async def list_project_additives(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_access),
+) -> list[ProjectContractAdditiveRead]:
+    proj = await ProjectsService(db).get_project_detail(project_id)
+    return [ProjectContractAdditiveRead.model_validate(a) for a in proj.additives]
+
+
+@router.post(
+    "/{project_id}/additives",
+    response_model=ProjectContractAdditiveRead,
+    status_code=201,
+    dependencies=[Depends(require_permission(PROJECTS_EDIT))],
+)
+async def create_project_additive(
+    project_id: UUID,
+    payload: ProjectContractAdditiveCreate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_access),
+) -> ProjectContractAdditiveRead:
+    row = await ProjectsService(db).add_additive(project_id=project_id, data=payload.model_dump())
+    return ProjectContractAdditiveRead.model_validate(row)
+
+
+@router.patch(
+    "/{project_id}/additives/{additive_id}",
+    response_model=ProjectContractAdditiveRead,
+    dependencies=[Depends(require_permission(PROJECTS_EDIT))],
+)
+async def update_project_additive(
+    project_id: UUID,
+    additive_id: UUID,
+    payload: ProjectContractAdditiveUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_access),
+) -> ProjectContractAdditiveRead:
+    row = await ProjectsService(db).update_additive(
+        project_id=project_id, additive_id=additive_id, data=payload.model_dump(exclude_unset=True)
+    )
+    return ProjectContractAdditiveRead.model_validate(row)
+
+
+@router.delete(
+    "/{project_id}/additives/{additive_id}",
+    status_code=204,
+    dependencies=[Depends(require_permission(PROJECTS_EDIT))],
+)
+async def delete_project_additive(
+    project_id: UUID,
+    additive_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_access),
+) -> None:
+    await ProjectsService(db).delete_additive(project_id=project_id, additive_id=additive_id)
+
+
+def _document_to_read(doc: ProjectDocument, uploader_name: str | None) -> ProjectDocumentRead:
+    return ProjectDocumentRead(
+        id=doc.id,
+        created_at=doc.created_at,
+        updated_at=doc.updated_at,
+        project_id=doc.project_id,
+        category=doc.category.value,  # type: ignore[arg-type]
+        title=doc.title,
+        original_filename=doc.original_filename,
+        uploaded_by=doc.uploaded_by,
+        uploaded_by_name=uploader_name,
+        uploaded_at=doc.uploaded_at,
+        download_url=f"projects/{doc.project_id}/documents/{doc.id}/download",
+    )
+
+
+@router.get(
+    "/{project_id}/documents",
+    response_model=list[ProjectDocumentRead],
+    dependencies=[Depends(require_permission(PROJECTS_DOCUMENTS_VIEW))],
+)
+async def list_project_documents(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_access),
+) -> list[ProjectDocumentRead]:
+    rows, names = await ProjectsService(db).list_documents(project_id=project_id)
+    return [_document_to_read(d, names.get(d.uploaded_by) if d.uploaded_by else None) for d in rows]
+
+
+@router.post(
+    "/{project_id}/documents",
+    response_model=ProjectDocumentRead,
+    status_code=201,
+    dependencies=[Depends(require_permission(PROJECTS_DOCUMENTS_UPLOAD))],
+)
+async def upload_project_document(
+    project_id: UUID,
+    file: UploadFile = File(...),
+    category: ProjectDocumentCategory = Form(default=ProjectDocumentCategory.OUTRO),
+    title: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+    _: User = Depends(require_project_access),
+) -> ProjectDocumentRead:
+    clean_title = (title or "").strip()
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="Informe o título do documento.")
+    body = await file.read()
+    if len(body) > settings.project_document_max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Arquivo excede o limite de {settings.project_document_max_bytes // (1024 * 1024)} MB.",
+        )
+    try:
+        doc = await ProjectsService(db).save_document(
+            project_id=project_id,
+            category=category,
+            title=clean_title,
+            file_name=(file.filename or "arquivo").strip(),
+            body=body,
+            uploaded_by=actor.id,
+        )
+    except HTTPException:
+        raise
+    return _document_to_read(doc, actor.full_name)
+
+
+@router.get(
+    "/{project_id}/documents/{document_id}/download",
+    dependencies=[Depends(require_permission(PROJECTS_DOCUMENTS_VIEW))],
+)
+async def download_project_document(
+    project_id: UUID,
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_access),
+) -> FileResponse:
+    svc = ProjectsService(db)
+    doc = await svc.get_document(project_id=project_id, document_id=document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
+    path = svc.document_disk_path(doc)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado no servidor.")
+    return FileResponse(path, filename=doc.original_filename)
+
+
+@router.delete(
+    "/{project_id}/documents/{document_id}",
+    status_code=204,
+    dependencies=[Depends(require_permission(PROJECTS_DOCUMENTS_DELETE))],
+)
+async def delete_project_document(
+    project_id: UUID,
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_access),
+) -> None:
+    ok = await ProjectsService(db).delete_document(project_id=project_id, document_id=document_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
 
 
 @router.post("/", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_CREATE))])

@@ -33,11 +33,16 @@ export function RoiOperacional() {
   const [dataFinal, setDataFinal] = useState<string>(() => currentMonth());
   const [preset, setPreset] = useState<RangePreset>("single");
 
-  // Ranking de TODOS os projetos ativos (fonte dos cards e das opções do filtro).
+  // Ranking dos projetos COM MOVIMENTAÇÃO no período (fonte dos cards e do filtro).
   const [allItems, setAllItems] = useState<ProjectRoi[]>([]);
-  // Projetos selecionados (default: todos os ativos).
+  // Projetos selecionados (default: todos com movimentação no período).
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const didInitSelection = useRef(false);
+  // Período (di|df) para o qual a seleção automática já foi aplicada.
+  // A autosseleção ocorre só na abertura e quando o PERÍODO muda — nunca em troca
+  // de cenário ou controles que não alterem o conjunto de projetos do período.
+  const lastAutoPeriodRef = useRef<string | null>(null);
+  // Descarta respostas de ranking fora de ordem (mudanças rápidas de período).
+  const rankingReqId = useRef(0);
 
   const [consolidated, setConsolidated] = useState<ConsolidatedRoi | null>(null);
   const [evolution, setEvolution] = useState<RoiEvolutionPoint[]>([]);
@@ -54,23 +59,29 @@ export function RoiOperacional() {
   const df = monthToCompetencia(dataFinal);
   const selectedKey = useMemo(() => [...selected].sort().join(","), [selected]);
 
-  // Carrega o ranking de todos os ativos quando muda período/cenário.
+  // Carrega o ranking dos projetos com movimentação quando muda período/cenário.
   const loadRanking = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const periodKey = `${di}|${df}`;
+    const myId = ++rankingReqId.current;
     try {
       const ranking = await fetchRoiOperacionalRanking({ dataInicial: di, dataFinal: df, scenario: globalScenario });
+      if (myId !== rankingReqId.current) return; // resposta obsoleta
       setAllItems(ranking.items);
-      // Default: na primeira carga, todos os projetos vêm selecionados.
-      if (!didInitSelection.current) {
+      // Seleção automática: todos os projetos com movimentação (receita/custo) no
+      // período — apenas quando o PERÍODO muda (não em troca de cenário). Se nenhum
+      // projeto tem movimentação, o conjunto vazio mantém tudo desmarcado.
+      if (lastAutoPeriodRef.current !== periodKey) {
         setSelected(new Set(ranking.items.map((i) => i.project_id)));
-        didInitSelection.current = true;
+        lastAutoPeriodRef.current = periodKey;
       }
     } catch (e) {
+      if (myId !== rankingReqId.current) return;
       if (isAxiosError(e)) setError(String(e.response?.data?.detail ?? e.message));
       else setError("Não foi possível carregar o ROI Operacional.");
     } finally {
-      setLoading(false);
+      if (myId === rankingReqId.current) setLoading(false);
     }
   }, [di, df, globalScenario]);
 

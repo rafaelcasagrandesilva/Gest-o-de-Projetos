@@ -67,6 +67,12 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     installment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     installment_value: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
 
+    # Cronograma da renegociação (endividamento). Servem para derivar a parcela
+    # esperada por competência (obrigatoriedade automática). Não criam lançamento.
+    renegotiation_agreement_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    renegotiation_first_payment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    renegotiation_due_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     payments: Mapped[list["CompanyFinancialPayment"]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",

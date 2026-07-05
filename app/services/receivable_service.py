@@ -210,9 +210,14 @@ class ReceivableService:
         if batch is not None:
             batch_summary = {
                 "id": batch.id,
+                "sgc_number": getattr(batch, "sgc_number", None),
                 "batch_number": batch.batch_number,
                 "institution": batch.institution,
                 "status": batch.status.value if hasattr(batch.status, "value") else str(batch.status),
+                "receive_date": getattr(batch, "receive_date", None),
+                "repayment_date": getattr(batch, "repayment_date", None),
+                "received_amount": _round2(_f(getattr(batch, "received_amount", 0))),
+                "gross_amount": _round2(_f(getattr(batch, "gross_amount", 0))),
             }
         ants_out: list[dict] = []
         for a in anticipations:
@@ -252,10 +257,12 @@ class ReceivableService:
             "issue_date": inv.issue_date,
             "due_days": inv.due_days,
             "due_date": inv.due_date,
+            "competence_month": getattr(inv, "competence_month", None),
             "gross_amount": gross,
             "net_amount": net,
             "client_name": inv.client_name,
             "notes": inv.notes,
+            "is_official": bool(getattr(inv, "is_official", True)),
             "is_anticipated": bool(anticipations) or bool(inv.is_anticipated),
             "institution": inv.institution,
             "advance_amount_received": _round2(adv_recv) if (anticipations or inv.advance_amount_received is not None) else None,
@@ -292,28 +299,40 @@ class ReceivableService:
             "advance_batch": batch_summary,
         }
 
-    async def list_invoices(
+    def _apply_invoice_filters(
         self,
+        q,
         *,
         project_id: UUID | None,
-        project_ids: list[UUID] | None = None,
-        status: str | None = None,
-        client_busca: str | None = None,
+        project_ids: list[UUID] | None,
         year: int | None,
         month: int | None,
-        period_field: str = "issue",
-    ) -> list[ReceivableInvoice]:
-        q = select(ReceivableInvoice).options(
-            selectinload(ReceivableInvoice.project),
-            selectinload(ReceivableInvoice.anticipations),
-            selectinload(ReceivableInvoice.files),
-        )
+        period_field: str,
+        competence_year: int | None,
+        competence_month: int | None,
+        client_busca: str | None,
+        official: str,
+    ):
+        """Aplica TODOS os filtros de NF (exceto status efetivo, que é pós-query) ao SELECT.
+
+        Fonte única de verdade compartilhada por `list_invoices` e `kpis`, para que
+        tabela e indicadores representem sempre exatamente o mesmo conjunto.
+        Retorna o `select` filtrado, ou ``None`` quando o conjunto é vazio por
+        definição (lista de projetos acessíveis vazia).
+        """
         if project_id is not None:
             q = q.where(ReceivableInvoice.project_id == project_id)
         elif project_ids is not None:
             if len(project_ids) == 0:
-                return []
+                return None
             q = q.where(ReceivableInvoice.project_id.in_(project_ids))
+        if official == "official":
+            q = q.where(ReceivableInvoice.is_official.is_(True))
+        elif official == "unofficial":
+            q = q.where(ReceivableInvoice.is_official.is_(False))
+        # Filtro de competência — independente do filtro de período (emissão/vencimento).
+        if competence_year is not None and competence_month is not None:
+            q = q.where(ReceivableInvoice.competence_month == date(competence_year, competence_month, 1))
         if year is not None and month is not None:
             start, end = month_bounds(year, month)
             if period_field == "issue":
@@ -331,21 +350,57 @@ class ReceivableService:
         if client_busca and client_busca.strip():
             pat = f"%{client_busca.strip()}%"
             q = q.where(ReceivableInvoice.client_name.ilike(pat))
+        return q
+
+    @staticmethod
+    def _matches_status(inv: ReceivableInvoice, status: str | None) -> bool:
+        """Filtro de status efetivo (derivado), aplicado pós-query — igual para lista e KPIs."""
+        if status is None:
+            return True
+        eff = derive_invoice_status(
+            stored_status=inv.invoice_status,
+            is_anticipated=inv.is_anticipated,
+            received_amount=_f(inv.received_amount),
+            net_amount=_f(inv.net_amount),
+        )
+        return eff == status
+
+    async def list_invoices(
+        self,
+        *,
+        project_id: UUID | None,
+        project_ids: list[UUID] | None = None,
+        status: str | None = None,
+        client_busca: str | None = None,
+        year: int | None,
+        month: int | None,
+        period_field: str = "issue",
+        competence_year: int | None = None,
+        competence_month: int | None = None,
+        official: str = "all",
+    ) -> list[ReceivableInvoice]:
+        q = select(ReceivableInvoice).options(
+            selectinload(ReceivableInvoice.project),
+            selectinload(ReceivableInvoice.anticipations),
+            selectinload(ReceivableInvoice.files),
+        )
+        q = self._apply_invoice_filters(
+            q,
+            project_id=project_id,
+            project_ids=project_ids,
+            year=year,
+            month=month,
+            period_field=period_field,
+            competence_year=competence_year,
+            competence_month=competence_month,
+            client_busca=client_busca,
+            official=official,
+        )
+        if q is None:
+            return []
         q = q.order_by(ReceivableInvoice.due_date.desc(), ReceivableInvoice.issue_date.desc())
         rows = (await self.db.execute(q)).scalars().unique().all()
-        if status is None:
-            return list(rows)
-        out: list[ReceivableInvoice] = []
-        for inv in rows:
-            eff = derive_invoice_status(
-                stored_status=inv.invoice_status,
-                is_anticipated=inv.is_anticipated,
-                received_amount=_f(inv.received_amount),
-                net_amount=_f(inv.net_amount),
-            )
-            if eff == status:
-                out.append(inv)
-        return out
+        return [inv for inv in rows if self._matches_status(inv, status)]
 
     async def kpis(
         self,
@@ -355,32 +410,37 @@ class ReceivableService:
         year: int | None,
         month: int | None,
         period_field: str = "issue",
+        official: str = "all",
+        status: str | None = None,
+        client_busca: str | None = None,
+        competence_year: int | None = None,
+        competence_month: int | None = None,
     ) -> dict:
+        empty = {
+            "total_a_receber": 0.0,
+            "total_bruto_a_receber": 0.0,
+            "recebido_no_mes": 0.0,
+            "em_atraso_valor": 0.0,
+            "total_nfs": 0,
+        }
         q = select(ReceivableInvoice).options(selectinload(ReceivableInvoice.project))
-        if project_id is not None:
-            q = q.where(ReceivableInvoice.project_id == project_id)
-        elif project_ids is not None:
-            if len(project_ids) == 0:
-                return {
-                    "total_a_receber": 0.0,
-                    "total_bruto_a_receber": 0.0,
-                    "recebido_no_mes": 0.0,
-                    "em_atraso_valor": 0.0,
-                    "total_nfs": 0,
-                }
-            q = q.where(ReceivableInvoice.project_id.in_(project_ids))
-        if year is not None and month is not None:
-            start, end = month_bounds(year, month)
-            if period_field == "issue":
-                q = q.where(and_(ReceivableInvoice.issue_date >= start, ReceivableInvoice.issue_date <= end))
-            else:
-                q = q.where(
-                    or_(
-                        and_(ReceivableInvoice.received_date.is_not(None), ReceivableInvoice.received_date >= start, ReceivableInvoice.received_date <= end),
-                        and_(ReceivableInvoice.received_date.is_(None), ReceivableInvoice.due_date >= start, ReceivableInvoice.due_date <= end),
-                    )
-                )
-        rows = (await self.db.execute(q)).scalars().unique().all()
+        q = self._apply_invoice_filters(
+            q,
+            project_id=project_id,
+            project_ids=project_ids,
+            year=year,
+            month=month,
+            period_field=period_field,
+            competence_year=competence_year,
+            competence_month=competence_month,
+            client_busca=client_busca,
+            official=official,
+        )
+        if q is None:
+            return empty
+        all_rows = (await self.db.execute(q)).scalars().unique().all()
+        # Mesmo conjunto da listagem: aplica também o filtro de status efetivo.
+        rows = [inv for inv in all_rows if self._matches_status(inv, status)]
         today = date.today()
 
         total_a_receber = 0.0
@@ -615,10 +675,12 @@ class ReceivableService:
             issue_date=issue,
             due_days=due_days,
             due_date=due_date,
+            competence_month=data.get("competence_month"),
             gross_amount=data["gross_amount"],
             net_amount=net,
             client_name=data.get("client_name"),
             notes=data.get("notes"),
+            is_official=bool(data.get("is_official", True)),
             is_anticipated=False,
             received_amount=0,
             invoice_status="EMITIDA",
@@ -664,6 +726,8 @@ class ReceivableService:
             inv.issue_date = data["issue_date"]
         if "due_days" in data and data["due_days"] is not None:
             inv.due_days = int(data["due_days"])
+        if "competence_month" in data:
+            inv.competence_month = data["competence_month"]
         if "gross_amount" in data and data["gross_amount"] is not None:
             inv.gross_amount = data["gross_amount"]
         if "net_amount" in data and data["net_amount"] is not None:
@@ -672,6 +736,8 @@ class ReceivableService:
             inv.client_name = data["client_name"]
         if "notes" in data:
             inv.notes = data["notes"]
+        if "is_official" in data and data["is_official"] is not None:
+            inv.is_official = bool(data["is_official"])
         if "is_anticipated" in data and data["is_anticipated"] is not None:
             inv.is_anticipated = bool(data["is_anticipated"])
         if "institution" in data:

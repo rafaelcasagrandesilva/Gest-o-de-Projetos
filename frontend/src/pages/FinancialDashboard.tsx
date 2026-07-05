@@ -280,7 +280,7 @@ export function FinancialDashboard() {
   const summaryCaixaNeg = (summary?.caixa ?? 0) < -0.01;
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-5">
+    <div className="space-y-5">
       <DashboardToolbar
         title="Dashboard Financeiro"
         hint={

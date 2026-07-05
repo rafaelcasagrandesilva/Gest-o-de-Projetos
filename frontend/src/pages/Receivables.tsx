@@ -12,6 +12,7 @@ import {
 } from "@/services/receivables";
 import { usePermission } from "@/hooks/usePermission";
 import { PeriodFilter } from "@/components/PeriodFilter";
+import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 import { formatApiError } from "@/utils/apiError";
 import {
@@ -83,6 +84,7 @@ export function Receivables() {
   const [statusFilter, setStatusFilter] = useState<ReceivableUiStatus | "">("");
   const [clienteFilter, setClienteFilter] = useState("");
   const [tipoFilter, setTipoFilter] = useState<"" | ReceivableViewType>("");
+  const [operationViewId, setOperationViewId] = useState<string | null>(null);
 
   const [rows, setRows] = useState<ReceivableViewRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -165,7 +167,7 @@ export function Receivables() {
   }, [viewRows]);
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-5">
+    <div className="space-y-5">
       <div>
         <h1 className="text-2xl font-semibold text-slate-900">Contas a receber</h1>
         <p className="mt-1 text-sm text-slate-600">Visão financeira gerada a partir das NFs existentes.</p>
@@ -329,9 +331,20 @@ export function Receivables() {
                         </TruncatedText>
                       </div>
                     ) : (
-                      <TruncatedText className="font-medium" maxWidthClass="max-w-[280px]">
-                        {r.number}
-                      </TruncatedText>
+                      <div className="min-w-0 space-y-0.5">
+                        <TruncatedText className="font-medium" maxWidthClass="max-w-[280px]">
+                          {r.number}
+                        </TruncatedText>
+                        {tipo === "BORDERO" ? (
+                          <button
+                            type="button"
+                            onClick={() => setOperationViewId(r.id)}
+                            className="text-[11px] text-indigo-700 hover:underline"
+                          >
+                            Ver operação
+                          </button>
+                        ) : null}
+                      </div>
                     )}
                   </td>
                   <td className="whitespace-nowrap px-2 py-2">{formatDateBr(r.issue_date)}</td>
@@ -433,6 +446,13 @@ export function Receivables() {
           await load();
         }}
         onError={(msg) => setError(msg)}
+      />
+
+      <AdvanceBatchModal
+        open={operationViewId !== null}
+        viewBatchId={operationViewId}
+        onClose={() => setOperationViewId(null)}
+        onCreated={() => void load()}
       />
     </div>
   );

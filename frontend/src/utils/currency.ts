@@ -55,6 +55,19 @@ export function roundCurrency(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Formato monetário compacto pt-BR para eixos, rótulos e tooltips de gráficos.
+ * Ex.: 657000 → "R$ 657 mil"; 2932131 → "R$ 2,9 mi"; -16389 → "-R$ 16 mil".
+ */
+export function formatCurrencyShort(n: number): string {
+  if (!Number.isFinite(n)) return "R$ 0";
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  if (abs >= 1_000_000) return `${sign}R$ ${(abs / 1_000_000).toFixed(1).replace(".", ",")} mi`;
+  if (abs >= 1000) return `${sign}R$ ${Math.round(abs / 1000)} mil`;
+  return `${sign}R$ ${Math.round(abs)}`;
+}
+
 /** Ex.: 365575.21 → "R$ 365.575,21" */
 export function formatCurrency(n: number): string {
   if (!Number.isFinite(n)) return BRL_CURRENCY.format(0);

@@ -2,6 +2,7 @@ export type PeriodMode = "MONTH" | "ALL";
 
 export function PeriodFilter({
   label = "Período",
+  monthOptionLabel = "Mês",
   mode,
   value,
   onModeChange,
@@ -9,6 +10,8 @@ export function PeriodFilter({
   disabled,
 }: {
   label?: string;
+  /** Rótulo da opção de mês específico (ex.: "Mês", "Competência"). */
+  monthOptionLabel?: string;
   mode: PeriodMode;
   value: string;
   onModeChange: (mode: PeriodMode) => void;
@@ -25,7 +28,7 @@ export function PeriodFilter({
           disabled={disabled}
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-60"
         >
-          <option value="MONTH">Mês</option>
+          <option value="MONTH">{monthOptionLabel}</option>
           <option value="ALL">Todos</option>
         </select>
         <input

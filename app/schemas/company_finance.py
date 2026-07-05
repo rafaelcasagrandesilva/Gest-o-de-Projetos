@@ -62,6 +62,9 @@ class CompanyFinancialItemCreate(BaseModel):
     renegotiation_type: RenegotiationType | None = None
     installment_count: int | None = Field(None, ge=1)
     installment_value: float | None = Field(None, gt=0)
+    renegotiation_agreement_date: date | None = None
+    renegotiation_first_payment_date: date | None = None
+    renegotiation_due_day: int | None = Field(None, ge=1, le=31)
 
     @model_validator(mode="after")
     def validate_renegotiation(self) -> "CompanyFinancialItemCreate":
@@ -118,6 +121,9 @@ class CompanyFinancialItemUpdate(BaseModel):
     renegotiation_type: RenegotiationType | None = None
     installment_count: int | None = Field(None, ge=1)
     installment_value: float | None = Field(None, gt=0)
+    renegotiation_agreement_date: date | None = None
+    renegotiation_first_payment_date: date | None = None
+    renegotiation_due_day: int | None = Field(None, ge=1, le=31)
 
     @model_validator(mode="after")
     def validate_renegotiation(self) -> "CompanyFinancialItemUpdate":
@@ -200,6 +206,9 @@ class CompanyFinancialItemRead(BaseModel):
     renegotiation_type: RenegotiationType | None = None
     installment_count: int | None = None
     installment_value: float | None = None
+    renegotiation_agreement_date: date | None = None
+    renegotiation_first_payment_date: date | None = None
+    renegotiation_due_day: int | None = None
     pagamentos: list[PagamentoMes]
     total_pago: float
     pago_mes: float = 0
@@ -243,12 +252,15 @@ class PendenciaLancamentoRead(BaseModel):
     valor_referencia: float
     ultimo_valor: float | None = None  # último valor lançado em competência anterior
     ultimo_mes: str | None = None  # YYYY-MM da última competência com valor
+    origem: Literal["manual", "renegociacao"] = "manual"
 
 
 class PendenciasCustosFixosRead(BaseModel):
     competencia: str  # YYYY-MM
     quantidade: int
     pendencias: list[PendenciaLancamentoRead]
+    total_previsto: float = 0
+    total_pago: float = 0
 
 
 class ChartPoint(BaseModel):

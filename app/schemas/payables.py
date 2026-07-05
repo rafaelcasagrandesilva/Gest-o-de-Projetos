@@ -20,6 +20,8 @@ PayableSnapshotType = Literal[
     "FINANCIAL",
     "MANUAL",
     "ANTECIPACAO",
+    # Obrigações de uma operação de antecipação/borderô (deságio/tarifas/repasse).
+    "ANTECIPACAO_OPERACAO",
 ]
 
 PayableSnapshotStatus = Literal["ABERTO", "PARCIAL", "PAGO"]

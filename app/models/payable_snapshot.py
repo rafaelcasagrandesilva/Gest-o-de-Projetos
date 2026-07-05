@@ -18,7 +18,12 @@ class PayableSnapshotType(str, enum.Enum):
     ENDIVIDAMENTO = "ENDIVIDAMENTO"
     # Legacy name kept so old databases/rows can still be read until migrated.
     FINANCIAL = "FINANCIAL"
+    # Antecipação individual de NF (ref_id = ReceivableInvoiceAnticipation).
     ANTECIPACAO = "ANTECIPACAO"
+    # Obrigações financeiras de uma OPERAÇÃO de antecipação/borderô — deságio, tarifas
+    # e repasse (ref_id = ReceivableAdvanceBatch). Tipo isolado da antecipação individual
+    # para não interferir na reconciliação de snapshot; exibido como "Antecipação" na UI.
+    ANTECIPACAO_OPERACAO = "ANTECIPACAO_OPERACAO"
     MANUAL = "MANUAL"
 
 

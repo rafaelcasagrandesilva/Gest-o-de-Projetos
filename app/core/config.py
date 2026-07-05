@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     asset_upload_dir: str = Field(default="var/asset_uploads", alias="ASSET_UPLOAD_DIR")
     asset_upload_max_bytes: int = Field(default=15 * 1024 * 1024, alias="ASSET_UPLOAD_MAX_BYTES")
 
+    # Documentos de projeto (mesmo mecanismo de disco dos anexos de ativos).
+    project_document_dir: str = Field(default="var/project_documents", alias="PROJECT_DOCUMENT_DIR")
+    project_document_max_bytes: int = Field(default=25 * 1024 * 1024, alias="PROJECT_DOCUMENT_MAX_BYTES")
+
     @field_validator("jwt_secret_key", "jwt_algorithm", mode="before")
     @classmethod
     def strip_secrets(cls, v: str) -> str:

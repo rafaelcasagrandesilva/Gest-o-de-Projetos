@@ -27,6 +27,10 @@ PROJECTS_VIEW_DETAIL = "projects.view_detail"
 PROJECTS_CREATE = "projects.create"
 PROJECTS_EDIT = "projects.edit"
 PROJECTS_DELETE = "projects.delete"
+# Documentos do projeto (aba Documentos no modal Detalhes).
+PROJECTS_DOCUMENTS_VIEW = "projects.documents.view"
+PROJECTS_DOCUMENTS_UPLOAD = "projects.documents.upload"
+PROJECTS_DOCUMENTS_DELETE = "projects.documents.delete"
 
 EMPLOYEES_VIEW = "employees.view"
 EMPLOYEES_EDIT = "employees.edit"
@@ -89,6 +93,9 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     PROJECTS_CREATE,
     PROJECTS_EDIT,
     PROJECTS_DELETE,
+    PROJECTS_DOCUMENTS_VIEW,
+    PROJECTS_DOCUMENTS_UPLOAD,
+    PROJECTS_DOCUMENTS_DELETE,
     EMPLOYEES_VIEW,
     EMPLOYEES_EDIT,
     VEHICLES_VIEW,
@@ -138,6 +145,9 @@ PRESET_GESTOR = frozenset(
         PROJECTS_CREATE,
         PROJECTS_EDIT,
         PROJECTS_DELETE,
+        PROJECTS_DOCUMENTS_VIEW,
+        PROJECTS_DOCUMENTS_UPLOAD,
+        PROJECTS_DOCUMENTS_DELETE,
         EMPLOYEES_VIEW,
         EMPLOYEES_EDIT,
         VEHICLES_VIEW,
@@ -175,6 +185,7 @@ PRESET_CONSULTA = frozenset(
         PROJECTS_VIEW,
         PROJECTS_VIEW_LIST,
         PROJECTS_VIEW_DETAIL,
+        PROJECTS_DOCUMENTS_VIEW,
         EMPLOYEES_VIEW,
         VEHICLES_VIEW,
         BILLING_VIEW,

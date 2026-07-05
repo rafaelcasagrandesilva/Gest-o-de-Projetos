@@ -10,10 +10,16 @@ export function ProjectFilterDropdown({
   options,
   selected,
   onToggle,
+  emptyText = "Nenhum projeto",
+  noOptionsText = "Nenhum projeto ativo.",
 }: {
   options: ProjectOption[];
   selected: Set<string>;
   onToggle: (id: string) => void;
+  /** rótulo quando nada está selecionado (ex.: "Todos os centros") */
+  emptyText?: string;
+  /** rótulo quando não há opções */
+  noOptionsText?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -48,7 +54,7 @@ export function ProjectFilterDropdown({
       >
         <span className="truncate">
           {count === 0
-            ? "Nenhum projeto"
+            ? emptyText
             : count === total
               ? `Todos (${total})`
               : `${count} de ${total} selecionados`}
@@ -73,7 +79,7 @@ export function ProjectFilterDropdown({
           role="listbox"
         >
           {options.length === 0 ? (
-            <p className="px-3 py-2 text-sm text-slate-500">Nenhum projeto ativo.</p>
+            <p className="px-3 py-2 text-sm text-slate-500">{noOptionsText}</p>
           ) : (
             options.map((opt) => (
               <label

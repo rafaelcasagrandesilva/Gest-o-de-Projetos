@@ -34,6 +34,7 @@ export type PayableSnapshotType =
   | "ENDIVIDAMENTO"
   | "FINANCIAL"
   | "ANTECIPACAO"
+  | "ANTECIPACAO_OPERACAO"
   | "MANUAL";
 
 export interface PayableSnapshotRow {

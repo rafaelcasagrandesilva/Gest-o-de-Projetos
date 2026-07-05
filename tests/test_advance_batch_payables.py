@@ -129,9 +129,13 @@ class BorderoPayablesAsyncTests(unittest.IsolatedAsyncioTestCase):
                 invoice_ids=[inv_a.id, inv_b.id],
                 created_by_id=None,
             )
+            # Operação nasce em rascunho; os efeitos (CAP de deságio/tarifa) só
+            # ocorrem na confirmação (DRAFT → OPEN).
+            await batch_svc.confirm_batch(batch_id=batch.id)
             await session.commit()
 
-            tag = batch.operation_code or batch.batch_number
+            # Identificador canônico da operação = número interno do SGC (display code).
+            tag = batch_svc._display_code(batch)
             payables = PayableSnapshotService(session)
 
             def _bordero_lines(rows: list) -> list:

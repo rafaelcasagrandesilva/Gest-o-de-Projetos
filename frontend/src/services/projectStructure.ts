@@ -165,6 +165,36 @@ export async function copyLaborsFromPrevious(
   return data;
 }
 
+// --- Inicializar Competência (fluxo único reutilizável por todas as abas) ---
+
+export type InitializeOrigin = "previous_realizado" | "current_previsto" | "previous_previsto";
+export type CostCategory = "labor" | "vehicles" | "systems" | "misc";
+
+export interface CategoryCopyResult {
+  category: CostCategory;
+  label: string;
+  copied: number;
+}
+
+export interface InitializeCompetenciaResult {
+  source_competencia: string;
+  source_scenario: string;
+  target_competencia: string;
+  target_scenario: string;
+  results: CategoryCopyResult[];
+}
+
+export async function initializeCompetencia(
+  projectId: string,
+  body: { competencia: string; origin: InitializeOrigin; categories: CostCategory[] },
+): Promise<InitializeCompetenciaResult> {
+  const { data } = await api.post<InitializeCompetenciaResult>(
+    `/projects/${projectId}/structure/initialize-competencia/`,
+    body,
+  );
+  return data;
+}
+
 export async function deleteLabor(projectId: string, laborId: string): Promise<void> {
   await api.delete(`/projects/${projectId}/structure/labors/${laborId}/`);
 }

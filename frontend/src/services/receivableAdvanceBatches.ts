@@ -1,9 +1,10 @@
 import { api } from "./api";
 
-export type AdvanceBatchStatus = "OPEN" | "SETTLED" | "CANCELLED";
+export type AdvanceBatchStatus = "DRAFT" | "OPEN" | "SETTLED" | "CANCELLED";
 
 export interface AdvanceBatchSummary {
   id: string;
+  sgc_number: number;
   batch_number: string;
   institution: string;
   status: AdvanceBatchStatus;
@@ -27,25 +28,39 @@ export interface AdvanceBatchItem {
   batch_id: string;
   invoice_id: string;
   invoice_amount: number;
+  advance_basis?: string | null;
+  advanced_amount?: number | null;
   invoice_number: string | null;
   client_name: string | null;
   project_name: string | null;
+  competence_month?: string | null;
+  gross_amount?: number | null;
+  net_amount?: number | null;
   issue_date: string | null;
   due_date: string | null;
+  invoice_status?: string | null;
 }
 
 export interface AdvanceBatch {
   id: string;
+  sgc_number: number;
   batch_number: string;
   operation_type?: "BORDERO" | "FACTORING" | "FIDC" | "OUTROS";
   operation_code?: string | null;
   institution: string;
+  institution_id?: string | null;
+  institution_profile?: string | null;
   gross_amount: number;
   received_amount: number;
+  expected_amount?: number | null;
+  actual_received_amount?: number | null;
   discount_amount: number;
   fee_amount: number;
+  repasse_enabled?: boolean;
+  repasse_amount?: number | null;
   receive_date: string;
   repayment_date: string;
+  confirmed_at?: string | null;
   observation: string | null;
   include_in_dashboard: boolean;
   status: AdvanceBatchStatus;
@@ -53,6 +68,9 @@ export interface AdvanceBatch {
   items: AdvanceBatchItem[];
   invoice_count: number;
   discount_percent: number | null;
+  invoices_net_total?: number | null;
+  finance_cost_amount?: number | null;
+  finance_cost_percent?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -67,17 +85,28 @@ export async function fetchEligibleInvoicesForBatch(params?: {
   return data;
 }
 
+export type AdvanceBasis = "BRUTO" | "LIQUIDO" | "LIQUIDO_MENOS_10" | "MANUAL";
+
+export interface AdvanceItemInput {
+  invoice_id: string;
+  advance_basis?: AdvanceBasis | null;
+  advanced_amount?: number | null;
+}
+
 export async function createAdvanceBatch(payload: {
   operation_type?: "BORDERO" | "FACTORING" | "FIDC" | "OUTROS";
   operation_code?: string | null;
-  institution: string;
-  received_amount: number;
-  discount_amount: number;
-  fee_amount: number;
+  institution_id: string;
+  received_amount?: number;
+  discount_amount?: number;
+  fee_amount?: number;
+  repasse_enabled?: boolean;
   receive_date: string;
-  repayment_date: string;
+  /** Opcional: perfis sem devolução (ex.: Daycoval) não a informam. */
+  repayment_date?: string | null;
   observation?: string | null;
-  invoice_ids: string[];
+  invoice_ids?: string[];
+  items?: AdvanceItemInput[];
 }): Promise<AdvanceBatch> {
   const { data } = await api.post<AdvanceBatch>("/invoices/advance-batches", payload);
   return data;
@@ -93,6 +122,17 @@ export async function updateAdvanceBatchDashboardInclusion(
   return data;
 }
 
+/** Informa o valor efetivamente recebido (realizado) — perfis com previsto×realizado (Daycoval). */
+export async function setAdvanceBatchActualReceived(
+  batchId: string,
+  actual_received_amount: number,
+): Promise<AdvanceBatch> {
+  const { data } = await api.patch<AdvanceBatch>(`/invoices/advance-batches/${batchId}`, {
+    actual_received_amount,
+  });
+  return data;
+}
+
 export async function fetchAdvanceBatch(batchId: string): Promise<AdvanceBatch> {
   const { data } = await api.get<AdvanceBatch>(`/invoices/advance-batches/${batchId}`);
   return data;
@@ -100,6 +140,11 @@ export async function fetchAdvanceBatch(batchId: string): Promise<AdvanceBatch> 
 
 export async function fetchAdvanceBatches(): Promise<AdvanceBatch[]> {
   const { data } = await api.get<AdvanceBatch[]>("/invoices/advance-batches");
+  return data;
+}
+
+export async function confirmAdvanceBatch(batchId: string): Promise<AdvanceBatch> {
+  const { data } = await api.post<AdvanceBatch>(`/invoices/advance-batches/${batchId}/confirm`);
   return data;
 }
 

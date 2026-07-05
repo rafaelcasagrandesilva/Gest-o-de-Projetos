@@ -1,194 +1,221 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from typing import Any, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from app.services.export.builders import (
     build_executive_pdf_bytes,
     build_operational_xlsx_bytes,
-    export_filename,
     format_brl,
     format_date_br,
 )
+from app.services.export.report_meta import ReportContext, friendly_filename, header_lines
 
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MIME_PDF = "application/pdf"
 
-_OPERATIONAL_SPECS: dict[str, tuple[list[str], list[str], frozenset[int]]] = {
-    "payables_detailed": (
-        [
-            "Vencimento",
-            "Competência",
-            "Nome",
-            "Projeto",
-            "Categoria",
-            "Tipo",
-            "Valor original",
-            "Valor pago",
-            "Saldo",
-            "Status",
-            "Observações",
-        ],
-        [
-            "vencimento",
-            "competencia",
-            "nome",
-            "projeto",
-            "categoria",
-            "tipo",
-            "valor_original",
-            "valor_pago",
-            "saldo",
-            "status",
-            "observacoes",
-        ],
-        frozenset({7, 8, 9}),
-    ),
-    "receivables_detailed": (
-        ["Cliente", "Projeto", "NF", "Emissão", "Vencimento", "Valor", "Recebido", "Saldo", "Status"],
-        ["cliente", "projeto", "nf", "emissao", "vencimento", "valor", "recebido", "saldo", "status"],
-        frozenset({6, 7, 8}),
-    ),
-    "invoices_detailed": (
-        ["Nº NF", "Cliente", "Projeto", "Emissão", "Vencimento", "Valor", "Recebido", "Saldo", "Status"],
-        ["numero_nf", "cliente", "projeto", "emissao", "vencimento", "valor", "recebido", "saldo", "status"],
-        frozenset({6, 7, 8}),
-    ),
-    "assets_inventory": (
-        [
-            "Código",
-            "Item",
-            "Categoria",
-            "Tamanho",
-            "Responsável",
-            "Centro de custo",
-            "Status",
-            "Estado físico",
-            "Valor",
-            "Tags",
-            "CA",
-            "Nº série",
-            "Observações",
-        ],
-        [
-            "codigo",
-            "item",
-            "categoria",
-            "tamanho",
-            "responsavel",
-            "centro_custo",
-            "status",
-            "estado_fisico",
-            "valor",
-            "tags",
-            "ca",
-            "numero_serie",
-            "observacoes",
-        ],
-        frozenset({9}),
-    ),
-    "assets_in_use": (
-        ["Código", "Item", "Responsável", "Data entrega", "Estado físico", "Centro de custo", "Valor"],
-        ["codigo", "item", "responsavel", "data_entrega", "estado_fisico", "centro_custo", "valor"],
-        frozenset({7}),
-    ),
-    "assets_inspections": (
-        ["Ativo", "Tipo inspeção", "Validade", "Status validade", "Dias restantes", "Responsável", "Alerta"],
-        ["ativo", "tipo_inspecao", "validade", "status_validade", "dias_restantes", "responsavel", "alerta"],
-        frozenset(),
-    ),
-    "assets_movements": (
-        [
-            "Ativo",
-            "Entregador",
-            "Recebedor",
-            "Data entrega",
-            "Data devolução",
-            "Resp. devolução",
-            "Estado devolução",
-            "Observações",
-        ],
-        [
-            "ativo",
-            "entregador",
-            "recebedor",
-            "data_entrega",
-            "data_devolucao",
-            "responsavel_devolucao",
-            "estado_devolucao",
-            "observacoes",
-        ],
-        frozenset(),
-    ),
+
+@dataclass(frozen=True)
+class Col:
+    """Definição de uma coluna do relatório operacional (cabeçalho + chave + tipo)."""
+
+    header: str
+    key: str
+    money: bool = False
+    is_date: bool = False
+
+
+# Colunas por relatório, na ordem lógica das telas:
+# Identificação → Relacionamentos → Valores → Status → Datas → Administrativo.
+_OPERATIONAL_COLUMNS: dict[str, list[Col]] = {
+    "payables_detailed": [
+        Col("Nome", "nome"),
+        Col("Categoria", "categoria"),
+        Col("Tipo", "tipo"),
+        Col("Projeto", "projeto"),
+        Col("Centro de custo", "centro_custo"),
+        Col("Competência", "competencia"),
+        Col("Vencimento", "vencimento", is_date=True),
+        Col("Mês pagamento", "mes_pagamento"),
+        Col("Data pagamento", "data_pagamento", is_date=True),
+        Col("Valor previsto", "valor_original", money=True),
+        Col("Valor final", "valor_final", money=True),
+        Col("Valor pago", "valor_pago", money=True),
+        Col("Saldo", "saldo", money=True),
+        Col("Status", "status"),
+        Col("Pago", "pago"),
+        Col("No dashboard", "no_dashboard"),
+        Col("Obsoleto", "obsoleto"),
+        Col("Motivo obsolescência", "motivo_obsolescencia"),
+        Col("Observações", "observacoes"),
+    ],
+    "receivables_detailed": [
+        Col("Nº NF", "nf"),
+        Col("Cliente", "cliente"),
+        Col("Projeto", "projeto"),
+        Col("Contrato", "contrato"),
+        Col("Centro de custo", "centro_custo"),
+        Col("Competência", "competencia"),
+        Col("Emissão", "emissao", is_date=True),
+        Col("Vencimento", "vencimento", is_date=True),
+        Col("Recebimento", "recebimento", is_date=True),
+        Col("Valor bruto", "valor_bruto", money=True),
+        Col("Valor líquido", "valor", money=True),
+        Col("Valor antecipado", "valor_antecipado", money=True),
+        Col("Recebido", "recebido", money=True),
+        Col("Saldo", "saldo", money=True),
+        Col("Status", "status"),
+        Col("Oficial", "oficial"),
+        Col("Antecipada", "antecipada"),
+        Col("Instituição", "instituicao"),
+        Col("Observações", "observacoes"),
+        Col("Origem", "origem"),
+    ],
+    "invoices_detailed": [
+        Col("Nº NF", "numero_nf"),
+        Col("Cliente", "cliente"),
+        Col("Projeto", "projeto"),
+        Col("Contrato", "contrato"),
+        Col("Centro de custo", "centro_custo"),
+        Col("Competência", "competencia"),
+        Col("Emissão", "emissao", is_date=True),
+        Col("Vencimento", "vencimento", is_date=True),
+        Col("Recebimento", "recebimento", is_date=True),
+        Col("Valor bruto", "valor_bruto", money=True),
+        Col("Valor líquido", "valor", money=True),
+        Col("Valor antecipado", "valor_antecipado", money=True),
+        Col("Custo antecipação", "custo_antecipacao", money=True),
+        Col("Recebido", "recebido", money=True),
+        Col("Saldo", "saldo", money=True),
+        Col("Prazo (dias)", "prazo_dias"),
+        Col("Status", "status"),
+        Col("Oficial", "oficial"),
+        Col("Antecipada", "antecipada"),
+        Col("Instituição", "instituicao"),
+        Col("Vencimento antecipação", "venc_antecipacao", is_date=True),
+        Col("No dashboard", "no_dashboard"),
+        Col("Observações", "observacoes"),
+        Col("Criado em", "criado_em", is_date=True),
+        Col("Atualizado em", "atualizado_em", is_date=True),
+    ],
+    "assets_inventory": [
+        Col("Código", "codigo"),
+        Col("Item", "item"),
+        Col("Categoria", "categoria"),
+        Col("Subcategoria", "subcategoria"),
+        Col("Tamanho", "tamanho"),
+        Col("Marca", "marca"),
+        Col("Modelo", "modelo"),
+        Col("Nº série", "numero_serie"),
+        Col("Patrimônio", "patrimonio"),
+        Col("IMEI", "imei"),
+        Col("CA", "ca"),
+        Col("Tags", "tags"),
+        Col("Descrição", "descricao"),
+        Col("Responsável", "responsavel"),
+        Col("Centro de custo", "centro_custo"),
+        Col("Projeto", "projeto"),
+        Col("Valor", "valor", money=True),
+        Col("Status", "status"),
+        Col("Estado físico", "estado_fisico"),
+        Col("Data aquisição", "data_aquisicao", is_date=True),
+        Col("Observações", "observacoes"),
+        Col("Criado em", "criado_em", is_date=True),
+        Col("Atualizado em", "atualizado_em", is_date=True),
+    ],
+    "assets_in_use": [
+        Col("Código", "codigo"),
+        Col("Item", "item"),
+        Col("Marca", "marca"),
+        Col("Modelo", "modelo"),
+        Col("Nº série", "numero_serie"),
+        Col("Patrimônio", "patrimonio"),
+        Col("Responsável", "responsavel"),
+        Col("Centro de custo", "centro_custo"),
+        Col("Projeto", "projeto"),
+        Col("Data entrega", "data_entrega", is_date=True),
+        Col("Status", "status"),
+        Col("Estado físico", "estado_fisico"),
+        Col("Valor", "valor", money=True),
+    ],
+    "assets_inspections": [
+        Col("Ativo", "ativo"),
+        Col("Tipo inspeção", "tipo_inspecao"),
+        Col("Data inspeção", "data_inspecao", is_date=True),
+        Col("Validade", "validade", is_date=True),
+        Col("Meses validade", "meses_validade"),
+        Col("Status validade", "status_validade"),
+        Col("Dias restantes", "dias_restantes"),
+        Col("Responsável", "responsavel"),
+        Col("Alerta", "alerta"),
+        Col("Observações", "observacoes"),
+    ],
+    "assets_movements": [
+        Col("Ativo", "ativo"),
+        Col("Entregador", "entregador"),
+        Col("Recebedor", "recebedor"),
+        Col("Data entrega", "data_entrega", is_date=True),
+        Col("Data devolução", "data_devolucao", is_date=True),
+        Col("Resp. devolução", "responsavel_devolucao"),
+        Col("Estado devolução", "estado_devolucao"),
+        Col("Observações", "observacoes"),
+        Col("Registrado em", "registrado_em", is_date=True),
+    ],
 }
 
 
-def _meta_from_filters(filters: dict[str, Any]) -> list[str]:
-    if not filters:
-        return []
-    parts = []
-    for k, v in filters.items():
-        if v is None or v == "":
-            continue
-        parts.append(f"{k}={v}")
-    return [f"Filtros: {'; '.join(parts)}"] if parts else []
+def _cell_xlsx(row: dict[str, Any], col: Col) -> Any:
+    val = row.get(col.key)
+    if col.money and isinstance(val, (int, float)):
+        return float(val)
+    if col.is_date and val:
+        return format_date_br(str(val)[:10])
+    return "" if val is None else val
 
 
-def _row_values(
-    row: dict[str, Any],
-    keys: list[str],
-    money_cols: frozenset[int],
-) -> list[Any]:
-    out: list[Any] = []
-    for idx, key in enumerate(keys, start=1):
-        val = row.get(key)
-        if idx in money_cols and isinstance(val, (int, float)):
-            out.append(float(val))
-        elif key in ("vencimento", "emissao", "data_entrega", "data_devolucao", "validade") and val:
-            out.append(format_date_br(str(val)[:10]))
-        else:
-            out.append("" if val is None else val)
-    return out
+def _cell_pdf(row: dict[str, Any], col: Col) -> str:
+    val = row.get(col.key)
+    if col.money and isinstance(val, (int, float)):
+        return format_brl(val)
+    if col.is_date and val:
+        return format_date_br(str(val)[:10])
+    return "" if val is None else str(val)
 
 
 def render_operational_report_bytes(
-    report_type: str, payload: dict[str, Any], fmt: str
+    report_type: str,
+    payload: dict[str, Any],
+    fmt: str,
+    ctx: ReportContext | None = None,
 ) -> tuple[bytes, str, str]:
     if fmt not in ("xlsx", "pdf"):
         raise ValueError("formato inválido")
-    spec = _OPERATIONAL_SPECS.get(report_type)
-    if not spec:
+    cols = _OPERATIONAL_COLUMNS.get(report_type)
+    if not cols:
         raise ValueError(f"tipo operacional desconhecido: {report_type}")
-    headers, keys, money_cols = spec
+    headers = [c.header for c in cols]
+    money_cols = frozenset(i for i, c in enumerate(cols, start=1) if c.money)
     raw_rows = payload.get("rows") or []
-    xlsx_rows = [_row_values(r, keys, money_cols) for r in raw_rows]
-    pdf_rows = []
-    for r in raw_rows:
-        pdf_row = []
-        for idx, key in enumerate(keys, start=1):
-            val = r.get(key)
-            if idx in money_cols and isinstance(val, (int, float)):
-                pdf_row.append(format_brl(val))
-            elif key in ("vencimento", "emissao", "data_entrega", "data_devolucao", "validade") and val:
-                pdf_row.append(format_date_br(str(val)[:10]))
-            else:
-                pdf_row.append("" if val is None else str(val))
-        pdf_rows.append(pdf_row)
 
-    title = str(payload.get("title") or report_type)
-    meta = _meta_from_filters(payload.get("filters") or {})
-    meta.insert(0, f"Registros: {len(raw_rows)}")
-    suffix = datetime.now(timezone.utc).strftime("%Y-%m")
-    slug = report_type
+    from app.services.export.report_meta import report_title
+
+    title = report_title(report_type)
+    periodo_token = ctx.periodo_token if ctx else None
 
     if fmt == "xlsx":
+        # Excel abre direto nos dados (sem aba de identificação); o nome amigável
+        # do relatório fica no NOME DO ARQUIVO.
+        xlsx_rows = [[_cell_xlsx(r, c) for c in cols] for r in raw_rows]
         raw = build_operational_xlsx_bytes(
             headers=headers,
             rows=xlsx_rows,
             sheet_title=title[:31],
             money_columns=money_cols,
         )
-        return raw, export_filename(slug, "xlsx", suffix), MIME_XLSX
+        return raw, friendly_filename(report_type, "xlsx", periodo_token=periodo_token), MIME_XLSX
 
+    pdf_rows = [[_cell_pdf(r, c) for c in cols] for r in raw_rows]
+    # No PDF o título e o "Gerado em" já são impressos pelo builder → não duplicar.
+    meta = header_lines(ctx, record_count=len(raw_rows), include_title=False, include_gen=False)
     raw = build_executive_pdf_bytes(title=title, headers=headers, rows=pdf_rows, meta_lines=meta)
-    return raw, export_filename(slug, "pdf", suffix), MIME_PDF
+    return raw, friendly_filename(report_type, "pdf", periodo_token=periodo_token), MIME_PDF

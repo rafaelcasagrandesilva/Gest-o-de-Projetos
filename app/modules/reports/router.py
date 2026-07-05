@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 from datetime import date
+from urllib.parse import quote
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -30,8 +32,14 @@ from app.core.permission_codes import (
 )
 from app.core.scenario import Scenario, coerce_scenario
 from app.database.session import get_db
+from app.models.project import Project
 from app.models.user import User
 from app.schemas.reports import ReportGenerateRequest
+from app.services.export.report_meta import (
+    ReportContext,
+    month_year_label,
+    month_year_token,
+)
 from app.services.operational_report_export import render_operational_report_bytes
 from app.services.operational_report_service import OperationalReportService, resolve_project_access
 from app.services.report_export import render_report_bytes
@@ -60,11 +68,77 @@ def _assert_report_access(user: User) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
 
 
+# Relatórios que possuem cenário Previsto/Realizado (para o cabeçalho de identificação).
+_SCENARIO_REPORTS = frozenset(
+    {"project_summary", "company_summary", "employees", "revenues", "dashboard"}
+)
+
+
 def _stream(data: bytes, filename: str, media: str) -> StreamingResponse:
+    # RFC 5987: nome amigável em pt-BR (acentos/espaços) via filename*, com
+    # fallback ASCII em filename para clientes antigos.
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii") or "relatorio"
+    disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
     return StreamingResponse(
         io.BytesIO(data),
         media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": disposition},
+    )
+
+
+def _period_from_filters(f: dict) -> tuple[str | None, str | None]:
+    """Deriva rótulo humano e token de arquivo do período, a partir dos filtros.
+
+    Suporta competência única, ano/mês e intervalo mês–mês (payables/movimentações).
+    Retorna (rótulo p/ cabeçalho, token p/ nome de arquivo) ou (None, None).
+    """
+
+    def _month(raw) -> date | None:
+        if raw in (None, ""):
+            return None
+        s = str(raw).strip()
+        if len(s) >= 7 and s[4] == "-":
+            return date(int(s[:4]), int(s[5:7]), 1)
+        return None
+
+    start = _month(f.get("competencia")) or _month(f.get("month"))
+    if start is None and f.get("year") and f.get("month"):
+        try:
+            start = date(int(f["year"]), int(f["month"]), 1)
+        except (ValueError, TypeError):
+            start = None
+    end = _month(f.get("month_to"))
+    if start is None:
+        return None, None
+    if end and (end.year, end.month) != (start.year, start.month):
+        return (
+            f"{month_year_label(start)} a {month_year_label(end)}",
+            f"{month_year_token(start)} a {month_year_token(end)}",
+        )
+    return month_year_label(start), month_year_token(start)
+
+
+async def _build_ctx(
+    db: AsyncSession, report_type: str, user: User, filters: dict, scenario: Scenario | None
+) -> ReportContext:
+    """Monta o contexto de identificação (item 8) da exportação — só rotulagem."""
+    projeto = None
+    pid_raw = filters.get("project_id")
+    if pid_raw:
+        try:
+            proj = await db.get(Project, UUID(str(pid_raw)))
+            projeto = proj.name if proj else None
+        except (ValueError, TypeError):
+            projeto = None
+    periodo, token = _period_from_filters(filters)
+    return ReportContext(
+        report_type=report_type,
+        generated_by=(user.full_name or user.email),
+        filters=dict(filters or {}),
+        projeto=projeto,
+        periodo=periodo,
+        periodo_token=token,
+        cenario=(scenario.value if (scenario and report_type in _SCENARIO_REPORTS) else None),
     )
 
 
@@ -80,6 +154,7 @@ async def generate_report(
     f = body.filters
     fmt = body.format
     svc = ReportService(db)
+    ctx = await _build_ctx(db, body.type, user, f, _report_scenario(body))
 
     if body.type == "project_summary":
         _assert_report_access(user)
@@ -93,7 +168,7 @@ async def generate_report(
         payload = await svc.generate_project_summary(
             project_id=pid, competencia=comp, scenario=_report_scenario(body)
         )
-        raw, name, media = render_report_bytes("project_summary", payload, fmt)
+        raw, name, media = render_report_bytes("project_summary", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "company_summary":
@@ -111,7 +186,7 @@ async def generate_report(
         payload = await svc.generate_company_summary(
             competencia=comp, project_ids=pids, scenario=_report_scenario(body)
         )
-        raw, name, media = render_report_bytes("company_summary", payload, fmt)
+        raw, name, media = render_report_bytes("company_summary", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "employees":
@@ -120,7 +195,7 @@ async def generate_report(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         comp = _competencia_date(f, "competencia")
         payload = await svc.generate_employees_report(competencia=comp, scenario=_report_scenario(body))
-        raw, name, media = render_report_bytes("employees", payload, fmt)
+        raw, name, media = render_report_bytes("employees", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "vehicles":
@@ -129,7 +204,7 @@ async def generate_report(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         active_only = bool(f.get("active_only", False))
         payload = await svc.generate_vehicles_report(active_only=active_only)
-        raw, name, media = render_report_bytes("vehicles", payload, fmt)
+        raw, name, media = render_report_bytes("vehicles", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "invoices":
@@ -151,7 +226,7 @@ async def generate_report(
             year=yi,
             month=mi,
         )
-        raw, name, media = render_report_bytes("invoices", payload, fmt)
+        raw, name, media = render_report_bytes("invoices", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "debt":
@@ -162,7 +237,7 @@ async def generate_report(
         if not comp or not str(comp).strip():
             raise HTTPException(status_code=400, detail="Informe competencia (YYYY-MM).")
         payload = await svc.generate_debt_report(competencia=str(comp).strip()[:7])
-        raw, name, media = render_report_bytes("debt", payload, fmt)
+        raw, name, media = render_report_bytes("debt", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "fixed_costs":
@@ -173,7 +248,7 @@ async def generate_report(
         if not comp or not str(comp).strip():
             raise HTTPException(status_code=400, detail="Informe competencia (YYYY-MM).")
         payload = await svc.generate_fixed_costs_report(competencia=str(comp).strip()[:7])
-        raw, name, media = render_report_bytes("fixed_costs", payload, fmt)
+        raw, name, media = render_report_bytes("fixed_costs", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "users":
@@ -181,7 +256,7 @@ async def generate_report(
         if not user_has_any_permission(user, USERS_MANAGE):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         payload = await svc.generate_users_report()
-        raw, name, media = render_report_bytes("users", payload, fmt)
+        raw, name, media = render_report_bytes("users", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "revenues":
@@ -192,7 +267,7 @@ async def generate_report(
         payload = await svc.generate_revenues_report(
             project_id=project_id, scenario=_report_scenario(body)
         )
-        raw, name, media = render_report_bytes("revenues", payload, fmt)
+        raw, name, media = render_report_bytes("revenues", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "dashboard":
@@ -221,7 +296,7 @@ async def generate_report(
             months=months,
             scenario=_report_scenario(body),
         )
-        raw, name, media = render_report_bytes("dashboard", payload, fmt)
+        raw, name, media = render_report_bytes("dashboard", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "payables_detailed":
@@ -235,7 +310,7 @@ async def generate_report(
             sees_all_projects=sees_all,
         )
         await db.commit()
-        raw, name, media = render_operational_report_bytes("payables_detailed", payload, fmt)
+        raw, name, media = render_operational_report_bytes("payables_detailed", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "receivables_detailed":
@@ -249,7 +324,7 @@ async def generate_report(
             accessible_project_ids=allowed,
             sees_all_projects=sees_all,
         )
-        raw, name, media = render_operational_report_bytes("receivables_detailed", payload, fmt)
+        raw, name, media = render_operational_report_bytes("receivables_detailed", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "invoices_detailed":
@@ -262,7 +337,7 @@ async def generate_report(
             accessible_project_ids=allowed,
             sees_all_projects=sees_all,
         )
-        raw, name, media = render_operational_report_bytes("invoices_detailed", payload, fmt)
+        raw, name, media = render_operational_report_bytes("invoices_detailed", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type in (
@@ -283,7 +358,7 @@ async def generate_report(
             payload = await ops.generate_assets_inspections(filters=f)
         else:
             payload = await ops.generate_assets_movements(filters=f)
-        raw, name, media = render_operational_report_bytes(body.type, payload, fmt)
+        raw, name, media = render_operational_report_bytes(body.type, payload, fmt, ctx)
         return _stream(raw, name, media)
 
     raise HTTPException(status_code=400, detail="Tipo de relatório desconhecido.")

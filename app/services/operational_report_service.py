@@ -40,6 +40,15 @@ _PAYABLE_TYPE_LABELS: dict[str, str] = {
 }
 
 
+def _yyyy_mm(value: Any) -> str:
+    """Competência YYYY-MM a partir de date/datetime/str; vazio se ausente."""
+    if not value:
+        return ""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()[:7]
+    return str(value)[:7]
+
+
 def _parse_yyyy_mm(raw: str | None) -> date | None:
     if raw is None or not str(raw).strip():
         return None
@@ -116,6 +125,28 @@ def _filter_payable_rows(
 class OperationalReportService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def _project_meta_map(
+        self, project_ids: set[UUID]
+    ) -> dict[UUID, dict[str, str]]:
+        """Mapa projeto → {nome, centro de custo, contrato} para enriquecer NFs.
+
+        Carregado em lote (evita lazy-load em contexto async). Usa apenas dados
+        cadastrais já existentes do projeto — nenhuma regra é alterada.
+        """
+        if not project_ids:
+            return {}
+        rows = (
+            await self.session.execute(select(Project).where(Project.id.in_(project_ids)))
+        ).scalars().all()
+        return {
+            p.id: {
+                "nome": p.name or "",
+                "centro_custo": p.cost_center or "",
+                "contrato": p.contract_number or "",
+            }
+            for p in rows
+        }
 
     async def _load_payable_snapshots(
         self,
@@ -220,17 +251,24 @@ class OperationalReportService:
             tipo = r.type.value if hasattr(r.type, "value") else str(r.type)
             out_rows.append(
                 {
-                    "vencimento": r.due_date.isoformat(),
-                    "competencia": comp_src.isoformat()[:7],
-                    "mes_pagamento": comp_month.isoformat()[:7],
                     "nome": r.name,
-                    "projeto": project_names.get(r.project_id) or r.cost_center or "",
                     "categoria": r.category,
                     "tipo": _PAYABLE_TYPE_LABELS.get(tipo, tipo),
+                    "projeto": project_names.get(r.project_id) or "",
+                    "centro_custo": r.cost_center or "",
+                    "competencia": comp_src.isoformat()[:7],
+                    "vencimento": r.due_date.isoformat(),
+                    "mes_pagamento": comp_month.isoformat()[:7],
+                    "data_pagamento": r.payment_date.isoformat() if r.payment_date else "",
                     "valor_original": float(r.amount_original or 0),
+                    "valor_final": float(r.amount_final or 0),
                     "valor_pago": float(r.amount_paid or 0),
                     "saldo": float(derived["amount_remaining"]),
                     "status": derived["status"],
+                    "pago": "Sim" if r.paid else "Não",
+                    "no_dashboard": "Sim" if r.include_in_dashboard else "Não",
+                    "obsoleto": "Sim" if getattr(r, "is_obsolete", False) else "Não",
+                    "motivo_obsolescencia": getattr(r, "obsolete_reason", "") or "",
                     "observacoes": r.observation or "",
                 }
             )
@@ -273,6 +311,7 @@ class OperationalReportService:
             month=month,
             period_field=period_field,
         )
+        proj_meta = await self._project_meta_map({inv.project_id for inv in invs if inv.project_id})
         for inv in invs:
             if (inv.invoice_status or "").upper() == "CANCELADA":
                 continue
@@ -284,17 +323,29 @@ class OperationalReportService:
             st = _receivable_view_status(net_value=net, total_received=recv)
             if status_filter and st != status_filter and status_filter not in ("EMITIDA", "ANTECIPADA", "RECEBIDA"):
                 pass
+            pm = proj_meta.get(inv.project_id, {})
             out_rows.append(
                 {
-                    "cliente": r.get("client_name") or inv.client_name,
-                    "projeto": r.get("project_name") or "",
                     "nf": r["number"],
+                    "cliente": r.get("client_name") or inv.client_name,
+                    "projeto": r.get("project_name") or pm.get("nome") or "",
+                    "contrato": pm.get("contrato", ""),
+                    "centro_custo": pm.get("centro_custo", ""),
+                    "competencia": _yyyy_mm(r.get("competence_month")),
                     "emissao": r["issue_date"].isoformat() if hasattr(r["issue_date"], "isoformat") else str(r["issue_date"]),
                     "vencimento": r["due_date"].isoformat() if hasattr(r["due_date"], "isoformat") else str(r["due_date"]),
+                    "recebimento": r["received_date"].isoformat() if r.get("received_date") else "",
+                    "valor_bruto": float(r["gross_amount"]),
                     "valor": net,
+                    "valor_antecipado": float(r["advance_amount_received"]) if r.get("advance_amount_received") is not None else "",
                     "recebido": recv,
                     "saldo": remaining,
                     "status": st,
+                    "oficial": "Sim" if r.get("is_official") else "Não",
+                    "antecipada": "Sim" if r.get("is_anticipated") else "Não",
+                    "instituicao": r.get("institution") or "",
+                    "observacoes": r.get("notes") or "",
+                    "origem": "Nota fiscal",
                 }
             )
 
@@ -312,15 +363,26 @@ class OperationalReportService:
             st = str(it.status.value if hasattr(it.status, "value") else it.status)
             out_rows.append(
                 {
+                    "nf": it.numero_referencia or "—",
                     "cliente": it.cliente,
                     "projeto": "—",
-                    "nf": it.numero_referencia or "—",
+                    "contrato": "",
+                    "centro_custo": "",
+                    "competencia": _yyyy_mm(it.data_emissao),
                     "emissao": it.data_emissao.isoformat(),
                     "vencimento": it.data_vencimento.isoformat(),
+                    "recebimento": "",
+                    "valor_bruto": "",
                     "valor": net,
+                    "valor_antecipado": "",
                     "recebido": recv,
                     "saldo": remaining,
                     "status": st,
+                    "oficial": "",
+                    "antecipada": "",
+                    "instituicao": "",
+                    "observacoes": getattr(it, "observacoes", "") or "",
+                    "origem": "Lançamento manual",
                 }
             )
 
@@ -357,23 +419,41 @@ class OperationalReportService:
             month=month,
             period_field=str(filters.get("period_field") or "issue"),
         )
+        proj_meta = await self._project_meta_map({inv.project_id for inv in invs if inv.project_id})
         out_rows: list[dict[str, Any]] = []
         for inv in invs:
             r = svc.invoice_to_read(inv)
             net = float(r["net_amount"])
             recv = float(r["received_amount"])
             saldo = max(0.0, net - recv)
+            pm = proj_meta.get(inv.project_id, {})
             out_rows.append(
                 {
                     "numero_nf": r["number"],
                     "cliente": r.get("client_name") or inv.client_name,
-                    "projeto": r.get("project_name") or "",
+                    "projeto": r.get("project_name") or pm.get("nome") or "",
+                    "contrato": pm.get("contrato", ""),
+                    "centro_custo": pm.get("centro_custo", ""),
+                    "competencia": _yyyy_mm(r.get("competence_month")),
                     "emissao": inv.issue_date.isoformat(),
                     "vencimento": inv.due_date.isoformat(),
+                    "recebimento": r["received_date"].isoformat() if r.get("received_date") else "",
+                    "valor_bruto": float(r["gross_amount"]),
                     "valor": net,
+                    "valor_antecipado": float(r["advance_amount_received"]) if r.get("advance_amount_received") is not None else "",
+                    "custo_antecipacao": float(r["advance_cost_value"]) if r.get("advance_cost_value") is not None else "",
                     "recebido": recv,
                     "saldo": saldo,
+                    "prazo_dias": r.get("due_days") if r.get("due_days") is not None else "",
                     "status": r["status"],
+                    "oficial": "Sim" if r.get("is_official") else "Não",
+                    "antecipada": "Sim" if r.get("is_anticipated") else "Não",
+                    "instituicao": r.get("institution") or "",
+                    "venc_antecipacao": r["advance_due_date"].isoformat() if r.get("advance_due_date") else "",
+                    "no_dashboard": "Sim" if getattr(inv, "include_in_dashboard", True) else "Não",
+                    "observacoes": r.get("notes") or "",
+                    "criado_em": r["created_at"].isoformat() if r.get("created_at") else "",
+                    "atualizado_em": r["updated_at"].isoformat() if r.get("updated_at") else "",
                 }
             )
         return {
@@ -419,30 +499,47 @@ class OperationalReportService:
             ).scalars().all()
             assets_by_id = {a.id: a for a in assets}
 
+        # Resolve nomes de projeto do centro de custo (cadastro; sem regra nova).
+        proj_ids = {a.cost_center_project_id for a in assets_by_id.values() if a.cost_center_project_id}
+        proj_meta = await self._project_meta_map(proj_ids)
+
         rows: list[dict[str, Any]] = []
         for item in items:
             asset = assets_by_id.get(item.id)
             tag_list = normalize_tags(asset.tags if asset else None)
             tags = ", ".join(tag_list) if tag_list else ""
+            projeto = ""
+            if asset and asset.cost_center_project_id:
+                projeto = proj_meta.get(asset.cost_center_project_id, {}).get("nome", "")
             rows.append(
                 {
                     "codigo": item.asset_code,
                     "item": item.name,
                     "categoria": item.category,
+                    "subcategoria": (asset.subcategory if asset else "") or "",
                     "tamanho": item.size or "",
+                    "marca": (asset.brand if asset else "") or "",
+                    "modelo": (asset.model if asset else "") or "",
+                    "numero_serie": (asset.serial_number if asset else "") or "",
+                    "patrimonio": (asset.patrimony_tag if asset else "") or "",
+                    "imei": (asset.imei if asset else "") or "",
+                    "ca": (asset.ca_number if asset else "") or "",
+                    "tags": tags,
+                    "descricao": (asset.description if asset else "") or "",
                     "responsavel": item.current_holder_name or "",
                     "centro_custo": item.cost_center_label or "",
+                    "projeto": projeto,
+                    "valor": float(item.purchase_value or 0),
                     "status": item.status.value if hasattr(item.status, "value") else str(item.status),
                     "estado_fisico": (
                         item.physical_condition.value
                         if item.physical_condition and hasattr(item.physical_condition, "value")
                         else (str(item.physical_condition) if item.physical_condition else "")
                     ),
-                    "valor": float(item.purchase_value or 0),
-                    "tags": tags,
-                    "ca": (asset.ca_number if asset else "") or "",
-                    "numero_serie": (asset.serial_number if asset else "") or "",
+                    "data_aquisicao": asset.acquisition_date.isoformat() if (asset and asset.acquisition_date) else "",
                     "observacoes": (asset.notes if asset else "") or "",
+                    "criado_em": asset.created_at.isoformat() if (asset and getattr(asset, "created_at", None)) else "",
+                    "atualizado_em": asset.updated_at.isoformat() if (asset and getattr(asset, "updated_at", None)) else "",
                 }
             )
         return {"title": "Inventário patrimonial", "filters": filters, "rows": rows}
@@ -450,21 +547,43 @@ class OperationalReportService:
     async def generate_assets_in_use(self, *, filters: dict[str, Any]) -> dict[str, Any]:
         svc = AssetsService(self.session)
         items = await svc.list_assets(status=AssetStatus.IN_USE)
+        asset_ids = [i.id for i in items]
+        assets_by_id: dict[UUID, Asset] = {}
+        if asset_ids:
+            assets = (
+                await self.session.execute(
+                    select(Asset).where(Asset.id.in_(asset_ids), Asset.deleted_at.is_(None))
+                )
+            ).scalars().all()
+            assets_by_id = {a.id: a for a in assets}
+        proj_ids = {a.cost_center_project_id for a in assets_by_id.values() if a.cost_center_project_id}
+        proj_meta = await self._project_meta_map(proj_ids)
+
         rows: list[dict[str, Any]] = []
         for item in items:
             open_a = await svc._open_assignment(item.id)
+            asset = assets_by_id.get(item.id)
+            projeto = ""
+            if asset and asset.cost_center_project_id:
+                projeto = proj_meta.get(asset.cost_center_project_id, {}).get("nome", "")
             rows.append(
                 {
                     "codigo": item.asset_code,
                     "item": item.name,
+                    "marca": (asset.brand if asset else "") or "",
+                    "modelo": (asset.model if asset else "") or "",
+                    "numero_serie": (asset.serial_number if asset else "") or "",
+                    "patrimonio": (asset.patrimony_tag if asset else "") or "",
                     "responsavel": item.current_holder_name or "",
+                    "centro_custo": item.cost_center_label or "",
+                    "projeto": projeto,
                     "data_entrega": open_a.delivery_date.isoformat() if open_a else "",
+                    "status": item.status.value if hasattr(item.status, "value") else str(item.status),
                     "estado_fisico": (
                         item.physical_condition.value
                         if item.physical_condition and hasattr(item.physical_condition, "value")
                         else ""
                     ),
-                    "centro_custo": item.cost_center_label or "",
                     "valor": float(item.purchase_value or 0),
                 }
             )
@@ -488,11 +607,14 @@ class OperationalReportService:
                 {
                     "ativo": f"{asset.asset_code} — {asset.name}",
                     "tipo_inspecao": insp.inspection_type,
+                    "data_inspecao": insp.inspection_date.isoformat() if insp.inspection_date else "",
                     "validade": exp.isoformat() if exp else "",
+                    "meses_validade": insp.expiration_months if insp.expiration_months is not None else "",
                     "status_validade": validity,
                     "dias_restantes": days if days is not None else "",
                     "responsavel": insp.responsible_company or "",
                     "alerta": alert.value if alert and hasattr(alert, "value") else "",
+                    "observacoes": insp.notes or "",
                 }
             )
         return {"title": "Inspeções e vencimentos", "filters": filters, "rows": rows}
@@ -536,6 +658,7 @@ class OperationalReportService:
                         else ""
                     ),
                     "observacoes": (a.return_notes or a.notes or "")[:2000],
+                    "registrado_em": a.created_at.isoformat() if getattr(a, "created_at", None) else "",
                 }
             )
         return {"title": "Movimentações patrimoniais", "filters": filters, "rows": rows}

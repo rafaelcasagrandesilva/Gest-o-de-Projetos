@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import unittest
 
+from datetime import date
+
 from app.services.indicators_service import (
+    IndicatorsService,
     aggregate_consolidado,
     compute_roi,
+    growth_pct,
     is_economically_relevant,
     sort_roi_desc,
+    trend_label,
 )
 
 
@@ -152,6 +157,91 @@ class TestIsEconomicallyRelevant(unittest.TestCase):
 
     def test_valor_acima_da_tolerancia_aparece(self) -> None:
         self.assertTrue(is_economically_relevant(0.0, 0.01))
+
+
+class TestAggregateConsolidadoExecutivo(unittest.TestCase):
+    """Campos adicionais do Dashboard Executivo (Custos de M.O. e Lucro Líquido)."""
+
+    def test_soma_labor_cost_veiculos_e_net_profit(self) -> None:
+        rows = [
+            {"revenue": 100.0, "cost": 60.0, "operational_profit": 40.0, "labor_cost": 25.0, "vehicle_cost": 5.0, "net_profit": 30.0},
+            {"revenue": 200.0, "cost": 150.0, "operational_profit": 50.0, "labor_cost": 80.0, "vehicle_cost": 12.0, "net_profit": 45.0},
+        ]
+        agg = aggregate_consolidado(rows)
+        self.assertAlmostEqual(agg["labor_cost"], 105.0)
+        self.assertAlmostEqual(agg["vehicle_cost"], 17.0)
+        self.assertAlmostEqual(agg["net_profit"], 75.0)
+
+    def test_campos_ausentes_tratados_como_zero(self) -> None:
+        # rows sem labor_cost/vehicle_cost/net_profit (compat. com o ROI atual) => 0.
+        rows = [{"revenue": 100.0, "cost": 60.0, "operational_profit": 40.0}]
+        agg = aggregate_consolidado(rows)
+        self.assertEqual(agg["labor_cost"], 0.0)
+        self.assertEqual(agg["vehicle_cost"], 0.0)
+        self.assertEqual(agg["net_profit"], 0.0)
+
+
+class TestGrowthPct(unittest.TestCase):
+    def test_crescimento_positivo(self) -> None:
+        # 280 -> 657 ≈ +134,6% (referência do protótipo)
+        self.assertAlmostEqual(growth_pct(280.0, 657.0), (657.0 - 280.0) / 280.0 * 100.0)
+
+    def test_base_zero_retorna_none(self) -> None:
+        self.assertIsNone(growth_pct(0.0, 1000.0))
+
+    def test_base_negativa_usa_modulo(self) -> None:
+        # base -100 -> 0 é uma melhora de +100%.
+        self.assertAlmostEqual(growth_pct(-100.0, 0.0), 100.0)
+
+
+class TestTrendLabel(unittest.TestCase):
+    def test_alta(self) -> None:
+        self.assertEqual(trend_label(100.0, 150.0), "alta")
+
+    def test_baixa(self) -> None:
+        self.assertEqual(trend_label(150.0, 100.0), "baixa")
+
+    def test_estavel_dentro_da_tolerancia(self) -> None:
+        self.assertEqual(trend_label(100.0, 100.0), "estavel")
+
+
+class TestBuildKpis(unittest.TestCase):
+    def test_total_acumulado_e_crescimento(self) -> None:
+        points = [
+            {"faturamento": 100.0, "custo_mo": 40.0, "lucro_operacional": 20.0, "lucro_liquido": 10.0},
+            {"faturamento": 200.0, "custo_mo": 60.0, "lucro_operacional": 50.0, "lucro_liquido": 40.0},
+        ]
+        kpis = IndicatorsService._build_kpis(points)
+        self.assertAlmostEqual(kpis["faturamento"]["total"], 300.0)
+        self.assertAlmostEqual(kpis["faturamento"]["growth_pct"], 100.0)  # 100 -> 200
+        self.assertAlmostEqual(kpis["lucro_liquido"]["total"], 50.0)
+
+
+class TestBuildInsights(unittest.TestCase):
+    def test_extremos_e_ranking_de_projetos(self) -> None:
+        points = [
+            {"competencia": date(2026, 1, 1), "faturamento": 100.0, "custo_mo": 40.0, "lucro_operacional": 20.0, "lucro_liquido": 5.0},
+            {"competencia": date(2026, 2, 1), "faturamento": 300.0, "custo_mo": 90.0, "lucro_operacional": 80.0, "lucro_liquido": 60.0},
+            {"competencia": date(2026, 3, 1), "faturamento": 200.0, "custo_mo": 70.0, "lucro_operacional": 40.0, "lucro_liquido": -10.0},
+        ]
+        proj_totals = [
+            {"project_id": "a", "project_name": "Alpha", "revenue": 400.0, "operational_profit": 90.0},
+            {"project_id": "b", "project_name": "Beta", "revenue": 200.0, "operational_profit": 50.0},
+        ]
+        ins = IndicatorsService._build_insights(points, proj_totals)
+        self.assertEqual(ins["maior_faturamento"]["value"], 300.0)
+        self.assertEqual(ins["maior_faturamento"]["competencia"], date(2026, 2, 1))
+        self.assertEqual(ins["menor_faturamento"]["value"], 100.0)
+        self.assertEqual(ins["maior_lucro_liquido"]["value"], 60.0)
+        self.assertEqual(ins["projeto_maior_faturamento"]["project_name"], "Alpha")
+        self.assertEqual(ins["tendencia"], "alta")  # 100 -> 200
+        self.assertAlmostEqual(ins["crescimento_acumulado_pct"], 100.0)
+
+    def test_series_vazia_nao_quebra(self) -> None:
+        ins = IndicatorsService._build_insights([], [])
+        self.assertIsNone(ins["maior_faturamento"])
+        self.assertIsNone(ins["projeto_maior_faturamento"])
+        self.assertEqual(ins["tendencia"], "estavel")
 
 
 if __name__ == "__main__":

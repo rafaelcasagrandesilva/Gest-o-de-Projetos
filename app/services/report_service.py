@@ -104,22 +104,67 @@ class ReportService:
         payroll = await PayrollService(self.session).build_payroll(
             competencia=comp, scenario=sc, project_id=None
         )
-        return {
-            "competencia_ref": comp.isoformat(),
-            "scenario": sc.value,
-            "rows": [
-                {
-                    "nome": line.full_name,
-                    "tipo": line.employment_type,
-                    "custo": float(line.grand_total),
-                }
-                for line in payroll.lines
-            ],
+
+        # Junta o custo de folha (por competência) com o CADASTRO do colaborador.
+        from sqlalchemy import select as _select
+        from app.models.employee import Employee
+
+        emps = (await self.session.execute(_select(Employee))).scalars().all()
+        emp_by_id = {e.id: e for e in emps}
+        # Centros de custo dos projetos alocados (para a coluna de relacionamentos).
+        proj_ids = {
+            s.project_id for line in payroll.lines for s in (line.by_project or []) if s.project_id
         }
+        proj_cc: dict[UUID, str] = {}
+        if proj_ids:
+            prows = (await self.session.execute(_select(Project).where(Project.id.in_(proj_ids)))).scalars().all()
+            proj_cc = {p.id: (p.cost_center or "") for p in prows}
+
+        rows: list[dict[str, Any]] = []
+        for line in payroll.lines:
+            emp = emp_by_id.get(line.employee_id)
+            slices = line.by_project or []
+            projetos = "; ".join(
+                f"{s.project_name} ({float(s.allocation_percentage):.0f}%)" for s in slices
+            )
+            ccs = sorted({proj_cc.get(s.project_id, "") for s in slices if proj_cc.get(s.project_id)})
+            rows.append(
+                {
+                    # Identificação
+                    "nome": line.full_name,
+                    "email": (emp.email if emp else "") or "",
+                    "cargo": line.role_title or "",
+                    "tipo": line.employment_type,
+                    "status": "Ativo" if line.is_active else "Inativo",
+                    # Relacionamentos
+                    "projetos": projetos,
+                    "centros_custo": "; ".join(ccs),
+                    # Valores (cadastro)
+                    "salario_base": float(emp.salary_base) if (emp and emp.salary_base is not None) else "",
+                    "custos_adicionais": float(emp.additional_costs) if (emp and emp.additional_costs is not None) else "",
+                    "custo_total_cadastro": float(emp.total_cost) if emp else "",
+                    "pj_horas_mes": float(emp.pj_hours_per_month) if (emp and emp.pj_hours_per_month is not None) else "",
+                    "pj_custo_adicional": float(emp.pj_additional_cost) if emp else "",
+                    # Adicionais
+                    "periculosidade": ("Sim" if emp.has_periculosidade else "Não") if emp else "",
+                    "adicional_dirigida": ("Sim" if emp.has_adicional_dirigida else "Não") if emp else "",
+                    # Pagamento
+                    "pix_tipo": (emp.pix_key_type if emp else "") or "",
+                    "pix_chave": (emp.pix_key if emp else "") or "",
+                    # Valores (folha na competência)
+                    "custo_projetos": float(line.projects_total),
+                    "custo_administrativo": float(line.administrative_cost),
+                    "custo": float(line.grand_total),
+                    # Datas
+                    "criado_em": emp.created_at.isoformat() if (emp and getattr(emp, "created_at", None)) else "",
+                    "atualizado_em": emp.updated_at.isoformat() if (emp and getattr(emp, "updated_at", None)) else "",
+                }
+            )
+        return {"competencia_ref": comp.isoformat(), "scenario": sc.value, "rows": rows}
 
     async def generate_vehicles_report(self, *, active_only: bool) -> dict[str, Any]:
         rows = await FleetService(self.session).list_vehicles(
-            offset=0, limit=10_000, active_only=active_only
+            offset=0, limit=10_000, include_inactive=not active_only
         )
         out = []
         for r in rows:
@@ -127,9 +172,14 @@ class ReportService:
             out.append(
                 {
                     "placa": v.plate,
+                    "modelo": getattr(r, "model", None) or "",
+                    "descricao": getattr(r, "description", None) or "",
                     "tipo": v.vehicle_type,
+                    "condutor": v.driver_name,
                     "custo_mensal": float(v.monthly_cost or 0),
                     "ativo": v.is_active,
+                    "criado_em": r.created_at.isoformat() if getattr(r, "created_at", None) else "",
+                    "atualizado_em": r.updated_at.isoformat() if getattr(r, "updated_at", None) else "",
                 }
             )
         return {"active_only": active_only, "rows": out}
@@ -261,6 +311,8 @@ class ReportService:
                     "nome": u.full_name,
                     "ativo": u.is_active,
                     "papeis": ", ".join(role_names),
+                    "criado_em": u.created_at.isoformat() if getattr(u, "created_at", None) else "",
+                    "atualizado_em": u.updated_at.isoformat() if getattr(u, "updated_at", None) else "",
                 }
             )
         return {"rows": rows}
@@ -272,17 +324,30 @@ class ReportService:
         rows = await FinancialCrudService(self.session).list_revenues(
             offset=0, limit=10_000, project_id=project_id, scenario=sc
         )
+        # Resolve nomes de projeto em lote (relatório legível, sem UUID cru).
+        from sqlalchemy import select as _select
+
+        pids = {r.project_id for r in rows if r.project_id}
+        project_names: dict[UUID, str] = {}
+        if pids:
+            prows = (await self.session.execute(_select(Project).where(Project.id.in_(pids)))).scalars().all()
+            project_names = {p.id: p.name for p in prows}
         out: list[dict[str, Any]] = []
         for r in rows:
             comp = r.competencia
+            scen = r.scenario.value if hasattr(r.scenario, "value") else str(r.scenario)
             out.append(
                 {
+                    "projeto": project_names.get(r.project_id) or "",
                     "project_id": str(r.project_id),
                     "competencia": comp.isoformat() if isinstance(comp, date) else str(comp),
+                    "cenario": scen,
                     "valor": float(r.amount),
                     "descricao": r.description or "",
                     "status": r.status,
                     "retencao": bool(r.has_retention),
+                    "criado_em": r.created_at.isoformat() if getattr(r, "created_at", None) else "",
+                    "atualizado_em": r.updated_at.isoformat() if getattr(r, "updated_at", None) else "",
                 }
             )
         return {

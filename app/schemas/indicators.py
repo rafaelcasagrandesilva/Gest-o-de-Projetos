@@ -78,3 +78,82 @@ class KpiCatalogEntry(BaseModel):
 
 class KpiCatalog(BaseModel):
     items: list[KpiCatalogEntry]
+
+
+# --- Dashboard Executivo: Evolução Financeira -------------------------------
+
+
+class FinancialEvolutionPoint(BaseModel):
+    """Ponto mensal do Dashboard Executivo (sem Combustível, conforme escopo)."""
+
+    competencia: date
+    faturamento: float
+    custo_mo: float
+    custo_veiculos: float
+    lucro_operacional: float
+    lucro_liquido: float
+
+
+class FinancialKpi(BaseModel):
+    """Card de KPI: total acumulado no período + crescimento mês inicial→final."""
+
+    total: float
+    growth_pct: float | None
+
+
+class FinancialKpis(BaseModel):
+    faturamento: FinancialKpi
+    custo_mo: FinancialKpi
+    lucro_operacional: FinancialKpi
+    lucro_liquido: FinancialKpi
+
+
+class MonthlyHighlight(BaseModel):
+    competencia: date
+    value: float
+
+
+class ProjectHighlight(BaseModel):
+    project_id: UUID
+    project_name: str
+    value: float
+
+
+class FinancialInsights(BaseModel):
+    """Painel 'Insights' — destaques calculados automaticamente."""
+
+    maior_faturamento: MonthlyHighlight | None
+    menor_faturamento: MonthlyHighlight | None
+    maior_lucro_operacional: MonthlyHighlight | None
+    maior_lucro_liquido: MonthlyHighlight | None
+    projeto_maior_faturamento: ProjectHighlight | None
+    projeto_maior_lucro: ProjectHighlight | None
+    tendencia: str  # "alta" | "baixa" | "estavel"
+    crescimento_acumulado_pct: float | None
+
+
+class FinancialEvolution(BaseModel):
+    """Payload completo do Dashboard Executivo de Evolução Financeira."""
+
+    scenario: str
+    start: date
+    end: date
+    project_ids: list[UUID]
+    cost_centers: list[str]
+    project_count: int
+    points: list[FinancialEvolutionPoint]
+    kpis: FinancialKpis
+    insights: FinancialInsights
+
+
+class FilterProject(BaseModel):
+    project_id: UUID
+    project_name: str
+    cost_center: str | None
+
+
+class IndicatorFilters(BaseModel):
+    """Opções de filtro disponíveis (apenas dimensões com cadastro estruturado)."""
+
+    projects: list[FilterProject]
+    cost_centers: list[str]

@@ -26,6 +26,27 @@ export type ReportFilters = Record<string, string | number | boolean | undefined
 
 export type ReportScenario = "PREVISTO" | "REALIZADO";
 
+/**
+ * Extrai o nome amigável do arquivo do cabeçalho Content-Disposition.
+ * Prioriza `filename*` (RFC 5987, com acentos em pt-BR); usa `filename` como
+ * alternativa. Sem nome técnico como fallback — apenas um genérico em português.
+ */
+function filenameFromDisposition(cd: string | undefined, ext: string): string {
+  if (cd) {
+    const star = cd.match(/filename\*=(?:UTF-8'')?([^;]+)/i);
+    if (star?.[1]) {
+      try {
+        return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ""));
+      } catch {
+        /* cai para filename simples */
+      }
+    }
+    const plain = cd.match(/filename="([^"]+)"/i) ?? cd.match(/filename=([^;\s]+)/i);
+    if (plain?.[1]) return plain[1].trim();
+  }
+  return `Relatório.${ext}`;
+}
+
 export async function generateReport(
   type: ReportType,
   format: ReportFormat,
@@ -48,9 +69,7 @@ export async function generateReport(
     const res = await api.post("/reports/generate/", body, { responseType: "blob" });
     const blob = res.data as Blob;
     const cd = res.headers["content-disposition"] as string | undefined;
-    let name = `relatorio_${type}.${format}`;
-    const m = cd?.match(/filename="([^"]+)"/i) ?? cd?.match(/filename=([^;\s]+)/i);
-    if (m?.[1]) name = m[1].trim();
+    const name = filenameFromDisposition(cd, format);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

@@ -385,7 +385,7 @@ export function AssetDetailPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-5">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link to={listPath} className="text-sm text-indigo-600 hover:underline">
