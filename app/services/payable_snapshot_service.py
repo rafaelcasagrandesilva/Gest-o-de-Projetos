@@ -48,6 +48,12 @@ PAYABLE_CONCILIATED_TAG = "[conciliado]"
 # Projetos > Realizado > Veículos: apropriação de custo por projeto (não obrigação financeira).
 VEHICLE_AUTO_PAYABLE_NAME = "Custo com veículos"
 
+# Piso de implantação da geração automática de Custos Fixos/Endividamento no Contas a
+# Pagar: a funcionalidade NÃO retroage. Competências anteriores a esta NUNCA geram esses
+# lançamentos automaticamente (JUL/2026 é a primeira competência válida). Não afeta
+# lançamentos de projeto/colaborador, manuais ou antecipações.
+COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE = date(2026, 7, 1)
+
 
 def _money2(value: object) -> Decimal:
     """Valor monetário com 2 casas — evita comparações quebradas por float / Numeric impreciso."""
@@ -703,6 +709,10 @@ class PayableSnapshotService:
         competências futuras).
         """
         comp = normalize_competencia(payment_month)
+        # Não retroage: competências anteriores à implantação (JUL/2026) nunca geram
+        # Custos Fixos/Endividamento automaticamente. JUL/2026 em diante segue igual.
+        if comp < COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE:
+            return 0
         _, month_end = _month_bounds(comp)
         settings = await SettingsService(self.session).get_or_create()
         due = _default_due_date(comp, day=10)
@@ -780,6 +790,61 @@ class PayableSnapshotService:
         if created:
             logger.info("payables company_finance auto-generation month=%s created=%d", comp, created)
         return created
+
+    async def purge_pre_launch_company_finance_payables(
+        self,
+        *,
+        first_competence: date = COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE,
+        dry_run: bool = False,
+    ) -> dict:
+        """Limpeza segura dos lançamentos automáticos de Custos Fixos/Endividamento criados
+        indevidamente em competências ANTERIORES à implantação (< first_competence).
+
+        Remove apenas linhas que atendem TODAS as condições (100% seguro):
+        - origin ∈ (FIXED_COST, DEBT)  → gerados automaticamente pelo cadastro corporativo;
+        - competência < first_competence (JUL/2026);
+        - sem QUALQUER pagamento registrado: amount_paid <= 0 E sem linha em payable_payments
+          (ativa ou estornada).
+
+        NUNCA remove: manuais (origin MANUAL), de projeto/colaborador (origin PROJECT/NULL),
+        antecipações, nem linhas com pagamento. `dry_run=True` apenas conta (não deleta).
+        Retorna relatório: total removido/candidato e quantidade por competência.
+        """
+        first = normalize_competencia(first_competence)
+        stmt = (
+            select(PayableSnapshot)
+            .where(
+                PayableSnapshot.month < first,
+                PayableSnapshot.origin.in_(
+                    (PayableOrigin.FIXED_COST.value, PayableOrigin.DEBT.value)
+                ),
+                PayableSnapshot.amount_paid <= 0,
+                ~PayableSnapshot.id.in_(select(PayablePayment.payable_snapshot_id)),
+            )
+            .order_by(PayableSnapshot.month.asc())
+        )
+        rows = list((await self.session.execute(stmt)).scalars().all())
+        by_competence: dict[str, int] = {}
+        for r in rows:
+            key = f"{r.month:%Y-%m}"
+            by_competence[key] = by_competence.get(key, 0) + 1
+            if not dry_run:
+                await self.session.delete(r)
+        if not dry_run:
+            await self.session.flush()
+            if rows:
+                logger.warning(
+                    "payables purge pre-launch company_finance removed=%d competences=%s",
+                    len(rows),
+                    sorted(by_competence),
+                )
+        return {
+            "first_competence": f"{first:%Y-%m}",
+            "removed": 0 if dry_run else len(rows),
+            "candidates": len(rows),
+            "by_competence": dict(sorted(by_competence.items())),
+            "dry_run": dry_run,
+        }
 
     async def sync_competencia(
         self,
