@@ -22,6 +22,9 @@ class VehicleRead(UUIDTimestampRead):
     driver_employee_id: UUID | None = None
     driver_name: str | None = None
     is_active: bool = Field(serialization_alias="active")
+    # Ciclo de vida: start_date = entrada; end_date = saída (venda/baixa).
+    start_date: date | None = None
+    end_date: date | None = None
 
 
 class VehicleCreate(BaseModel):
@@ -32,6 +35,9 @@ class VehicleCreate(BaseModel):
     monthly_cost: float = Field(ge=0, description="Custo fixo mensal (R$); padrão vem das configurações por tipo.")
     driver_employee_id: UUID | None = None
     is_active: bool = True
+    # Ciclo de vida — entrada obrigatória em novos cadastros; saída opcional.
+    start_date: date = Field(..., description="Data de entrada do veículo na frota.")
+    end_date: date | None = None
 
 
 class VehicleUpdate(BaseModel):
@@ -42,6 +48,9 @@ class VehicleUpdate(BaseModel):
     monthly_cost: float | None = Field(default=None, ge=0)
     driver_employee_id: UUID | None = None
     is_active: bool | None = None
+    # Ciclo de vida — invariante (inativo exige end_date) aplicada no serviço.
+    start_date: date | None = None
+    end_date: date | None = None
 
 
 class VehicleUsageRead(UUIDTimestampRead):

@@ -25,6 +25,7 @@ from app.services.payable_snapshot_service import (
     SOURCE_TAG_PROJECT_SYSTEM,
     payable_snapshot_derived_fields,
 )
+from app.services.receivable_advance_batch_service import ReceivableAdvanceBatchService
 from app.services.receivable_manual_service import ReceivableManualService
 from app.services.receivable_service import ReceivableService
 from app.utils.date_utils import normalize_competencia, previous_competencia
@@ -420,6 +421,10 @@ class OperationalReportService:
             period_field=str(filters.get("period_field") or "issue"),
         )
         proj_meta = await self._project_meta_map({inv.project_id for inv in invs if inv.project_id})
+        # Regra 13: histórico N:N — todas as operações de antecipação relacionadas a cada NF.
+        batch_svc = ReceivableAdvanceBatchService(self.session)
+        ops_map = await batch_svc.operations_for_invoices([inv.id for inv in invs])
+        counts_map = await batch_svc.confirmed_operation_counts([inv.id for inv in invs])
         out_rows: list[dict[str, Any]] = []
         for inv in invs:
             r = svc.invoice_to_read(inv)
@@ -427,6 +432,12 @@ class OperationalReportService:
             recv = float(r["received_amount"])
             saldo = max(0.0, net - recv)
             pm = proj_meta.get(inv.project_id, {})
+            ops = ops_map.get(inv.id, [])
+            ops_label = "; ".join(
+                f"SGC {b.sgc_number} ({b.institution})" if getattr(b, "sgc_number", None) is not None
+                else f"{b.batch_number} ({b.institution})"
+                for b in ops
+            )
             out_rows.append(
                 {
                     "numero_nf": r["number"],
@@ -448,6 +459,8 @@ class OperationalReportService:
                     "status": r["status"],
                     "oficial": "Sim" if r.get("is_official") else "Não",
                     "antecipada": "Sim" if r.get("is_anticipated") else "Não",
+                    "qtd_operacoes": int(counts_map.get(inv.id, 0)),
+                    "operacoes": ops_label,
                     "instituicao": r.get("institution") or "",
                     "venc_antecipacao": r["advance_due_date"].isoformat() if r.get("advance_due_date") else "",
                     "no_dashboard": "Sim" if getattr(inv, "include_in_dashboard", True) else "Não",

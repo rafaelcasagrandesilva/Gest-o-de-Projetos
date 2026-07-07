@@ -44,6 +44,25 @@ export interface ReceivableInvoice {
   include_in_dashboard: boolean;
   advance_batch_id?: string | null;
   advance_batch?: AdvanceBatchSummary | null;
+  /** Contador de operações confirmadas válidas (regra 7/8): "Antecipada Nx". */
+  anticipation_count?: number;
+  /** HISTÓRICO DE ANTECIPAÇÕES (regra 5): todas as operações relacionadas à NF. */
+  advance_operations?: AdvanceOperationHistory[];
+}
+
+/** Item do HISTÓRICO DE ANTECIPAÇÕES da NF (regra 5). */
+export interface AdvanceOperationHistory {
+  id: string;
+  sgc_number: number | null;
+  batch_number: string;
+  institution: string;
+  status: string;
+  receive_date: string | null;
+  repayment_date: string | null;
+  /** Valor antecipado da NF nesta operação. */
+  advanced_amount: number | null;
+  /** Valor realizado da operação, quando informado. */
+  received_amount: number | null;
 }
 
 export interface AdvanceBatchSummary {

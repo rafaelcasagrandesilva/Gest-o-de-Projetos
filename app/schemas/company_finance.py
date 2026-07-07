@@ -40,7 +40,11 @@ class PagamentoMes(BaseModel):
 
 class CompanyFinancialItemCreate(BaseModel):
     tipo: TipoFinanceiro
-    nome: str = Field(..., min_length=1, max_length=255)
+    # Nome opcional: em Endividamento é composto automaticamente pelo serviço a partir de
+    # colaborador + descrição. Em Custo Fixo continua obrigatório (validado abaixo).
+    nome: str | None = Field(None, max_length=255)
+    # Descrição própria do item (identificador da dívida em Endividamento).
+    item_description: str | None = Field(None, max_length=255)
     valor_referencia: float = Field(..., ge=0)
     category: str | None = Field(None, max_length=120)
     cost_center_ref: str = Field(
@@ -55,6 +59,10 @@ class CompanyFinancialItemCreate(BaseModel):
     employee_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
     is_monthly_required: bool = False
+    # Ciclo de vida — início obrigatório em novos cadastros; encerramento opcional.
+    is_active: bool = True
+    start_date: date = Field(..., description="Data de início do custo/endividamento.")
+    end_date: date | None = None
 
     has_legal_process: bool = False
     has_renegotiation: bool = False
@@ -87,6 +95,8 @@ class CompanyFinancialItemCreate(BaseModel):
     def validate_matrix_collaborator(self) -> "CompanyFinancialItemCreate":
         if self.tipo != "custo_fixo":
             return self
+        if not (self.nome and self.nome.strip()):
+            raise ValueError("nome é obrigatório.")
         if self.item_type == "COLABORADOR_MATRIZ":
             if self.employee_id is None:
                 raise ValueError("employee_id é obrigatório para item COLABORADOR_MATRIZ.")
@@ -97,9 +107,23 @@ class CompanyFinancialItemCreate(BaseModel):
             self.percentual = None
         return self
 
+    @model_validator(mode="after")
+    def validate_debt_fields(self) -> "CompanyFinancialItemCreate":
+        # Endividamento: descrição própria é obrigatória (identificador da dívida). O
+        # colaborador é opcional (apenas identificação — sem matriz/percentual). O `nome`
+        # é composto no serviço; nunca usa COLABORADOR_MATRIZ.
+        if self.tipo != "endividamento":
+            return self
+        if not (self.item_description and self.item_description.strip()):
+            raise ValueError("item_description é obrigatório para Endividamento.")
+        self.item_type = "MANUAL"
+        self.percentual = None
+        return self
+
 
 class CompanyFinancialItemUpdate(BaseModel):
     nome: str | None = Field(None, min_length=1, max_length=255)
+    item_description: str | None = Field(None, max_length=255)
     valor_referencia: float | None = Field(None, ge=0)
     category: str | None = Field(None, max_length=120)
     cost_center_ref: str | None = Field(
@@ -114,6 +138,10 @@ class CompanyFinancialItemUpdate(BaseModel):
     employee_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
     is_monthly_required: bool | None = None
+    # Ciclo de vida — invariante (inativo exige end_date) aplicada no serviço.
+    is_active: bool | None = None
+    start_date: date | None = None
+    end_date: date | None = None
 
     has_legal_process: bool | None = None
     has_renegotiation: bool | None = None
@@ -169,12 +197,10 @@ class CompanyFinancialItemUpdate(BaseModel):
 
     @model_validator(mode="after")
     def validate_matrix_collaborator(self) -> "CompanyFinancialItemUpdate":
-        # Validação parcial: só se o payload tocar no assunto.
-        touch = any(v is not None for v in (self.item_type, self.employee_id, self.percentual))
-        if not touch:
-            return self
-        eff_type = self.item_type or ("COLABORADOR_MATRIZ" if self.employee_id is not None else None)
-        if eff_type == "COLABORADOR_MATRIZ":
+        # Validação parcial: só quando o item é EXPLICITAMENTE COLABORADOR_MATRIZ (Custo
+        # Fixo). Não inferimos matriz a partir de `employee_id` isolado — Endividamento
+        # agora também usa `employee_id` (só identificação, sem percentual/matriz).
+        if self.item_type == "COLABORADOR_MATRIZ":
             if self.employee_id is None:
                 raise ValueError("employee_id é obrigatório para item COLABORADOR_MATRIZ.")
             if self.percentual is None:
@@ -191,6 +217,7 @@ class CompanyFinancialItemRead(BaseModel):
     employee_employment_type: str | None = None
     percentual: float | None = None
     nome: str
+    item_description: str | None = None
     valor_referencia: float
     category: str | None = None
     cost_center_ref: str
@@ -200,6 +227,10 @@ class CompanyFinancialItemRead(BaseModel):
     description: str | None = None
     recurrence: str | None = None
     is_monthly_required: bool = False
+    # Ciclo de vida do cadastro (distinto de `status`, que é o progresso do endividamento).
+    is_active: bool = True
+    start_date: date | None = None
+    end_date: date | None = None
     has_legal_process: bool = False
     has_renegotiation: bool = False
     renegotiated_amount: float | None = None

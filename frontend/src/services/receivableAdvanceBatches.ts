@@ -10,6 +10,15 @@ export interface AdvanceBatchSummary {
   status: AdvanceBatchStatus;
 }
 
+/** Resumo curto de uma operação para indicadores de histórico N:N (regras 4 e 6). */
+export interface AdvanceOperationSummary {
+  id: string;
+  sgc_number: number | null;
+  batch_number: string;
+  institution: string;
+  status: AdvanceBatchStatus;
+}
+
 export interface AdvanceBatchEligibleInvoice {
   id: string;
   project_id: string;
@@ -21,6 +30,9 @@ export interface AdvanceBatchEligibleInvoice {
   gross_amount: number;
   net_amount: number;
   status: string;
+  /** Histórico N:N (regra 4): operações válidas em que a NF já participou. */
+  operations_count?: number;
+  operations?: AdvanceOperationSummary[];
 }
 
 export interface AdvanceBatchItem {
@@ -39,6 +51,8 @@ export interface AdvanceBatchItem {
   issue_date: string | null;
   due_date: string | null;
   invoice_status?: string | null;
+  /** Regra 6: outras operações válidas em que esta mesma NF participa. */
+  other_operations?: AdvanceOperationSummary[];
 }
 
 export interface AdvanceBatch {

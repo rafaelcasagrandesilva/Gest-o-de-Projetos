@@ -77,6 +77,8 @@ type Props = {
   repasseCompetence?: string;
   /** Navegação operação → NF. */
   onOpenInvoice?: (item: AdvanceBatchItem) => void;
+  /** Navegação operação → outra operação (regra 6): abre outro borderô. */
+  onOpenOperation?: (batchId: string) => void;
 };
 
 export function AdvanceBatchModal({
@@ -86,6 +88,7 @@ export function AdvanceBatchModal({
   viewBatchId,
   repasseCompetence,
   onOpenInvoice,
+  onOpenOperation,
 }: Props) {
   const isView = Boolean(viewBatchId);
   const [loading, setLoading] = useState(false);
@@ -238,7 +241,24 @@ export function AdvanceBatchModal({
         </td>
         <td className="px-2 py-1.5">{inv.project_name ?? "—"}</td>
         <td className="px-2 py-1.5">{inv.client_name ?? "—"}</td>
-        <td className="px-2 py-1.5 font-medium">{inv.number}</td>
+        <td className="px-2 py-1.5 font-medium">
+          {inv.number}
+          {(inv.operations_count ?? 0) > 0 ? (
+            <span
+              className="mt-0.5 block text-[10px] font-normal text-amber-700"
+              title={`Já utilizada em ${inv.operations_count} ${
+                (inv.operations_count ?? 0) === 1 ? "operação" : "operações"
+              }`}
+            >
+              {`Já usada em ${inv.operations_count} ${
+                (inv.operations_count ?? 0) === 1 ? "operação" : "operações"
+              }`}
+              {(inv.operations?.length ?? 0) > 0
+                ? ` • ${[...new Set((inv.operations ?? []).map((o) => o.institution))].join(" • ")}`
+                : ""}
+            </span>
+          ) : null}
+        </td>
         <td className="px-2 py-1.5 whitespace-nowrap">{formatDateBr(inv.issue_date)}</td>
         <td className="px-2 py-1.5 whitespace-nowrap">{formatDateBr(inv.due_date)}</td>
         <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(inv.gross_amount)}</td>
@@ -702,6 +722,8 @@ export function AdvanceBatchModal({
                 items={detail.items}
                 dueCompetenceFilter={repasseCompetence}
                 onOpenInvoice={onOpenInvoice}
+                currentBatchId={detail.id}
+                onOpenOperation={onOpenOperation}
               />
             </div>
           </div>

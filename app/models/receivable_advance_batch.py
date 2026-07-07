@@ -20,6 +20,18 @@ class ReceivableAdvanceBatchStatus(str, enum.Enum):
 
 BATCH_STATUS_DB = Enum(ReceivableAdvanceBatchStatus, name="receivable_advance_batch_status")
 
+# Operações "válidas" para fins de relacionamento N:N (regra 8): confirmadas e não
+# canceladas. Uma NF é considerada efetivamente ANTECIPADA por operações neste conjunto
+# (DRAFT ainda é rascunho — não antecipou nada; CANCELLED foi revertida).
+CONFIRMED_BATCH_STATUSES: frozenset[ReceivableAdvanceBatchStatus] = frozenset(
+    {ReceivableAdvanceBatchStatus.OPEN, ReceivableAdvanceBatchStatus.SETTLED}
+)
+# Operações "vivas" (não canceladas), usadas para bloquear reuso da MESMA NF no MESMO
+# lote ativo e para exibir histórico pendente (inclui rascunhos).
+ACTIVE_BATCH_STATUSES: frozenset[ReceivableAdvanceBatchStatus] = frozenset(
+    {ReceivableAdvanceBatchStatus.DRAFT, ReceivableAdvanceBatchStatus.OPEN, ReceivableAdvanceBatchStatus.SETTLED}
+)
+
 
 class ReceivableAdvanceBatch(TimestampUUIDMixin, Base):
     """Operação de antecipação de NFs (ex.: borderô, factoring, FIDC)."""
@@ -98,4 +110,4 @@ class ReceivableAdvanceBatchItem(TimestampUUIDMixin, Base):
     advanced_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
 
     batch: Mapped[ReceivableAdvanceBatch] = relationship(back_populates="items")
-    invoice: Mapped["ReceivableInvoice"] = relationship(back_populates="advance_batch_item")  # noqa: F821
+    invoice: Mapped["ReceivableInvoice"] = relationship(back_populates="advance_batch_items")  # noqa: F821

@@ -72,12 +72,17 @@ class ReceivableInvoice(TimestampUUIDMixin, Base):
         cascade="all, delete-orphan",
         order_by="ReceivableInvoiceFile.created_at.asc()",
     )
+    # Ponteiro denormalizado para a operação confirmada mais recente (compatibilidade:
+    # Dashboard, financial router, resumo na NF). NÃO é o relacionamento — o histórico
+    # completo N:N vive em `advance_batch_items`.
     advance_batch: Mapped["ReceivableAdvanceBatch | None"] = relationship(
         foreign_keys=[advance_batch_id],
     )
-    advance_batch_item: Mapped["ReceivableAdvanceBatchItem | None"] = relationship(
+    # Relacionamento N:N (1 NF → N operações): todas as participações da NF em operações
+    # de antecipação, através da tabela de junção. Fonte de verdade do histórico.
+    advance_batch_items: Mapped[list["ReceivableAdvanceBatchItem"]] = relationship(
         back_populates="invoice",
-        uselist=False,
+        order_by="ReceivableAdvanceBatchItem.created_at.asc()",
     )
 
 

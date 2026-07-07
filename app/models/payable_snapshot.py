@@ -30,6 +30,37 @@ class PayableSnapshotType(str, enum.Enum):
 PAYABLE_SNAPSHOT_TYPE_DB = Enum(PayableSnapshotType, name="payable_snapshot_type")
 
 
+class PayableOrigin(str, enum.Enum):
+    """Origem rastreável de um lançamento do Contas a Pagar.
+
+    Armazenada como texto (coluna `origin`), acompanhada do `ref_id` (ID da origem).
+    É a base arquitetural para as automações de geração — cada rotina identifica suas
+    linhas por (origin, ref_id, competência), garantindo idempotência.
+    """
+
+    PROJECT = "PROJECT"
+    FIXED_COST = "FIXED_COST"
+    DEBT = "DEBT"
+    MANUAL = "MANUAL"
+    PAYROLL = "PAYROLL"
+    ANTECIPACAO = "ANTECIPACAO"
+
+
+def default_origin_for_type(t: "PayableSnapshotType") -> str:
+    """Origem inferida a partir do `type` (para linhas legadas sem `origin`)."""
+    if t == PayableSnapshotType.COLLABORATOR:
+        return PayableOrigin.PROJECT.value
+    if t == PayableSnapshotType.VEHICLE:
+        return PayableOrigin.PROJECT.value
+    if t == PayableSnapshotType.FIXED_COST:
+        return PayableOrigin.FIXED_COST.value
+    if t in (PayableSnapshotType.ENDIVIDAMENTO, PayableSnapshotType.FINANCIAL):
+        return PayableOrigin.DEBT.value
+    if t in (PayableSnapshotType.ANTECIPACAO, PayableSnapshotType.ANTECIPACAO_OPERACAO):
+        return PayableOrigin.ANTECIPACAO.value
+    return PayableOrigin.MANUAL.value
+
+
 class PayableSnapshot(TimestampUUIDMixin, Base):
     """
     Snapshot mensal de contas a pagar (imutável após geração).
@@ -60,7 +91,16 @@ class PayableSnapshot(TimestampUUIDMixin, Base):
         PG_UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
+    # Origem rastreável do lançamento (PROJECT, FIXED_COST, DEBT, MANUAL, PAYROLL, …).
+    # Preenchida nas gerações automáticas; NULL em registros legados (origem inferida
+    # pelo `type` na leitura). Combinada com `ref_id`, identifica a origem de cada linha.
+    origin: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Descrição do item, separada do `name` (que é o Credor). Hoje preenchida em
+    # lançamentos de Endividamento vinculados ao cadastro; genérica de propósito
+    # (reutilizável por outros tipos no futuro). NULL em legados/demais tipos.
+    item_description: Mapped[str | None] = mapped_column(String(255), nullable=True)
     cost_center: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
 

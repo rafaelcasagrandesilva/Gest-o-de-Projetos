@@ -48,8 +48,12 @@ export interface PayableSnapshotRow {
   project_id: string | null;
 
   name: string;
+  /** Descrição do item, separada do `name`/Credor (Endividamento). Null nos demais. */
+  item_description?: string | null;
   cost_center: string;
   category: string;
+  /** Origem rastreável do lançamento (PROJECT, FIXED_COST, DEBT, MANUAL, PAYROLL, …). */
+  origin: string | null;
 
   amount_original: number;
   amount_final: number;

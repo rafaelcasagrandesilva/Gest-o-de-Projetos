@@ -25,6 +25,11 @@ class Vehicle(TimestampUUIDMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
+    # Ciclo de vida do cadastro. start_date = entrada; end_date = saída (venda/baixa).
+    # Regra: inativo (is_active=False) exige end_date; ativo pode manter ambos nulos.
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
     driver: Mapped["Employee | None"] = relationship(
         "Employee", foreign_keys=[driver_employee_id], lazy="joined"
     )

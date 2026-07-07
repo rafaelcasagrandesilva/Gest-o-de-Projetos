@@ -13,10 +13,13 @@ from sqlalchemy.orm import selectinload
 
 from app.core.scenario import Scenario, coerce_scenario, scenario_pg_rhs
 from app.models.costs import ProjectFixedCost
-from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment
+from app.models.company_finance import (
+    CompanyFinancialItem,
+    CompanyFinancialItemType,
+)
 from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
 from app.models.payable_payment import PayablePayment
-from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
+from app.models.payable_snapshot import PayableOrigin, PayableSnapshot, PayableSnapshotType
 from app.models.payable_snapshot_generation import PayableSnapshotGeneration
 from app.models.project_operational import (
     ProjectLabor,
@@ -27,7 +30,11 @@ from app.models.receivable import ReceivableInvoice, ReceivableInvoiceAnticipati
 from app.repositories.projects import ProjectRepository
 from app.models.project import Project
 from app.services.company_finance_cost_center import CompanyFinanceCostCenterService
-from app.services.employee_cost_service import project_labor_payable_snapshot_components
+from app.services.employee_cost_service import (
+    calculate_clt_cost,
+    calculate_pj_total_cost,
+    project_labor_payable_snapshot_components,
+)
 from app.services.settings_service import SettingsService
 from app.utils.dashboard_inclusion import apply_dashboard_inclusion_change
 from app.utils.date_utils import next_competencia, normalize_competencia, previous_competencia
@@ -576,100 +583,43 @@ class PayableSnapshotService:
         row = await self.session.get(PayableSnapshotGeneration, comp)
         return row is not None
 
-    async def _ensure_company_finance_manual_entries(self, *, payment_month: date) -> int:
+    async def _ensure_company_finance_auto_entries(self, *, payment_month: date) -> int:
+        """Backfill idempotente de Custos Fixos/Endividamento na competência.
+
+        Antes dependia de valor lançado manualmente na matriz (`company_financial_payments`);
+        agora o CADASTRO governa e a geração é automática a partir do valor de referência
+        (ver `_generate_company_finance_payables`). Mantido como ponto de extensão chamado
+        na abertura/sincronização do mês.
         """
-        Garante que lançamentos corporativos (custos diversos + endividamento) existam no snapshot do mês
-        SOMENTE quando houver valor preenchido manualmente em `company_financial_payments` para a competência.
-        """
-        comp = normalize_competencia(payment_month)
-        due = _default_due_date(comp, day=10)
-        rows = (
-            await self.session.execute(
-                select(CompanyFinancialPayment, CompanyFinancialItem)
-                .join(CompanyFinancialItem, CompanyFinancialItem.id == CompanyFinancialPayment.item_id)
-                .where(
-                    CompanyFinancialPayment.competencia == comp,
-                    CompanyFinancialPayment.valor > 0,
-                    CompanyFinancialItem.tipo.in_(("custo_fixo", "endividamento")),
-                )
-            )
-        ).all()
-        if not rows:
-            return 0
-
-        item_ids = [it.id for _, it in rows]
-        existing_fixed = set(
-            (
-                await self.session.execute(
-                    select(PayableSnapshot.ref_id).where(
-                        PayableSnapshot.month == comp,
-                        PayableSnapshot.type == PayableSnapshotType.FIXED_COST,
-                        PayableSnapshot.ref_id.in_(item_ids),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        existing_fin = set(
-            (
-                await self.session.execute(
-                    select(PayableSnapshot.ref_id).where(
-                        PayableSnapshot.month == comp,
-                        PayableSnapshot.type.in_(PAYABLE_DEBT_TYPES),
-                        PayableSnapshot.ref_id.in_(item_ids),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-        created = 0
-        for p, it in rows:
-            amt = float(p.valor or 0.0)
-            if amt <= 0:
-                continue
-            snap_type, cost_center, category = await self._company_finance_snapshot_meta(it)
-            if it.tipo == "custo_fixo":
-                if it.id in existing_fixed:
-                    continue
-            else:
-                if it.id in existing_fin:
-                    continue
-
-            self.session.add(
-                PayableSnapshot(
-                    month=comp,
-                    type=snap_type,
-                    ref_id=it.id,
-                    project_id=None,
-                    name=str(it.nome).strip(),
-                    cost_center=cost_center,
-                    category=category,
-                    amount_original=Decimal(str(round(amt, 2))),
-                    amount_final=Decimal(str(round(amt, 2))),
-                    amount_paid=Decimal("0"),
-                    due_date=due,
-                    paid=False,
-                    payment_date=None,
-                    observation=None,
-                )
-            )
-            created += 1
-
-        if created:
-            logger.warning("payables company_finance manual entries backfill applied month=%s added=%d", comp, created)
-        return created
+        return await self._generate_company_finance_payables(payment_month=payment_month)
 
     async def _get_company_financial_item(self, item_id: UUID) -> CompanyFinancialItem | None:
-        """Carrega item sem lazy load async (cost_center_project via selectinload)."""
+        """Carrega item sem lazy load async (cost_center_project/employee via selectinload)."""
         stmt = (
             select(CompanyFinancialItem)
             .where(CompanyFinancialItem.id == item_id)
-            .options(selectinload(CompanyFinancialItem.cost_center_project))
+            .options(
+                selectinload(CompanyFinancialItem.cost_center_project),
+                selectinload(CompanyFinancialItem.employee),
+            )
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    @staticmethod
+    def _company_finance_payable_identity(item: CompanyFinancialItem) -> tuple[str, str | None]:
+        """(name, item_description) exibidos no Contas a Pagar.
+
+        Endividamento: `name` = Credor (colaborador vinculado; senão a própria descrição;
+        senão o nome legado) e `item_description` = descrição própria do item. Demais tipos
+        (custo fixo/projeto): `name` = `item.nome` e `item_description` = None (inalterado).
+        """
+        if item.tipo == "endividamento":
+            desc = (getattr(item, "item_description", None) or "").strip() or None
+            emp = getattr(item, "employee", None)
+            emp_name = _employee_display_name(emp) if emp is not None else None
+            credor = (emp_name or desc or str(item.nome or "")).strip() or str(item.nome or "")
+            return credor, desc
+        return str(item.nome or "").strip(), None
 
     async def _company_finance_snapshot_meta(self, item: CompanyFinancialItem) -> tuple[PayableSnapshotType, str, str]:
         cc_svc = CompanyFinanceCostCenterService(self.session)
@@ -683,6 +633,175 @@ class PayableSnapshotService:
             return PayableSnapshotType.ENDIVIDAMENTO, cost_center, category
         raise ValueError("Tipo financeiro corporativo inválido para contas a pagar.")
 
+    # ------------------------------------------------------------------ #
+    # Geração automática a partir do CADASTRO (Custos Fixos / Endividamento)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _company_finance_payable_labels(item: CompanyFinancialItem) -> tuple[PayableSnapshotType, str, str]:
+        """(type, category, origin) do lançamento conforme as regras do cadastro.
+
+        - Custo fixo vinculado a colaborador → Tipo "Colaborador" (o credor/nome é o
+          próprio colaborador, já gravado em `item.nome`);
+        - Custo fixo sem colaborador → Tipo "Custo Fixo";
+        - Endividamento → Tipo "Endividamento".
+
+        O `type` interno permanece FIXED_COST/ENDIVIDAMENTO (reconciliação por ref_id
+        intacta); o rótulo exibido vem da `category`.
+        """
+        if item.tipo == "endividamento":
+            return PayableSnapshotType.ENDIVIDAMENTO, "Endividamento", PayableOrigin.DEBT.value
+        if getattr(item, "employee_id", None) is not None:
+            return PayableSnapshotType.FIXED_COST, "Colaborador", PayableOrigin.FIXED_COST.value
+        return PayableSnapshotType.FIXED_COST, "Custo Fixo", PayableOrigin.FIXED_COST.value
+
+    def _company_finance_monthly_value(
+        self, item: CompanyFinancialItem, *, comp: date, settings
+    ) -> Decimal:
+        """Valor mensal do lançamento automático (congelado no snapshot).
+
+        - Custo fixo colaborador (COLABORADOR_MATRIZ): custo do colaborador no mês × %;
+        - Custo fixo comum: valor mensal de referência;
+        - Endividamento: parcela prevista (installment_value) ou saldo/valor de referência
+          — mesma base já usada pelas pendências, sem alterar cálculo financeiro.
+        """
+        if item.tipo == "custo_fixo":
+            emp = getattr(item, "employee", None)
+            pct = getattr(item, "percentual", None)
+            if (
+                getattr(item, "item_type", None) == CompanyFinancialItemType.COLABORADOR_MATRIZ
+                and emp is not None
+                and pct is not None
+            ):
+                if (getattr(emp, "employment_type", "") or "").upper() == "CLT":
+                    base = calculate_clt_cost(emp, settings, comp.year, comp.month)
+                else:
+                    base = calculate_pj_total_cost(emp)
+                return _money2(float(base) * (float(pct) / 100.0))
+            return _money2(item.valor_referencia)
+        # Endividamento
+        rt = getattr(item, "renegotiation_type", None)
+        rt_val = getattr(rt, "value", rt)
+        if (
+            getattr(item, "has_renegotiation", False)
+            and rt_val == "INSTALLMENTS"
+            and getattr(item, "installment_value", None) is not None
+        ):
+            return _money2(item.installment_value)
+        if getattr(item, "has_renegotiation", False) and getattr(item, "renegotiated_amount", None) is not None:
+            return _money2(item.renegotiated_amount)
+        return _money2(item.valor_referencia)
+
+    async def _generate_company_finance_payables(self, *, payment_month: date) -> int:
+        """Gera automaticamente os lançamentos de Custos Fixos e Endividamento.
+
+        Regras (o CADASTRO governa a linha de contas a pagar):
+        - Custos Fixos: item ativo e competência dentro da vigência (início/encerramento);
+        - Endividamento: além disso, apenas quando `is_monthly_required` (Obrigatório = Sim).
+        Idempotente por (competência, ref_id): se já existir um lançamento daquele item na
+        competência (inclusive de gerações anteriores/legado), NÃO cria de novo. Nunca
+        apaga nada. Valor congelado no momento da geração (alterar o cadastro só afeta
+        competências futuras).
+        """
+        comp = normalize_competencia(payment_month)
+        _, month_end = _month_bounds(comp)
+        settings = await SettingsService(self.session).get_or_create()
+        due = _default_due_date(comp, day=10)
+        cc_svc = CompanyFinanceCostCenterService(self.session)
+
+        # Itens ativos cuja vigência cobre a competência.
+        stmt = (
+            select(CompanyFinancialItem)
+            .options(
+                selectinload(CompanyFinancialItem.employee),
+                selectinload(CompanyFinancialItem.cost_center_project),
+            )
+            .where(
+                CompanyFinancialItem.tipo.in_(("custo_fixo", "endividamento")),
+                CompanyFinancialItem.is_active.is_(True),
+                or_(CompanyFinancialItem.start_date.is_(None), CompanyFinancialItem.start_date <= month_end),
+                or_(CompanyFinancialItem.end_date.is_(None), CompanyFinancialItem.end_date >= comp),
+            )
+        )
+        items = list((await self.session.execute(stmt)).scalars().unique().all())
+        if not items:
+            return 0
+
+        # Idempotência: ref_ids que já possuem lançamento corporativo nesta competência.
+        existing_refs = set(
+            (
+                await self.session.execute(
+                    select(PayableSnapshot.ref_id).where(
+                        PayableSnapshot.month == comp,
+                        PayableSnapshot.type.in_((PayableSnapshotType.FIXED_COST, *PAYABLE_DEBT_TYPES)),
+                        PayableSnapshot.ref_id.is_not(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        created = 0
+        for item in items:
+            if item.id in existing_refs:
+                continue
+            # Endividamento só gera automaticamente quando obrigatório.
+            if item.tipo == "endividamento" and not bool(getattr(item, "is_monthly_required", False)):
+                continue
+            value = self._company_finance_monthly_value(item, comp=comp, settings=settings)
+            if value <= 0:
+                continue
+            snap_type, category, origin = self._company_finance_payable_labels(item)
+            cost_center = await cc_svc.resolve_label(item)
+            name, item_description = self._company_finance_payable_identity(item)
+            self.session.add(
+                PayableSnapshot(
+                    month=comp,
+                    type=snap_type,
+                    ref_id=item.id,
+                    project_id=None,
+                    name=name,
+                    item_description=item_description,
+                    cost_center=cost_center,
+                    category=category,
+                    origin=origin,
+                    amount_original=value,
+                    amount_final=value,
+                    amount_paid=Decimal("0"),
+                    due_date=due,
+                    paid=False,
+                    payment_date=None,
+                    observation=None,
+                )
+            )
+            existing_refs.add(item.id)
+            created += 1
+
+        if created:
+            logger.info("payables company_finance auto-generation month=%s created=%d", comp, created)
+        return created
+
+    async def sync_competencia(
+        self,
+        *,
+        payment_month: date,
+        accessible_project_ids: set[UUID] | None = None,
+        sees_all_projects: bool = True,
+    ) -> list[PayableSnapshot]:
+        """Rotina reutilizável de sincronização de uma competência.
+
+        Garante que o snapshot da competência exista (custos de Projetos) e gera os
+        lançamentos automáticos faltantes de Custos Fixos/Endividamento. É idempotente
+        (pode rodar infinitas vezes), NUNCA duplica, NUNCA apaga lançamentos existentes
+        nem lançamentos manuais. Base para todas as automações futuras.
+        """
+        rows = await self.get_or_create_for_month(
+            payment_month=payment_month,
+            accessible_project_ids=accessible_project_ids,
+            sees_all_projects=sees_all_projects,
+        )
+        return rows
+
     async def sync_company_finance_item_metadata(self, *, item_id: UUID) -> int:
         """
         Atualiza nome/centro/categoria em snapshots corporativos existentes.
@@ -693,6 +812,7 @@ class PayableSnapshotService:
         if item is None:
             return 0
         _snap_type, cost_center, category = await self._company_finance_snapshot_meta(item)
+        name, item_description = self._company_finance_payable_identity(item)
         rows = (
             await self.session.execute(
                 select(PayableSnapshot).where(
@@ -702,7 +822,8 @@ class PayableSnapshotService:
             )
         ).scalars().all()
         for row in rows:
-            row.name = str(item.nome).strip()
+            row.name = name
+            row.item_description = item_description
             row.cost_center = cost_center
             row.category = category
             _sync_legacy_paid_fields(row)
@@ -710,124 +831,18 @@ class PayableSnapshotService:
         return len(rows)
 
     async def sync_company_finance_item_months(self, *, item_id: UUID, months: set[date]) -> int:
+        """Neutralizado: a matriz mensal NÃO governa mais as linhas de Contas a Pagar.
+
+        A partir da geração automática por cadastro, a linha de CAP de um Custo Fixo/
+        Endividamento é criada e valorada a partir do próprio cadastro (valor de
+        referência), na abertura/sincronização da competência
+        (`_generate_company_finance_payables`). A grade mensal
+        (`company_financial_payments`) permanece como controle próprio do módulo Custos
+        Fixos e alimenta seus KPIs, mas deixou de criar/apagar lançamentos no CAP —
+        garantindo que a edição da matriz nunca remova uma linha automática nem altere
+        o histórico. Mantido como no-op idempotente para compatibilidade dos chamadores.
         """
-        Sincroniza valores de payables a partir de `company_financial_payments` (Salvar agora).
-
-        Não invalida nem recria o snapshot do mês inteiro. Remove linhas não pagas (exceto MANUAL)
-        quando o pagamento corporativo do mês zera. Linhas pagas nunca são apagadas.
-        """
-        if not months:
-            return 0
-
-        item = await self._get_company_financial_item(item_id)
-        if item is None:
-            return 0
-        snap_type, cost_center, category = await self._company_finance_snapshot_meta(item)
-        comps = sorted({normalize_competencia(m) for m in months})
-        pay_rows = (
-            await self.session.execute(
-                select(CompanyFinancialPayment).where(
-                    CompanyFinancialPayment.item_id == item_id,
-                    CompanyFinancialPayment.competencia.in_(comps),
-                )
-            )
-        ).scalars().all()
-        payments_by_month = {normalize_competencia(p.competencia): _money2(p.valor) for p in pay_rows}
-
-        changed = 0
-        for comp in comps:
-            existing = list(
-                (
-                    await self.session.execute(
-                        select(PayableSnapshot).where(
-                            PayableSnapshot.month == comp,
-                            PayableSnapshot.ref_id == item_id,
-                            PayableSnapshot.type.in_((PayableSnapshotType.FIXED_COST, *PAYABLE_DEBT_TYPES)),
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            # Sem marcador de geração e sem linha existente: aguarda geração do mês.
-            if not existing and not await self.is_generated(month=comp):
-                logger.info(
-                    "payables company_finance sync skip item_id=%s month=%s (month not generated, no rows)",
-                    item_id,
-                    comp,
-                )
-                continue
-
-            amount = payments_by_month.get(comp, Decimal("0.00"))
-
-            if amount <= 0:
-                removed = 0
-                protected = 0
-                for row in existing:
-                    if _payable_row_is_protected_from_auto_delete(row):
-                        row.name = str(item.nome).strip()
-                        row.cost_center = cost_center
-                        row.category = category
-                        _sync_legacy_paid_fields(row)
-                        protected += 1
-                        changed += 1
-                        continue
-                    await self.session.delete(row)
-                    removed += 1
-                    changed += 1
-                logger.info(
-                    "payables company_finance sync zero amount item_id=%s month=%s removed=%d protected=%d",
-                    item_id,
-                    comp,
-                    removed,
-                    protected,
-                )
-                continue
-
-            target = next((row for row in existing if row.type == snap_type), None)
-            if target is None:
-                target = PayableSnapshot(
-                    month=comp,
-                    type=snap_type,
-                    ref_id=item.id,
-                    project_id=None,
-                    name=str(item.nome).strip(),
-                    cost_center=cost_center,
-                    category=category,
-                    amount_original=amount,
-                    amount_final=amount,
-                    amount_paid=Decimal("0"),
-                    due_date=_default_due_date(comp, day=10),
-                    paid=False,
-                    payment_date=None,
-                    observation=None,
-                )
-                self.session.add(target)
-                changed += 1
-
-            if _money2(target.amount_paid) > 0:
-                _sync_legacy_paid_fields(target)
-                continue
-
-            target.name = str(item.nome).strip()
-            target.cost_center = cost_center
-            target.category = category
-            target.amount_original = amount
-            target.amount_final = amount
-            target.due_date = _default_due_date(comp, day=10)
-            _sync_legacy_paid_fields(target)
-
-            for row in existing:
-                if row.id == target.id:
-                    continue
-                if _payable_row_is_protected_from_auto_delete(row):
-                    _sync_legacy_paid_fields(row)
-                    continue
-                await self.session.delete(row)
-                changed += 1
-
-        await self.session.flush()
-        return changed
+        return 0
 
     async def sync_collaborator_payables_for_labor(
         self,
@@ -1440,7 +1455,7 @@ class PayableSnapshotService:
                     if await self._has_stale_invoice_anticipation_rows(month=comp):
                         logger.error("payables snapshot month=%s has stale ANTECIPACAO rows; preserving snapshot.", comp)
                     if existing and not force_regenerate:
-                        added_fixed = await self._ensure_company_finance_manual_entries(payment_month=comp)
+                        added_fixed = await self._ensure_company_finance_auto_entries(payment_month=comp)
                         added_ants = await self._ensure_invoice_anticipation_obligations(
                             payment_month=comp,
                             project_ids=None if sees_all_projects else (accessible_project_ids or None),
@@ -1462,7 +1477,7 @@ class PayableSnapshotService:
                             comp,
                         )
                     if existing and not force_regenerate:
-                        added_fixed = await self._ensure_company_finance_manual_entries(payment_month=comp)
+                        added_fixed = await self._ensure_company_finance_auto_entries(payment_month=comp)
                         added_ants = await self._ensure_invoice_anticipation_obligations(
                             payment_month=comp,
                             project_ids=None if sees_all_projects else (accessible_project_ids or None),
@@ -1694,44 +1709,11 @@ class PayableSnapshotService:
                         amount,
                     )
 
-            # --- Company finance (manual entries only): custos diversos + endividamento ---
-            # Regra nova: NÃO gerar automaticamente pelo valor de referência.
-            # Só entra no contas a pagar se houver valor lançado manualmente no mês (company_financial_payments).
-            payments_rows = (
-                await self.session.execute(
-                    select(CompanyFinancialPayment, CompanyFinancialItem)
-                    .join(CompanyFinancialItem, CompanyFinancialItem.id == CompanyFinancialPayment.item_id)
-                    .where(
-                        CompanyFinancialPayment.competencia == payment_month,
-                        CompanyFinancialPayment.valor > 0,
-                        CompanyFinancialItem.tipo.in_(("custo_fixo", "endividamento")),
-                    )
-                )
-            ).all()
-            for p, it in payments_rows:
-                amt = float(p.valor or 0.0)
-                if amt <= 0:
-                    continue
-                snap_type, cost_center, category = await self._company_finance_snapshot_meta(it)
-                self.session.add(
-                    PayableSnapshot(
-                        month=payment_month,
-                        type=snap_type,
-                        ref_id=it.id,
-                        project_id=None,
-                        name=str(it.nome).strip(),
-                        cost_center=cost_center,
-                        category=category,
-                        amount_original=Decimal(str(round(amt, 2))),
-                        amount_final=Decimal(str(round(amt, 2))),
-                        amount_paid=Decimal("0"),
-                        due_date=due,
-                        paid=False,
-                        payment_date=None,
-                        observation=None,
-                    )
-                )
-                created += 1
+            # --- Company finance: Custos Fixos + Endividamento (geração automática) ---
+            # O CADASTRO governa a linha (valor de referência), respeitando o ciclo de
+            # vida (ativo + vigência) e, para endividamento, o "Obrigatório = Sim".
+            # Idempotente por (competência, ref_id) — ver _generate_company_finance_payables.
+            created += await self._generate_company_finance_payables(payment_month=payment_month)
 
             # --- Custos diversos (operacional) — um snapshot por item ---
             misc_stmt = (
@@ -2027,12 +2009,18 @@ class PayableSnapshotService:
         amt = Decimal(str(round(float(amount), 2)))
         cc = await self._validate_manual_cost_center(cost_center)
         obs = (observation or "").strip() or None
+        origin = (
+            PayableOrigin.ANTECIPACAO.value
+            if snapshot_type == PayableSnapshotType.ANTECIPACAO_OPERACAO
+            else PayableOrigin.MANUAL.value
+        )
         row = PayableSnapshot(
             month=comp,
             type=snapshot_type,
             # ref_id permite vincular o lançamento à operação de antecipação (rastreabilidade).
             ref_id=ref_id or uuid4(),
             project_id=None,
+            origin=origin,
             name=str(name).strip(),
             cost_center=cc,
             category=str(category).strip(),

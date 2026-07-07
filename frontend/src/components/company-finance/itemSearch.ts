@@ -25,6 +25,7 @@ export function itemMatchesSearch(
 
   const haystack = [
     item.nome,
+    item.item_description ?? "",
     item.description ?? "",
     item.category ?? "",
     item.cost_center ?? "",

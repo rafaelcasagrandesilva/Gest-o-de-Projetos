@@ -16,6 +16,7 @@ REPORT_TITLES: dict[str, str] = {
     "project_summary": "Projeto - Resumo Financeiro e Custos",
     "company_summary": "Empresa - Resumo Financeiro por Projeto",
     "employees": "Colaboradores",
+    "payroll": "Folha de Pagamento",
     "vehicles": "Frota",
     "invoices": "Notas Fiscais - Resumo",
     "invoices_detailed": "Notas Fiscais - Detalhado",

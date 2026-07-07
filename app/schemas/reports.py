@@ -9,6 +9,7 @@ ReportType = Literal[
     "project_summary",
     "company_summary",
     "employees",
+    "payroll",
     "vehicles",
     "invoices",
     "debt",

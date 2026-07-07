@@ -279,6 +279,7 @@ export function AdvanceBatches() {
           setViewBatchId(null);
           navigate("/finance/invoices");
         }}
+        onOpenOperation={(batchId) => setViewBatchId(batchId)}
       />
     </div>
   );

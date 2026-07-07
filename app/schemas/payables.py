@@ -34,8 +34,14 @@ class PayableSnapshotRead(UUIDTimestampRead):
     project_id: UUID | None = None
 
     name: str
+    # Descrição do item (separada do `name`/Credor). Preenchida em lançamentos de
+    # Endividamento vinculados ao cadastro; NULL nos demais/legados.
+    item_description: str | None = None
     cost_center: str
     category: str
+    # Origem rastreável (PROJECT, FIXED_COST, DEBT, MANUAL, PAYROLL, …). Pode ser inferida
+    # do `type` para linhas legadas — ver ReceivablePayables read builder.
+    origin: str | None = None
 
     amount_original: float
     amount_final: float

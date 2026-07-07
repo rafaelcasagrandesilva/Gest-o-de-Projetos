@@ -398,6 +398,106 @@ def render_employees_bytes(
     return raw, _fname("employees", "pdf", ctx), MIME_PDF
 
 
+# Limite de caracteres do "Detalhamento dos Endividamentos" no PDF antes de resumir
+# para "N endividamentos" (o espaço da célula é limitado). No XLSX mostra-se completo.
+ENDIV_DETALHE_PDF_MAXLEN = 60
+
+
+def _format_endividamentos_detalhe(itens: list[dict[str, Any]] | None, *, summarize: bool) -> str:
+    """Detalhamento por dívida: "Descrição (R$ x); Descrição (R$ y)".
+
+    - Um único item: sempre mostra ele por extenso.
+    - `summarize` (PDF) com 2+ itens e texto longo: resume para "N endividamentos"
+      (a coluna financeira "Endividamentos" continua mostrando o total).
+    """
+    itens = itens or []
+    if not itens:
+        return ""
+    full = "; ".join(f"{it.get('descricao')} ({format_brl(it.get('valor'))})" for it in itens)
+    if summarize and len(itens) >= 2 and len(full) > ENDIV_DETALHE_PDF_MAXLEN:
+        return f"{len(itens)} endividamentos"
+    return full
+
+
+def render_payroll_bytes(
+    data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
+) -> tuple[bytes, str, str]:
+    """Folha de Pagamento: resumo executivo + 1 linha por colaborador + linha de totais.
+
+    Novo relatório — NÃO altera o de Colaboradores (render_employees_bytes) nem os demais.
+    """
+    s = data.get("summary") or {}
+    summarize_detalhe = fmt != "xlsx"  # PDF resume quando faltar espaço; XLSX completo.
+    headers = [
+        "Nome", "E-mail", "Cargo", "Tipo", "Status",
+        "Centro de Custo", "Distribuição",
+        "Salário Base", "Salário Líquido / Contratado", "Benefícios", "VR",
+        "VT", "Ajuda de custo", "Endividamentos", "Detalhamento dos Endividamentos",
+        "Outros pagamentos",
+        "Total da Folha", "PIX Tipo", "PIX Chave",
+    ]
+    rows: list[list[Any]] = []
+    for r in data["rows"]:
+        rows.append(
+            [
+                r["nome"], r.get("email") or "", r.get("cargo") or "", r["tipo"], r.get("status") or "",
+                r.get("centro_custo") or "—",
+                r.get("distribuicao") or "—",
+                format_brl(r.get("salario_base")),
+                format_brl(r.get("salario_liquido")),
+                format_brl(r.get("beneficios")),
+                format_brl(r.get("vr")),
+                format_brl(r.get("vt")),
+                format_brl(r.get("ajuda_custo")),
+                format_brl(r.get("endividamentos")),
+                _format_endividamentos_detalhe(r.get("endividamentos_itens"), summarize=summarize_detalhe),
+                format_brl(r.get("outros")),
+                format_brl(r.get("total_folha")),
+                r.get("pix_tipo") or "",
+                r.get("pix_chave") or "",
+            ]
+        )
+
+    # Resumo executivo (antes da tabela — igual aos demais relatórios).
+    meta = _ident_meta(ctx, len(rows)) + [
+        f"Competência: {s.get('competencia') or data.get('competencia_ref')}",
+        f"Cenário: {data.get('scenario') or 'REALIZADO'}",
+        f"Colaboradores CLT: {s.get('qtd_clt', 0)}; PJ: {s.get('qtd_pj', 0)}",
+        f"Total Salários: {format_brl(s.get('total_salarios'))}",
+        f"Total Benefícios: {format_brl(s.get('total_beneficios'))}",
+        f"Total VR: {format_brl(s.get('total_vr'))}",
+        f"Total Endividamentos: {format_brl(s.get('total_endividamentos'))}",
+        f"Total Ajuda de Custo: {format_brl(s.get('total_ajuda_custo'))}",
+        f"TOTAL GERAL DA FOLHA: {format_brl(s.get('total_geral'))}",
+    ]
+
+    # Linha de totais (posicional, alinhada às colunas de valor).
+    total_base = sum(float(r.get("salario_base") or 0) for r in data["rows"])
+    totals_row = [
+        "TOTAIS", "", "", "", "", "", "",
+        format_brl(total_base),
+        format_brl(s.get("total_salarios")),
+        format_brl(s.get("total_beneficios")),
+        format_brl(s.get("total_vr")),
+        "",  # VT (futuro)
+        format_brl(s.get("total_ajuda_custo")),
+        format_brl(s.get("total_endividamentos")),
+        "",  # Detalhamento dos Endividamentos (sem total)
+        "",  # Outros (futuro)
+        format_brl(s.get("total_geral")),
+        "", "",
+    ]
+
+    title = report_title("payroll")
+    if fmt == "xlsx":
+        raw = build_xlsx_bytes(
+            headers=headers, rows=rows, sheet_title="Folha de Pagamento", totals_row=totals_row
+        )
+        return raw, _fname("payroll", "xlsx", ctx), MIME_XLSX
+    raw = build_pdf_bytes(title=title, headers=headers, rows=rows, meta_lines=meta, totals_row=totals_row)
+    return raw, _fname("payroll", "pdf", ctx), MIME_PDF
+
+
 def render_vehicles_bytes(
     data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
 ) -> tuple[bytes, str, str]:
@@ -649,6 +749,8 @@ def render_report_bytes(
         return render_company_summary_bytes(payload, fmt, ctx)
     if report_type == "employees":
         return render_employees_bytes(payload, fmt, ctx)
+    if report_type == "payroll":
+        return render_payroll_bytes(payload, fmt, ctx)
     if report_type == "vehicles":
         return render_vehicles_bytes(payload, fmt, ctx)
     if report_type == "invoices":

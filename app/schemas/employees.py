@@ -24,6 +24,12 @@ class EmployeeRead(UUIDTimestampRead):
     additional_costs: float | None = None
     total_cost: float
     is_active: bool
+    # Ciclo de vida: start_date = admissão; end_date = desligamento.
+    start_date: date | None = None
+    end_date: date | None = None
+    # Centro de Custo principal + flag de alocação compartilhada.
+    cost_center: str | None = None
+    can_allocate_other_cost_centers: bool = False
     has_periculosidade: bool = False
     has_adicional_dirigida: bool = False
     extra_hours_50: float = 0
@@ -43,6 +49,12 @@ class EmployeeCreate(BaseModel):
     salary_base: float | None = Field(default=None, ge=0)
     additional_costs: float | None = Field(default=None, ge=0)
     is_active: bool = True
+    # Ciclo de vida — admissão obrigatória em novos cadastros; desligamento opcional.
+    start_date: date = Field(..., description="Data de admissão do colaborador.")
+    end_date: date | None = None
+    # Centro de Custo — obrigatório no cadastro (define alocação em projetos).
+    cost_center: str = Field(..., min_length=1, max_length=255, description="Centro de Custo principal.")
+    can_allocate_other_cost_centers: bool = False
     has_periculosidade: bool = False
     has_adicional_dirigida: bool = False
     extra_hours_50: float = Field(default=0, ge=0)
@@ -86,6 +98,12 @@ class EmployeeUpdate(BaseModel):
     salary_base: float | None = Field(default=None, ge=0)
     additional_costs: float | None = Field(default=None, ge=0)
     is_active: bool | None = None
+    # Ciclo de vida — a invariante (inativo exige end_date) é aplicada no serviço.
+    start_date: date | None = None
+    end_date: date | None = None
+    # Centro de Custo — na edição pode ser preenchido (força a modelagem dos legados).
+    cost_center: str | None = Field(default=None, max_length=255)
+    can_allocate_other_cost_centers: bool | None = None
     has_periculosidade: bool | None = None
     has_adicional_dirigida: bool | None = None
     extra_hours_50: float | None = Field(default=None, ge=0)

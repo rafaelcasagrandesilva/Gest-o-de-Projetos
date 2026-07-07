@@ -866,13 +866,16 @@ function LaborTab({
           search: q.trim() ? q.trim() : undefined,
           limit: 20,
           offset: 0,
+          // Mão de Obra: mostra apenas colaboradores do Centro de Custo do projeto
+          // (ou compartilhados / ainda não classificados).
+          project_id: projectId,
         }).catch(() => []);
         setEmployeeOptions(items);
       } finally {
         setEmployeeLoading(false);
       }
     },
-    [competencia],
+    [competencia, projectId],
   );
 
   // Busca com debounce (300ms) ao digitar.

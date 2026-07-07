@@ -40,6 +40,10 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     )
     percentual: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
     nome: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Descrição própria do item (ex.: "Acordo de Remuneração"), separada do `nome`.
+    # Genérica de propósito (reutilizável por outros tipos futuros); hoje usada por
+    # Endividamento. NULL em registros legados — o `nome` continua sendo a fonte de exibição.
+    item_description: Mapped[str | None] = mapped_column(String(255), nullable=True)
     valor_referencia: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     category: Mapped[str | None] = mapped_column(String(120), nullable=True)
     cost_center: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -55,6 +59,16 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     is_monthly_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+
+    # Ciclo de vida do cadastro. start_date = início; end_date = encerramento.
+    # Inativo (is_active=False) não gera NOVOS lançamentos automáticos nem pendências,
+    # mas permanece no histórico e vinculado aos lançamentos antigos. Inativo exige
+    # end_date; ativo pode manter ambos nulos.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     # Campos adicionais (endividamento)
     has_legal_process: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")

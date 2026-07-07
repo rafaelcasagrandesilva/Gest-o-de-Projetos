@@ -68,6 +68,8 @@ type FormState = {
   vehicle_type: FleetVehicleType;
   monthly_cost: number;
   driver_employee_id: string;
+  start_date: string;
+  end_date: string;
 };
 
 const emptyForm: FormState = {
@@ -76,6 +78,8 @@ const emptyForm: FormState = {
   vehicle_type: "LIGHT",
   monthly_cost: 0,
   driver_employee_id: "",
+  start_date: "",
+  end_date: "",
 };
 
 function vehicleToForm(v: FleetVehicle): FormState {
@@ -85,6 +89,8 @@ function vehicleToForm(v: FleetVehicle): FormState {
     vehicle_type: (v.type as FleetVehicleType) || "LIGHT",
     monthly_cost: typeof v.monthly_cost === "number" ? v.monthly_cost : 0,
     driver_employee_id: v.driver_employee_id ?? "",
+    start_date: v.start_date ?? "",
+    end_date: v.end_date ?? "",
   };
 }
 
@@ -188,6 +194,11 @@ export function Vehicles() {
         setCreating(false);
         return;
       }
+      if (!form.start_date) {
+        setError("Informe a data de entrada do veículo.");
+        setCreating(false);
+        return;
+      }
       await createFleetVehicle({
         plate: form.plate.trim().toUpperCase(),
         model: form.model.trim() || null,
@@ -195,6 +206,8 @@ export function Vehicles() {
         monthly_cost: mc,
         driver_employee_id: form.driver_employee_id || null,
         is_active: true,
+        start_date: form.start_date,
+        end_date: form.end_date || null,
       });
       setForm(emptyForm);
       await reload();
@@ -214,10 +227,25 @@ export function Vehicles() {
 
   async function toggleActive(v: FleetVehicle) {
     try {
-      await updateFleetVehicle(v.id, { is_active: !v.active });
+      if (v.active) {
+        // Inativar (saída) exige a data de saída (regra do ciclo de vida).
+        const today = new Date().toISOString().slice(0, 10);
+        const end = window.prompt(
+          "Informe a data de saída do veículo (AAAA-MM-DD):",
+          v.end_date ?? today,
+        );
+        if (!end) return;
+        await updateFleetVehicle(v.id, { is_active: false, end_date: end });
+      } else {
+        await updateFleetVehicle(v.id, { is_active: true });
+      }
       await reload();
-    } catch {
-      setError("Erro ao atualizar status.");
+    } catch (err) {
+      if (isAxiosError(err) && typeof err.response?.data?.detail === "string") {
+        setError(err.response.data.detail);
+      } else {
+        setError("Erro ao atualizar status.");
+      }
     }
   }
 
@@ -310,6 +338,16 @@ export function Vehicles() {
               placeholder="0,00"
             />
             <p className="mt-1 text-xs text-slate-500">Padrão do tipo nas configurações; edite se necessário.</p>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-600">Entrada</label>
+            <input
+              type="date"
+              value={form.start_date}
+              onChange={(e) => setForm((f) => ({ ...f, start_date: e.target.value }))}
+              disabled={readOnly}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
           </div>
           <div className="sm:col-span-2">
             <CollaboratorSelect
@@ -491,6 +529,7 @@ function EditVehiclePanel({
         vehicle_type: form.vehicle_type,
         monthly_cost: mc,
         driver_employee_id: form.driver_employee_id || null,
+        start_date: form.start_date || null,
       });
       await onSaved();
     } catch (err) {
@@ -583,6 +622,19 @@ function EditVehiclePanel({
               }}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
             />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-600">Entrada</label>
+            <input
+              type="date"
+              value={form.start_date}
+              onChange={(e) => setForm((f) => ({ ...f, start_date: e.target.value }))}
+              disabled={saving}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+            {form.end_date ? (
+              <p className="mt-1 text-xs text-slate-500">Saída: {form.end_date}</p>
+            ) : null}
           </div>
           <div className="sm:col-span-2">
             <CollaboratorSelect

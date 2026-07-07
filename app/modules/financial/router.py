@@ -43,7 +43,7 @@ from app.schemas.financial import (
     RevenueRead,
     RevenueUpdate,
 )
-from app.models.payable_snapshot import PayableSnapshotType
+from app.models.payable_snapshot import PayableSnapshotType, default_origin_for_type
 from app.schemas.cost_center_alias import CostCenterAliasCreate, CostCenterAliasRead
 from app.schemas.payable_import import (
     PayableImportAnalyzeResult,
@@ -76,7 +76,11 @@ from app.schemas.receivable import (
     ReceivableManualItemUpdate,
     ReceivableViewRead,
 )
-from app.models.receivable_advance_batch import ReceivableAdvanceBatch, ReceivableAdvanceBatchStatus
+from app.models.receivable_advance_batch import (
+    ReceivableAdvanceBatch,
+    ReceivableAdvanceBatchItem,
+    ReceivableAdvanceBatchStatus,
+)
 from app.models.receivable import ReceivableInvoice
 from app.schemas.financial_dashboard import (
     FinancialDashboardBreakdownRead,
@@ -306,10 +310,15 @@ async def list_receivables_view(
             stmt = stmt.where(func.lower(ReceivableAdvanceBatch.institution).contains(q))
 
         # Escopo por projeto/permissões: borderô aparece se tiver ao menos 1 NF elegível no escopo.
+        # Usa a tabela de junção (relacionamento N:N) em vez do ponteiro escalar
+        # advance_batch_id — que, com múltiplas operações por NF, deixa de ser confiável.
         if project_id is not None or (not sees_all and allowed is not None):
             stmt = stmt.join(
+                ReceivableAdvanceBatchItem,
+                ReceivableAdvanceBatchItem.batch_id == ReceivableAdvanceBatch.id,
+            ).join(
                 ReceivableInvoice,
-                ReceivableInvoice.advance_batch_id == ReceivableAdvanceBatch.id,
+                ReceivableInvoice.id == ReceivableAdvanceBatchItem.invoice_id,
             )
             if project_id is not None:
                 stmt = stmt.where(ReceivableInvoice.project_id == project_id)
@@ -703,8 +712,10 @@ def _snapshot_to_read(
         ref_id=row.ref_id,
         project_id=row.project_id,
         name=row.name,
+        item_description=getattr(row, "item_description", None),
         cost_center=row.cost_center,
         category=row.category,
+        origin=getattr(row, "origin", None) or default_origin_for_type(row.type),
         amount_original=float(row.amount_original),
         amount_final=amount_final,
         amount_paid=amount_paid,

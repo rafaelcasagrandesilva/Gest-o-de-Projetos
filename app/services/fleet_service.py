@@ -16,6 +16,7 @@ from app.services.audit_service import AuditService
 from app.services.operational_cost_calc import compute_project_vehicle_monthly_cost
 from app.services.settings_service import SettingsService
 from app.services.utils import model_to_dict
+from app.utils.lifecycle import normalize_lifecycle
 
 
 def fleet_vehicle_to_read(v: Vehicle) -> VehicleRead:
@@ -35,6 +36,8 @@ def fleet_vehicle_to_read(v: Vehicle) -> VehicleRead:
         driver_employee_id=v.driver_employee_id,
         driver_name=driver_name,
         is_active=bool(v.is_active),
+        start_date=getattr(v, "start_date", None),
+        end_date=getattr(v, "end_date", None),
     )
 
 
@@ -76,6 +79,12 @@ class FleetService:
     ) -> Vehicle:
         if "plate" in data and data.get("plate") is not None:
             data["plate"] = str(data["plate"]).strip().upper()
+        try:
+            data["end_date"] = normalize_lifecycle(
+                is_active=bool(data.get("is_active", True)), end_date=data.get("end_date")
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         v = Vehicle(**data)
         await self.vehicles.add(v)
         await self.audit.log_action(
@@ -114,6 +123,13 @@ class FleetService:
             data["plate"] = str(data["plate"]).strip().upper()
         for key, value in data.items():
             setattr(v, key, value)
+        # Invariante do ciclo de vida (só quando status/encerramento é tocado, para não
+        # bloquear edições não relacionadas): inativo exige end_date; ativo limpa-o.
+        if "is_active" in data or "end_date" in data:
+            try:
+                v.end_date = normalize_lifecycle(is_active=bool(v.is_active), end_date=v.end_date)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         await self.audit.log_action(
             user=actor,
             action="update",

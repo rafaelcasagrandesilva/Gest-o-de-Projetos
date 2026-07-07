@@ -70,7 +70,7 @@ def _assert_report_access(user: User) -> None:
 
 # Relatórios que possuem cenário Previsto/Realizado (para o cabeçalho de identificação).
 _SCENARIO_REPORTS = frozenset(
-    {"project_summary", "company_summary", "employees", "revenues", "dashboard"}
+    {"project_summary", "company_summary", "employees", "payroll", "revenues", "dashboard"}
 )
 
 
@@ -196,6 +196,15 @@ async def generate_report(
         comp = _competencia_date(f, "competencia")
         payload = await svc.generate_employees_report(competencia=comp, scenario=_report_scenario(body))
         raw, name, media = render_report_bytes("employees", payload, fmt, ctx)
+        return _stream(raw, name, media)
+
+    if body.type == "payroll":
+        _assert_report_access(user)
+        if not user_has_any_permission(user, EMPLOYEES_VIEW):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
+        comp = _competencia_date(f, "competencia")
+        payload = await svc.generate_payroll_report(competencia=comp, scenario=_report_scenario(body))
+        raw, name, media = render_report_bytes("payroll", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "vehicles":

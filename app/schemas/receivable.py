@@ -10,7 +10,7 @@ from app.models.receivable import DUE_DAYS_CHOICES
 
 INVOICE_STATUSES = frozenset({"EMITIDA", "ANTECIPADA", "RECEBIDA", "CANCELADA"})
 from app.schemas.common import UUIDTimestampRead
-from app.schemas.receivable_advance_batch import AdvanceBatchSummaryRead
+from app.schemas.receivable_advance_batch import AdvanceBatchSummaryRead, AdvanceOperationHistoryRead
 
 InvoiceStatus = Literal["EMITIDA", "ANTECIPADA", "RECEBIDA", "CANCELADA"]
 
@@ -93,6 +93,10 @@ class ReceivableInvoiceRead(UUIDTimestampRead):
     include_in_dashboard: bool = True
     advance_batch_id: UUID | None = None
     advance_batch: AdvanceBatchSummaryRead | None = None
+    # Contador de operações CONFIRMADAS válidas (regra 7/8): "Antecipada Nx".
+    anticipation_count: int = 0
+    # HISTÓRICO DE ANTECIPAÇÕES (regra 5): todas as operações relacionadas à NF.
+    advance_operations: list[AdvanceOperationHistoryRead] = Field(default_factory=list)
 
 
 class ReceivableInvoiceCreate(BaseModel):

@@ -91,6 +91,8 @@ _OPERATIONAL_COLUMNS: dict[str, list[Col]] = {
         Col("Status", "status"),
         Col("Oficial", "oficial"),
         Col("Antecipada", "antecipada"),
+        Col("Qtd. antecipações", "qtd_operacoes"),
+        Col("Operações de antecipação", "operacoes"),
         Col("Instituição", "instituicao"),
         Col("Vencimento antecipação", "venc_antecipacao", is_date=True),
         Col("No dashboard", "no_dashboard"),

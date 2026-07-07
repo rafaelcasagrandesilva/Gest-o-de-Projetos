@@ -52,6 +52,25 @@ def _actor_display(user: User) -> str:
     return name if name else _actor_email(user)
 
 
+async def _invoice_read(
+    svc: ReceivableService,
+    batch_svc: ReceivableAdvanceBatchService,
+    inv,
+    prefix: str,
+) -> ReceivableInvoiceRead:
+    """Monta o read de uma NF já com o histórico N:N (contador + operações)."""
+    counts = await batch_svc.confirmed_operation_counts([inv.id])
+    history = await batch_svc.invoice_history_map([inv.id])
+    return ReceivableInvoiceRead.model_validate(
+        svc.invoice_to_read(
+            inv,
+            api_prefix=prefix,
+            anticipation_count=counts.get(inv.id, 0),
+            advance_operations=history.get(inv.id, []),
+        )
+    )
+
+
 def _pdf_disk_path(stored: str) -> Path:
     base = Path(settings.receivable_upload_dir)
     p = (base / stored).resolve()
@@ -96,6 +115,7 @@ async def list_invoices(
     if (competence_year is None) != (competence_month is None):
         raise HTTPException(status_code=400, detail="Informe ano e mês juntos para a competência, ou deixe ambos vazios.")
     svc = ReceivableService(db)
+    batch_svc = ReceivableAdvanceBatchService(db)
     pf = "issue" if period_field == "issue" else "due"
 
     async def run_list(pid: UUID | None, pids: list[UUID] | None) -> list[ReceivableInvoiceRead]:
@@ -112,8 +132,20 @@ async def list_invoices(
             official=official,
         )
         prefix = settings.api_v1_prefix.rstrip("/")
+        ids = [r.id for r in rows]
+        # Histórico N:N em consultas batelizadas (sem N+1): contador "Antecipada Nx"
+        # (regra 7/8) e histórico de operações da NF (regra 5).
+        counts = await batch_svc.confirmed_operation_counts(ids)
+        history = await batch_svc.invoice_history_map(ids)
         return [
-            ReceivableInvoiceRead.model_validate(svc.invoice_to_read(r, api_prefix=prefix))
+            ReceivableInvoiceRead.model_validate(
+                svc.invoice_to_read(
+                    r,
+                    api_prefix=prefix,
+                    anticipation_count=counts.get(r.id, 0),
+                    advance_operations=history.get(r.id, []),
+                )
+            )
             for r in rows
         ]
 
@@ -197,13 +229,19 @@ async def list_eligible_invoices_for_batch(
         project_ids = [project_id]
 
     rows = await batch_svc.list_eligible_invoices(project_ids=project_ids, search=search)
+    visible = [
+        inv
+        for inv in rows
+        if (project_id is None or inv.project_id == project_id)
+        and (project_ids is None or inv.project_id in project_ids)
+    ]
+    # Histórico N:N (regra 4): operações válidas em que cada NF já participou, para
+    # exibir "Já usada em N operações • LEPTA • DAYCOVAL" sem sumir da seleção.
+    ops_map = await batch_svc.operations_for_invoices([inv.id for inv in visible])
     out: list[AdvanceBatchEligibleInvoiceRead] = []
-    for inv in rows:
-        if project_id is not None and inv.project_id != project_id:
-            continue
-        if project_ids is not None and inv.project_id not in project_ids:
-            continue
+    for inv in visible:
         d = recv_svc.invoice_to_read(inv)
+        ops = [batch_svc.operation_summary_entry(b) for b in ops_map.get(inv.id, [])]
         out.append(
             AdvanceBatchEligibleInvoiceRead(
                 id=inv.id,
@@ -216,6 +254,8 @@ async def list_eligible_invoices_for_batch(
                 gross_amount=float(inv.gross_amount),
                 net_amount=float(inv.net_amount),
                 status=str(d.get("status")),
+                operations_count=len(ops),
+                operations=ops,  # type: ignore[arg-type]
             )
         )
     return out
@@ -305,7 +345,7 @@ async def list_advance_batches(
 ) -> list[AdvanceBatchRead]:
     batch_svc = ReceivableAdvanceBatchService(db)
     rows = await batch_svc.list_batches()
-    return [AdvanceBatchRead.model_validate(batch_svc.batch_to_read(b)) for b in rows]
+    return [AdvanceBatchRead.model_validate(await batch_svc.batch_read_dict(b)) for b in rows]
 
 
 @invoices_router.get(
@@ -321,7 +361,7 @@ async def get_advance_batch(
     row = await batch_svc.get_batch(batch_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Borderô não encontrado.")
-    return AdvanceBatchRead.model_validate(batch_svc.batch_to_read(row))
+    return AdvanceBatchRead.model_validate(await batch_svc.batch_read_dict(row))
 
 
 @invoices_router.post(
@@ -368,7 +408,7 @@ async def create_advance_batch(
     loaded = await batch_svc.get_batch(batch.id)
     if loaded is None:
         raise HTTPException(status_code=500, detail="Falha ao carregar borderô.")
-    return AdvanceBatchRead.model_validate(batch_svc.batch_to_read(loaded))
+    return AdvanceBatchRead.model_validate(await batch_svc.batch_read_dict(loaded))
 
 
 @invoices_router.post(
@@ -390,7 +430,7 @@ async def confirm_advance_batch(
     loaded = await batch_svc.get_batch(batch_id)
     if loaded is None:
         raise HTTPException(status_code=404, detail="Operação não encontrada.")
-    return AdvanceBatchRead.model_validate(batch_svc.batch_to_read(loaded))
+    return AdvanceBatchRead.model_validate(await batch_svc.batch_read_dict(loaded))
 
 
 @invoices_router.patch(
@@ -428,7 +468,7 @@ async def update_advance_batch(
     loaded = await batch_svc.get_batch(batch_id)
     if loaded is None:
         raise HTTPException(status_code=404, detail="Borderô não encontrado.")
-    return AdvanceBatchRead.model_validate(batch_svc.batch_to_read(loaded))
+    return AdvanceBatchRead.model_validate(await batch_svc.batch_read_dict(loaded))
 
 
 @invoices_router.delete(
@@ -481,7 +521,7 @@ async def create_invoice(
     if loaded is None:
         raise HTTPException(status_code=500, detail="Falha ao carregar NF")
     prefix = settings.api_v1_prefix.rstrip("/")
-    return ReceivableInvoiceRead.model_validate(svc.invoice_to_read(loaded, api_prefix=prefix))
+    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix)
 
 
 @invoices_router.post(
@@ -514,7 +554,7 @@ async def reactivate_invoice(
     if loaded is None:
         raise HTTPException(status_code=404, detail="NF não encontrada.")
     prefix = settings.api_v1_prefix.rstrip("/")
-    return ReceivableInvoiceRead.model_validate(svc.invoice_to_read(loaded, api_prefix=prefix))
+    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix)
 
 
 @invoices_router.patch("/{invoice_id}", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
@@ -541,7 +581,7 @@ async def update_invoice(
     if loaded is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
     prefix = settings.api_v1_prefix.rstrip("/")
-    return ReceivableInvoiceRead.model_validate(svc.invoice_to_read(loaded, api_prefix=prefix))
+    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix)
 
 
 @invoices_router.delete("/{invoice_id}", status_code=204, dependencies=[Depends(require_permission(INVOICES_EDIT))])
@@ -688,7 +728,7 @@ async def upload_invoice_pdf(
     if loaded is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
     prefix = settings.api_v1_prefix.rstrip("/")
-    return ReceivableInvoiceRead.model_validate(svc.invoice_to_read(loaded, api_prefix=prefix))
+    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix)
 
 
 @invoices_router.get("/{invoice_id}/files", response_model=list[ReceivableInvoiceFileRead], dependencies=_read_view)
@@ -781,4 +821,4 @@ async def delete_invoice_pdf(
     if loaded is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
     prefix = settings.api_v1_prefix.rstrip("/")
-    return ReceivableInvoiceRead.model_validate(svc.invoice_to_read(loaded, api_prefix=prefix))
+    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix)

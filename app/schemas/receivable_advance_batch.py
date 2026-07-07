@@ -20,6 +20,27 @@ class AdvanceBatchItemInput(BaseModel):
     advanced_amount: float | None = Field(default=None, ge=0)
 
 
+class AdvanceOperationSummaryRead(BaseModel):
+    """Resumo curto de uma operação para indicadores de histórico N:N (regras 4 e 6)."""
+
+    id: UUID
+    sgc_number: int | None = None
+    batch_number: str
+    institution: str
+    status: AdvanceBatchStatus
+
+
+class AdvanceOperationHistoryRead(AdvanceOperationSummaryRead):
+    """Item do HISTÓRICO DE ANTECIPAÇÕES da NF (regra 5)."""
+
+    receive_date: date | None = None
+    repayment_date: date | None = None
+    # Valor antecipado da NF nesta operação (congelado no item).
+    advanced_amount: float | None = None
+    # Valor realizado da operação, quando informado.
+    received_amount: float | None = None
+
+
 class AdvanceBatchEligibleInvoiceRead(BaseModel):
     id: UUID
     project_id: UUID
@@ -31,6 +52,10 @@ class AdvanceBatchEligibleInvoiceRead(BaseModel):
     gross_amount: float
     net_amount: float
     status: str
+    # Histórico N:N (regra 4): operações válidas em que a NF já participou. Permite
+    # exibir "Já usada em N operações • LEPTA • DAYCOVAL" sem sumir da seleção.
+    operations_count: int = 0
+    operations: list[AdvanceOperationSummaryRead] = Field(default_factory=list)
 
 
 class AdvanceBatchItemRead(UUIDTimestampRead):
@@ -48,6 +73,8 @@ class AdvanceBatchItemRead(UUIDTimestampRead):
     issue_date: date | None = None
     due_date: date | None = None
     invoice_status: str | None = None
+    # Regra 6: outras operações válidas em que esta mesma NF participa (com links).
+    other_operations: list[AdvanceOperationSummaryRead] = Field(default_factory=list)
 
 
 class AdvanceBatchRead(UUIDTimestampRead):

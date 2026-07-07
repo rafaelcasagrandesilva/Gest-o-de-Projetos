@@ -5,6 +5,7 @@ export type ReportType =
   | "project_summary"
   | "company_summary"
   | "employees"
+  | "payroll"
   | "vehicles"
   | "invoices"
   | "debt"

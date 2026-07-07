@@ -10,6 +10,7 @@ import {
 import {
   createEmployee,
   deleteEmployee,
+  fetchCostCenters,
   fetchPayroll,
   listEmployees,
   parseCompetenciaYm,
@@ -41,6 +42,10 @@ type FormState = {
   role_title: string | null;
   employment_type: "CLT" | "PJ";
   is_active: boolean;
+  start_date: string;
+  end_date: string;
+  cost_center: string;
+  can_allocate_other_cost_centers: boolean;
   salary_base: string;
   has_periculosidade: boolean;
   has_adicional_dirigida: boolean;
@@ -60,6 +65,10 @@ const emptyForm: FormState = {
   role_title: null,
   employment_type: "CLT",
   is_active: true,
+  start_date: "",
+  end_date: "",
+  cost_center: "",
+  can_allocate_other_cost_centers: false,
   salary_base: "",
   has_periculosidade: false,
   has_adicional_dirigida: false,
@@ -119,6 +128,10 @@ function employeeToForm(emp: Employee): FormState {
     role_title: emp.role_title,
     employment_type: emp.employment_type === "PJ" ? "PJ" : "CLT",
     is_active: emp.is_active,
+    start_date: emp.start_date ?? "",
+    end_date: emp.end_date ?? "",
+    cost_center: emp.cost_center ?? "",
+    can_allocate_other_cost_centers: emp.can_allocate_other_cost_centers ?? false,
     salary_base: emp.salary_base != null ? String(emp.salary_base) : "",
     has_periculosidade: emp.has_periculosidade,
     has_adicional_dirigida: emp.has_adicional_dirigida,
@@ -145,6 +158,10 @@ function formToCreatePayload(form: FormState, referenceCompetencia: string): Emp
     role_title: form.role_title?.trim() || null,
     employment_type: form.employment_type,
     is_active: form.is_active,
+    start_date: form.start_date,
+    end_date: form.end_date || null,
+    cost_center: form.cost_center.trim(),
+    can_allocate_other_cost_centers: form.can_allocate_other_cost_centers,
     salary_base: salary,
     additional_costs: add,
     has_periculosidade: form.has_periculosidade,
@@ -172,6 +189,10 @@ function formToUpdatePayload(form: FormState): Partial<EmployeeCreate> {
     role_title: form.role_title?.trim() || null,
     employment_type: form.employment_type,
     is_active: form.is_active,
+    start_date: form.start_date || undefined,
+    end_date: form.end_date || null,
+    cost_center: form.cost_center.trim() || undefined,
+    can_allocate_other_cost_centers: form.can_allocate_other_cost_centers,
     salary_base: salary,
     additional_costs: add,
     has_periculosidade: form.has_periculosidade,
@@ -292,6 +313,20 @@ function CadastroColaboradorFields({
   idPrefix: string;
   referenceCompetencia: string;
 }) {
+  const [costCenters, setCostCenters] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCostCenters()
+      .then((cc) => {
+        if (!cancelled) setCostCenters(cc);
+      })
+      .catch(() => {
+        /* datalist é apenas sugestão — silencioso */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <div className="sm:col-span-2">
@@ -331,6 +366,84 @@ function CadastroColaboradorFields({
           <option value="PJ">PJ</option>
         </select>
       </div>
+      <div>
+        <label htmlFor={`${idPrefix}-cc`} className="mb-1 block text-sm text-slate-600">
+          Centro de Custo
+        </label>
+        <input
+          id={`${idPrefix}-cc`}
+          required
+          list={`${idPrefix}-cc-list`}
+          value={form.cost_center}
+          onChange={(e) => setForm((f) => ({ ...f, cost_center: e.target.value }))}
+          placeholder="Ex.: Fiscalização AT, Subterrâneo, Administrativo…"
+          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+        />
+        <datalist id={`${idPrefix}-cc-list`}>
+          {costCenters.map((cc) => (
+            <option key={cc} value={cc} />
+          ))}
+        </datalist>
+      </div>
+      <div className="sm:col-span-2">
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={form.can_allocate_other_cost_centers}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, can_allocate_other_cost_centers: e.target.checked }))
+            }
+            className="rounded border-slate-300"
+          />
+          Pode ser alocado em outros Centros de Custo (diretores/gerentes/compartilhados)
+        </label>
+      </div>
+      <div>
+        <label htmlFor={`${idPrefix}-start`} className="mb-1 block text-sm text-slate-600">
+          Admissão
+        </label>
+        <input
+          id={`${idPrefix}-start`}
+          type="date"
+          value={form.start_date}
+          onChange={(e) => setForm((f) => ({ ...f, start_date: e.target.value }))}
+          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+        />
+      </div>
+      <div>
+        <label htmlFor={`${idPrefix}-status`} className="mb-1 block text-sm text-slate-600">
+          Status
+        </label>
+        <select
+          id={`${idPrefix}-status`}
+          value={form.is_active ? "1" : "0"}
+          onChange={(e) =>
+            setForm((f) => ({
+              ...f,
+              is_active: e.target.value === "1",
+              end_date: e.target.value === "1" ? "" : f.end_date,
+            }))
+          }
+          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+        >
+          <option value="1">Ativo</option>
+          <option value="0">Inativo</option>
+        </select>
+      </div>
+      {!form.is_active && (
+        <div>
+          <label htmlFor={`${idPrefix}-end`} className="mb-1 block text-sm text-slate-600">
+            Desligamento
+          </label>
+          <input
+            id={`${idPrefix}-end`}
+            type="date"
+            value={form.end_date}
+            onChange={(e) => setForm((f) => ({ ...f, end_date: e.target.value }))}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+          />
+        </div>
+      )}
       <div className="sm:col-span-2">
         <label htmlFor={`${idPrefix}-email`} className="mb-1 block text-sm text-slate-600">
           E-mail
@@ -577,6 +690,13 @@ export function Employees() {
     return m;
   }, [payReal]);
 
+  // Centro de Custo por colaborador (para a coluna da listagem).
+  const ccByEmp = useMemo(() => {
+    const m = new Map<string, string | null>();
+    for (const e of items) m.set(e.id, e.cost_center);
+    return m;
+  }, [items]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -618,6 +738,18 @@ export function Employees() {
       setError(pixErr);
       return;
     }
+    if (!form.start_date) {
+      setError("Informe a data de admissão.");
+      return;
+    }
+    if (!form.cost_center.trim()) {
+      setError("Informe o Centro de Custo do colaborador.");
+      return;
+    }
+    if (!form.is_active && !form.end_date) {
+      setError("Colaborador inativo exige a data de desligamento.");
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
@@ -640,12 +772,28 @@ export function Employees() {
 
   async function toggleActive(emp: Employee) {
     try {
-      await updateEmployee(emp.id, { is_active: !emp.is_active });
+      if (emp.is_active) {
+        // Inativar (desligar) exige a data de desligamento (regra do ciclo de vida).
+        const today = new Date().toISOString().slice(0, 10);
+        const end = window.prompt(
+          "Informe a data em que o colaborador foi desligado (AAAA-MM-DD):",
+          emp.end_date ?? today,
+        );
+        if (!end) return;
+        await updateEmployee(emp.id, { is_active: false, end_date: end });
+      } else {
+        // Reativar reabre o ciclo (o backend limpa a data de desligamento).
+        await updateEmployee(emp.id, { is_active: true });
+      }
       const data = await listEmployees({ competencia: referenceCompetencia, limit: 200 });
       setItems(data);
       await refreshPayroll();
-    } catch {
-      setError("Erro ao atualizar status.");
+    } catch (err) {
+      if (isAxiosError(err) && typeof err.response?.data?.detail === "string") {
+        setError(err.response.data.detail);
+      } else {
+        setError("Erro ao atualizar status.");
+      }
     }
   }
 
@@ -656,8 +804,13 @@ export function Employees() {
       const data = await listEmployees({ competencia: referenceCompetencia, limit: 200 });
       setItems(data);
       await refreshPayroll();
-    } catch {
-      setError("Erro ao excluir.");
+    } catch (err) {
+      // Cadastro com movimentação não pode ser excluído — o backend orienta a inativar.
+      if (isAxiosError(err) && typeof err.response?.data?.detail === "string") {
+        setError(err.response.data.detail);
+      } else {
+        setError("Erro ao excluir.");
+      }
     }
   }
 
@@ -869,6 +1022,7 @@ export function Employees() {
                     <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
                     <th className="px-4 py-3 font-medium text-slate-600">Cargo</th>
                     <th className="px-4 py-3 font-medium text-slate-600">Tipo</th>
+                    <th className="px-4 py-3 font-medium text-slate-600">Centro de Custo</th>
                     <th className="px-4 py-3 text-right font-medium text-slate-600">Projetos</th>
                     <th className="px-4 py-3 text-right font-medium text-slate-600">Adm.</th>
                     <th className="px-4 py-3 text-right font-medium text-slate-600">
@@ -908,6 +1062,7 @@ export function Employees() {
                             <TruncatedCell value={line.role_title} maxWidthClass="max-w-[220px]" />
                           </td>
                           <td className="px-4 py-3">{line.employment_type}</td>
+                          <td className="px-4 py-3 text-slate-600">{ccByEmp.get(line.employee_id) || "—"}</td>
                           <td className="px-4 py-3 text-right tabular-nums">{formatMoney(line.projects_total)}</td>
                           <td className="px-4 py-3 text-right tabular-nums text-slate-600">
                             {formatMoney(line.administrative_cost)}
@@ -928,7 +1083,7 @@ export function Employees() {
                         </tr>
                         {open && line.by_project.length > 0 ? (
                           <tr className="border-b border-slate-50 bg-slate-50/50">
-                            <td colSpan={11} className="px-4 py-3">
+                            <td colSpan={12} className="px-4 py-3">
                               <p className="mb-2 text-xs font-medium text-slate-600">Por projeto</p>
                               <ul className="space-y-1 text-xs text-slate-700">
                                 {line.by_project.map((s) => (

@@ -58,12 +58,18 @@ export function OperationInvoicesTable({
   items,
   dueCompetenceFilter,
   onOpenInvoice,
+  currentBatchId,
+  onOpenOperation,
 }: {
   items: AdvanceBatchItem[];
   /** Mostra apenas NFs cujo mês de vencimento é YYYY-MM (composição do repasse). */
   dueCompetenceFilter?: string;
   /** Callback para navegar até a NF (operação → NF). */
   onOpenInvoice?: (item: AdvanceBatchItem) => void;
+  /** Operação atualmente aberta (para excluir das "outras operações"). */
+  currentBatchId?: string;
+  /** Callback para navegar até outra operação da mesma NF (regra 6). */
+  onOpenOperation?: (batchId: string) => void;
 }) {
   const rows = useMemo(() => {
     if (!dueCompetenceFilter) return items;
@@ -109,6 +115,33 @@ export function OperationInvoicesTable({
                   ) : (
                     (it.invoice_number ?? "—")
                   )}
+                  {(() => {
+                    // Regra 6: outras operações válidas em que esta mesma NF participa.
+                    const others = (it.other_operations ?? []).filter((op) => op.id !== currentBatchId);
+                    if (others.length === 0) return null;
+                    return (
+                      <span className="mt-0.5 block text-[10px] font-normal text-slate-500">
+                        Participa também de:{" "}
+                        {others.map((op, idx) => (
+                          <span key={op.id}>
+                            {idx > 0 ? ", " : ""}
+                            {onOpenOperation ? (
+                              <button
+                                type="button"
+                                onClick={() => onOpenOperation(op.id)}
+                                className="text-indigo-600 hover:underline"
+                                title={`${op.institution} — abrir operação`}
+                              >
+                                SGC {op.sgc_number ?? op.batch_number}
+                              </button>
+                            ) : (
+                              <span>SGC {op.sgc_number ?? op.batch_number}</span>
+                            )}
+                          </span>
+                        ))}
+                      </span>
+                    );
+                  })()}
                 </td>
                 <td className="max-w-[140px] truncate px-2 py-1.5">{it.project_name ?? "—"}</td>
                 <td className="max-w-[140px] truncate px-2 py-1.5">{it.client_name ?? "—"}</td>

@@ -15,6 +15,12 @@ export interface Employee {
   additional_costs: number | null;
   total_cost: number;
   is_active: boolean;
+  /** Ciclo de vida: admissão (start_date) / desligamento (end_date). */
+  start_date: string | null;
+  end_date: string | null;
+  /** Centro de Custo principal + flag de alocação compartilhada. */
+  cost_center: string | null;
+  can_allocate_other_cost_centers: boolean;
   has_periculosidade: boolean;
   has_adicional_dirigida: boolean;
   extra_hours_50: number;
@@ -34,6 +40,12 @@ export interface EmployeeCreate {
   salary_base?: number | null;
   additional_costs?: number | null;
   is_active?: boolean;
+  /** Ciclo de vida — admissão obrigatória em novos cadastros; desligamento opcional. */
+  start_date: string;
+  end_date?: string | null;
+  /** Centro de Custo — obrigatório no cadastro. */
+  cost_center: string;
+  can_allocate_other_cost_centers?: boolean;
   has_periculosidade?: boolean;
   has_adicional_dirigida?: boolean;
   extra_hours_50?: number;
@@ -68,8 +80,16 @@ export async function listEmployees(params?: {
   search?: string;
   offset?: number;
   limit?: number;
+  /** Filtra por Centro de Custo do projeto (Mão de Obra). */
+  project_id?: string;
 }): Promise<Employee[]> {
   const { data } = await api.get<Employee[]>("/employees/", { params });
+  return data;
+}
+
+/** Centros de Custo distintos (projetos + colaboradores) para o datalist do cadastro. */
+export async function fetchCostCenters(): Promise<string[]> {
+  const { data } = await api.get<string[]>("/collaborators/cost-centers");
   return data;
 }
 

@@ -4,15 +4,17 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import MissingGreenlet
 
 from app.models.project import Project
 from app.models.advance_institution import AdvanceInstitution
-from app.models.receivable import ReceivableInvoice, ReceivableInvoiceAnticipation
+from app.models.receivable import ReceivableInvoice
 from app.models.receivable_advance_batch import (
+    ACTIVE_BATCH_STATUSES,
+    CONFIRMED_BATCH_STATUSES,
     ReceivableAdvanceBatch,
     ReceivableAdvanceBatchItem,
     ReceivableAdvanceBatchStatus,
@@ -101,43 +103,168 @@ class ReceivableAdvanceBatchService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def _invoice_in_active_batch(self, invoice_id: UUID) -> ReceivableAdvanceBatch | None:
-        stmt = (
-            select(ReceivableAdvanceBatch)
-            .join(ReceivableAdvanceBatchItem, ReceivableAdvanceBatchItem.batch_id == ReceivableAdvanceBatch.id)
-            .where(
-                ReceivableAdvanceBatchItem.invoice_id == invoice_id,
-                ReceivableAdvanceBatch.status.in_(
-                    [ReceivableAdvanceBatchStatus.DRAFT, ReceivableAdvanceBatchStatus.OPEN]
-                ),
-            )
-            .limit(1)
-        )
-        return (await self.db.execute(stmt)).scalar_one_or_none()
-
     async def _validate_invoice_eligible(self, inv: ReceivableInvoice) -> None:
+        """Elegibilidade da NF para entrar em uma operação.
+
+        Arquitetura N:N (1 NF → N operações): uma NF EMITIDA ou já ANTECIPADA pode
+        participar de quantas operações forem necessárias — o histórico é preservado
+        na tabela de junção. Só o fim do ciclo financeiro bloqueia novas operações:
+        - CANCELADA: não é um recebível válido;
+        - RECEBIDA (recebido ≥ líquido): o ciclo financeiro está encerrado (regra 9).
+        """
         if inv.invoice_status == "CANCELADA":
             raise ValueError(f"NF {inv.nf_number}: cancelada não pode entrar no borderô.")
         recv = float(inv.received_amount or 0)
         net = float(inv.net_amount or 0)
         if recv >= net - CENT_TOL:
             raise ValueError(f"NF {inv.nf_number}: já recebida não pode entrar no borderô.")
-        ants = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(ReceivableInvoiceAnticipation)
-                .where(ReceivableInvoiceAnticipation.invoice_id == inv.id)
+
+    async def _recompute_invoice_advance_state(self, inv: ReceivableInvoice) -> None:
+        """Deriva o estado agregado da NF a partir das operações CONFIRMADAS válidas.
+
+        Substitui a lógica antiga que limpava `advance_batch_id`/`is_anticipated`
+        cegamente ao cancelar uma operação — o que corromperia o estado quando a NF
+        participa de várias operações. Aqui o estado é sempre reconstruído a partir do
+        conjunto atual de operações confirmadas (OPEN/SETTLED, não canceladas):
+
+        - `advance_batch_id`/`institution` ← operação confirmada mais recente (ou None);
+        - `is_anticipated` ← existe ao menos uma operação confirmada;
+        - Não altera NF CANCELADA nem recebimento (regra 9): status é apenas re-derivado.
+        """
+        if (inv.invoice_status or "").upper() == "CANCELADA":
+            return
+        stmt = (
+            select(ReceivableAdvanceBatch)
+            .join(ReceivableAdvanceBatchItem, ReceivableAdvanceBatchItem.batch_id == ReceivableAdvanceBatch.id)
+            .where(
+                ReceivableAdvanceBatchItem.invoice_id == inv.id,
+                ReceivableAdvanceBatch.status.in_(CONFIRMED_BATCH_STATUSES),
             )
-        ).scalar_one()
-        if int(ants or 0) > 0:
-            raise ValueError(f"NF {inv.nf_number}: já possui antecipação individual.")
-        if inv.is_anticipated and inv.advance_batch_id is None:
-            raise ValueError(f"NF {inv.nf_number}: já está marcada como antecipada.")
-        active = await self._invoice_in_active_batch(inv.id)
-        if active is not None:
-            raise ValueError(
-                f"NF {inv.nf_number}: já está no borderô ativo {active.batch_number}."
+            .order_by(ReceivableAdvanceBatch.receive_date.desc(), ReceivableAdvanceBatch.created_at.desc())
+        )
+        batches = list((await self.db.execute(stmt)).scalars().all())
+        is_received = (inv.invoice_status or "").upper() == "RECEBIDA"
+        if batches:
+            current = batches[0]
+            inv.advance_batch_id = current.id
+            inv.institution = current.institution
+            if not is_received:
+                inv.is_anticipated = True
+        else:
+            inv.advance_batch_id = None
+            if not is_received:
+                inv.is_anticipated = False
+                inv.institution = None
+        inv.invoice_status = derive_invoice_status(
+            stored_status=inv.invoice_status,
+            is_anticipated=inv.is_anticipated,
+            received_amount=float(inv.received_amount or 0),
+            net_amount=float(inv.net_amount or 0),
+        )
+
+    async def operations_for_invoices(
+        self,
+        invoice_ids: list[UUID],
+        *,
+        statuses: frozenset[ReceivableAdvanceBatchStatus] = ACTIVE_BATCH_STATUSES,
+    ) -> dict[UUID, list[ReceivableAdvanceBatch]]:
+        """Mapa invoice_id → operações (batches) em que a NF participa.
+
+        Fonte única do histórico N:N reutilizada pelas telas (busca de antecipação,
+        detalhe da NF e detalhe da operação). Por padrão retorna apenas operações
+        não canceladas (regra 8). Ordenado por data de recebimento (mais antiga primeiro).
+        """
+        ids = [i for i in dict.fromkeys(invoice_ids)]
+        if not ids:
+            return {}
+        stmt = (
+            select(ReceivableAdvanceBatchItem.invoice_id, ReceivableAdvanceBatch)
+            .join(ReceivableAdvanceBatch, ReceivableAdvanceBatch.id == ReceivableAdvanceBatchItem.batch_id)
+            .where(
+                ReceivableAdvanceBatchItem.invoice_id.in_(ids),
+                ReceivableAdvanceBatch.status.in_(statuses),
             )
+            .order_by(ReceivableAdvanceBatch.receive_date.asc(), ReceivableAdvanceBatch.created_at.asc())
+        )
+        out: dict[UUID, list[ReceivableAdvanceBatch]] = {}
+        for inv_id, batch in (await self.db.execute(stmt)).all():
+            out.setdefault(inv_id, []).append(batch)
+        return out
+
+    async def confirmed_operation_counts(self, invoice_ids: list[UUID]) -> dict[UUID, int]:
+        """Contador de operações CONFIRMADAS válidas por NF (regra 7/8: "Antecipada Nx").
+
+        Considera apenas operações OPEN/SETTLED — rascunhos e cancelamentos não contam.
+        """
+        ids = [i for i in dict.fromkeys(invoice_ids)]
+        if not ids:
+            return {}
+        stmt = (
+            select(ReceivableAdvanceBatchItem.invoice_id, func.count())
+            .join(ReceivableAdvanceBatch, ReceivableAdvanceBatch.id == ReceivableAdvanceBatchItem.batch_id)
+            .where(
+                ReceivableAdvanceBatchItem.invoice_id.in_(ids),
+                ReceivableAdvanceBatch.status.in_(CONFIRMED_BATCH_STATUSES),
+            )
+            .group_by(ReceivableAdvanceBatchItem.invoice_id)
+        )
+        return {inv_id: int(n or 0) for inv_id, n in (await self.db.execute(stmt)).all()}
+
+    def operation_summary_entry(self, batch: ReceivableAdvanceBatch) -> dict:
+        """Resumo curto de uma operação para indicadores de histórico (regras 4 e 6)."""
+        return {
+            "id": batch.id,
+            "sgc_number": int(batch.sgc_number) if getattr(batch, "sgc_number", None) is not None else None,
+            "batch_number": batch.batch_number,
+            "institution": batch.institution,
+            "status": batch.status.value if hasattr(batch.status, "value") else str(batch.status),
+        }
+
+    def _operation_history_entry(self, item: ReceivableAdvanceBatchItem, batch: ReceivableAdvanceBatch) -> dict:
+        """Entrada do HISTÓRICO DE ANTECIPAÇÕES (regra 5): operação + valores da NF."""
+        entry = self.operation_summary_entry(batch)
+        entry.update(
+            {
+                "receive_date": batch.receive_date,
+                "repayment_date": batch.repayment_date,
+                "advanced_amount": (
+                    float(item.advanced_amount) if getattr(item, "advanced_amount", None) is not None else None
+                ),
+                "received_amount": (
+                    float(batch.actual_received_amount)
+                    if getattr(batch, "actual_received_amount", None) is not None
+                    else None
+                ),
+            }
+        )
+        return entry
+
+    async def invoice_history_map(self, invoice_ids: list[UUID]) -> dict[UUID, list[dict]]:
+        """Mapa invoice_id → HISTÓRICO DE ANTECIPAÇÕES (regra 5), em uma única consulta.
+
+        Reutilizado tanto pela listagem de NFs quanto pelo detalhe individual, evitando
+        N+1. Retorna operações não canceladas, ordenadas por data de recebimento.
+        """
+        ids = [i for i in dict.fromkeys(invoice_ids)]
+        if not ids:
+            return {}
+        stmt = (
+            select(ReceivableAdvanceBatchItem, ReceivableAdvanceBatch)
+            .join(ReceivableAdvanceBatch, ReceivableAdvanceBatch.id == ReceivableAdvanceBatchItem.batch_id)
+            .where(
+                ReceivableAdvanceBatchItem.invoice_id.in_(ids),
+                ReceivableAdvanceBatch.status.in_(ACTIVE_BATCH_STATUSES),
+            )
+            .order_by(ReceivableAdvanceBatch.receive_date.asc(), ReceivableAdvanceBatch.created_at.asc())
+        )
+        out: dict[UUID, list[dict]] = {}
+        for item, batch in (await self.db.execute(stmt)).all():
+            out.setdefault(item.invoice_id, []).append(self._operation_history_entry(item, batch))
+        return out
+
+    async def invoice_operation_history(self, invoice_id: UUID) -> list[dict]:
+        """Histórico financeiro completo de uma única NF (regra 5)."""
+        return (await self.invoice_history_map([invoice_id])).get(invoice_id, [])
 
     async def list_eligible_invoices(
         self,
@@ -146,16 +273,10 @@ class ReceivableAdvanceBatchService:
         search: str | None = None,
         limit: int = 500,
     ) -> list[ReceivableInvoice]:
-        active_invoice_ids = select(ReceivableAdvanceBatchItem.invoice_id).join(
-            ReceivableAdvanceBatch, ReceivableAdvanceBatch.id == ReceivableAdvanceBatchItem.batch_id
-        ).where(
-            ReceivableAdvanceBatch.status.in_(
-                [ReceivableAdvanceBatchStatus.DRAFT, ReceivableAdvanceBatchStatus.OPEN]
-            )
-        )
-
-        has_individual_ant = select(ReceivableInvoiceAnticipation.invoice_id).distinct()
-
+        # Arquitetura N:N: uma NF EMITIDA ou já ANTECIPADA continua elegível para novas
+        # operações (regra 3) — não filtramos mais por lote ativo / is_anticipated /
+        # antecipação individual. Só o encerramento do ciclo financeiro exclui a NF:
+        # CANCELADA ou já RECEBIDA (recebido ≥ líquido), preservando a regra 9.
         stmt = (
             select(ReceivableInvoice)
             .options(selectinload(ReceivableInvoice.project))
@@ -163,9 +284,6 @@ class ReceivableAdvanceBatchService:
             .where(
                 ReceivableInvoice.invoice_status != "CANCELADA",
                 ReceivableInvoice.received_amount < ReceivableInvoice.net_amount - CENT_TOL,
-                ReceivableInvoice.id.not_in(has_individual_ant),
-                ReceivableInvoice.id.not_in(active_invoice_ids),
-                or_(ReceivableInvoice.is_anticipated.is_(False), ReceivableInvoice.advance_batch_id.is_(None)),
             )
             .order_by(ReceivableInvoice.due_date.asc(), ReceivableInvoice.nf_number.asc())
             .limit(limit)
@@ -408,6 +526,12 @@ class ReceivableAdvanceBatchService:
         }
         affected_months |= handler_extra_months
 
+        # Marca como CANCELADA antes de recomputar para que a operação sob cancelamento
+        # não conte no estado agregado das NFs (arquitetura N:N). O flush persiste o novo
+        # status: a sessão usa autoflush=False, e o recompute consulta o banco.
+        batch.status = ReceivableAdvanceBatchStatus.CANCELLED
+        await self.db.flush()
+
         for item in batch.items or []:
             try:
                 inv = item.invoice
@@ -415,14 +539,13 @@ class ReceivableAdvanceBatchService:
                 inv = None
             if inv is None:
                 continue
-            inv.advance_batch_id = None
-            if (inv.invoice_status or "").upper() not in ("CANCELADA", "RECEBIDA"):
-                inv.is_anticipated = False
+            # Recompõe o estado da NF a partir das operações confirmadas remanescentes:
+            # se ainda houver outra operação válida (ex.: LEPTA), a NF continua ANTECIPADA
+            # e apontando para ela; só volta a EMITIDA se não sobrar nenhuma.
+            await self._recompute_invoice_advance_state(inv)
             if log_user:
                 recv_svc.append_log(inv, f"Borderô {batch.batch_number}: cancelado by={log_user}")
             affected_months |= get_affected_months(inv)
-
-        batch.status = ReceivableAdvanceBatchStatus.CANCELLED
         await PayableSnapshotService(self.db).invalidate_months(months=affected_months)
         await self.db.flush()
         await self.db.refresh(batch)
@@ -460,8 +583,11 @@ class ReceivableAdvanceBatchService:
             if float(getattr(row, "amount_paid", 0) or 0) > 0.005:
                 raise ValueError("Não é possível excluir: despesas do borderô já possuem pagamento registrado.")
 
-        # NFs deveriam estar desassociadas no cancelamento; reforça idempotência.
+        # O borderô já está CANCELADO — o estado das NFs já foi recomposto no cancelamento.
+        # NÃO limpar `advance_batch_id` cegamente (poderia apagar o vínculo com outra
+        # operação válida). Apenas registra log e recompõe por idempotência após remover.
         recv_svc = ReceivableService(self.db)
+        invoices: list[ReceivableInvoice] = []
         for item in batch.items or []:
             try:
                 inv = item.invoice
@@ -469,12 +595,16 @@ class ReceivableAdvanceBatchService:
                 inv = None
             if inv is None:
                 continue
-            inv.advance_batch_id = None
+            invoices.append(inv)
             if log_user:
                 recv_svc.append_log(inv, f"Borderô {batch.batch_number}: excluído definitivamente by={log_user}")
 
         # Remove itens e o lote
         await self.db.delete(batch)
+        await self.db.flush()
+
+        for inv in invoices:
+            await self._recompute_invoice_advance_state(inv)
         await self.db.flush()
 
     async def _resolve_institution(
@@ -801,7 +931,19 @@ class ReceivableAdvanceBatchService:
         await self.db.refresh(batch)
         return batch
 
-    def batch_to_read(self, batch: ReceivableAdvanceBatch) -> dict:
+    async def batch_read_dict(self, batch: ReceivableAdvanceBatch) -> dict:
+        """batch_to_read + histórico N:N: anexa, por NF, as OUTRAS operações válidas
+        em que ela participa (regra 6), com links para navegação entre operações."""
+        invoice_ids = [it.invoice_id for it in (batch.items or [])]
+        ops_map = await self.operations_for_invoices(invoice_ids)
+        other_map: dict[UUID, list[dict]] = {}
+        for iid, batches in ops_map.items():
+            other_map[iid] = [self.operation_summary_entry(b) for b in batches if b.id != batch.id]
+        return self.batch_to_read(batch, other_operations_map=other_map)
+
+    def batch_to_read(
+        self, batch: ReceivableAdvanceBatch, *, other_operations_map: dict[UUID, list[dict]] | None = None
+    ) -> dict:
         gross = float(batch.gross_amount or 0)
         disc = float(batch.discount_amount or 0)
         discount_percent = round((disc / gross) * 100.0, 2) if gross > 0.005 else None
@@ -843,6 +985,9 @@ class ReceivableAdvanceBatchService:
                         )
                         if inv
                         else None
+                    ),
+                    "other_operations": (
+                        (other_operations_map or {}).get(item.invoice_id, [])
                     ),
                 }
             )

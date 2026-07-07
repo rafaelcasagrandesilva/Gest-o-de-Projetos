@@ -148,7 +148,10 @@ async def delete_item(
 ) -> None:
     _ = actor
     svc = CompanyFinanceService(db)
-    ok = await svc.delete_item(item_id=item_id)
+    try:
+        ok = await svc.delete_item(item_id=item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="Item não encontrado")
     await db.commit()

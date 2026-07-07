@@ -53,6 +53,7 @@ const REPORT_GROUPS: { label: string; reports: ReportDef[] }[] = [
     label: "Administrativo",
     reports: [
       { id: "employees", label: "Colaboradores — nome, tipo e custo", roles: R_ALL },
+      { id: "payroll", label: "Folha de Pagamento — fechamento mensal", roles: R_ALL },
       { id: "vehicles", label: "Frota — placa, tipo, custo e status", roles: R_ALL },
       { id: "users", label: "Usuários do sistema", roles: R_ADMIN_ONLY },
     ],
@@ -146,6 +147,7 @@ export function Reports() {
         return f;
       }
       case "employees":
+      case "payroll":
         return { competencia: `${competencia}-01` };
       case "vehicles":
         return { active_only: activeOnly };
@@ -352,9 +354,9 @@ export function Reports() {
           </div>
         )}
 
-        {type === "employees" && (
+        {(type === "employees" || type === "payroll") && (
           <div className="border-t border-slate-100 pt-4">
-            <Field label="Competência de referência do custo">
+            <Field label={type === "payroll" ? "Competência da folha" : "Competência de referência do custo"}>
               <input
                 type="month"
                 value={competencia}

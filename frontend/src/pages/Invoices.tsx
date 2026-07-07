@@ -96,6 +96,19 @@ const STATUS_LABELS: Record<InvoiceStatus, string> = {
   CANCELADA: "Cancelada",
 };
 
+/**
+ * Rótulo do status exibido na coluna STATUS. Para NFs ANTECIPADAS que participaram de
+ * mais de uma operação válida, mostra o contador automático "Antecipada Nx" (regra 7/8).
+ */
+function statusLabel(row: ReceivableInvoice): string {
+  const base = STATUS_LABELS[row.status];
+  const count = row.anticipation_count ?? 0;
+  if (row.status === "ANTECIPADA" && count > 1) {
+    return `Antecipada ${count}x`;
+  }
+  return base;
+}
+
 /** Badge discreto de classificação Oficial / Não Oficial. */
 function officialBadgeClass(isOfficial: boolean): string {
   return isOfficial
@@ -105,6 +118,7 @@ function officialBadgeClass(isOfficial: boolean): string {
 
 /** Rótulo do status do lote de antecipação (módulo Antecipações). */
 function batchStatusLabel(s: string): string {
+  if (s === "DRAFT") return "Rascunho";
   if (s === "OPEN") return "Em aberto";
   if (s === "SETTLED") return "Liquidado";
   if (s === "CANCELLED") return "Cancelado";
@@ -867,7 +881,7 @@ export function Invoices() {
                         <span
                           className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${statusBadgeClass(row.status)}`}
                         >
-                          {STATUS_LABELS[row.status]}
+                          {statusLabel(row)}
                         </span>
                         {overdue && row.status !== "CANCELADA" && (
                           <span className="ml-1 text-[10px] font-semibold text-red-700">Atraso</span>
@@ -1104,49 +1118,56 @@ export function Invoices() {
 
                               <div className="flex items-center justify-between">
                                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                                  Antecipações
+                                  Histórico de Antecipações
                                 </p>
                                 <span className="text-[11px] text-slate-400">somente leitura — gerencie no módulo Antecipações</span>
                               </div>
                               <div className="space-y-3">
-                                {row.advance_batch ? (
+                                {(row.advance_operations?.length ?? 0) > 0 ? (
                                   <div className="overflow-x-auto rounded border border-slate-200 bg-white">
-                                    <table className="w-full min-w-[560px] text-left text-xs">
+                                    <table className="w-full min-w-[640px] text-left text-xs">
                                       <thead className="border-b border-slate-100 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                                         <tr>
                                           <th className="px-3 py-2 font-medium">Operação SGC</th>
-                                          <th className="px-3 py-2 font-medium">Data</th>
                                           <th className="px-3 py-2 font-medium">Instituição</th>
-                                          <th className="px-3 py-2 text-right font-medium">Valor recebido</th>
-                                          <th className="px-3 py-2 text-right font-medium">Valor devolvido</th>
+                                          <th className="px-3 py-2 font-medium">Data</th>
                                           <th className="px-3 py-2 font-medium">Status</th>
+                                          <th className="px-3 py-2 text-right font-medium">Valor antecipado</th>
+                                          <th className="px-3 py-2 text-right font-medium">Valor realizado</th>
                                         </tr>
                                       </thead>
-                                      <tbody>
-                                        <tr className="text-slate-700">
-                                          <td className="px-3 py-2 font-semibold">
-                                            {row.advance_batch.sgc_number ?? "—"}
-                                          </td>
-                                          <td className="px-3 py-2 tabular-nums">
-                                            {row.advance_batch.receive_date ? formatDateBr(row.advance_batch.receive_date) : "—"}
-                                          </td>
-                                          <td className="px-3 py-2">{row.advance_batch.institution}</td>
-                                          <td className="px-3 py-2 text-right tabular-nums">
-                                            {typeof row.advance_batch.received_amount === "number"
-                                              ? formatBRL(row.advance_batch.received_amount)
-                                              : "—"}
-                                          </td>
-                                          <td className="px-3 py-2 text-right tabular-nums">
-                                            {typeof row.advance_batch.gross_amount === "number"
-                                              ? formatBRL(row.advance_batch.gross_amount)
-                                              : "—"}
-                                          </td>
-                                          <td className="px-3 py-2">
-                                            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                                              {batchStatusLabel(row.advance_batch.status)}
-                                            </span>
-                                          </td>
-                                        </tr>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {(row.advance_operations ?? []).map((op) => (
+                                          <tr key={op.id} className="text-slate-700">
+                                            <td className="px-3 py-2 font-semibold">
+                                              <button
+                                                type="button"
+                                                className="text-indigo-700 hover:underline"
+                                                onClick={() => {
+                                                  setViewBatchId(op.id);
+                                                  setBatchModalOpen(true);
+                                                }}
+                                              >
+                                                {op.sgc_number ?? op.batch_number}
+                                              </button>
+                                            </td>
+                                            <td className="px-3 py-2">{op.institution}</td>
+                                            <td className="px-3 py-2 tabular-nums">
+                                              {op.receive_date ? formatDateBr(op.receive_date) : "—"}
+                                            </td>
+                                            <td className="px-3 py-2">
+                                              <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                                                {batchStatusLabel(op.status)}
+                                              </span>
+                                            </td>
+                                            <td className="px-3 py-2 text-right tabular-nums">
+                                              {typeof op.advanced_amount === "number" ? formatBRL(op.advanced_amount) : "—"}
+                                            </td>
+                                            <td className="px-3 py-2 text-right tabular-nums">
+                                              {typeof op.received_amount === "number" ? formatBRL(op.received_amount) : "—"}
+                                            </td>
+                                          </tr>
+                                        ))}
                                       </tbody>
                                     </table>
                                   </div>
@@ -1237,6 +1258,7 @@ export function Invoices() {
           setViewBatchId(null);
         }}
         onCreated={() => void load()}
+        onOpenOperation={(batchId) => setViewBatchId(batchId)}
       />
     </div>
   );

@@ -81,6 +81,18 @@ function typeLabel(t: PayableSnapshotType): string {
   return "Manual";
 }
 
+/**
+ * Rótulo do "Tipo" exibido na linha. Para os lançamentos automáticos de Custos Fixos
+ * gerados a partir do cadastro, mostra a categoria ("Custo Fixo" / "Colaborador");
+ * os demais (projetos, legado, manuais) mantêm o rótulo por tipo — sem regressão.
+ */
+function payableTipoLabel(r: PayableSnapshotRow): string {
+  if (r.type === "FIXED_COST" && (r.category === "Custo Fixo" || r.category === "Colaborador")) {
+    return r.category;
+  }
+  return typeLabel(r.type);
+}
+
 export function Payables() {
   const { user } = useAuth();
   const canView = usePermission("payables.view");
@@ -1033,16 +1045,28 @@ function PayablesSnapshotTable({
               const temPago = r.amount_paid > 0.005;
               return (
                 <tr key={r.id} className="hover:bg-slate-50/80">
-                  <td className="whitespace-nowrap px-2 py-1.5 text-slate-700">{typeLabel(r.type)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-slate-700">{payableTipoLabel(r)}</td>
                   <td className="min-w-0 px-2 py-1.5 align-middle text-slate-900">
                     {/* Tooltip com o nome completo (obrigações de operação de antecipação
-                        guardam o nome longo em observation; demais lançamentos usam o nome). */}
+                        guardam o nome longo em observation; demais lançamentos usam o nome).
+                        Endividamento: `name` é o Credor e `item_description` a Descrição. */}
                     <div
                       className="truncate max-w-[280px]"
-                      title={r.type === "ANTECIPACAO_OPERACAO" ? r.observation ?? r.name : r.name}
+                      title={
+                        r.type === "ANTECIPACAO_OPERACAO"
+                          ? r.observation ?? r.name
+                          : r.item_description
+                            ? `${r.name} — ${r.item_description}`
+                            : r.name
+                      }
                     >
                       {r.name}
                     </div>
+                    {r.item_description ? (
+                      <div className="truncate max-w-[280px] text-xs text-slate-500">
+                        {r.item_description}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-slate-700">
                     {payableCompetenceLabel(r.month)}

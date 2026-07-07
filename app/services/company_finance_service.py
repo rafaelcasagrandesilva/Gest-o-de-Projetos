@@ -5,7 +5,7 @@ import traceback
 from datetime import date, datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,6 +21,7 @@ from app.services.company_finance_cost_center import (
 from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_total_cost
 from app.services.payable_snapshot_service import PayableSnapshotService
 from app.services.settings_service import SettingsService
+from app.utils.lifecycle import DELETE_WITH_MOVEMENT_MSG, normalize_lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,20 @@ def _debt_base_amount(it: CompanyFinancialItem) -> float:
     if getattr(it, "has_renegotiation", False) and getattr(it, "renegotiated_amount", None) is not None:
         return _f(it.renegotiated_amount)
     return _f(it.valor_referencia)
+
+
+def compose_debt_nome(employee_full_name: str | None, item_description: str | None) -> str:
+    """Nome composto de um Endividamento: "<colaborador> - <descrição>".
+
+    Sem colaborador → apenas a descrição. Sem descrição → apenas o colaborador (borda).
+    Usado para preencher `nome` automaticamente (Opção B: o campo Nome deixa de ser
+    editado manualmente em Endividamento, mas é preservado internamente).
+    """
+    desc = (item_description or "").strip()
+    name = (employee_full_name or "").strip()
+    if name and desc:
+        return f"{name} - {desc}"
+    return desc or name
 
 
 def _default_category(tipo: str) -> str:
@@ -147,6 +162,12 @@ class CompanyFinanceService:
             out.append(await self._item_to_read(it, comp_date))
         return out
 
+    async def _employee_full_name(self, employee_id: UUID | None) -> str | None:
+        if employee_id is None:
+            return None
+        emp = await self.db.get(Employee, employee_id)
+        return getattr(emp, "full_name", None) if emp is not None else None
+
     async def _employee_base_value(self, emp: Employee, *, competencia: date) -> float:
         settings = await SettingsService(self.db).get_or_create()
         if (emp.employment_type or "").upper() == "CLT":
@@ -205,12 +226,16 @@ class CompanyFinanceService:
                 "employee_employment_type": employee_employment_type,
                 "percentual": percentual,
                 "nome": it.nome,
+                "item_description": getattr(it, "item_description", None),
                 "valor_referencia": ref,
                 "category": getattr(it, "category", None) or _default_category(it.tipo),
                 **cc_fields,
                 "description": getattr(it, "description", None),
                 "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
                 "is_monthly_required": bool(getattr(it, "is_monthly_required", False)),
+                "is_active": bool(getattr(it, "is_active", True)),
+                "start_date": getattr(it, "start_date", None),
+                "end_date": getattr(it, "end_date", None),
                 "has_legal_process": bool(getattr(it, "has_legal_process", False)),
                 "has_renegotiation": bool(getattr(it, "has_renegotiation", False)),
                 "renegotiated_amount": _f(it.renegotiated_amount) if getattr(it, "renegotiated_amount", None) is not None else None,
@@ -241,12 +266,16 @@ class CompanyFinanceService:
             "employee_employment_type": employee_employment_type,
             "percentual": percentual,
             "nome": it.nome,
+            "item_description": getattr(it, "item_description", None),
             "valor_referencia": ref,
             "category": getattr(it, "category", None) or _default_category(it.tipo),
             **cc_fields,
             "description": getattr(it, "description", None),
             "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
             "is_monthly_required": bool(getattr(it, "is_monthly_required", False)),
+            "is_active": bool(getattr(it, "is_active", True)),
+            "start_date": getattr(it, "start_date", None),
+            "end_date": getattr(it, "end_date", None),
             "has_legal_process": bool(getattr(it, "has_legal_process", False)),
             "has_renegotiation": bool(getattr(it, "has_renegotiation", False)),
             "renegotiated_amount": _f(it.renegotiated_amount) if getattr(it, "renegotiated_amount", None) is not None else None,
@@ -275,10 +304,29 @@ class CompanyFinanceService:
         item_type = CompanyFinancialItemType(item_type_raw)
         employee_id = data.get("employee_id")
         percentual = data.get("percentual")
+        is_active = bool(data.get("is_active", True))
+        end_date = normalize_lifecycle(is_active=is_active, end_date=data.get("end_date"))
+
+        # Endividamento: colaborador é só identificação (nunca matriz/percentual); a
+        # descrição própria é o identificador e o `nome` é composto automaticamente.
+        item_description = (data.get("item_description") or "").strip() or None
+        if data["tipo"] == "endividamento":
+            item_type = CompanyFinancialItemType.MANUAL
+            percentual = None
+            emp_name = await self._employee_full_name(employee_id)
+            nome = compose_debt_nome(emp_name, item_description)
+        else:
+            item_description = None
+            nome = (data.get("nome") or "").strip()
+
         row = CompanyFinancialItem(
             tipo=data["tipo"],
-            nome=data["nome"].strip(),
+            nome=nome,
+            item_description=item_description,
             valor_referencia=data["valor_referencia"],
+            is_active=is_active,
+            start_date=data.get("start_date"),
+            end_date=end_date,
             category=(data.get("category") or _default_category(data["tipo"])).strip(),
             description=(data.get("description") or None),
             recurrence=(data.get("recurrence") or _default_recurrence(data["tipo"])).strip(),
@@ -320,6 +368,9 @@ class CompanyFinanceService:
             row.percentual = data.get("percentual")
         if data.get("nome") is not None:
             row.nome = data["nome"].strip()
+        if "item_description" in data:
+            raw = data.get("item_description")
+            row.item_description = str(raw).strip() if raw is not None and str(raw).strip() else None
         if data.get("valor_referencia") is not None:
             row.valor_referencia = data["valor_referencia"]
         if "category" in data:
@@ -338,6 +389,17 @@ class CompanyFinanceService:
             row.recurrence = (data.get("recurrence") or _default_recurrence(row.tipo)).strip()
         if data.get("is_monthly_required") is not None:
             row.is_monthly_required = bool(data["is_monthly_required"])
+        # Ciclo de vida do cadastro.
+        if "start_date" in data:
+            row.start_date = data.get("start_date")
+        if data.get("is_active") is not None:
+            row.is_active = bool(data["is_active"])
+        if "end_date" in data:
+            row.end_date = data.get("end_date")
+        # Invariante (só quando status/encerramento é tocado): inativo exige end_date;
+        # ativo limpa o encerramento (reativar reabre o ciclo de vida).
+        if ("is_active" in data and data.get("is_active") is not None) or ("end_date" in data):
+            row.end_date = normalize_lifecycle(is_active=bool(row.is_active), end_date=row.end_date)
         if data.get("has_legal_process") is not None:
             row.has_legal_process = bool(data["has_legal_process"])
         if data.get("has_renegotiation") is not None:
@@ -369,7 +431,15 @@ class CompanyFinanceService:
             row.renegotiation_first_payment_date = None
             row.renegotiation_due_day = None
 
-        if row.tipo != "custo_fixo" or row.item_type != CompanyFinancialItemType.COLABORADOR_MATRIZ:
+        # Custo Fixo: colaborador/percentual só existem em COLABORADOR_MATRIZ. Endividamento
+        # mantém o colaborador (só identificação), mas nunca usa matriz/percentual.
+        if row.tipo == "endividamento":
+            row.item_type = CompanyFinancialItemType.MANUAL
+            row.percentual = None
+            # Nome é sempre derivado de colaborador + descrição (Opção B).
+            emp_name = await self._employee_full_name(row.employee_id)
+            row.nome = compose_debt_nome(emp_name, row.item_description) or row.nome
+        elif row.item_type != CompanyFinancialItemType.COLABORADOR_MATRIZ:
             row.employee_id = None
             row.percentual = None
 
@@ -391,6 +461,20 @@ class CompanyFinanceService:
         row = await self.db.get(CompanyFinancialItem, item_id)
         if row is None:
             return False
+        # Exclusão física bloqueada quando há movimentação (pagamentos lançados): o
+        # cadastro deve ser inativado para preservar o histórico financeiro.
+        movement = int(
+            (
+                await self.db.execute(
+                    select(func.count())
+                    .select_from(CompanyFinancialPayment)
+                    .where(CompanyFinancialPayment.item_id == item_id)
+                )
+            ).scalar_one()
+            or 0
+        )
+        if movement > 0:
+            raise ValueError(DELETE_WITH_MOVEMENT_MSG)
         await PayableSnapshotService(self.db).preserve_or_remove_deleted_company_finance_item(item_id=item_id)
         await self.db.delete(row)
         await self.db.flush()
@@ -422,6 +506,21 @@ class CompanyFinanceService:
             if not incoming:
                 logger.info("company_finance.replace_payments service noop item_id=%s (empty payload)", item_id)
                 return item
+
+            # Item inativo não gera NOVOS lançamentos automáticos: bloqueia valor positivo
+            # em competência que ainda não possui lançamento. Correções de meses já lançados
+            # continuam permitidas (preserva a capacidade de acertar o histórico).
+            if not bool(getattr(item, "is_active", True)):
+                existing_months = await self._payment_months_for_item(item_id=item_id)
+                new_positive = [
+                    comp for comp, val in incoming.items() if val > 0 and comp not in existing_months
+                ]
+                if new_positive:
+                    meses = ", ".join(month_key(c) for c in sorted(new_positive))
+                    raise ValueError(
+                        "Cadastro inativo não gera novos lançamentos. "
+                        f"Reative o cadastro para lançar novas competências ({meses})."
+                    )
 
             months_in_payload = set(incoming.keys())
             logger.info(
@@ -597,7 +696,9 @@ class CompanyFinanceService:
         Retorna também os totais previsto/pago das obrigatoriedades no mês.
         """
         comp = parse_month(competencia)
-        where = [CompanyFinancialItem.tipo == tipo]
+        # Cadastros inativos não geram novas obrigatoriedades/pendências (regra do ciclo
+        # de vida). O histórico já lançado permanece intacto em contas a pagar.
+        where = [CompanyFinancialItem.tipo == tipo, CompanyFinancialItem.is_active.is_(True)]
         if tipo == "endividamento":
             where.append(
                 CompanyFinancialItem.is_monthly_required.is_(True)

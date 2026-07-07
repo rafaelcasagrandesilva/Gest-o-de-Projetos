@@ -17,6 +17,8 @@ export interface CompanyFinancialItem {
   employee_employment_type?: string | null;
   percentual?: number | null;
   nome: string;
+  /** Descrição própria do item (identificador da dívida em Endividamento). */
+  item_description?: string | null;
   valor_referencia: number;
   category?: string | null;
   cost_center_ref?: string;
@@ -35,6 +37,10 @@ export interface CompanyFinancialItem {
   renegotiation_agreement_date?: string | null;
   renegotiation_first_payment_date?: string | null;
   renegotiation_due_day?: number | null;
+  /** Ciclo de vida do cadastro (distinto de `status`, que é o progresso do endividamento). */
+  is_active?: boolean;
+  start_date?: string | null;
+  end_date?: string | null;
   pagamentos: PagamentoMes[];
   total_pago: number;
   pago_mes: number;
@@ -95,7 +101,9 @@ export async function listCompanyFinanceItems(
 
 export async function createCompanyFinanceItem(payload: {
   tipo: TipoFinanceiro;
-  nome: string;
+  /** Opcional em Endividamento (composto no backend a partir de colaborador + descrição). */
+  nome?: string;
+  item_description?: string | null;
   valor_referencia: number;
   category?: string | null;
   cost_center_ref: string;
@@ -114,6 +122,10 @@ export async function createCompanyFinanceItem(payload: {
   renegotiation_agreement_date?: string | null;
   renegotiation_first_payment_date?: string | null;
   renegotiation_due_day?: number | null;
+  is_active?: boolean;
+  /** Ciclo de vida — início obrigatório em novos cadastros; encerramento opcional. */
+  start_date: string;
+  end_date?: string | null;
 }): Promise<CompanyFinancialItem> {
   const { data } = await api.post<CompanyFinancialItem>("/company-finance/items/", payload);
   return data;
@@ -125,6 +137,7 @@ export async function updateCompanyFinanceItem(
   id: string,
   payload: {
     nome?: string;
+    item_description?: string | null;
     valor_referencia?: number;
     category?: string | null;
     cost_center_ref?: string;
@@ -143,6 +156,9 @@ export async function updateCompanyFinanceItem(
     renegotiation_agreement_date?: string | null;
     renegotiation_first_payment_date?: string | null;
     renegotiation_due_day?: number | null;
+    is_active?: boolean;
+    start_date?: string | null;
+    end_date?: string | null;
   },
   competencia: string,
 ): Promise<CompanyFinancialItem> {

@@ -25,6 +25,23 @@ class Employee(TimestampUUIDMixin, Base):
     total_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # Ciclo de vida do cadastro. start_date = admissão; end_date = desligamento.
+    # Regra: inativo (is_active=False) exige end_date; ativo pode manter ambos nulos.
+    # (Preparado para o cálculo futuro de "tempo de empresa" — não implementado aqui.)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # Centro de Custo principal do colaborador (mesmo domínio de projects.cost_center:
+    # Administrativo, Financeiro, Fiscalização AT, Subterrâneo, …). Determina em quais
+    # projetos ele pode ser alocado (Projetos → Custos → Mão de Obra). Legados sem
+    # histórico ficam NULL (preenchimento forçado na edição).
+    cost_center: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Quando True, o colaborador aparece para QUALQUER projeto, independentemente do
+    # Centro de Custo (diretores/gerentes/compartilhados). Default False.
+    can_allocate_other_cost_centers: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     # CLT: total_cost é snapshot ao salvar (mês de referência); listagens/API recalculam por competência.
     has_periculosidade: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     has_adicional_dirigida: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

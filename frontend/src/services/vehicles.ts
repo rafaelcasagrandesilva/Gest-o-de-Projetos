@@ -17,6 +17,9 @@ export interface FleetVehicle {
   driver_name: string | null;
   /** JSON da API: `active` */
   active: boolean;
+  /** Ciclo de vida: entrada (start_date) / saída (end_date). */
+  start_date: string | null;
+  end_date: string | null;
 }
 
 export interface FleetVehicleCreate {
@@ -27,6 +30,9 @@ export interface FleetVehicleCreate {
   monthly_cost: number;
   driver_employee_id?: string | null;
   is_active?: boolean;
+  /** Ciclo de vida — entrada obrigatória em novos cadastros; saída opcional. */
+  start_date: string;
+  end_date?: string | null;
 }
 
 export interface FleetVehicleUpdate {
@@ -37,6 +43,8 @@ export interface FleetVehicleUpdate {
   monthly_cost?: number;
   driver_employee_id?: string | null;
   is_active?: boolean;
+  start_date?: string | null;
+  end_date?: string | null;
 }
 
 export async function listFleetVehicles(options?: {

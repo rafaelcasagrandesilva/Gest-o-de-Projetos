@@ -13,6 +13,7 @@ from app.schemas.dashboard import DirectorSummary, FinancialDashboardSummary, Mo
 from app.services.company_finance_service import CompanyFinanceService
 from app.services.dashboard_service import DashboardService
 from app.services.employees_service import default_cost_reference
+from app.services.employee_cost_service import pj_cost_breakdown
 from app.services.fleet_service import FleetService, fleet_vehicle_to_read
 from app.services.project_structure_service import ProjectStructureService
 from app.services.projects_service import ProjectsService
@@ -47,6 +48,80 @@ def _competencia_date(filters: dict[str, Any], key: str = "competencia") -> date
         y, m = int(s[0:4]), int(s[5:7])
         return date(y, m, 1)
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{key} inválido (use YYYY-MM).")
+
+
+def _month_bounds_local(comp: date) -> tuple[date, date]:
+    from calendar import monthrange
+
+    last = monthrange(comp.year, comp.month)[1]
+    return date(comp.year, comp.month, 1), date(comp.year, comp.month, last)
+
+
+def _debt_monthly_value(item: Any) -> float:
+    """Valor mensal de um endividamento vinculado ao colaborador (parcela ou referência).
+
+    Mesma base já usada pelas pendências/CAP: parcela (installment_value) quando há
+    renegociação parcelada; senão saldo renegociado / valor de referência.
+    """
+    rt = getattr(item, "renegotiation_type", None)
+    rt_val = getattr(rt, "value", rt)
+    if (
+        getattr(item, "has_renegotiation", False)
+        and rt_val == "INSTALLMENTS"
+        and getattr(item, "installment_value", None) is not None
+    ):
+        return float(item.installment_value)
+    if getattr(item, "has_renegotiation", False) and getattr(item, "renegotiated_amount", None) is not None:
+        return float(item.renegotiated_amount)
+    return float(getattr(item, "valor_referencia", 0) or 0)
+
+
+def _payroll_distribution_label(line: Any) -> str:
+    """Coluna "Projetos / Administrativo": como o colaborador está distribuído.
+
+    Ex.: "Fiscalização AT (100%)"; "Fiscalização AT (50%) / Administrativo (50%)";
+    "Administrativo"; "—" (sem alocação)."""
+    if line is None:
+        return "—"
+    slices = list(getattr(line, "by_project", None) or [])
+    parts: list[str] = []
+    total_pct = 0.0
+    for s in slices:
+        pct = float(getattr(s, "allocation_percentage", 0) or 0)
+        total_pct += pct
+        parts.append(f"{getattr(s, 'project_name', '')} ({pct:.0f}%)")
+    remainder = round(100.0 - total_pct, 2)
+    if parts:
+        if remainder > 0.5:
+            parts.append(f"Administrativo ({remainder:.0f}%)")
+        return " / ".join(parts)
+    if float(getattr(line, "administrative_cost", 0) or 0) > 0:
+        return "Administrativo"
+    return "—"
+
+
+def _payroll_cost_center_distribution(line: Any, proj_cc: dict) -> str:
+    """Distribuição do colaborador por Centro de Custo (agrega % de alocação por centro
+    dos projetos). Ex.: "Subterrâneo (70%) / Administrativo (30%)". Preserva a informação
+    de distribuição que antes ficava na coluna principal (agora "Centro de Custo")."""
+    if line is None:
+        return "—"
+    agg: dict[str, float] = {}
+    total_pct = 0.0
+    for s in list(getattr(line, "by_project", None) or []):
+        pct = float(getattr(s, "allocation_percentage", 0) or 0)
+        total_pct += pct
+        cc = (proj_cc.get(getattr(s, "project_id", None)) or "").strip() or (
+            getattr(s, "project_name", "") or "—"
+        )
+        agg[cc] = agg.get(cc, 0.0) + pct
+    remainder = round(100.0 - total_pct, 2)
+    if remainder > 0.5:
+        agg["Administrativo"] = agg.get("Administrativo", 0.0) + remainder
+    if not agg:
+        return "Administrativo" if float(getattr(line, "administrative_cost", 0) or 0) > 0 else "—"
+    parts = [f"{cc} ({pct:.0f}%)" for cc, pct in sorted(agg.items(), key=lambda kv: -kv[1])]
+    return " / ".join(parts)
 
 
 class ReportService:
@@ -161,6 +236,211 @@ class ReportService:
                 }
             )
         return {"competencia_ref": comp.isoformat(), "scenario": sc.value, "rows": rows}
+
+    async def generate_payroll_report(
+        self, *, competencia: date | None, scenario: str | Scenario = DEFAULT_SCENARIO
+    ) -> dict[str, Any]:
+        """Folha de Pagamento (fechamento mensal): 1 linha por colaborador com o valor
+        efetivamente pago na competência (holerite real CLT / contratado PJ + VR +
+        ajuda de custo + endividamentos). Consolida tudo no backend (sem N+1).
+
+        NÃO altera o relatório de Colaboradores nem qualquer cálculo existente — só lê
+        os dados atuais (payroll, holerite real e endividamentos vinculados).
+        """
+        from sqlalchemy import select as _select
+        from app.models.employee import Employee
+        from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
+        from app.models.company_finance import CompanyFinancialItem
+
+        comp = normalize_competencia(competencia or default_cost_reference())
+        sc = coerce_scenario(scenario)
+        comp_str = f"{comp.year:04d}-{comp.month:02d}"
+        _, month_end = _month_bounds_local(comp)
+
+        # 1) Payroll consolidado (distribuição por projeto/administrativo + conjunto base).
+        payroll = await PayrollService(self.session).build_payroll(
+            competencia=comp, scenario=sc, project_id=None
+        )
+        line_by_emp = {line.employee_id: line for line in payroll.lines}
+
+        # 2) Holerite real (líquido + VR) da competência — 1 consulta.
+        overrides = (
+            await self.session.execute(
+                _select(EmployeeMonthlyPayrollOverride).where(
+                    EmployeeMonthlyPayrollOverride.competence_month == comp_str
+                )
+            )
+        ).scalars().all()
+        override_by_emp = {o.employee_id: o for o in overrides}
+
+        # 3) Endividamentos vinculados ao colaborador, vigentes na competência — 1 consulta.
+        endiv_items = (
+            await self.session.execute(
+                _select(CompanyFinancialItem).where(
+                    CompanyFinancialItem.tipo == "endividamento",
+                    CompanyFinancialItem.employee_id.is_not(None),
+                    CompanyFinancialItem.is_active.is_(True),
+                    (CompanyFinancialItem.start_date.is_(None))
+                    | (CompanyFinancialItem.start_date <= month_end),
+                    (CompanyFinancialItem.end_date.is_(None))
+                    | (CompanyFinancialItem.end_date >= comp),
+                )
+            )
+        ).scalars().all()
+        endiv_by_emp: dict[UUID, float] = {}
+        # Detalhe por colaborador: (descrição, valor) de cada endividamento vinculado, para a
+        # coluna "Detalhamento dos Endividamentos". A descrição usa item_description (novo);
+        # cai para o nome legado quando o item antigo não tem descrição própria.
+        endiv_detalhe_by_emp: dict[UUID, list[tuple[str, float]]] = {}
+        for it in endiv_items:
+            val = _debt_monthly_value(it)
+            endiv_by_emp[it.employee_id] = endiv_by_emp.get(it.employee_id, 0.0) + val
+            descr = (getattr(it, "item_description", None) or it.nome or "").strip()
+            endiv_detalhe_by_emp.setdefault(it.employee_id, []).append((descr, val))
+
+        # 3b) Custos fixos vinculados ao colaborador (COLABORADOR_MATRIZ), vigentes — 1 consulta.
+        custofixo_ids = set(
+            (
+                await self.session.execute(
+                    _select(CompanyFinancialItem.employee_id).where(
+                        CompanyFinancialItem.tipo == "custo_fixo",
+                        CompanyFinancialItem.employee_id.is_not(None),
+                        CompanyFinancialItem.is_active.is_(True),
+                        (CompanyFinancialItem.start_date.is_(None))
+                        | (CompanyFinancialItem.start_date <= month_end),
+                        (CompanyFinancialItem.end_date.is_(None))
+                        | (CompanyFinancialItem.end_date >= comp),
+                    )
+                )
+            ).scalars().all()
+        )
+
+        # 3c) Centros de custo dos projetos alocados (para a coluna opcional "Distribuição").
+        proj_ids = {
+            s.project_id for line in payroll.lines for s in (line.by_project or []) if s.project_id
+        }
+        proj_cc: dict[UUID, str] = {}
+        if proj_ids:
+            prows = (
+                await self.session.execute(_select(Project).where(Project.id.in_(proj_ids)))
+            ).scalars().all()
+            proj_cc = {p.id: (p.cost_center or "") for p in prows}
+
+        # 4) SOMENTE colaboradores com MOVIMENTAÇÃO na competência (regra do relatório):
+        #    custo em projeto/administrativo (payroll com total > 0) OU holerite OU
+        #    endividamento OU custo fixo vinculado. Elimina desligados/sem uso/esquecidos.
+        moved_ids = {eid for eid, ln in line_by_emp.items() if float(getattr(ln, "grand_total", 0) or 0) > 0}
+        moved_ids |= set(override_by_emp) | set(endiv_by_emp) | custofixo_ids
+        emp_ids = moved_ids
+        emp_by_id: dict[UUID, Employee] = {}
+        if emp_ids:
+            emps = (
+                await self.session.execute(_select(Employee).where(Employee.id.in_(emp_ids)))
+            ).scalars().all()
+            emp_by_id = {e.id: e for e in emps}
+
+        ordered_ids = sorted(
+            emp_ids,
+            key=lambda i: (
+                not bool(getattr(emp_by_id.get(i), "is_active", False)),
+                (getattr(emp_by_id.get(i), "full_name", "") or "").lower(),
+            ),
+        )
+
+        rows: list[dict[str, Any]] = []
+        qtd_clt = qtd_pj = 0
+        t_sal = t_ben = t_vr = t_endiv = t_ajuda = t_geral = 0.0
+        for eid in ordered_ids:
+            emp = emp_by_id.get(eid)
+            if emp is None:
+                continue
+            line = line_by_emp.get(eid)
+            tipo = (emp.employment_type or "CLT").strip().upper()
+            ov = override_by_emp.get(eid)
+            endiv = round(float(endiv_by_emp.get(eid, 0.0)), 2)
+            endiv_itens = [
+                {"descricao": d or "Endividamento", "valor": round(float(v), 2)}
+                for d, v in endiv_detalhe_by_emp.get(eid, [])
+            ]
+
+            if tipo == "PJ":
+                qtd_pj += 1
+                pj = pj_cost_breakdown(emp)
+                salario_base = round(float(pj["salary_base"]), 2)
+                salario_pago = salario_base  # PJ: valor contratado é o que se paga
+                vr_real = None
+                ajuda = round(float(pj["ajuda_custo"]), 2)
+            else:
+                qtd_clt += 1
+                salario_base = float(emp.salary_base) if emp.salary_base is not None else None
+                # "Real": só quando há holerite lançado (senão em branco).
+                salario_pago = (
+                    round(float(ov.net_salary_amount), 2)
+                    if (ov is not None and ov.net_salary_amount is not None)
+                    else None
+                )
+                vr_real = (
+                    round(float(ov.vr_amount), 2)
+                    if (ov is not None and ov.vr_amount is not None)
+                    else None
+                )
+                ajuda = None
+
+            beneficios = None  # módulo de benefícios futuro (coluna preservada)
+            total = round(
+                (salario_pago or 0.0) + (vr_real or 0.0) + (beneficios or 0.0) + (ajuda or 0.0) + endiv,
+                2,
+            )
+
+            t_sal += salario_pago or 0.0
+            t_vr += vr_real or 0.0
+            t_ben += beneficios or 0.0
+            t_ajuda += ajuda or 0.0
+            t_endiv += endiv
+            t_geral += total
+
+            rows.append(
+                {
+                    "nome": emp.full_name,
+                    "email": emp.email or "",
+                    "cargo": emp.role_title or "",
+                    "tipo": tipo,
+                    "status": "Ativo" if emp.is_active else "Inativo",
+                    # Coluna principal: Centro de Custo cadastrado no colaborador (Parte 6).
+                    "centro_custo": (getattr(emp, "cost_center", None) or "—"),
+                    # Coluna auxiliar (opcional): distribuição por Centro de Custo (Parte 7),
+                    # derivada da alocação em projetos — informação preservada.
+                    "distribuicao": _payroll_cost_center_distribution(line, proj_cc),
+                    "salario_base": salario_base,
+                    "salario_liquido": salario_pago,
+                    "beneficios": beneficios,
+                    "vr": vr_real,
+                    "vt": None,  # futuro
+                    "ajuda_custo": ajuda,
+                    "endividamentos": endiv if endiv > 0 else None,
+                    # Itens individuais para a coluna "Detalhamento dos Endividamentos"
+                    # (formatação/summarização feita no render). Vazio quando não há.
+                    "endividamentos_itens": endiv_itens,
+                    "outros": None,  # futuro
+                    "total_folha": total,
+                    "pix_tipo": emp.pix_key_type or "",
+                    "pix_chave": emp.pix_key or "",
+                }
+            )
+
+        summary = {
+            "competencia": comp_str,
+            "scenario": sc.value,
+            "qtd_clt": qtd_clt,
+            "qtd_pj": qtd_pj,
+            "total_salarios": round(t_sal, 2),
+            "total_beneficios": round(t_ben, 2),
+            "total_vr": round(t_vr, 2),
+            "total_endividamentos": round(t_endiv, 2),
+            "total_ajuda_custo": round(t_ajuda, 2),
+            "total_geral": round(t_geral, 2),
+        }
+        return {"competencia_ref": comp.isoformat(), "scenario": sc.value, "rows": rows, "summary": summary}
 
     async def generate_vehicles_report(self, *, active_only: bool) -> dict[str, Any]:
         rows = await FleetService(self.session).list_vehicles(

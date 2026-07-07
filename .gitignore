@@ -42,3 +42,7 @@ uploads/
 backup_sgp.sql
 *.sql
 *.dump
+
+# Dumps/backups do banco (NUNCA versionar dados de produção)
+backups/
+*.backup

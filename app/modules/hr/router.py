@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,13 +37,22 @@ async def list_employees(
     db: AsyncSession = Depends(get_db),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
+    search: str | None = Query(default=None, description="Busca por nome (ILIKE em full_name)."),
+    project_id: UUID | None = Query(
+        default=None,
+        description="Filtra por Centro de Custo do projeto (Mão de Obra). Omitido = todos.",
+    ),
     competencia: date | None = Query(
         default=None,
         description="Primeiro dia do mês de competência para custo CLT na resposta.",
     ),
 ) -> list[EmployeeRead]:
     comp = competencia or default_cost_reference()
-    return await EmployeesService(db).list_employees_as_read(offset=offset, limit=limit, competencia=comp)
+    svc = EmployeesService(db)
+    cc = await svc.cost_center_for_project(project_id) if project_id is not None else None
+    return await svc.list_employees_as_read(
+        offset=offset, limit=limit, competencia=comp, search=search, cost_center=cc
+    )
 
 
 @router.post("/employees", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])

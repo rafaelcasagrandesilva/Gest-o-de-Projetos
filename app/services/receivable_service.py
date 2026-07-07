@@ -165,7 +165,14 @@ class ReceivableService:
         if ad_f + CENT_TOL < ar_f:
             raise ValueError("Valor a devolver deve ser maior ou igual ao valor recebido.")
 
-    def invoice_to_read(self, inv: ReceivableInvoice, *, api_prefix: str = "/api/v1") -> dict:
+    def invoice_to_read(
+        self,
+        inv: ReceivableInvoice,
+        *,
+        api_prefix: str = "/api/v1",
+        anticipation_count: int | None = None,
+        advance_operations: list[dict] | None = None,
+    ) -> dict:
         self._sync_effective_status(inv)
         gross = _f(inv.gross_amount)
         net = _f(inv.net_amount)
@@ -297,6 +304,8 @@ class ReceivableService:
             "include_in_dashboard": bool(getattr(inv, "include_in_dashboard", True)),
             "advance_batch_id": inv.advance_batch_id,
             "advance_batch": batch_summary,
+            "anticipation_count": int(anticipation_count) if anticipation_count is not None else 0,
+            "advance_operations": advance_operations or [],
         }
 
     def _apply_invoice_filters(

@@ -199,6 +199,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [draftCostCenterRef, setDraftCostCenterRef] = useState(() => defaultCostCenterRef(tipo));
   const [projectOptions, setProjectOptions] = useState<Project[]>([]);
   const [draftDescription, setDraftDescription] = useState("");
+  // Endividamento: descrição própria do item (identificador da dívida) — obrigatória.
+  const [draftItemDescription, setDraftItemDescription] = useState("");
   const [draftRecurrence, setDraftRecurrence] = useState(() => defaultRecurrence(tipo));
   const [draftItemType, setDraftItemType] = useState<"MANUAL" | "COLABORADOR_MATRIZ">("MANUAL");
   const [draftEmployeeQuery, setDraftEmployeeQuery] = useState("");
@@ -217,6 +219,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [draftRenegAgreementDate, setDraftRenegAgreementDate] = useState("");
   const [draftRenegFirstPaymentDate, setDraftRenegFirstPaymentDate] = useState("");
   const [draftRenegDueDay, setDraftRenegDueDay] = useState("");
+  // Ciclo de vida — novo cadastro exige data de início; nasce ativo.
+  const [draftStartDate, setDraftStartDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [itemSearch, setItemSearch] = useState("");
@@ -229,6 +233,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     setDraftCategory(defaultCategory(tipo));
     setDraftCostCenterRef(defaultCostCenterRef(tipo));
     setDraftDescription("");
+    setDraftItemDescription("");
     setDraftRecurrence(defaultRecurrence(tipo));
     setDraftItemType("MANUAL");
     setDraftEmployeeQuery("");
@@ -245,6 +250,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     setDraftRenegAgreementDate("");
     setDraftRenegFirstPaymentDate("");
     setDraftRenegDueDay("");
+    setDraftStartDate("");
   }, [tipo]);
 
   useEffect(() => {
@@ -471,10 +477,25 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ"
         ? (selectedEmployee?.full_name ?? "").trim()
         : draftName.trim();
+    const itemDescription = draftItemDescription.trim();
     const ref = calculatedRef;
-    if (!nome || ref < 0) return;
+    // Endividamento: descrição é o identificador (nome é composto no backend); colaborador
+    // é opcional. Demais tipos exigem nome como antes.
+    if (tipo === "endividamento") {
+      if (!itemDescription) {
+        setError("Informe a descrição da dívida.");
+        return;
+      }
+    } else if (!nome) {
+      return;
+    }
+    if (ref < 0) return;
     if (!draftCostCenterRef) {
       setError("Selecione o centro de custo.");
+      return;
+    }
+    if (!draftStartDate) {
+      setError("Informe a data de início.");
       return;
     }
     if (createValidationError) {
@@ -496,14 +517,21 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     try {
       await createCompanyFinanceItem({
         tipo,
-        nome,
+        // Endividamento: nome é composto no backend a partir de colaborador + descrição.
+        nome: tipo === "endividamento" ? undefined : nome,
+        item_description: tipo === "endividamento" ? itemDescription : undefined,
         valor_referencia: ref,
         category: draftCategory.trim() || defaultCategory(tipo),
         cost_center_ref: draftCostCenterRef || defaultCostCenterRef(tipo),
         description: draftDescription.trim() || null,
         recurrence: draftRecurrence.trim() || defaultRecurrence(tipo),
         item_type: tipo === "custo_fixo" ? draftItemType : "MANUAL",
-        employee_id: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? draftEmployeeId : null,
+        employee_id:
+          tipo === "endividamento"
+            ? draftEmployeeId || null
+            : tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ"
+              ? draftEmployeeId
+              : null,
         percentual: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? percentualN : null,
         is_monthly_required: draftIsMonthlyRequired,
         has_legal_process: tipo === "endividamento" ? draftHasLegalProcess : false,
@@ -527,6 +555,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
           tipo === "endividamento" && draftHasRenegotiation && draftRenegDueDay
             ? Number(draftRenegDueDay)
             : null,
+        is_active: true,
+        start_date: draftStartDate,
+        end_date: null,
       });
       resetCreateForm();
       setShowCreateForm(false);
@@ -546,8 +577,39 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       await deleteCompanyFinanceItem(id);
       if (expandedId === id) setExpandedId(null);
       await loadAll();
-    } catch {
-      setError("Não foi possível excluir.");
+    } catch (err) {
+      // Cadastro com movimentação não pode ser excluído — o backend orienta a inativar.
+      if (isAxiosError(err) && typeof err.response?.data?.detail === "string") {
+        setError(err.response.data.detail);
+      } else {
+        setError("Não foi possível excluir.");
+      }
+    }
+  }
+
+  /** Ativa/inativa um cadastro. Inativar exige a data de encerramento (ciclo de vida). */
+  async function handleToggleActive(item: CompanyFinancialItem) {
+    if (financeReadOnly) return;
+    const isActive = item.is_active ?? true;
+    try {
+      if (isActive) {
+        const today = new Date().toISOString().slice(0, 10);
+        const end = window.prompt(
+          "Informe a data em que este cadastro deixou de ser utilizado (AAAA-MM-DD):",
+          item.end_date ?? today,
+        );
+        if (!end) return;
+        await updateCompanyFinanceItem(item.id, { is_active: false, end_date: end }, competencia);
+      } else {
+        await updateCompanyFinanceItem(item.id, { is_active: true }, competencia);
+      }
+      await loadAll();
+    } catch (err) {
+      if (isAxiosError(err) && typeof err.response?.data?.detail === "string") {
+        setError(err.response.data.detail);
+      } else {
+        setError("Não foi possível atualizar o status.");
+      }
     }
   }
 
@@ -893,15 +955,109 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             </label>
           )}
 
-          <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-sm">
-            <span className="text-slate-600">Nome</span>
+          {/* Endividamento: o Nome é composto automaticamente (colaborador + descrição) —
+              o campo é escondido e substituído por Colaborador (opcional) + Descrição. */}
+          {tipo === "custo_fixo" && (
+            <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-sm">
+              <span className="text-slate-600">Nome</span>
+              <input
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-2"
+                placeholder="Ex.: Financiamento veículos"
+                required
+                disabled={financeReadOnly || draftItemType === "COLABORADOR_MATRIZ"}
+              />
+            </label>
+          )}
+          {tipo === "endividamento" && (
+            <>
+              <label className="flex w-full min-w-[200px] flex-col gap-1 text-sm sm:w-64">
+                <span className="text-slate-600">Colaborador (opcional)</span>
+                <div className="relative">
+                  <input
+                    value={draftEmployeeQuery}
+                    onChange={(e) => {
+                      setDraftEmployeeQuery(e.target.value);
+                      setDraftEmployeeOpen(true);
+                    }}
+                    onFocus={() => setDraftEmployeeOpen(true)}
+                    onBlur={() => window.setTimeout(() => setDraftEmployeeOpen(false), 150)}
+                    placeholder={selectedEmployee ? selectedEmployee.full_name : "Digite para buscar…"}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    disabled={financeReadOnly}
+                  />
+                  {draftEmployeeOpen ? (
+                    <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                      <div className="px-3 py-2 text-xs text-slate-500">
+                        {draftEmployeeLoading
+                          ? "Buscando…"
+                          : draftEmployeeOptions.length === 0
+                            ? "Nenhum colaborador encontrado."
+                            : "Selecione um colaborador"}
+                      </div>
+                      <div className="max-h-56 overflow-auto">
+                        {draftEmployeeOptions.map((em) => (
+                          <button
+                            key={em.id}
+                            type="button"
+                            onMouseDown={(ev) => {
+                              ev.preventDefault();
+                              setDraftEmployeeId(em.id);
+                              setDraftEmployeeQuery("");
+                              setDraftEmployeeOpen(false);
+                            }}
+                            className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50"
+                          >
+                            <span className="truncate text-slate-900">{em.full_name}</span>
+                            <span className="ml-2 shrink-0 rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+                              {em.employment_type}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                {selectedEmployee ? (
+                  <p className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                    <span className="font-medium text-slate-700">{selectedEmployee.full_name}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraftEmployeeId("");
+                        setDraftEmployeeQuery("");
+                      }}
+                      className="text-indigo-600 hover:underline"
+                      disabled={financeReadOnly}
+                    >
+                      remover
+                    </button>
+                  </p>
+                ) : null}
+              </label>
+              <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-sm">
+                <span className="text-slate-600">Descrição da dívida *</span>
+                <input
+                  value={draftItemDescription}
+                  onChange={(e) => setDraftItemDescription(e.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2"
+                  placeholder="Ex.: Acordo de Remuneração"
+                  required
+                  disabled={financeReadOnly}
+                />
+              </label>
+            </>
+          )}
+          <label className="flex w-full min-w-[150px] flex-col gap-1 text-sm sm:w-44">
+            <span className="text-slate-600">Início</span>
             <input
-              value={draftName}
-              onChange={(e) => setDraftName(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="Ex.: Financiamento veículos"
+              type="date"
+              value={draftStartDate}
+              onChange={(e) => setDraftStartDate(e.target.value)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2"
               required
-              disabled={financeReadOnly || (tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ")}
+              disabled={financeReadOnly}
             />
           </label>
           <label className="flex w-full min-w-[160px] flex-col gap-1 text-sm sm:w-48">
@@ -1235,6 +1391,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               readOnly={financeReadOnly}
               onToggle={() => setExpandedId((prev) => (prev === it.id ? null : it.id))}
               onDelete={() => void handleDelete(it.id)}
+              onToggleActive={() => void handleToggleActive(it)}
               onSaved={loadAll}
             />
           ))
@@ -1428,6 +1585,7 @@ function FinanceItemCard({
   readOnly,
   onToggle,
   onDelete,
+  onToggleActive,
   onSaved,
 }: {
   item: CompanyFinancialItem;
@@ -1439,9 +1597,11 @@ function FinanceItemCard({
   readOnly: boolean;
   onToggle: () => void;
   onDelete: () => void;
+  onToggleActive: () => void;
   onSaved: () => Promise<void>;
 }) {
   const ref = item.valor_referencia;
+  const isActive = item.is_active ?? true;
   const ratio = item.progresso;
   const pct = Math.min(100, ratio * 100);
   const hasLegal = Boolean(item.has_legal_process);
@@ -1459,6 +1619,14 @@ function FinanceItemCard({
   const [editingStructure, setEditingStructure] = useState(false);
   const [structureSaving, setStructureSaving] = useState(false);
   const [structureName, setStructureName] = useState(item.nome);
+  // Endividamento: descrição própria + colaborador (vínculo opcional, só identificação).
+  const [structureItemDescription, setStructureItemDescription] = useState(item.item_description ?? "");
+  const [structureEmployeeId, setStructureEmployeeId] = useState(item.employee_id ?? "");
+  const [structureEmployeeName, setStructureEmployeeName] = useState(item.employee_name ?? "");
+  const [structureEmployeeQuery, setStructureEmployeeQuery] = useState("");
+  const [structureEmployeeOptions, setStructureEmployeeOptions] = useState<Employee[]>([]);
+  const [structureEmployeeOpen, setStructureEmployeeOpen] = useState(false);
+  const [structureEmployeeLoading, setStructureEmployeeLoading] = useState(false);
   const [structureRef, setStructureRef] = useState(formatCurrencyInputFromApi(item.valor_referencia));
   const [structureCategory, setStructureCategory] = useState(item.category ?? defaultCategory(tipo));
   const [structureCostCenterRef, setStructureCostCenterRef] = useState(() =>
@@ -1512,6 +1680,11 @@ function FinanceItemCard({
   useEffect(() => {
     if (editingStructure) return;
     setStructureName(item.nome);
+    setStructureItemDescription(item.item_description ?? "");
+    setStructureEmployeeId(item.employee_id ?? "");
+    setStructureEmployeeName(item.employee_name ?? "");
+    setStructureEmployeeQuery("");
+    setStructureEmployeeOptions([]);
     setStructureRef(formatCurrencyInputFromApi(item.valor_referencia));
     setStructureCategory(item.category ?? defaultCategory(tipo));
     setStructureCostCenterRef(itemCostCenterRef(item, tipo, projectOptions));
@@ -1537,6 +1710,24 @@ function FinanceItemCard({
     setStructureError(null);
     setStructureSuccess(null);
   }, [item, tipo, projectOptions, editingStructure]);
+
+  // Autocomplete de colaborador na edição de Endividamento (opcional, só identificação).
+  useEffect(() => {
+    if (tipo !== "endividamento" || !structureEmployeeOpen) return;
+    const t = window.setTimeout(() => {
+      setStructureEmployeeLoading(true);
+      void listEmployees({
+        competencia: `${competencia}-01`,
+        search: structureEmployeeQuery.trim() ? structureEmployeeQuery.trim() : undefined,
+        limit: 20,
+        offset: 0,
+      })
+        .then((rows) => setStructureEmployeeOptions(rows))
+        .catch(() => setStructureEmployeeOptions([]))
+        .finally(() => setStructureEmployeeLoading(false));
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [tipo, structureEmployeeOpen, structureEmployeeQuery, competencia]);
 
   const [paymentsError, setPaymentsError] = useState<string | null>(null);
   const [paymentsSuccess, setPaymentsSuccess] = useState<string | null>(null);
@@ -1607,7 +1798,13 @@ function FinanceItemCard({
   async function saveStructure() {
     if (readOnly) return;
     const nome = structureName.trim();
-    if (!nome) {
+    const itemDescription = structureItemDescription.trim();
+    if (tipo === "endividamento") {
+      if (!itemDescription) {
+        setStructureError("Informe a descrição da dívida.");
+        return;
+      }
+    } else if (!nome) {
       setStructureError("Informe o nome do item.");
       return;
     }
@@ -1616,7 +1813,10 @@ function FinanceItemCard({
       return;
     }
     const payload: Parameters<typeof updateCompanyFinanceItem>[1] = {
-      nome,
+      // Endividamento: nome é composto no backend (colaborador + descrição).
+      ...(tipo === "endividamento"
+        ? { item_description: itemDescription, employee_id: structureEmployeeId || null }
+        : { nome }),
       valor_referencia: parseBRLInput(structureRef),
       category: structureCategory.trim() || defaultCategory(tipo),
       cost_center_ref: structureCostCenterRef,
@@ -1704,6 +1904,20 @@ function FinanceItemCard({
             )}
           </div>
           <dl className="mt-2 grid gap-2 text-sm text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
+            {tipo === "endividamento" && (
+              <>
+                <div>
+                  <dt className="text-xs text-slate-500">Colaborador</dt>
+                  <dd className="font-medium text-slate-900">{item.employee_name ?? "-"}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Descrição</dt>
+                  <dd className="font-medium text-slate-900">
+                    {item.item_description?.trim() || item.nome}
+                  </dd>
+                </div>
+              </>
+            )}
             <div>
               <dt className="text-xs text-slate-500">Referência</dt>
               <dd className="font-medium text-slate-900">{formatBRL(ref)}</dd>
@@ -1798,15 +2012,96 @@ function FinanceItemCard({
               </dl>
             ) : (
               <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-slate-600">Nome</span>
-                  <input
-                    value={structureName}
-                    onChange={(e) => setStructureName(e.target.value)}
-                    className="rounded border border-slate-300 px-2 py-1.5"
-                    disabled={readOnly || structureSaving}
-                  />
-                </label>
+                {tipo === "endividamento" ? (
+                  <>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Colaborador (opcional)</span>
+                      <div className="relative">
+                        <input
+                          value={structureEmployeeQuery}
+                          onChange={(e) => {
+                            setStructureEmployeeQuery(e.target.value);
+                            setStructureEmployeeOpen(true);
+                          }}
+                          onFocus={() => setStructureEmployeeOpen(true)}
+                          onBlur={() => window.setTimeout(() => setStructureEmployeeOpen(false), 150)}
+                          placeholder={structureEmployeeName || "Digite para buscar…"}
+                          className="w-full rounded border border-slate-300 px-2 py-1.5"
+                          disabled={readOnly || structureSaving}
+                        />
+                        {structureEmployeeOpen ? (
+                          <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                            <div className="px-3 py-2 text-xs text-slate-500">
+                              {structureEmployeeLoading
+                                ? "Buscando…"
+                                : structureEmployeeOptions.length === 0
+                                  ? "Nenhum colaborador encontrado."
+                                  : "Selecione um colaborador"}
+                            </div>
+                            <div className="max-h-56 overflow-auto">
+                              {structureEmployeeOptions.map((em) => (
+                                <button
+                                  key={em.id}
+                                  type="button"
+                                  onMouseDown={(ev) => {
+                                    ev.preventDefault();
+                                    setStructureEmployeeId(em.id);
+                                    setStructureEmployeeName(em.full_name);
+                                    setStructureEmployeeQuery("");
+                                    setStructureEmployeeOpen(false);
+                                  }}
+                                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50"
+                                >
+                                  <span className="truncate text-slate-900">{em.full_name}</span>
+                                  <span className="ml-2 shrink-0 rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+                                    {em.employment_type}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                      {structureEmployeeId ? (
+                        <p className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                          <span className="font-medium text-slate-700">{structureEmployeeName}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setStructureEmployeeId("");
+                              setStructureEmployeeName("");
+                              setStructureEmployeeQuery("");
+                            }}
+                            className="text-indigo-600 hover:underline"
+                            disabled={readOnly || structureSaving}
+                          >
+                            remover
+                          </button>
+                        </p>
+                      ) : null}
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Descrição da dívida *</span>
+                      <input
+                        value={structureItemDescription}
+                        onChange={(e) => setStructureItemDescription(e.target.value)}
+                        className="rounded border border-slate-300 px-2 py-1.5"
+                        placeholder="Ex.: Acordo de Remuneração"
+                        disabled={readOnly || structureSaving}
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-slate-600">Nome</span>
+                    <input
+                      value={structureName}
+                      onChange={(e) => setStructureName(e.target.value)}
+                      className="rounded border border-slate-300 px-2 py-1.5"
+                      disabled={readOnly || structureSaving}
+                    />
+                  </label>
+                )}
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="text-slate-600">Valor base</span>
                   <input
@@ -2098,6 +2393,15 @@ function FinanceItemCard({
               className="rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50 disabled:opacity-50"
             >
               {paymentsSaving ? "Salvando…" : "Salvar agora"}
+            </button>
+            <button
+              type="button"
+              onClick={onToggleActive}
+              disabled={readOnly}
+              title={readOnly ? GESTOR_GLOBAL_EDIT_TOOLTIP : undefined}
+              className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {isActive ? "Inativar" : "Reativar"}
             </button>
             <button
               type="button"

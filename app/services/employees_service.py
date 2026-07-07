@@ -6,8 +6,12 @@ from uuid import UUID
 from fastapi import HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import func, select
+
 from app.core.scenario import Scenario
+from app.models.company_finance import CompanyFinancialItem
 from app.models.employee import Employee, EmployeeAllocation
+from app.models.fleet import Vehicle
 from app.models.user import User
 from app.repositories.employees import EmployeeAllocationRepository, EmployeeRepository
 from app.schemas.employees import EmployeeRead
@@ -16,6 +20,7 @@ from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_
 from app.services.payable_snapshot_service import PayableSnapshotService
 from app.services.settings_service import SettingsService
 from app.services.utils import model_to_dict
+from app.utils.lifecycle import DELETE_WITH_MOVEMENT_MSG, normalize_lifecycle
 
 
 def default_cost_reference() -> date:
@@ -54,6 +59,10 @@ _EMPLOYEE_PATCHABLE = frozenset(
         "extra_hours_100",
         "pj_hours_per_month",
         "pj_additional_cost",
+        "start_date",
+        "end_date",
+        "cost_center",
+        "can_allocate_other_cost_centers",
     }
 )
 
@@ -89,8 +98,11 @@ class EmployeesService:
         limit: int = 50,
         competencia: date,
         search: str | None = None,
+        cost_center: str | None = None,
     ) -> list[EmployeeRead]:
-        rows = await self.employees.list(offset=offset, limit=limit, search=search)
+        rows = await self.employees.list(
+            offset=offset, limit=limit, search=search, cost_center=cost_center
+        )
         settings = await SettingsService(self.session).get_or_create()
         y, m = competencia.year, competencia.month
         out: list[EmployeeRead] = []
@@ -103,9 +115,35 @@ class EmployeesService:
         return out
 
     async def list_employees(
-        self, *, offset: int = 0, limit: int = 50, search: str | None = None
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        search: str | None = None,
+        cost_center: str | None = None,
     ) -> list[Employee]:
-        return await self.employees.list(offset=offset, limit=limit, search=search)
+        return await self.employees.list(
+            offset=offset, limit=limit, search=search, cost_center=cost_center
+        )
+
+    async def cost_center_for_project(self, project_id) -> str | None:
+        """Centro de Custo efetivo do projeto (para filtrar colaboradores elegíveis).
+
+        Usa `projects.cost_center` quando preenchido; caso contrário cai para o NOME do
+        projeto — que é o agrupamento de fato hoje (a coluna cost_center dos projetos
+        ainda não é populada). Assim o filtro já funciona com os dados atuais e passa a
+        respeitar o cost_center explícito assim que ele for cadastrado.
+        """
+        from app.models.project import Project
+
+        proj = await self.session.get(Project, project_id)
+        if proj is None:
+            return None
+        cc = (getattr(proj, "cost_center", None) or "").strip()
+        if cc:
+            return cc
+        name = (getattr(proj, "name", None) or "").strip()
+        return name or None
 
     async def get_employee(self, employee_id) -> Employee:
         emp = await self.employees.get(employee_id)
@@ -135,6 +173,12 @@ class EmployeesService:
                     detail="Salário base não pode ser negativo.",
                 )
 
+        is_active = bool(payload.get("is_active", True))
+        try:
+            end_date = normalize_lifecycle(is_active=is_active, end_date=payload.get("end_date"))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
         emp = Employee(
             full_name=payload["full_name"],
             email=payload.get("email"),
@@ -142,7 +186,11 @@ class EmployeesService:
             employment_type=employment_type,
             salary_base=payload.get("salary_base"),
             additional_costs=payload.get("additional_costs"),
-            is_active=payload.get("is_active", True),
+            is_active=is_active,
+            start_date=payload.get("start_date"),
+            end_date=end_date,
+            cost_center=(str(payload["cost_center"]).strip() if payload.get("cost_center") else None),
+            can_allocate_other_cost_centers=bool(payload.get("can_allocate_other_cost_centers", False)),
             has_periculosidade=bool(payload.get("has_periculosidade", False)),
             has_adicional_dirigida=bool(payload.get("has_adicional_dirigida", False)),
             extra_hours_50=float(payload.get("extra_hours_50") or 0),
@@ -185,6 +233,14 @@ class EmployeesService:
         for k, v in patch.items():
             setattr(emp, k, v)
 
+        # Invariante do ciclo de vida (apenas quando o status/encerramento é tocado, para
+        # não bloquear edições não relacionadas): inativo exige end_date; ativo limpa-o.
+        if "is_active" in patch or "end_date" in patch:
+            try:
+                emp.end_date = normalize_lifecycle(is_active=bool(emp.is_active), end_date=emp.end_date)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
         if emp.employment_type == "CLT":
             sb = emp.salary_base
             if sb is None or float(sb) <= 0:
@@ -212,6 +268,25 @@ class EmployeesService:
         await self.session.refresh(emp)
         return emp
 
+    async def _has_movement(self, employee_id) -> bool:
+        """True se o colaborador possui movimentação vinculada (impede exclusão física).
+
+        Considera: alocações em projetos, itens de custo-matriz (COLABORADOR_MATRIZ) e
+        vínculo como motorista de veículo. Basta uma referência para preservar o histórico.
+        """
+        for stmt in (
+            select(func.count()).select_from(EmployeeAllocation).where(
+                EmployeeAllocation.employee_id == employee_id
+            ),
+            select(func.count()).select_from(CompanyFinancialItem).where(
+                CompanyFinancialItem.employee_id == employee_id
+            ),
+            select(func.count()).select_from(Vehicle).where(Vehicle.driver_employee_id == employee_id),
+        ):
+            if int((await self.session.execute(stmt)).scalar_one() or 0) > 0:
+                return True
+        return False
+
     async def delete_employee(
         self,
         *,
@@ -221,6 +296,8 @@ class EmployeesService:
         request: Request | None = None,
     ) -> None:
         emp = await self.get_employee(employee_id)
+        if await self._has_movement(employee_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=DELETE_WITH_MOVEMENT_MSG)
         before = model_to_dict(emp)
         await self.employees.delete(emp)
         await self.audit.log_action(
