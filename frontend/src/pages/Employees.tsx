@@ -370,20 +370,25 @@ function CadastroColaboradorFields({
         <label htmlFor={`${idPrefix}-cc`} className="mb-1 block text-sm text-slate-600">
           Centro de Custo
         </label>
-        <input
+        <select
           id={`${idPrefix}-cc`}
           required
-          list={`${idPrefix}-cc-list`}
           value={form.cost_center}
           onChange={(e) => setForm((f) => ({ ...f, cost_center: e.target.value }))}
-          placeholder="Ex.: Fiscalização AT, Subterrâneo, Administrativo…"
           className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-        />
-        <datalist id={`${idPrefix}-cc-list`}>
+        >
+          <option value="">Selecione…</option>
+          {/* Preserva um centro já gravado que não esteja mais na lista carregada
+              (legado/inativo) — não perde o valor ao editar. */}
+          {form.cost_center && !costCenters.includes(form.cost_center) ? (
+            <option value={form.cost_center}>{form.cost_center}</option>
+          ) : null}
           {costCenters.map((cc) => (
-            <option key={cc} value={cc} />
+            <option key={cc} value={cc}>
+              {cc}
+            </option>
           ))}
-        </datalist>
+        </select>
       </div>
       <div className="sm:col-span-2">
         <label className="flex items-center gap-2 text-sm text-slate-700">
