@@ -142,6 +142,49 @@ export function FinancialEvolutionMainChart({
       };
     });
 
+    // Linha de equilíbrio (R$ 0) + marcação suave da região de prejuízo (abaixo de zero),
+    // no mesmo padrão visual da "Evolução Mensal" (Recharts ReferenceLine/ReferenceArea →
+    // aqui markLine/markArea do ECharts). Apenas apresentação: sem tocar séries, tooltips
+    // ou cálculos. Os overlays ficam sempre DENTRO do range dos dados (guardas abaixo),
+    // então NÃO alteram a escala do eixo.
+    const presentValues = MAIN_SERIES.flatMap((s) => (isVisibleInCatalog(s.id) ? numsById[s.id] : [])).filter(
+      (v) => Number.isFinite(v),
+    );
+    const dataMin = presentValues.length ? Math.min(...presentValues) : 0;
+    const dataMax = presentValues.length ? Math.max(...presentValues) : 0;
+    const zeroInRange = dataMin <= TOL && dataMax >= -TOL; // R$ 0 dentro da faixa dos dados
+    const hasLossRegion = dataMin < -TOL; // existe região abaixo de zero (prejuízo)
+
+    // Série dedicada (fora da legenda/tooltip) só para os overlays — assim a linha de
+    // equilíbrio e a faixa de prejuízo permanecem visíveis mesmo alternando séries.
+    const baselineSeries = {
+      name: "__equilibrio__",
+      type: "line" as const,
+      data: [] as number[],
+      silent: true,
+      showSymbol: false,
+      legendHoverLink: false,
+      tooltip: { show: false },
+      markLine: zeroInRange
+        ? {
+            silent: true,
+            symbol: "none" as const,
+            lineStyle: { color: CHART_COLORS.zeroLine, width: 2, type: "solid" as const },
+            label: { show: false },
+            data: [{ yAxis: 0 }],
+          }
+        : undefined,
+      markArea: hasLossRegion
+        ? {
+            silent: true,
+            itemStyle: { color: "#fecaca", opacity: 0.25 },
+            // Da linha do zero (ou do topo visível, se tudo negativo) até o piso dos dados.
+            data: [[{ yAxis: Math.min(0, dataMax) }, { yAxis: dataMin }]],
+          }
+        : undefined,
+    };
+    series.push(baselineSeries as unknown as (typeof series)[number]);
+
     const legendNames = MAIN_SERIES.filter((s) => isVisibleInCatalog(s.id)).map((s) => s.name);
     const legendSelected: Record<string, boolean> = Object.fromEntries(
       MAIN_SERIES.filter((s) => isVisibleInCatalog(s.id)).map((s) => [s.name, selectedSeries[s.id] !== false]),
