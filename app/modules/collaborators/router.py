@@ -65,23 +65,23 @@ async def search_collaborators(
     dependencies=[Depends(require_permission(EMPLOYEES_VIEW))],
 )
 async def list_cost_centers(db: AsyncSession = Depends(get_db)) -> list[str]:
-    """Centros de Custo distintos existentes (projetos + colaboradores) para o datalist do cadastro."""
+    """Centros de Custo (agrupamentos) já cadastrados — em projetos E colaboradores — para
+    os selects de cadastro.
+
+    Retorna apenas Centros de Custo REAIS (`projects.cost_center` ∪ `employees.cost_center`).
+    NÃO inclui nome de projeto como fallback: o Centro de Custo é um agrupamento próprio,
+    reutilizável entre vários projetos, distinto do nome do projeto.
+    """
     from sqlalchemy import select as _select
     from app.models.project import Project
     from app.models.employee import Employee
 
-    # Centro de Custo efetivo dos projetos = cost_center (se houver) senão o nome do projeto.
-    prows = (await db.execute(_select(Project.cost_center, Project.name))).all()
+    proj_cc = (
+        await db.execute(_select(Project.cost_center).where(Project.cost_center.is_not(None)).distinct())
+    ).scalars().all()
     emp_cc = (
         await db.execute(_select(Employee.cost_center).where(Employee.cost_center.is_not(None)).distinct())
     ).scalars().all()
-    values: set[str] = set()
-    for cc, name in prows:
-        eff = (cc or "").strip() or (name or "").strip()
-        if eff:
-            values.add(eff)
-    for c in emp_cc:
-        if c and str(c).strip():
-            values.add(str(c).strip())
+    values = {str(c).strip() for c in (*proj_cc, *emp_cc) if c and str(c).strip()}
     return sorted(values, key=lambda s: s.lower())
 

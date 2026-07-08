@@ -112,5 +112,51 @@ class EmployeeCostCenterDBTests(unittest.IsolatedAsyncioTestCase):
             await s.commit()
 
 
+class CostCenterVocabularyDBTests(unittest.IsolatedAsyncioTestCase):
+    async def test_list_cost_centers_excludes_project_names(self) -> None:
+        """A lista de Centros de Custo traz só agrupamentos reais (projects.cost_center ∪
+        employees.cost_center) — NÃO o nome do projeto."""
+        from sqlalchemy import text
+        from sqlalchemy.exc import ProgrammingError
+
+        from app.database.session import AsyncSessionLocal, engine
+        from app.models.employee import Employee
+        from app.models.project import Project
+        from app.modules.collaborators.router import list_cost_centers
+
+        await engine.dispose()
+        tag = uuid4().hex[:6]
+        proj_name_only = f"ProjSemCC-{tag}"  # projeto sem cost_center → NÃO deve virar centro
+        cc_proj = f"CC-Proj-{tag}"
+        cc_emp = f"CC-Emp-{tag}"
+
+        async with AsyncSessionLocal() as s:
+            try:
+                await s.execute(text("SELECT cost_center FROM employees LIMIT 1"))
+            except ProgrammingError:
+                self.skipTest("Coluna cost_center ausente (rode alembic upgrade head).")
+            try:
+                s.add(Project(name=proj_name_only, is_active=True))
+                s.add(Project(name=f"Proj-{tag}", cost_center=cc_proj, is_active=True))
+                s.add(
+                    Employee(
+                        full_name=f"Emp CC {tag}",
+                        employment_type="PJ",
+                        is_active=True,
+                        salary_base=1000.0,
+                        total_cost=0,
+                        cost_center=cc_emp,
+                    )
+                )
+                await s.flush()
+
+                result = await list_cost_centers(db=s)
+                self.assertIn(cc_proj, result)  # cost_center de projeto entra
+                self.assertIn(cc_emp, result)  # cost_center de colaborador entra
+                self.assertNotIn(proj_name_only, result)  # nome de projeto NÃO entra
+            finally:
+                await s.rollback()  # não persiste dados de teste
+
+
 if __name__ == "__main__":
     unittest.main()

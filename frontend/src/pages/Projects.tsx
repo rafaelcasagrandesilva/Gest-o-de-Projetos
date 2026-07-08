@@ -12,6 +12,8 @@ import {
   type Project,
   type ProjectStatusFilter,
 } from "@/services/projects";
+import { fetchCostCenters } from "@/services/employees";
+import { CostCenterCombo } from "@/components/CostCenterCombo";
 import { isAxiosError } from "axios";
 import { TruncatedCell } from "@/components/TruncatedText";
 import { ProjectDetailsModal } from "@/components/ProjectDetailsModal";
@@ -37,6 +39,8 @@ export function Projects() {
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [costCenter, setCostCenter] = useState("");
+  const [costCenterOptions, setCostCenterOptions] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [statusFilter, setStatusFilter] = useState<ProjectStatusFilter>("ACTIVE");
@@ -60,6 +64,21 @@ export function Projects() {
     load();
   }, [statusFilter]);
 
+  // Centros de Custo já existentes (para o select do cadastro de projeto).
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCostCenters()
+      .then((cc) => {
+        if (!cancelled) setCostCenterOptions(cc);
+      })
+      .catch(() => {
+        if (!cancelled) setCostCenterOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const canManageAny = useMemo(() => !readOnly && (canEditProject || canDeleteProject), [readOnly, canEditProject, canDeleteProject]);
 
   const { sortedRows, headerSort } = useTableSort(items, PROJECT_SORT_COLUMNS, {
@@ -71,9 +90,14 @@ export function Projects() {
     setCreating(true);
     setError(null);
     try {
-      await createProject({ name: name.trim(), description: description.trim() || null });
+      await createProject({
+        name: name.trim(),
+        description: description.trim() || null,
+        cost_center: costCenter.trim() || null,
+      });
       setName("");
       setDescription("");
+      setCostCenter("");
       setShowForm(false);
       await load();
     } catch (err) {
@@ -128,6 +152,18 @@ export function Projects() {
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
               placeholder="Nome do projeto"
             />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-600">Centro de Custo</label>
+            <CostCenterCombo
+              value={costCenter}
+              onChange={setCostCenter}
+              options={costCenterOptions}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              Agrupamento reutilizável entre projetos. Define quais colaboradores aparecem para alocação.
+            </p>
           </div>
           <div>
             <label className="mb-1 block text-sm text-slate-600">Descrição</label>

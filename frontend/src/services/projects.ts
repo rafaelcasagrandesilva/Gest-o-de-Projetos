@@ -115,10 +115,12 @@ export async function listProjects(params?: {
 export async function createProject(payload: {
   name: string;
   description?: string | null;
+  cost_center?: string | null;
 }): Promise<Project> {
   const { data } = await api.post<Project>("/projects/", {
     name: payload.name,
     description: payload.description || null,
+    cost_center: payload.cost_center || null,
   });
   return data;
 }
@@ -146,7 +148,7 @@ export async function updateProjectContract(
 /** Salva os dados básicos (aba Geral) reutilizando o mesmo endpoint de atualização. */
 export async function updateProjectGeneral(
   id: string,
-  payload: { name?: string; description?: string | null },
+  payload: { name?: string; description?: string | null; cost_center?: string | null },
 ): Promise<Project> {
   const { data } = await api.patch<Project>(`/projects/${id}`, payload);
   return data;

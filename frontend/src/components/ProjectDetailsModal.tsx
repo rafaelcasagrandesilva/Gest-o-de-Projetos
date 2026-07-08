@@ -19,6 +19,8 @@ import {
   type ProjectDocument,
   type ProjectDocumentCategory,
 } from "@/services/projects";
+import { fetchCostCenters } from "@/services/employees";
+import { CostCenterCombo } from "@/components/CostCenterCombo";
 import { usePermission } from "@/hooks/usePermission";
 import { normalizeCurrencyForApi } from "@/utils/currency";
 
@@ -97,6 +99,8 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
   // Aba Geral (editável).
   const [projName, setProjName] = useState("");
   const [projDescription, setProjDescription] = useState("");
+  const [projCostCenter, setProjCostCenter] = useState("");
+  const [costCenterOptions, setCostCenterOptions] = useState<string[]>([]);
   const [projActive, setProjActive] = useState(true);
   const [projActiveOriginal, setProjActiveOriginal] = useState(true);
   const [savingGeneral, setSavingGeneral] = useState(false);
@@ -133,6 +137,7 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
       const d = await getProjectDetail(projectId);
       setProjName(d.name ?? "");
       setProjDescription(d.description ?? "");
+      setProjCostCenter(d.cost_center ?? "");
       setProjActive(d.is_active);
       setProjActiveOriginal(d.is_active);
       setContractNumber(d.contract_number ?? "");
@@ -162,6 +167,22 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
   useEffect(() => {
     if (open) setActiveTab("geral");
   }, [open, projectId]);
+
+  // Centros de Custo já existentes (para o select da aba Geral).
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void fetchCostCenters()
+      .then((cc) => {
+        if (!cancelled) setCostCenterOptions(cc);
+      })
+      .catch(() => {
+        if (!cancelled) setCostCenterOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   const loadDocuments = useCallback(async () => {
     if (!projectId || !canViewDocs) return;
@@ -244,6 +265,7 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
       await updateProjectGeneral(projectId, {
         name: projName.trim(),
         description: projDescription.trim() || null,
+        cost_center: projCostCenter.trim() || null,
       });
       // …e o fluxo existente de encerramento/reativação para o status.
       if (projActive !== projActiveOriginal) {
@@ -443,6 +465,19 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
                       <option value="ativo">Ativo</option>
                       <option value="encerrado">Encerrado</option>
                     </select>
+                  </label>
+                  <label className={`${labelCls} sm:col-span-2`}>
+                    <span className="font-medium text-slate-700">Centro de Custo</span>
+                    <CostCenterCombo
+                      value={projCostCenter}
+                      onChange={setProjCostCenter}
+                      options={costCenterOptions}
+                      disabled={!canEdit}
+                      className={inputCls}
+                    />
+                    <span className="text-xs font-normal text-slate-500">
+                      Agrupamento reutilizável — define quais colaboradores aparecem para alocação neste projeto.
+                    </span>
                   </label>
                   <label className={`${labelCls} sm:col-span-2`}>
                     <span className="font-medium text-slate-700">Descrição</span>
