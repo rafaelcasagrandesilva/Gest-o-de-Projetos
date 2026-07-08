@@ -1766,7 +1766,13 @@ function FinanceItemCard({
       }
       setLocalPayments(m);
       await onSaved();
-      setPaymentsSuccess("Pagamentos salvos. Contas a Pagar será atualizado nos meses já gerados.");
+      // Aviso quando algum mês não pôde ser sincronizado no CAP por já ter pagamento.
+      if (saved.payable_sync_warning) {
+        setPaymentsError(saved.payable_sync_warning);
+        setPaymentsSuccess(null);
+      } else {
+        setPaymentsSuccess("Pagamentos salvos. Contas a Pagar atualizado conforme a grade do mês.");
+      }
       if (import.meta.env.DEV) {
         console.info("[company-finance] Salvar agora OK", saved);
       }

@@ -16,6 +16,7 @@ from app.models.costs import ProjectFixedCost
 from app.models.company_finance import (
     CompanyFinancialItem,
     CompanyFinancialItemType,
+    CompanyFinancialPayment,
 )
 from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
 from app.models.payable_payment import PayablePayment
@@ -895,19 +896,102 @@ class PayableSnapshotService:
         await self.session.flush()
         return len(rows)
 
-    async def sync_company_finance_item_months(self, *, item_id: UUID, months: set[date]) -> int:
-        """Neutralizado: a matriz mensal NÃO governa mais as linhas de Contas a Pagar.
+    async def sync_company_finance_item_months(
+        self, *, item_id: UUID, months: set[date]
+    ) -> dict:
+        """A grade mensal governa o valor da competência no Contas a Pagar.
 
-        A partir da geração automática por cadastro, a linha de CAP de um Custo Fixo/
-        Endividamento é criada e valorada a partir do próprio cadastro (valor de
-        referência), na abertura/sincronização da competência
-        (`_generate_company_finance_payables`). A grade mensal
-        (`company_financial_payments`) permanece como controle próprio do módulo Custos
-        Fixos e alimenta seus KPIs, mas deixou de criar/apagar lançamentos no CAP —
-        garantindo que a edição da matriz nunca remova uma linha automática nem altere
-        o histórico. Mantido como no-op idempotente para compatibilidade dos chamadores.
+        Regra funcional (Custos Fixos/Endividamento):
+        - o CADASTRO gera automaticamente a PRIMEIRA linha da competência (valor de
+          referência) — feito em `_generate_company_finance_payables`, aqui NÃO se cria;
+        - depois que a competência existe, o valor efetivo passa a ser governado pela
+          grade mensal (`company_financial_payments`): editar a caixa do mês atualiza o
+          lançamento correspondente do CAP (amount_original, amount_final e, por
+          consequência, o saldo). Sem valor na grade → volta ao valor de referência.
+
+        Localiza a linha por (tipo corporativo FIXED_COST/ENDIVIDAMENTO) + `ref_id` +
+        `month`. Só sincroniza quando NÃO há pagamento (amount_paid == 0 E nenhum
+        payable_payment ativo); havendo pagamento, preserva o histórico e reporta o mês
+        para aviso ao usuário (ajuste manual). Respeita o piso de implantação (JUL/2026)
+        e nunca toca competências anteriores. Não altera Dashboard/KPIs/geração.
+
+        Retorna {"synced": int, "skipped_paid": list[date]}.
         """
-        return 0
+        synced = 0
+        skipped_paid: list[date] = []
+        if not months:
+            return {"synced": 0, "skipped_paid": []}
+
+        item = await self._get_company_financial_item(item_id)
+        if item is None:
+            return {"synced": 0, "skipped_paid": []}
+        settings = await SettingsService(self.session).get_or_create()
+
+        for raw_month in months:
+            comp = normalize_competencia(raw_month)
+            # Não retroage: competências anteriores ao piso nunca são sincronizadas.
+            if comp < COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE:
+                continue
+
+            # Valor efetivo do mês: valor da grade (se lançado) senão valor de referência.
+            grid_val = await self.session.scalar(
+                select(CompanyFinancialPayment.valor).where(
+                    CompanyFinancialPayment.item_id == item_id,
+                    CompanyFinancialPayment.competencia == comp,
+                )
+            )
+            new_amount = (
+                _money2(grid_val)
+                if grid_val is not None
+                else self._company_finance_monthly_value(item, comp=comp, settings=settings)
+            )
+            if new_amount <= 0:
+                # Sem valor efetivo positivo: não zera/apaga a obrigação (a criação/remoção
+                # é governada pela geração), apenas não sincroniza.
+                continue
+
+            # Localiza a linha automática por (ref_id + competência + tipo corporativo).
+            row = (
+                await self.session.execute(
+                    select(PayableSnapshot).where(
+                        PayableSnapshot.ref_id == item_id,
+                        PayableSnapshot.month == comp,
+                        PayableSnapshot.type.in_((PayableSnapshotType.FIXED_COST, *PAYABLE_DEBT_TYPES)),
+                    )
+                )
+            ).scalars().first()
+            if row is None:
+                # A geração cria a primeira linha; o sync só atualiza linhas existentes.
+                continue
+
+            # Guarda de pagamento: havendo qualquer pagamento (valor pago > 0 ou pagamento
+            # ativo), NÃO altera — preserva o histórico e reporta para aviso ao usuário.
+            has_payment = _money2(row.amount_paid) > 0 or await _has_active_payments(
+                self.session, snapshot_id=row.id
+            )
+            if has_payment:
+                skipped_paid.append(comp)
+                continue
+
+            before_o = _money2(row.amount_original)
+            before_f = _money2(row.amount_final)
+            before_p = _money2(row.amount_paid)
+            if before_f == new_amount and before_o == new_amount:
+                continue  # já sincronizado
+
+            _apply_dynamic_payable_amounts(row, new_amount=new_amount)
+            synced += 1
+            _log_payable_dynamic_sync(
+                action="grid_sync",
+                row=row,
+                before_original=before_o,
+                before_final=before_f,
+                before_paid=before_p,
+            )
+
+        if synced or skipped_paid:
+            await self.session.flush()
+        return {"synced": synced, "skipped_paid": skipped_paid}
 
     async def sync_collaborator_payables_for_labor(
         self,

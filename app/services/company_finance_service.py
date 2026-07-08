@@ -128,6 +128,9 @@ def parcela_prevista_na_competencia(*, anchor_month: date, installment_count: in
 class CompanyFinanceService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+        # Resumo da última sincronização grade→CAP (para o router avisar o usuário quando
+        # algum mês não foi ajustado por já ter pagamento registrado).
+        self.last_payable_sync: dict | None = None
 
     async def _payment_months_for_item(self, *, item_id: UUID) -> set[date]:
         rows = (
@@ -140,9 +143,12 @@ class CompanyFinanceService:
     async def _sync_payables_metadata_for_company_finance_item(self, *, item_id: UUID) -> None:
         await PayableSnapshotService(self.db).sync_company_finance_item_metadata(item_id=item_id)
 
-    async def _sync_payables_for_company_finance_item(self, *, item_id: UUID, months: set[date]) -> None:
-        if months:
-            await PayableSnapshotService(self.db).sync_company_finance_item_months(item_id=item_id, months=months)
+    async def _sync_payables_for_company_finance_item(self, *, item_id: UUID, months: set[date]) -> dict:
+        if not months:
+            return {"synced": 0, "skipped_paid": []}
+        return await PayableSnapshotService(self.db).sync_company_finance_item_months(
+            item_id=item_id, months=months
+        )
 
     async def list_items(self, tipo: str, competencia: str | None) -> list[dict]:
         q = (
@@ -573,10 +579,13 @@ class CompanyFinanceService:
                 item_id,
                 sorted(month_key(c) for c in months_in_payload),
             )
-            await self._sync_payables_for_company_finance_item(item_id=item_id, months=months_in_payload)
+            self.last_payable_sync = await self._sync_payables_for_company_finance_item(
+                item_id=item_id, months=months_in_payload
+            )
             logger.info(
-                "company_finance.replace_payments service AFTER sync_company_finance_item_months item_id=%s",
+                "company_finance.replace_payments service AFTER sync_company_finance_item_months item_id=%s sync=%s",
                 item_id,
+                self.last_payable_sync,
             )
 
             logger.info("company_finance.replace_payments service OK item_id=%s", item_id)

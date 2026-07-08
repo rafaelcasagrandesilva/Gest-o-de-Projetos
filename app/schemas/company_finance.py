@@ -247,6 +247,10 @@ class CompanyFinancialItemRead(BaseModel):
     progresso: float
     status: str | None = None
     progresso_mes: float | None = None
+    # Aviso transitório da sincronização grade→CAP: preenchido apenas na resposta do
+    # PUT de pagamentos quando algum mês não pôde ser ajustado por já ter pagamento
+    # registrado (ajuste manual necessário). Não é persistido.
+    payable_sync_warning: str | None = None
 
     model_config = {"from_attributes": True}
 

@@ -193,6 +193,15 @@ async def replace_payments(
         comp = competencia or _default_month()
         read = await svc._item_to_read(loaded, parse_month(comp))
         result = CompanyFinancialItemRead.model_validate(read)
+        # Aviso quando a grade não pôde governar o CAP por já haver pagamento no mês.
+        sync = svc.last_payable_sync or {}
+        skipped = sync.get("skipped_paid") or []
+        if skipped:
+            meses = ", ".join(f"{d:%m/%Y}" for d in sorted(skipped))
+            result.payable_sync_warning = (
+                f"Existe pagamento registrado em {meses}: o Contas a Pagar não foi ajustado "
+                "automaticamente. Ajuste o lançamento manualmente para preservar o histórico."
+            )
         logger.info("company_finance.replace_payments OK item_id=%s competencia=%s", item_id, comp)
         return result
     except HTTPException:

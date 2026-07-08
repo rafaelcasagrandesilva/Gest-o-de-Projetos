@@ -48,6 +48,8 @@ export interface CompanyFinancialItem {
   progresso: number;
   status: string | null;
   progresso_mes: number | null;
+  /** Aviso da sincronização grade→CAP (só na resposta do PUT de pagamentos). */
+  payable_sync_warning?: string | null;
 }
 
 export interface KpiEndividamento {
