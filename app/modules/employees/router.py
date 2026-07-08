@@ -184,6 +184,10 @@ async def delete_staff_cost(
 async def list_employees(
     db: AsyncSession = Depends(get_db),
     search: str | None = Query(default=None, description="Busca por nome (ILIKE em full_name)."),
+    project_id: UUID | None = Query(
+        default=None,
+        description="Filtra por Centro de Custo do projeto (Mão de Obra). Omitido = todos.",
+    ),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     competencia: date | None = Query(
@@ -192,8 +196,10 @@ async def list_employees(
     ),
 ) -> list[EmployeeRead]:
     comp = competencia or default_cost_reference()
-    return await EmployeesService(db).list_employees_as_read(
-        offset=offset, limit=limit, competencia=comp, search=search
+    # Filtro de Mão de Obra por Centro de Custo do projeto — lógica ÚNICA no serviço
+    # (mesma usada por /hr/employees e /collaborators), sem regra duplicada aqui.
+    return await EmployeesService(db).list_employees_read_for_project(
+        offset=offset, limit=limit, competencia=comp, search=search, project_id=project_id
     )
 
 

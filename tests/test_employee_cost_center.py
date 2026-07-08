@@ -158,5 +158,74 @@ class CostCenterVocabularyDBTests(unittest.IsolatedAsyncioTestCase):
                 await s.rollback()  # não persiste dados de teste
 
 
+class EmployeesEndpointFilterDBTests(unittest.IsolatedAsyncioTestCase):
+    async def test_employees_endpoint_applies_project_filter(self) -> None:
+        """O handler REAL de GET /employees (o que o frontend chama) aplica o filtro por
+        Centro de Custo do projeto — guarda contra a regressão em que o project_id era
+        ignorado e todos os colaboradores voltavam."""
+        from sqlalchemy import text
+        from sqlalchemy.exc import ProgrammingError
+
+        from app.database.session import AsyncSessionLocal, engine
+        from app.models.employee import Employee
+        from app.models.project import Project
+        from app.modules.employees.router import list_employees as employees_endpoint
+
+        await engine.dispose()
+        tag = uuid4().hex[:6]
+        cc_x = f"CC-X-{tag}"
+        comp = date(2099, 7, 1)
+
+        async with AsyncSessionLocal() as s:
+            try:
+                await s.execute(text("SELECT cost_center FROM employees LIMIT 1"))
+            except ProgrammingError:
+                self.skipTest("Coluna cost_center ausente (rode alembic upgrade head).")
+            try:
+                proj = Project(name=f"Proj {tag}", cost_center=cc_x, is_active=True)
+                s.add(proj)
+
+                def mk(name, cc, shared=False):
+                    return Employee(
+                        full_name=f"CC {tag} {name}",
+                        employment_type="PJ",
+                        is_active=True,
+                        salary_base=1000.0,
+                        total_cost=0,
+                        start_date=date(2099, 1, 1),
+                        cost_center=cc,
+                        can_allocate_other_cost_centers=shared,
+                    )
+
+                e_match = mk("match", cc_x)
+                e_other = mk("other", f"CC-Y-{tag}")
+                e_null = mk("null", None)
+                for e in (e_match, e_other, e_null):
+                    s.add(e)
+                await s.flush()
+
+                # Chama o handler real do endpoint /employees, com project_id (como o frontend).
+                reads = await employees_endpoint(
+                    db=s,
+                    search=f"CC {tag}",
+                    project_id=proj.id,
+                    offset=0,
+                    limit=50,
+                    competencia=comp,
+                )
+                names = {r.full_name for r in reads}
+                self.assertIn(e_match.full_name, names)      # mesmo centro → aparece
+                self.assertIn(e_null.full_name, names)       # sem centro → aparece
+                self.assertNotIn(e_other.full_name, names)   # centro diferente → NÃO aparece
+
+                # Sem project_id → sem filtro (todos aparecem).
+                reads_all = await employees_endpoint(
+                    db=s, search=f"CC {tag}", project_id=None, offset=0, limit=50, competencia=comp
+                )
+                self.assertEqual(len({r.full_name for r in reads_all}), 3)
+            finally:
+                await s.rollback()
+
+
 if __name__ == "__main__":
     unittest.main()

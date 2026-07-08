@@ -145,6 +145,45 @@ class EmployeesService:
         name = (getattr(proj, "name", None) or "").strip()
         return name or None
 
+    async def cost_center_filter_for_project(self, project_id) -> str | None:
+        """Centro de Custo a aplicar no filtro de Mão de Obra.
+
+        PONTO ÚNICO de resolução, reutilizado por TODOS os endpoints de listagem de
+        colaboradores (evita regra duplicada): com projeto → Centro de Custo do projeto;
+        sem projeto → None (sem filtro). O WHERE em si vive só no repositório
+        (`EmployeeRepository.list`).
+        """
+        if project_id is None:
+            return None
+        return await self.cost_center_for_project(project_id)
+
+    async def list_employees_for_project(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        search: str | None = None,
+        project_id=None,
+    ) -> list[Employee]:
+        """Lista colaboradores já filtrados pelo Centro de Custo do projeto (Mão de Obra)."""
+        cc = await self.cost_center_filter_for_project(project_id)
+        return await self.list_employees(offset=offset, limit=limit, search=search, cost_center=cc)
+
+    async def list_employees_read_for_project(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        competencia: date,
+        search: str | None = None,
+        project_id=None,
+    ) -> list[EmployeeRead]:
+        """Idem `list_employees_for_project`, porém já no formato de leitura (com custo)."""
+        cc = await self.cost_center_filter_for_project(project_id)
+        return await self.list_employees_as_read(
+            offset=offset, limit=limit, competencia=competencia, search=search, cost_center=cc
+        )
+
     async def get_employee(self, employee_id) -> Employee:
         emp = await self.employees.get(employee_id)
         if not emp:

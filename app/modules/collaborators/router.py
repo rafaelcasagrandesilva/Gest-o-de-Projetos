@@ -29,10 +29,8 @@ async def list_collaborators(
     competencia: date | None = Query(default=None, description="Competência para custo (opcional)."),
 ) -> list[EmployeeRead]:
     comp = competencia or default_cost_reference()
-    svc = EmployeesService(db)
-    cc = await svc.cost_center_for_project(project_id) if project_id is not None else None
-    return await svc.list_employees_as_read(
-        offset=offset, limit=limit, competencia=comp, search=search, cost_center=cc
+    return await EmployeesService(db).list_employees_read_for_project(
+        offset=offset, limit=limit, competencia=comp, search=search, project_id=project_id
     )
 
 
@@ -53,9 +51,9 @@ async def search_collaborators(
     term = (q or "").strip()
     if not term:
         return []
-    svc = EmployeesService(db)
-    cc = await svc.cost_center_for_project(project_id) if project_id is not None else None
-    rows = await svc.list_employees(offset=0, limit=limit, search=term, cost_center=cc)
+    rows = await EmployeesService(db).list_employees_for_project(
+        offset=0, limit=limit, search=term, project_id=project_id
+    )
     return [{"id": str(r.id), "name": r.full_name} for r in rows if getattr(r, "full_name", None)]
 
 

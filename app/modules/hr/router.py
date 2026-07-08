@@ -48,10 +48,8 @@ async def list_employees(
     ),
 ) -> list[EmployeeRead]:
     comp = competencia or default_cost_reference()
-    svc = EmployeesService(db)
-    cc = await svc.cost_center_for_project(project_id) if project_id is not None else None
-    return await svc.list_employees_as_read(
-        offset=offset, limit=limit, competencia=comp, search=search, cost_center=cc
+    return await EmployeesService(db).list_employees_read_for_project(
+        offset=offset, limit=limit, competencia=comp, search=search, project_id=project_id
     )
 
 
