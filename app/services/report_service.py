@@ -339,6 +339,12 @@ class ReportService:
             ).scalars().all()
             emp_by_id = {e.id: e for e in emps}
 
+        # Centro de Custo TEMPORAL: resolve o centro VIGENTE na competência do relatório
+        # (histórico), em lote (sem N+1). Não usa mais o cache `employees.cost_center`.
+        from app.services.cost_center_history_service import EmployeeCostCenterService
+
+        cc_by_emp = await EmployeeCostCenterService(self.session).resolve_map(emp_ids, comp)
+
         ordered_ids = sorted(
             emp_ids,
             key=lambda i: (
@@ -407,7 +413,7 @@ class ReportService:
                     "tipo": tipo,
                     "status": "Ativo" if emp.is_active else "Inativo",
                     # Coluna principal: Centro de Custo cadastrado no colaborador (Parte 6).
-                    "centro_custo": (getattr(emp, "cost_center", None) or "—"),
+                    "centro_custo": (cc_by_emp.get(eid) or "—"),
                     # Coluna auxiliar (opcional): distribuição por Centro de Custo (Parte 7),
                     # derivada da alocação em projetos — informação preservada.
                     "distribuicao": _payroll_cost_center_distribution(line, proj_cc),

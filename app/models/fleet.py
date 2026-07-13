@@ -22,6 +22,10 @@ class Vehicle(TimestampUUIDMixin, Base):
     driver_employee_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )
+    # CACHE do Centro de Custo VIGENTE do veículo. Fonte da verdade temporal em
+    # vehicle_cost_center_history — as regras (ex.: elegibilidade na aba Veículos do
+    # projeto) resolvem o centro POR COMPETÊNCIA. NULL = sem centro (aparece em todos).
+    cost_center: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
@@ -34,6 +38,9 @@ class Vehicle(TimestampUUIDMixin, Base):
         "Employee", foreign_keys=[driver_employee_id], lazy="joined"
     )
     usages: Mapped[list["VehicleUsage"]] = relationship(back_populates="vehicle", cascade="all, delete-orphan")
+    cost_center_history: Mapped[list["VehicleCostCenterHistory"]] = relationship(  # noqa: F821
+        back_populates="vehicle", cascade="all, delete-orphan"
+    )
 
 
 class VehicleUsage(TimestampUUIDMixin, Base):

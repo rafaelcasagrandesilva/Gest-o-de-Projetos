@@ -31,10 +31,10 @@ class Employee(TimestampUUIDMixin, Base):
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
-    # Centro de Custo principal do colaborador (mesmo domínio de projects.cost_center:
-    # Administrativo, Financeiro, Fiscalização AT, Subterrâneo, …). Determina em quais
-    # projetos ele pode ser alocado (Projetos → Custos → Mão de Obra). Legados sem
-    # histórico ficam NULL (preenchimento forçado na edição).
+    # CACHE do Centro de Custo VIGENTE do colaborador. A fonte da verdade é temporal
+    # (employee_cost_center_history) — toda regra de negócio resolve o centro POR
+    # COMPETÊNCIA. Este campo espelha o centro atual (última linha de histórico aberta)
+    # e é usado só como conveniência/fallback. Legados sem centro ficam NULL.
     cost_center: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     # Quando True, o colaborador aparece para QUALQUER projeto, independentemente do
     # Centro de Custo (diretores/gerentes/compartilhados). Default False.
@@ -54,6 +54,10 @@ class Employee(TimestampUUIDMixin, Base):
     pj_additional_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0, nullable=False)
 
     allocations: Mapped[list["EmployeeAllocation"]] = relationship(
+        back_populates="employee", cascade="all, delete-orphan"
+    )
+    # Histórico temporal do Centro de Custo (fonte da verdade).
+    cost_center_history: Mapped[list["EmployeeCostCenterHistory"]] = relationship(  # noqa: F821
         back_populates="employee", cascade="all, delete-orphan"
     )
 

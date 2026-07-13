@@ -15,6 +15,8 @@ export interface FleetVehicle {
   monthly_cost: number;
   driver_employee_id: string | null;
   driver_name: string | null;
+  /** Cache do Centro de Custo vigente (fonte da verdade é temporal — histórico). */
+  cost_center: string | null;
   /** JSON da API: `active` */
   active: boolean;
   /** Ciclo de vida: entrada (start_date) / saída (end_date). */
@@ -29,6 +31,7 @@ export interface FleetVehicleCreate {
   vehicle_type?: FleetVehicleType;
   monthly_cost: number;
   driver_employee_id?: string | null;
+  cost_center?: string | null;
   is_active?: boolean;
   /** Ciclo de vida — entrada obrigatória em novos cadastros; saída opcional. */
   start_date: string;
@@ -42,6 +45,9 @@ export interface FleetVehicleUpdate {
   vehicle_type?: FleetVehicleType;
   monthly_cost?: number;
   driver_employee_id?: string | null;
+  cost_center?: string | null;
+  /** Competência a partir da qual o novo Centro de Custo vale (histórico). Ausente = atual. */
+  cost_center_effective_date?: string | null;
   is_active?: boolean;
   start_date?: string | null;
   end_date?: string | null;
@@ -68,11 +74,20 @@ export async function listFleetVehicles(options?: {
   return data;
 }
 
-export async function listFleetVehiclesActive(options?: { offset?: number; limit?: number }): Promise<FleetVehicle[]> {
+export async function listFleetVehiclesActive(options?: {
+  offset?: number;
+  limit?: number;
+  /** Filtra por Centro de Custo do projeto (aba Veículos), resolvido por competência. */
+  project_id?: string;
+  /** Competência (YYYY-MM-01) para resolver o Centro de Custo vigente do veículo. */
+  competencia?: string;
+}): Promise<FleetVehicle[]> {
   const { data } = await api.get<FleetVehicle[]>("/vehicles/active", {
     params: {
       offset: options?.offset ?? 0,
       limit: options?.limit ?? 200,
+      ...(options?.project_id ? { project_id: options.project_id } : {}),
+      ...(options?.competencia ? { competencia: options.competencia } : {}),
     },
   });
   return data;

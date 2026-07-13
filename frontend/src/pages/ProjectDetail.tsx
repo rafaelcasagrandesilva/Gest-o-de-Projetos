@@ -1290,7 +1290,9 @@ function VehiclesTab({
 
   useEffect(() => {
     let c = false;
-    listFleetVehiclesActive({ limit: 200 })
+    // Aba Veículos: só veículos cujo Centro de Custo VIGENTE na competência bate com o do
+    // projeto (ou sem centro). Resolvido por competência (histórico) no backend.
+    listFleetVehiclesActive({ limit: 200, project_id: projectId, competencia })
       .then((list) => {
         if (!c) setFleet(list);
       })

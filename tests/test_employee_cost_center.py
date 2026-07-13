@@ -58,6 +58,14 @@ class EmployeeCostCenterDBTests(unittest.IsolatedAsyncioTestCase):
                 s.add(e)
             await s.flush()
 
+            # Centro de Custo agora é temporal — cria o histórico inicial (como no backfill/
+            # no serviço). Colaboradores criados direto via ORM precisam disso nos testes.
+            from app.services.cost_center_history_service import EmployeeCostCenterService
+
+            cchs = EmployeeCostCenterService(s)
+            for e in (e_match, e_other, e_shared, e_null):
+                await cchs.ensure_initial_history(e)
+
             svc = EmployeesService(s)
 
             # cost_center_for_project: usa nome quando não há cost_center; usa cost_center quando há.
@@ -113,12 +121,16 @@ class EmployeeCostCenterDBTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CostCenterVocabularyDBTests(unittest.IsolatedAsyncioTestCase):
-    async def test_list_cost_centers_excludes_project_names(self) -> None:
-        """A lista de Centros de Custo traz só agrupamentos reais (projects.cost_center ∪
-        employees.cost_center) — NÃO o nome do projeto."""
+    async def test_list_cost_centers_is_admin_plus_active_projects(self) -> None:
+        """Nova arquitetura: a lista = Administrativos fixos ∪ `projects.cost_center` de projetos
+        ATIVOS. NÃO inclui nome de projeto, NÃO inclui `employees.cost_center`, e NÃO inclui
+        Centro de Custo de projeto encerrado/apagado (regressão do "Drone")."""
+        from datetime import datetime, timezone
+
         from sqlalchemy import text
         from sqlalchemy.exc import ProgrammingError
 
+        from app.core.constants.cost_centers import ADMIN_COST_CENTERS
         from app.database.session import AsyncSessionLocal, engine
         from app.models.employee import Employee
         from app.models.project import Project
@@ -126,8 +138,9 @@ class CostCenterVocabularyDBTests(unittest.IsolatedAsyncioTestCase):
 
         await engine.dispose()
         tag = uuid4().hex[:6]
-        proj_name_only = f"ProjSemCC-{tag}"  # projeto sem cost_center → NÃO deve virar centro
-        cc_proj = f"CC-Proj-{tag}"
+        proj_name_only = f"ProjSemCC-{tag}"  # projeto sem cost_center → nada a listar
+        cc_active = f"CC-Active-{tag}"
+        cc_closed = f"CC-Closed-{tag}"  # simula o "Drone": projeto encerrado+apagado
         cc_emp = f"CC-Emp-{tag}"
 
         async with AsyncSessionLocal() as s:
@@ -136,8 +149,16 @@ class CostCenterVocabularyDBTests(unittest.IsolatedAsyncioTestCase):
             except ProgrammingError:
                 self.skipTest("Coluna cost_center ausente (rode alembic upgrade head).")
             try:
+                now = datetime.now(timezone.utc)
                 s.add(Project(name=proj_name_only, is_active=True))
-                s.add(Project(name=f"Proj-{tag}", cost_center=cc_proj, is_active=True))
+                s.add(Project(name=f"Proj-{tag}", cost_center=cc_active, is_active=True))
+                # Encerrado E apagado (como "Drone") → não pode aparecer.
+                s.add(
+                    Project(
+                        name=cc_closed, cost_center=cc_closed,
+                        is_active=False, closed_at=now, deleted_at=now,
+                    )
+                )
                 s.add(
                     Employee(
                         full_name=f"Emp CC {tag}",
@@ -151,9 +172,14 @@ class CostCenterVocabularyDBTests(unittest.IsolatedAsyncioTestCase):
                 await s.flush()
 
                 result = await list_cost_centers(db=s)
-                self.assertIn(cc_proj, result)  # cost_center de projeto entra
-                self.assertIn(cc_emp, result)  # cost_center de colaborador entra
-                self.assertNotIn(proj_name_only, result)  # nome de projeto NÃO entra
+                self.assertIn(cc_active, result)              # projeto ativo entra
+                self.assertNotIn(cc_closed, result)           # encerrado/apagado NÃO entra
+                self.assertNotIn(proj_name_only, result)      # nome de projeto NÃO entra
+                self.assertNotIn(cc_emp, result)              # employees.cost_center NÃO é mais fonte
+                for admin in ADMIN_COST_CENTERS:              # administrativos sempre presentes
+                    self.assertIn(admin, result)
+                # Administrativos vêm primeiro, na ordem canônica.
+                self.assertEqual(list(result[: len(ADMIN_COST_CENTERS)]), list(ADMIN_COST_CENTERS))
             finally:
                 await s.rollback()  # não persiste dados de teste
 
@@ -203,6 +229,12 @@ class EmployeesEndpointFilterDBTests(unittest.IsolatedAsyncioTestCase):
                 for e in (e_match, e_other, e_null):
                     s.add(e)
                 await s.flush()
+
+                from app.services.cost_center_history_service import EmployeeCostCenterService
+
+                cchs = EmployeeCostCenterService(s)
+                for e in (e_match, e_other, e_null):
+                    await cchs.ensure_initial_history(e)
 
                 # Chama o handler real do endpoint /employees, com project_id (como o frontend).
                 reads = await employees_endpoint(

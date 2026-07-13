@@ -35,6 +35,7 @@ def fleet_vehicle_to_read(v: Vehicle) -> VehicleRead:
         monthly_cost=float(getattr(v, "monthly_cost", 0) or 0),
         driver_employee_id=v.driver_employee_id,
         driver_name=driver_name,
+        cost_center=getattr(v, "cost_center", None),
         is_active=bool(v.is_active),
         start_date=getattr(v, "start_date", None),
         end_date=getattr(v, "end_date", None),
@@ -54,8 +55,30 @@ class FleetService:
         offset: int = 0,
         limit: int = 50,
         include_inactive: bool = False,
+        cost_center: str | None = None,
+        competence=None,
     ) -> list[Vehicle]:
-        return await self.vehicles.list_ordered(offset=offset, limit=limit, include_inactive=include_inactive)
+        return await self.vehicles.list_ordered(
+            offset=offset,
+            limit=limit,
+            include_inactive=include_inactive,
+            cost_center=cost_center,
+            competence=competence,
+        )
+
+    async def list_active_for_project(
+        self, *, project_id, competencia, offset: int = 0, limit: int = 500
+    ) -> list[Vehicle]:
+        """Veículos ATIVOS elegíveis para o projeto na competência: Centro de Custo VIGENTE
+        igual ao do projeto OU sem centro. Sem project_id → todos (compat)."""
+        from app.services.employees_service import EmployeesService
+
+        cc = None
+        if project_id is not None:
+            cc = await EmployeesService(self.session).cost_center_for_project(project_id)
+        return await self.vehicles.list_ordered(
+            offset=offset, limit=limit, include_inactive=False, cost_center=cc, competence=competencia
+        )
 
     async def get_vehicle(self, vehicle_id) -> Vehicle:
         v = await self.vehicles.get(vehicle_id)
@@ -85,8 +108,14 @@ class FleetService:
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        # `cost_center_effective_date` não é coluna do veículo (só usado na edição).
+        data.pop("cost_center_effective_date", None)
         v = Vehicle(**data)
         await self.vehicles.add(v)
+        # Histórico inicial (fonte da verdade temporal) refletindo o centro do cadastro.
+        from app.services.cost_center_history_service import VehicleCostCenterService
+
+        await VehicleCostCenterService(self.session).ensure_initial_history(v)
         await self.audit.log_action(
             user=actor,
             action="create",
@@ -121,8 +150,19 @@ class FleetService:
         before = model_to_dict(v)
         if "plate" in data and data.get("plate") is not None:
             data["plate"] = str(data["plate"]).strip().upper()
+        # Centro de Custo é TEMPORAL: não setar direto o cache; roteia pelo histórico.
+        cc_touched = "cost_center" in data
+        new_cc = data.pop("cost_center", None)
+        cc_effective = data.pop("cost_center_effective_date", None)
         for key, value in data.items():
             setattr(v, key, value)
+        if cc_touched:
+            from app.services.cost_center_history_service import VehicleCostCenterService
+            from app.services.employees_service import default_cost_reference
+
+            await VehicleCostCenterService(self.session).change_cost_center(
+                v, new_cc, cc_effective or default_cost_reference()
+            )
         # Invariante do ciclo de vida (só quando status/encerramento é tocado, para não
         # bloquear edições não relacionadas): inativo exige end_date; ativo limpa-o.
         if "is_active" in data or "end_date" in data:

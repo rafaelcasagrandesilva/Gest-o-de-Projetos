@@ -24,6 +24,7 @@ class EmployeeRepository(Repository[Employee]):
         limit: int = 50,
         search: str | None = None,
         cost_center: str | None = None,
+        competence: date | None = None,
     ) -> list[Employee]:
         stmt = select(Employee)
         if search is not None:
@@ -31,18 +32,28 @@ class EmployeeRepository(Repository[Employee]):
             if q:
                 stmt = stmt.where(Employee.full_name.ilike(f"%{q}%"))
         # Filtro por Centro de Custo (Projetos → Custos → Mão de Obra): quando informado,
-        # mostra apenas colaboradores do MESMO centro OU marcados como compartilhados
-        # (can_allocate_other_cost_centers). Sem o filtro, comportamento inalterado.
+        # mostra apenas colaboradores do MESMO centro OU compartilhados
+        # (can_allocate_other_cost_centers) OU sem centro (legado/não classificado).
+        #
+        # TEMPORAL: com `competence`, o centro do colaborador é resolvido POR COMPETÊNCIA a
+        # partir do histórico (subquery correlata — 1 query, sem N+1, paginação no banco).
+        # Sem `competence`, cai no cache `employees.cost_center` (compatibilidade).
         cc = (cost_center or "").strip()
         if cc:
+            from app.services.cost_center_history_service import (
+                employee_effective_cost_center_subquery,
+            )
+
+            eff_cc = (
+                employee_effective_cost_center_subquery(competence)
+                if competence is not None
+                else Employee.cost_center
+            )
             stmt = stmt.where(
                 or_(
-                    func.lower(Employee.cost_center) == cc.lower(),
+                    func.lower(eff_cc) == cc.lower(),
                     Employee.can_allocate_other_cost_centers.is_(True),
-                    # Não classificado (legado sem cost_center) permanece visível — o filtro
-                    # se estreita naturalmente conforme os colaboradores são classificados,
-                    # sem quebrar a alocação de quem ainda não tem Centro de Custo.
-                    Employee.cost_center.is_(None),
+                    eff_cc.is_(None),
                 )
             )
         stmt = stmt.order_by(Employee.full_name.asc()).offset(offset).limit(limit)

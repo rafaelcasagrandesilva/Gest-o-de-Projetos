@@ -7,8 +7,9 @@ import {
   type FleetVehicle,
   type FleetVehicleType,
 } from "@/services/vehicles";
-import { listEmployees, type Employee } from "@/services/employees";
+import { listEmployees, fetchCostCenters, type Employee } from "@/services/employees";
 import { fetchSettings, type SystemSettings } from "@/services/settings";
+import { CostCenterCombo } from "@/components/CostCenterCombo";
 import { isAxiosError } from "axios";
 import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
 import { usePermission } from "@/hooks/usePermission";
@@ -62,12 +63,22 @@ const FLEET_SUMMARY_TYPES: { key: "LIGHT" | "PICKUP" | "SEDAN"; title: string }[
   { key: "SEDAN", title: "Pesado" },
 ];
 
+function currentMonthYYYYMM(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 type FormState = {
   plate: string;
   model: string;
   vehicle_type: FleetVehicleType;
   monthly_cost: number;
   driver_employee_id: string;
+  cost_center: string;
+  // Centro de Custo temporal: competência (YYYY-MM) a partir da qual o novo centro vale.
+  cost_center_effective_month: string;
+  // Valor do centro no momento da edição (detecta mudança). undefined = criação.
+  _original_cost_center?: string;
   start_date: string;
   end_date: string;
 };
@@ -78,6 +89,9 @@ const emptyForm: FormState = {
   vehicle_type: "LIGHT",
   monthly_cost: 0,
   driver_employee_id: "",
+  cost_center: "",
+  cost_center_effective_month: currentMonthYYYYMM(),
+  _original_cost_center: undefined,
   start_date: "",
   end_date: "",
 };
@@ -89,9 +103,19 @@ function vehicleToForm(v: FleetVehicle): FormState {
     vehicle_type: (v.type as FleetVehicleType) || "LIGHT",
     monthly_cost: typeof v.monthly_cost === "number" ? v.monthly_cost : 0,
     driver_employee_id: v.driver_employee_id ?? "",
+    cost_center: v.cost_center ?? "",
+    cost_center_effective_month: currentMonthYYYYMM(),
+    _original_cost_center: v.cost_center ?? "",
     start_date: v.start_date ?? "",
     end_date: v.end_date ?? "",
   };
+}
+
+function vehicleCostCenterChanged(form: FormState): boolean {
+  return (
+    form._original_cost_center !== undefined &&
+    form.cost_center.trim() !== form._original_cost_center.trim()
+  );
 }
 
 export function Vehicles() {
@@ -106,6 +130,21 @@ export function Vehicles() {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [referenceCompetencia] = useState(monthStartIso);
+  const [costCenterOptions, setCostCenterOptions] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCostCenters()
+      .then((cc) => {
+        if (!cancelled) setCostCenterOptions(cc);
+      })
+      .catch(() => {
+        if (!cancelled) setCostCenterOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function reload() {
     const [data, st] = await Promise.all([
@@ -205,6 +244,7 @@ export function Vehicles() {
         vehicle_type: form.vehicle_type,
         monthly_cost: mc,
         driver_employee_id: form.driver_employee_id || null,
+        cost_center: form.cost_center.trim() || null,
         is_active: true,
         start_date: form.start_date,
         end_date: form.end_date || null,
@@ -299,6 +339,33 @@ export function Vehicles() {
               onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
             />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-600">Centro de Custo</label>
+            <CostCenterCombo
+              value={form.cost_center}
+              onChange={(v) => setForm((f) => ({ ...f, cost_center: v }))}
+              options={costCenterOptions}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+            {vehicleCostCenterChanged(form) ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                <label className="mb-1 block text-xs font-medium text-amber-900">
+                  Vigente a partir de qual competência?
+                </label>
+                <input
+                  type="month"
+                  value={form.cost_center_effective_month}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, cost_center_effective_month: e.target.value }))
+                  }
+                  className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm"
+                />
+                <p className="mt-1 text-xs text-amber-800/80">
+                  Competências anteriores mantêm o Centro de Custo anterior (histórico preservado).
+                </p>
+              </div>
+            ) : null}
           </div>
           <div>
             <label className="mb-1 block text-sm text-slate-600">Tipo</label>
@@ -479,6 +546,7 @@ export function Vehicles() {
           vehicle={items.find((x) => x.id === editingId)!}
           employees={employees}
           settings={settings}
+          costCenterOptions={costCenterOptions}
           onCancel={() => setEditingId(null)}
           onSaved={async () => {
             setEditingId(null);
@@ -494,12 +562,14 @@ function EditVehiclePanel({
   vehicle,
   employees,
   settings,
+  costCenterOptions,
   onCancel,
   onSaved,
 }: {
   vehicle: FleetVehicle;
   employees: Employee[];
   settings: SystemSettings | null;
+  costCenterOptions: string[];
   onCancel: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -529,7 +599,12 @@ function EditVehiclePanel({
         vehicle_type: form.vehicle_type,
         monthly_cost: mc,
         driver_employee_id: form.driver_employee_id || null,
+        cost_center: form.cost_center.trim() || null,
         start_date: form.start_date || null,
+        // Só envia a vigência quando o Centro de Custo mudou (senão o backend não abre histórico).
+        ...(vehicleCostCenterChanged(form) && form.cost_center_effective_month
+          ? { cost_center_effective_date: `${form.cost_center_effective_month}-01` }
+          : {}),
       });
       await onSaved();
     } catch (err) {
@@ -585,6 +660,33 @@ function EditVehiclePanel({
               onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
             />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-600">Centro de Custo</label>
+            <CostCenterCombo
+              value={form.cost_center}
+              onChange={(v) => setForm((f) => ({ ...f, cost_center: v }))}
+              options={costCenterOptions}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+            {vehicleCostCenterChanged(form) ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                <label className="mb-1 block text-xs font-medium text-amber-900">
+                  Vigente a partir de qual competência?
+                </label>
+                <input
+                  type="month"
+                  value={form.cost_center_effective_month}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, cost_center_effective_month: e.target.value }))
+                  }
+                  className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm"
+                />
+                <p className="mt-1 text-xs text-amber-800/80">
+                  Competências anteriores mantêm o Centro de Custo anterior (histórico preservado).
+                </p>
+              </div>
+            ) : null}
           </div>
           <div>
             <label className="mb-1 block text-sm text-slate-600">Tipo</label>

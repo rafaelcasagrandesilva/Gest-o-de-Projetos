@@ -100,8 +100,10 @@ class EmployeesService:
         search: str | None = None,
         cost_center: str | None = None,
     ) -> list[EmployeeRead]:
+        # Filtro por Centro de Custo é TEMPORAL: resolve pela própria `competencia` do
+        # relatório/lista (histórico). O valor congelado no cache não governa mais.
         rows = await self.employees.list(
-            offset=offset, limit=limit, search=search, cost_center=cost_center
+            offset=offset, limit=limit, search=search, cost_center=cost_center, competence=competencia
         )
         settings = await SettingsService(self.session).get_or_create()
         y, m = competencia.year, competencia.month
@@ -121,9 +123,10 @@ class EmployeesService:
         limit: int = 50,
         search: str | None = None,
         cost_center: str | None = None,
+        competence: date | None = None,
     ) -> list[Employee]:
         return await self.employees.list(
-            offset=offset, limit=limit, search=search, cost_center=cost_center
+            offset=offset, limit=limit, search=search, cost_center=cost_center, competence=competence
         )
 
     async def cost_center_for_project(self, project_id) -> str | None:
@@ -164,10 +167,17 @@ class EmployeesService:
         limit: int = 50,
         search: str | None = None,
         project_id=None,
+        competence: date | None = None,
     ) -> list[Employee]:
-        """Lista colaboradores já filtrados pelo Centro de Custo do projeto (Mão de Obra)."""
+        """Lista colaboradores já filtrados pelo Centro de Custo do projeto (Mão de Obra).
+
+        Com `competence`, a elegibilidade respeita o Centro de Custo VIGENTE na competência
+        (histórico). Sem ela, usa o cache (compatibilidade).
+        """
         cc = await self.cost_center_filter_for_project(project_id)
-        return await self.list_employees(offset=offset, limit=limit, search=search, cost_center=cc)
+        return await self.list_employees(
+            offset=offset, limit=limit, search=search, cost_center=cc, competence=competence
+        )
 
     async def list_employees_read_for_project(
         self,
@@ -240,6 +250,10 @@ class EmployeesService:
         )
         await self._compute_and_assign_total_cost(emp, reference=ref_date)
         await self.employees.add(emp)
+        # Histórico inicial do Centro de Custo (fonte da verdade temporal).
+        from app.services.cost_center_history_service import EmployeeCostCenterService
+
+        await EmployeeCostCenterService(self.session).ensure_initial_history(emp)
         await self.audit.log_action(
             user=actor,
             action="create",
@@ -268,9 +282,20 @@ class EmployeesService:
         data.pop("total_cost", None)
         ref = data.pop("cost_reference_competencia", None)
         ref_date = ref if isinstance(ref, date) else None
+        # Centro de Custo é TEMPORAL: não setar direto o cache; roteia pelo histórico
+        # (fecha a linha anterior, abre nova a partir da competência informada).
+        cc_touched = "cost_center" in data
+        new_cc = data.pop("cost_center", None)
+        cc_effective = data.pop("cost_center_effective_date", None)
         patch = {k: v for k, v in data.items() if k in _EMPLOYEE_PATCHABLE}
         for k, v in patch.items():
             setattr(emp, k, v)
+        if cc_touched:
+            from app.services.cost_center_history_service import EmployeeCostCenterService
+
+            await EmployeeCostCenterService(self.session).change_cost_center(
+                emp, new_cc, cc_effective if isinstance(cc_effective, date) else default_cost_reference()
+            )
 
         # Invariante do ciclo de vida (apenas quando o status/encerramento é tocado, para
         # não bloquear edições não relacionadas): inativo exige end_date; ativo limpa-o.

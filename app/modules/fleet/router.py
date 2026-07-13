@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -18,6 +19,7 @@ from app.database.session import get_db
 from app.models.user import User
 from app.schemas.fleet import VehicleCreate, VehicleRead, VehicleUpdate, VehicleUsageCreate, VehicleUsageRead
 from app.services.fleet_service import FleetService, fleet_vehicle_to_read
+from app.services.employees_service import default_cost_reference
 
 
 _read = [Depends(require_permission(VEHICLES_VIEW))]
@@ -49,8 +51,24 @@ async def list_active_vehicles(
     db: AsyncSession = Depends(get_db),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=500),
+    project_id: UUID | None = Query(
+        default=None,
+        description="Filtra por Centro de Custo do projeto (aba Veículos). Omitido = todos.",
+    ),
+    competencia: date | None = Query(
+        default=None,
+        description="Competência para resolver o Centro de Custo VIGENTE do veículo (histórico).",
+    ),
 ) -> list[VehicleRead]:
-    rows = await FleetService(db).list_vehicles(offset=offset, limit=limit, include_inactive=False)
+    if project_id is not None:
+        rows = await FleetService(db).list_active_for_project(
+            project_id=project_id,
+            competencia=competencia or default_cost_reference(),
+            offset=offset,
+            limit=limit,
+        )
+    else:
+        rows = await FleetService(db).list_vehicles(offset=offset, limit=limit, include_inactive=False)
     return [fleet_vehicle_to_read(r) for r in rows]
 
 

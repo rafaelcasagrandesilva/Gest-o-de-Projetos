@@ -103,6 +103,9 @@ class EmployeeUpdate(BaseModel):
     end_date: date | None = None
     # Centro de Custo — na edição pode ser preenchido (força a modelagem dos legados).
     cost_center: str | None = Field(default=None, max_length=255)
+    # Competência a partir da qual o novo Centro de Custo passa a valer (histórico).
+    # Ausente = competência atual. Só usado quando `cost_center` muda.
+    cost_center_effective_date: date | None = None
     can_allocate_other_cost_centers: bool | None = None
     has_periculosidade: bool | None = None
     has_adicional_dirigida: bool | None = None
