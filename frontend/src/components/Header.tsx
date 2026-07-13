@@ -3,6 +3,7 @@ import { hasPermission } from "@/permissions";
 import { useWorkspace, type WorkspaceName } from "@/context/WorkspaceContext";
 import { useNavigate } from "react-router-dom";
 import { SidebarToggleButton } from "@/components/SidebarToggleButton";
+import { resolveWorkspaceLanding } from "@/workspaces/navigation";
 
 export function Header() {
   const { user, logout } = useAuth();
@@ -18,10 +19,8 @@ export function Header() {
   function go(w: WorkspaceName) {
     if (w === workspace) return;
     setWorkspace(w);
-    if (w === "projects") navigate("/projects/dashboard");
-    else if (w === "assets") navigate("/assets/dashboard");
-    else if (w === "indicators") navigate("/indicators/roi");
-    else navigate("/finance/dashboard");
+    // Vai para a PRIMEIRA tela permitida do Workspace (resolvedor central); se nenhuma, "sem acesso".
+    navigate(resolveWorkspaceLanding(w, perms) ?? "/no-access");
   }
 
   return (

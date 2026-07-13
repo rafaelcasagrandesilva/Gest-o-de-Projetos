@@ -1,25 +1,17 @@
 import { useAuth } from "@/context/AuthContext";
-import { hasPermission } from "@/permissions";
 import { AppSidebarShell } from "@/components/AppSidebarShell";
 import { SidebarNavItem } from "@/components/SidebarNavItem";
+import { visibleWorkspaceMenu } from "@/workspaces/navigation";
 
 export function AssetsSidebar() {
   const { user } = useAuth();
-  const canView = hasPermission(user?.permission_names, "assets.view");
-  const canSettings =
-    hasPermission(user?.permission_names, "settings.view") ||
-    hasPermission(user?.permission_names, "audit.export");
+  const visible = visibleWorkspaceMenu("assets", user?.permission_names);
 
   return (
     <AppSidebarShell subtitle="Gestão de Ativos">
-      {canView ? (
-        <>
-          <SidebarNavItem to="/assets/dashboard" label="Dashboard" />
-          <SidebarNavItem to="/assets" end label="Patrimônio" />
-          <SidebarNavItem to="/epis" end label="EPIs" />
-        </>
-      ) : null}
-      {canSettings ? <SidebarNavItem to="/settings" end={false} label="Configurações" /> : null}
+      {visible.map((item) => (
+        <SidebarNavItem key={item.to} to={item.to} end={item.end ?? false} label={item.label} />
+      ))}
     </AppSidebarShell>
   );
 }

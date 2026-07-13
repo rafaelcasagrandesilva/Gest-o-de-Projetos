@@ -1,16 +1,17 @@
 import { useAuth } from "@/context/AuthContext";
-import { hasPermission } from "@/permissions";
 import { AppSidebarShell } from "@/components/AppSidebarShell";
 import { SidebarNavItem } from "@/components/SidebarNavItem";
+import { visibleWorkspaceMenu } from "@/workspaces/navigation";
 
 export function IndicatorsSidebar() {
   const { user } = useAuth();
-  const canView = hasPermission(user?.permission_names, "indicators.view");
+  const visible = visibleWorkspaceMenu("indicators", user?.permission_names);
 
   return (
     <AppSidebarShell subtitle="Workspace: Indicadores">
-      {canView ? <SidebarNavItem to="/indicators/roi" label="ROI Operacional" /> : null}
-      {canView ? <SidebarNavItem to="/indicators/evolucao-financeira" label="Evolução Financeira" /> : null}
+      {visible.map((item) => (
+        <SidebarNavItem key={item.to} to={item.to} end={item.end ?? false} label={item.label} />
+      ))}
     </AppSidebarShell>
   );
 }

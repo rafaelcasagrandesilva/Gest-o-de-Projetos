@@ -5,7 +5,9 @@ import { useAuth } from "@/context/AuthContext";
 import { WorkspaceProvider, useWorkspace } from "@/context/WorkspaceContext";
 import { Layout } from "@/components/Layout";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { WorkspaceNoAccess } from "@/components/WorkspaceNoAccess";
 import { hasPermission } from "@/permissions";
+import { resolveWorkspaceLanding } from "@/workspaces/navigation";
 import { Dashboard } from "@/pages/Dashboard";
 import { Employees } from "@/pages/Employees";
 import { Vehicles } from "@/pages/Vehicles";
@@ -36,17 +38,15 @@ function LegacyProjectDetailRedirect() {
   return <Navigate to={`/projects/list/${projectId ?? ""}`} replace />;
 }
 
-function WorkspaceNotFoundRedirect() {
+/**
+ * Rota inicial do Workspace atual: vai para a PRIMEIRA tela permitida (resolvedor central).
+ * Quando o usuário não tem acesso a nenhuma tela do Workspace, cai em "/no-access".
+ */
+function WorkspaceLanding() {
   const { workspace } = useWorkspace();
-  const target =
-    workspace === "projects"
-      ? "/projects/dashboard"
-      : workspace === "assets"
-        ? "/assets/dashboard"
-        : workspace === "indicators"
-          ? "/indicators/roi"
-          : "/finance/dashboard";
-  return <Navigate to={target} replace />;
+  const { user } = useAuth();
+  const landing = resolveWorkspaceLanding(workspace, user?.permission_names);
+  return <Navigate to={landing ?? "/no-access"} replace />;
 }
 
 function WorkspaceSessionSync() {
@@ -112,8 +112,11 @@ export default function App() {
               <Route path="indicators/roi" element={<RoiOperacional />} />
               <Route path="indicators/evolucao-financeira" element={<EvolucaoFinanceira />} />
 
+              {/* Sem acesso a nenhuma tela do Workspace (dentro do Layout). */}
+              <Route path="no-access" element={<WorkspaceNoAccess />} />
+
               {/* Compat: rotas antigas (mantidas via redirect) */}
-              <Route index element={<WorkspaceNotFoundRedirect />} />
+              <Route index element={<WorkspaceLanding />} />
               <Route path="projects" element={<Navigate to="/projects/list" replace />} />
               <Route path="projects/:projectId" element={<LegacyProjectDetailRedirect />} />
               <Route path="reports" element={<Navigate to="/projects/reports" replace />} />
@@ -128,7 +131,7 @@ export default function App() {
               {/* Sem workspace (mantém como estava) */}
               <Route path="settings" element={<Settings />} />
             </Route>
-            <Route path="*" element={<WorkspaceNotFoundRedirect />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </WorkspaceProvider>
