@@ -8,6 +8,7 @@ import {
   type SetStateAction,
 } from "react";
 import {
+  costCenterOptionLabel,
   createEmployee,
   deleteEmployee,
   fetchCostCenters,
@@ -27,6 +28,7 @@ import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
 import { usePermission } from "@/hooks/usePermission";
 import { useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
+import { CollapsiblePanel } from "@/components/ExpandableFormSection";
 import { parseCurrencyInput } from "@/utils/currency";
 
 function monthStartIso(): string {
@@ -55,7 +57,17 @@ type FormState = {
   extra_hours_100: string;
   pj_hours_per_month: string;
   pj_additional_cost: string;
+  // Centro de Custo temporal: competência (YYYY-MM) a partir da qual o novo centro vale.
+  cost_center_effective_month: string;
+  // Valor do centro no momento da edição (para detectar mudança). undefined = criação.
+  _original_cost_center?: string;
 };
+
+/** Mês corrente YYYY-MM (padrão para a vigência do Centro de Custo). */
+function currentMonthYYYYMM(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
 const emptyForm: FormState = {
   full_name: "",
@@ -78,6 +90,8 @@ const emptyForm: FormState = {
   extra_hours_100: "0",
   pj_hours_per_month: "",
   pj_additional_cost: "0",
+  cost_center_effective_month: currentMonthYYYYMM(),
+  _original_cost_center: undefined,
 };
 
 function parseOptionalMoney(s: string): number | null {
@@ -141,7 +155,14 @@ function employeeToForm(emp: Employee): FormState {
     extra_hours_100: String(emp.extra_hours_100 ?? 0),
     pj_hours_per_month: emp.pj_hours_per_month != null ? String(emp.pj_hours_per_month) : "",
     pj_additional_cost: String(emp.pj_additional_cost ?? 0),
+    cost_center_effective_month: currentMonthYYYYMM(),
+    _original_cost_center: emp.cost_center ?? "",
   };
+}
+
+/** True quando editando e o Centro de Custo foi alterado (habilita o prompt de competência). */
+function costCenterChanged(form: FormState): boolean {
+  return form._original_cost_center !== undefined && form.cost_center.trim() !== form._original_cost_center.trim();
 }
 
 function formToCreatePayload(form: FormState, referenceCompetencia: string): EmployeeCreate {
@@ -175,7 +196,9 @@ function formToCreatePayload(form: FormState, referenceCompetencia: string): Emp
   };
 }
 
-function formToUpdatePayload(form: FormState): Partial<EmployeeCreate> {
+function formToUpdatePayload(
+  form: FormState,
+): Partial<EmployeeCreate> & { cost_center_effective_date?: string | null } {
   const add = parseOptionalMoney(form.additional_costs);
   const pjH = parseOptionalMoney(form.pj_hours_per_month);
   const salary = parseOptionalMoney(form.salary_base);
@@ -202,6 +225,10 @@ function formToUpdatePayload(form: FormState): Partial<EmployeeCreate> {
     extra_hours_100: parseNonNegativeMoney(form.extra_hours_100, 0),
     pj_hours_per_month: pjH,
     pj_additional_cost: parseNonNegativeMoney(form.pj_additional_cost, 0),
+    // Só envia a vigência quando o Centro de Custo mudou (senão o backend não abre histórico).
+    ...(costCenterChanged(form) && form.cost_center_effective_month
+      ? { cost_center_effective_date: `${form.cost_center_effective_month}-01` }
+      : {}),
   };
 }
 
@@ -379,9 +406,9 @@ function CadastroColaboradorFields({
         >
           <option value="">Selecione…</option>
           {/* Preserva um centro já gravado que não esteja mais na lista carregada
-              (legado/inativo) — não perde o valor ao editar. */}
+              (legado/encerrado) — não perde o valor ao editar; rotulado "(encerrado)". */}
           {form.cost_center && !costCenters.includes(form.cost_center) ? (
-            <option value={form.cost_center}>{form.cost_center}</option>
+            <option value={form.cost_center}>{costCenterOptionLabel(form.cost_center, costCenters)}</option>
           ) : null}
           {costCenters.map((cc) => (
             <option key={cc} value={cc}>
@@ -389,6 +416,25 @@ function CadastroColaboradorFields({
             </option>
           ))}
         </select>
+        {/* Centro de Custo temporal: ao MUDAR o centro de um colaborador existente, o
+            usuário informa a partir de qual competência vale (o passado é preservado). */}
+        {costCenterChanged(form) ? (
+          <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+            <label htmlFor={`${idPrefix}-cc-eff`} className="mb-1 block text-xs font-medium text-amber-900">
+              Vigente a partir de qual competência?
+            </label>
+            <input
+              id={`${idPrefix}-cc-eff`}
+              type="month"
+              value={form.cost_center_effective_month}
+              onChange={(e) => setForm((f) => ({ ...f, cost_center_effective_month: e.target.value }))}
+              className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm"
+            />
+            <p className="mt-1 text-xs text-amber-800/80">
+              Competências anteriores mantêm o Centro de Custo anterior (histórico preservado).
+            </p>
+          </div>
+        ) : null}
       </div>
       <div className="sm:col-span-2">
         <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -542,41 +588,10 @@ function CadastroColaboradorFields({
               Função dirigida (+R$ 209,24)
             </label>
           </div>
-          <div className="sm:col-span-2">
-            <p className="mb-2 text-xs font-medium text-slate-500">Opcional — horas extras no mês (referência 220h)</p>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <label className="block text-xs text-slate-600">
-                Horas 50%
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={form.extra_hours_50}
-                  onChange={(e) => setForm((f) => ({ ...f, extra_hours_50: e.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
-                />
-              </label>
-              <label className="block text-xs text-slate-600">
-                Horas 70%
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={form.extra_hours_70}
-                  onChange={(e) => setForm((f) => ({ ...f, extra_hours_70: e.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
-                />
-              </label>
-              <label className="block text-xs text-slate-600">
-                Horas 100%
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={form.extra_hours_100}
-                  onChange={(e) => setForm((f) => ({ ...f, extra_hours_100: e.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
-                />
-              </label>
-            </div>
-          </div>
+          {/* Horas extras (50%/70%/100%) foram removidas do CADASTRO: pertencem ao lançamento
+              da folha da competência, não à identificação do colaborador. O estado/payload
+              (extra_hours_*) é mantido para não alterar backend/APIs nem zerar valores já
+              gravados ao editar. */}
           <div className="sm:col-span-2">
             <label htmlFor={`${idPrefix}-addcost`} className="mb-1 block text-sm text-slate-600">
               Custos adicionais mensais (R$, opcional)
@@ -653,6 +668,12 @@ export function Employees() {
   const [payPrev, setPayPrev] = useState<PayrollResponse | null>(null);
   const [payReal, setPayReal] = useState<PayrollResponse | null>(null);
   const [expandedPayroll, setExpandedPayroll] = useState<Set<string>>(() => new Set());
+  // UI/UX: cadastro em Drawer (oculto por padrão) + seções da competência recolhidas por padrão.
+  const [showNewDrawer, setShowNewDrawer] = useState(false);
+  const [showResumo, setShowResumo] = useState(false);
+  const [showCustos, setShowCustos] = useState(false);
+  // Ponto de entrada de "Histórico" do colaborador (placeholder preparado para evolução futura).
+  const [historyEmp, setHistoryEmp] = useState<Employee | null>(null);
 
   const refreshPayroll = useCallback(async () => {
     setPayrollLoading(true);
@@ -729,6 +750,22 @@ export function Employees() {
     void refreshPayroll();
   }, [refreshPayroll]);
 
+  // Fecha o Drawer de novo colaborador com Esc.
+  useEffect(() => {
+    if (!showNewDrawer) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowNewDrawer(false);
+    };
+    document.addEventListener("keydown", onEsc);
+    return () => document.removeEventListener("keydown", onEsc);
+  }, [showNewDrawer]);
+
+  function openNewDrawer() {
+    setForm(emptyForm);
+    setError(null);
+    setShowNewDrawer(true);
+  }
+
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (form.employment_type === "CLT") {
@@ -760,9 +797,10 @@ export function Employees() {
     try {
       await createEmployee(formToCreatePayload(form, referenceCompetencia));
       setForm(emptyForm);
+      setShowNewDrawer(false); // fecha o Drawer automaticamente após salvar
       const data = await listEmployees({ competencia: referenceCompetencia, limit: 200 });
       setItems(data);
-      await refreshPayroll();
+      await refreshPayroll(); // mantém competência/cenário/projeto atuais (filtros preservados)
     } catch (err) {
       if (isAxiosError(err) && err.response?.data?.detail) {
         const d = err.response.data.detail;
@@ -916,34 +954,116 @@ export function Employees() {
       )}
 
       {!readOnly && (
-        <form
-          onSubmit={handleCreate}
-          className="max-w-2xl space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
-        >
-          <h3 className="font-medium text-slate-900">Novo colaborador</h3>
-          <CadastroColaboradorFields
-            form={form}
-            setForm={setForm}
-            idPrefix="new"
-            referenceCompetencia={referenceCompetencia}
-          />
+        <div>
           <button
-            type="submit"
-            disabled={creating}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+            type="button"
+            onClick={openNewDrawer}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700"
           >
-            {creating ? "Salvando…" : "Cadastrar"}
+            + Novo colaborador
           </button>
-        </form>
+        </div>
       )}
 
-      {loading || payrollLoading ? (
+      {/* TABELA DE CADASTRO — informação principal, logo após os filtros e o botão. */}
+      {loading ? (
         <div className="text-slate-500">Carregando…</div>
       ) : (
-        <div className="space-y-5">
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-slate-900">Resumo da folha</h3>
-            <p className="text-sm text-slate-500">
+        <div>
+          <h3 className="mb-2 text-lg font-semibold text-slate-900">Colaboradores cadastrados</h3>
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-slate-100 bg-slate-50/80">
+                <tr>
+                  <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
+                  <th className="px-4 py-3 font-medium text-slate-600">Cargo</th>
+                  <th className="px-4 py-3 font-medium text-slate-600">Tipo</th>
+                  <th className="px-4 py-3 text-right font-medium text-slate-600">Salário base</th>
+                  <th className="px-4 py-3 text-right font-medium text-slate-600">Custo mês</th>
+                  <th className="px-4 py-3 font-medium text-slate-600">Ativo</th>
+                  {!readOnly && <th className="px-4 py-3" />}
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((emp) => (
+                  <tr key={emp.id} className="border-b border-slate-50">
+                    <td className="min-w-0 max-w-[280px] px-4 py-3 align-middle">
+                      <TruncatedCell value={emp.full_name} maxWidthClass="max-w-[280px]" />
+                    </td>
+                    <td className="min-w-0 max-w-[220px] px-4 py-3 align-middle text-slate-600">
+                      <TruncatedCell value={emp.role_title} maxWidthClass="max-w-[220px]" />
+                    </td>
+                    <td className="px-4 py-3">{emp.employment_type}</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+                      {emp.salary_base != null ? formatMoney(emp.salary_base) : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right font-medium tabular-nums text-slate-900">
+                      {formatMoney(emp.total_cost)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {readOnly ? (
+                        <span>{emp.is_active ? "Sim" : "Não"}</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => toggleActive(emp)}
+                          className="text-indigo-600 hover:underline"
+                        >
+                          {emp.is_active ? "Sim" : "Não"}
+                        </button>
+                      )}
+                    </td>
+                    {!readOnly && (
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(editingId === emp.id ? null : emp.id)}
+                          className="text-sm text-slate-600 hover:text-slate-900"
+                        >
+                          {editingId === emp.id ? "Fechar" : "Editar"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHistoryEmp(emp)}
+                          className="ml-3 text-sm text-slate-600 hover:text-slate-900"
+                        >
+                          Histórico
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(emp.id)}
+                          className="ml-3 text-sm text-red-600 hover:underline"
+                        >
+                          Excluir
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* RESUMO DA COMPETÊNCIA — inicia recolhido. */}
+      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <button
+          type="button"
+          onClick={() => setShowResumo((v) => !v)}
+          className="flex w-full items-center gap-2 px-4 py-3 text-left"
+          aria-expanded={showResumo}
+        >
+          <span className="text-slate-400">{showResumo ? "▼" : "▶"}</span>
+          <span className="text-lg font-semibold text-slate-900">Resumo da competência</span>
+        </button>
+        <CollapsiblePanel open={showResumo}>
+          <div className="border-t border-slate-100 px-4 py-4">
+            {payrollLoading ? (
+              <div className="text-slate-500">Carregando…</div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-sm text-slate-500">
               Totais no cenário <strong>{scenario === "PREVISTO" ? "previsto" : "realizado"}</strong>
               {filterProjectId ? " — apenas alocações do projeto selecionado (custos administrativos mantidos)." : "."}
             </p>
@@ -1016,10 +1136,31 @@ export function Employees() {
                 <p className="mt-1 text-sm tabular-nums text-slate-600">{formatCurrency(teamSummary.folhaPj)}</p>
               </div>
             </div>
+              </div>
+            )}
           </div>
+        </CollapsiblePanel>
+      </section>
 
-          {payroll && (
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      {/* CUSTOS DA COMPETÊNCIA — inicia recolhido. */}
+      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <button
+          type="button"
+          onClick={() => setShowCustos((v) => !v)}
+          className="flex w-full items-center gap-2 px-4 py-3 text-left"
+          aria-expanded={showCustos}
+        >
+          <span className="text-slate-400">{showCustos ? "▼" : "▶"}</span>
+          <span className="text-lg font-semibold text-slate-900">
+            Custos da competência{payroll ? ` (${payroll.lines.length} colaboradores)` : ""}
+          </span>
+        </button>
+        <CollapsiblePanel open={showCustos}>
+          <div className="border-t border-slate-100 px-4 py-4">
+            {payrollLoading ? (
+              <div className="text-slate-500">Carregando…</div>
+            ) : payroll ? (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
               <table className="w-full text-left text-sm">
                 <thead className="border-b border-slate-100 bg-slate-50/80">
                   <tr>
@@ -1117,78 +1258,13 @@ export function Employees() {
                 </tbody>
               </table>
             </div>
-          )}
-
-          <div>
-            <h3 className="mb-2 text-lg font-semibold text-slate-900">Cadastro (identificação)</h3>
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b border-slate-100 bg-slate-50/80">
-                  <tr>
-                    <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
-                    <th className="px-4 py-3 font-medium text-slate-600">Cargo</th>
-                    <th className="px-4 py-3 font-medium text-slate-600">Tipo</th>
-                    <th className="px-4 py-3 text-right font-medium text-slate-600">Salário base</th>
-                    <th className="px-4 py-3 text-right font-medium text-slate-600">Custo mês</th>
-                    <th className="px-4 py-3 font-medium text-slate-600">Ativo</th>
-                    {!readOnly && <th className="px-4 py-3" />}
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((emp) => (
-                    <tr key={emp.id} className="border-b border-slate-50">
-                      <td className="min-w-0 max-w-[280px] px-4 py-3 align-middle">
-                        <TruncatedCell value={emp.full_name} maxWidthClass="max-w-[280px]" />
-                      </td>
-                      <td className="min-w-0 max-w-[220px] px-4 py-3 align-middle text-slate-600">
-                        <TruncatedCell value={emp.role_title} maxWidthClass="max-w-[220px]" />
-                      </td>
-                      <td className="px-4 py-3">{emp.employment_type}</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                        {emp.salary_base != null ? formatMoney(emp.salary_base) : "—"}
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium tabular-nums text-slate-900">
-                        {formatMoney(emp.total_cost)}
-                      </td>
-                      <td className="px-4 py-3">
-                        {readOnly ? (
-                          <span>{emp.is_active ? "Sim" : "Não"}</span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => toggleActive(emp)}
-                            className="text-indigo-600 hover:underline"
-                          >
-                            {emp.is_active ? "Sim" : "Não"}
-                          </button>
-                        )}
-                      </td>
-                      {!readOnly && (
-                        <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setEditingId(editingId === emp.id ? null : emp.id)}
-                            className="text-sm text-slate-600 hover:text-slate-900"
-                          >
-                            {editingId === emp.id ? "Fechar" : "Editar"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(emp.id)}
-                            className="ml-3 text-sm text-red-600 hover:underline"
-                          >
-                            Excluir
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            ) : (
+              <div className="text-slate-500">Sem dados.</div>
+            )}
           </div>
-        </div>
-      )}
+        </CollapsiblePanel>
+      </section>
+
       {editingId && !readOnly && (
         <EditEmployeePanel
           emp={items.find((e) => e.id === editingId)!}
@@ -1202,6 +1278,120 @@ export function Employees() {
           }}
         />
       )}
+
+      {/* DRAWER — Novo colaborador (oculto por padrão). Mesmo formulário/regras de antes,
+          apenas movido para um painel lateral. */}
+      {showNewDrawer && !readOnly && (
+        <div
+          className="fixed inset-0 z-50 flex justify-end bg-black/40"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setShowNewDrawer(false);
+          }}
+        >
+          <div className="flex h-full w-full max-w-xl flex-col overflow-hidden bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <h3 className="text-base font-semibold text-slate-900">Novo colaborador</h3>
+              <button
+                type="button"
+                onClick={() => setShowNewDrawer(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Fechar"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleCreate} className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+              <CadastroColaboradorFields
+                form={form}
+                setForm={setForm}
+                idPrefix="new"
+                referenceCompetencia={referenceCompetencia}
+              />
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={creating}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+                >
+                  {creating ? "Salvando…" : "Cadastrar"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowNewDrawer(false)}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {historyEmp && (
+        <EmployeeHistoryModal emp={historyEmp} onClose={() => setHistoryEmp(null)} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Ponto de entrada de "Histórico" do colaborador. Placeholder preparado para evolução futura
+ * (ex.: histórico de Centro de Custo, alterações de cargo/salário). NÃO cria histórico novo nem
+ * consulta APIs — apenas a estrutura de UI para ser preenchida em uma etapa posterior.
+ */
+function EmployeeHistoryModal({ emp, onClose }: { emp: Employee; onClose: () => void }) {
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onEsc);
+    return () => document.removeEventListener("keydown", onEsc);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Histórico do colaborador</h2>
+            <p className="mt-0.5 text-sm text-slate-500">{emp.full_name}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            aria-label="Fechar"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="px-5 py-6 text-sm text-slate-600">
+          <p>
+            O histórico deste colaborador será exibido aqui em uma próxima etapa (ex.: alterações de
+            Centro de Custo, cargo e salário ao longo das competências).
+          </p>
+          <p className="mt-3 text-xs text-slate-400">Funcionalidade em preparação.</p>
+        </div>
+        <div className="border-t border-slate-200 px-5 py-4 text-right">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm"
+          >
+            Fechar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
