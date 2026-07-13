@@ -41,7 +41,12 @@ VEHICLES_EDIT = "vehicles.edit"
 BILLING_VIEW = "billing.view"
 
 PAYABLES_VIEW = "payables.view"
+# Edição do Contas a Pagar (CAP). Permissão PRÓPRIA do módulo — antes o CAP editava com
+# costs.edit (Custos), acoplando os dois. Cada módulo tem seu próprio view/edit.
+PAYABLES_EDIT = "payables.edit"
 RECEIVABLES_VIEW = "receivables.view"
+# Edição do Contas a Receber (itens manuais). Permissão PRÓPRIA — antes editava com invoices.edit.
+RECEIVABLES_EDIT = "receivables.edit"
 # Reconciliar snapshot de Contas a Pagar: marcar lançamentos automáticos cuja
 # origem foi removida (resíduos) e permitir limpeza manual. Operação sensível,
 # separada de payables.view e do superusuário do "Regenerar Snapshot".
@@ -102,7 +107,9 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     VEHICLES_EDIT,
     BILLING_VIEW,
     PAYABLES_VIEW,
+    PAYABLES_EDIT,
     RECEIVABLES_VIEW,
+    RECEIVABLES_EDIT,
     PAYABLE_SNAPSHOT_RECONCILE,
     INVOICES_VIEW,
     INVOICES_EDIT,
@@ -154,7 +161,9 @@ PRESET_GESTOR = frozenset(
         VEHICLES_EDIT,
         BILLING_VIEW,
         PAYABLES_VIEW,
+        PAYABLES_EDIT,
         RECEIVABLES_VIEW,
+        RECEIVABLES_EDIT,
         PAYABLE_SNAPSHOT_RECONCILE,
         INVOICES_VIEW,
         INVOICES_EDIT,

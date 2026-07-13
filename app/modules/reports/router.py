@@ -14,12 +14,14 @@ from app.api.deps import (
     get_current_workspace,
     require_project_access,
     user_has_any_permission,
+    user_has_permission,
     user_sees_all_projects,
 )
 from app.core.permission_codes import (
     ASSETS_VIEW,
     BILLING_VIEW,
     COMPANY_FINANCE_VIEW,
+    DASHBOARD_VIEW,
     DEBTS_VIEW,
     EMPLOYEES_VIEW,
     INVOICES_VIEW,
@@ -66,6 +68,42 @@ def _report_scenario(body: ReportGenerateRequest) -> Scenario:
 def _assert_report_access(user: User) -> None:
     if not user_has_any_permission(user, REPORTS_VIEW, REPORTS_EXPORT):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
+
+
+# Isolamento de módulos nos Relatórios: além de reports.view/export, cada tipo de relatório exige
+# a permissão VIEW do SEU módulo. Antes, quem tivesse apenas reports.view conseguia gerar o
+# relatório de qualquer módulo (ex.: Ativos) sem ter a permissão daquele módulo.
+# project_summary/company_summary ficam fora do mapa: são consolidações multi-módulo já
+# protegidas por reports.* (+ require_project_access no project_summary).
+_REPORT_TYPE_VIEW_PERMISSION: dict[str, str] = {
+    "payables_detailed": PAYABLES_VIEW,
+    "receivables_detailed": RECEIVABLES_VIEW,
+    "invoices_detailed": INVOICES_VIEW,
+    "invoices": INVOICES_VIEW,
+    "debt": DEBTS_VIEW,
+    "fixed_costs": COMPANY_FINANCE_VIEW,
+    "revenues": BILLING_VIEW,
+    "vehicles": VEHICLES_VIEW,
+    "employees": EMPLOYEES_VIEW,
+    "payroll": EMPLOYEES_VIEW,
+    "users": USERS_MANAGE,
+    "dashboard": DASHBOARD_VIEW,
+    "assets_inventory": ASSETS_VIEW,
+    "assets_in_use": ASSETS_VIEW,
+    "assets_inspections": ASSETS_VIEW,
+    "assets_movements": ASSETS_VIEW,
+}
+
+
+def _assert_report_type_access(user: User, report_type: str) -> None:
+    """Autoriza a geração de um relatório: reports.view/export E a permissão do módulo do tipo."""
+    _assert_report_access(user)
+    needed = _REPORT_TYPE_VIEW_PERMISSION.get(report_type)
+    if needed is not None and not user_has_permission(user, needed):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sem permissão para o módulo correspondente a este relatório.",
+        )
 
 
 # Relatórios que possuem cenário Previsto/Realizado (para o cabeçalho de identificação).
@@ -151,6 +189,8 @@ async def generate_report(
     _ws: str = Depends(get_current_workspace),
 ) -> StreamingResponse:
     """Gera relatório (Excel ou PDF) conforme tipo e filtros."""
+    # Isolamento de módulos: exige a permissão do módulo do relatório (além de reports.*).
+    _assert_report_type_access(user, body.type)
     f = body.filters
     fmt = body.format
     svc = ReportService(db)

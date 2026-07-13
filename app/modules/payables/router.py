@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_permission
-from app.core.permission_codes import COSTS_EDIT, PAYABLES_VIEW
+from app.core.permission_codes import PAYABLES_EDIT, PAYABLES_VIEW
 from app.database.session import get_db
 from app.models.payable import Payable
 from app.models.user import User
@@ -17,7 +17,7 @@ from app.services.payable_service import PayableService, payable_status
 router = APIRouter()
 
 _read = [Depends(require_permission(PAYABLES_VIEW))]
-_write = [Depends(require_permission(COSTS_EDIT))]
+_write = [Depends(require_permission(PAYABLES_EDIT))]
 
 
 def _to_read(row) -> PayableRead:

@@ -96,7 +96,8 @@ function payableTipoLabel(r: PayableSnapshotRow): string {
 export function Payables() {
   const { user } = useAuth();
   const canView = usePermission("payables.view");
-  const canEdit = usePermission("costs.edit");
+  // CAP tem permissão de edição PRÓPRIA (antes usava costs.edit, acoplado ao módulo de Custos).
+  const canEdit = usePermission("payables.edit");
   const canRegenerateSnapshot = Boolean(user?.is_superuser);
   const canReconcileSnapshot = usePermission("payable_snapshot.reconcile");
 

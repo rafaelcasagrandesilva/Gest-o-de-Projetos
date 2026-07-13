@@ -24,12 +24,13 @@ from app.api.deps import (
 from app.core.permission_codes import (
     BILLING_VIEW,
     INVOICES_REACTIVATE,
-    COSTS_EDIT,
     INVOICES_EDIT,
     INVOICES_VIEW,
     PAYABLES_VIEW,
+    PAYABLES_EDIT,
     PAYABLE_SNAPSHOT_RECONCILE,
     RECEIVABLES_VIEW,
+    RECEIVABLES_EDIT,
 )
 from app.core.scenario import coerce_scenario, parse_scenario
 from app.database.session import get_db
@@ -371,7 +372,7 @@ async def list_receivables_view(
 @router.post(
     "/receivables/manual",
     response_model=ReceivableManualItemRead,
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(RECEIVABLES_EDIT))],
 )
 async def create_receivable_manual_item(
     payload: ReceivableManualItemCreate,
@@ -391,7 +392,7 @@ async def create_receivable_manual_item(
 @router.patch(
     "/receivables/manual/{item_id}",
     response_model=ReceivableManualItemRead,
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(RECEIVABLES_EDIT))],
 )
 async def update_receivable_manual_item(
     item_id: UUID,
@@ -416,7 +417,7 @@ async def update_receivable_manual_item(
 @router.delete(
     "/receivables/manual/{item_id}",
     status_code=204,
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(RECEIVABLES_EDIT))],
 )
 async def delete_receivable_manual_item(
     item_id: UUID,
@@ -844,7 +845,7 @@ async def _ensure_payable_snapshot_edit_access(*, row, user: User, db: AsyncSess
             raise HTTPException(status_code=403, detail="Sem permissão.")
 
 
-@router.patch("/payables/{snapshot_id}", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(COSTS_EDIT))])
+@router.patch("/payables/{snapshot_id}", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(PAYABLES_EDIT))])
 async def update_payables_snapshot(
     snapshot_id: UUID,
     payload: PayableSnapshotUpdate,
@@ -873,7 +874,7 @@ async def update_payables_snapshot(
 @router.post(
     "/payables/{snapshot_id}/register-payment",
     response_model=PayableSnapshotRead,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def register_payables_payment(
     snapshot_id: UUID,
@@ -905,7 +906,7 @@ async def register_payables_payment(
 @router.post(
     "/payables/{snapshot_id}/reverse-payment",
     response_model=PayableSnapshotRead,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def reverse_payables_payment(
     snapshot_id: UUID,
@@ -947,7 +948,7 @@ async def _read_payables_import_file(file: UploadFile) -> tuple[bytes, str]:
 @router.post(
     "/payables/import/analyze",
     response_model=PayableImportAnalyzeResult,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def analyze_payables_import(
     file: UploadFile = File(...),
@@ -966,7 +967,7 @@ async def analyze_payables_import(
 @router.post(
     "/payables/import/mapped/scan-cost-centers",
     response_model=PayableImportCostCenterScanResult,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def scan_payables_import_cost_centers(
     file: UploadFile = File(...),
@@ -988,7 +989,7 @@ async def scan_payables_import_cost_centers(
 @router.post(
     "/payables/import/mapped/preview",
     response_model=PayableImportPreviewResult,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def preview_payables_import_mapped(
     file: UploadFile = File(...),
@@ -1018,7 +1019,7 @@ async def preview_payables_import_mapped(
 @router.post(
     "/payables/import/mapped/confirm",
     response_model=PayableImportConfirmResult,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def confirm_payables_import_mapped(
     file: UploadFile = File(...),
@@ -1050,7 +1051,7 @@ async def confirm_payables_import_mapped(
 @router.get(
     "/cost-center-aliases",
     response_model=list[CostCenterAliasRead],
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def list_cost_center_aliases(
     db: AsyncSession = Depends(get_db),
@@ -1071,7 +1072,7 @@ async def list_cost_center_aliases(
 @router.post(
     "/cost-center-aliases",
     response_model=CostCenterAliasRead,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def create_cost_center_alias(
     payload: CostCenterAliasCreate,
@@ -1099,7 +1100,7 @@ async def create_cost_center_alias(
 @router.delete(
     "/cost-center-aliases/{alias_id}",
     status_code=204,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def delete_cost_center_alias(
     alias_id: UUID,
@@ -1114,7 +1115,7 @@ async def delete_cost_center_alias(
 @router.get(
     "/payables/import/templates",
     response_model=list[PayableImportTemplateRead],
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def list_payables_import_templates(
     db: AsyncSession = Depends(get_db),
@@ -1126,7 +1127,7 @@ async def list_payables_import_templates(
 @router.post(
     "/payables/import/templates",
     response_model=PayableImportTemplateRead,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def create_payables_import_template(
     payload: PayableImportTemplateCreate,
@@ -1144,7 +1145,7 @@ async def create_payables_import_template(
 @router.delete(
     "/payables/import/templates/{template_id}",
     status_code=204,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def delete_payables_import_template(
     template_id: UUID,
@@ -1160,7 +1161,7 @@ async def delete_payables_import_template(
 @router.post(
     "/payables/import/preview",
     response_model=PayableImportPreviewResult,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def preview_payables_import(
     file: UploadFile = File(...),
@@ -1176,7 +1177,7 @@ async def preview_payables_import(
 @router.post(
     "/payables/import/confirm",
     response_model=PayableImportConfirmResult,
-    dependencies=[Depends(require_permission(COSTS_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
 )
 async def confirm_payables_import(
     file: UploadFile = File(...),
@@ -1191,7 +1192,7 @@ async def confirm_payables_import(
     return result
 
 
-@router.post("/payables", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(COSTS_EDIT))])
+@router.post("/payables", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(PAYABLES_EDIT))])
 async def create_manual_payables_snapshot(
     payload: PayableSnapshotManualCreate,
     db: AsyncSession = Depends(get_db),
@@ -1218,7 +1219,7 @@ async def create_manual_payables_snapshot(
     return _snapshot_to_read(row)
 
 
-@router.delete("/payables/{snapshot_id}", status_code=204, dependencies=[Depends(require_permission(COSTS_EDIT))])
+@router.delete("/payables/{snapshot_id}", status_code=204, dependencies=[Depends(require_permission(PAYABLES_EDIT))])
 async def delete_payables_snapshot(
     snapshot_id: UUID,
     db: AsyncSession = Depends(get_db),

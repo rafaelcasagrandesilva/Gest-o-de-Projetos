@@ -30,6 +30,7 @@ from app.core.permission_codes import (
     EMPLOYEES_VIEW,
     INVOICES_EDIT,
     INVOICES_VIEW,
+    PAYABLES_EDIT,
     PAYABLES_VIEW,
     PRESET_CONSULTA,
     PROJECTS_CREATE,
@@ -38,6 +39,7 @@ from app.core.permission_codes import (
     PROJECTS_VIEW,
     PROJECTS_VIEW_DETAIL,
     PROJECTS_VIEW_LIST,
+    RECEIVABLES_EDIT,
     RECEIVABLES_VIEW,
     REPORTS_EXPORT,
     REPORTS_VIEW,
@@ -189,7 +191,9 @@ def user_has_permission(user: User, code: str) -> bool:
     if code == WORKSPACE_FINANCE_ACCESS and names.intersection(
         {
             PAYABLES_VIEW,
+            PAYABLES_EDIT,
             RECEIVABLES_VIEW,
+            RECEIVABLES_EDIT,
             INVOICES_VIEW,
             INVOICES_EDIT,
             DEBTS_VIEW,

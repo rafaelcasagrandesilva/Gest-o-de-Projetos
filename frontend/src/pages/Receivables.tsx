@@ -77,6 +77,8 @@ function statusBadgeClass(s: ReceivableUiStatus): string {
 
 export function Receivables() {
   const canReactivateInvoices = usePermission("invoices.reactivate");
+  // Edição de receitas manuais tem permissão PRÓPRIA (antes usava invoices.edit).
+  const canEditReceivables = usePermission("receivables.edit");
   const [reactivatingId, setReactivatingId] = useState<string | null>(null);
   const [periodMode, setPeriodMode] = useState<"MONTH" | "ALL">("MONTH");
   const [period, setPeriod] = useState(() => monthToYm(new Date()));
@@ -256,16 +258,18 @@ export function Receivables() {
             Atualizar
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              setEditingManual(null);
-              setManualModalOpen(true);
-            }}
-            className="w-fit rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-          >
-            + Adicionar receita
-          </button>
+          {canEditReceivables && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditingManual(null);
+                setManualModalOpen(true);
+              }}
+              className="w-fit rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+            >
+              + Adicionar receita
+            </button>
+          )}
         </div>
       </section>
 
@@ -369,34 +373,36 @@ export function Receivables() {
                   </td>
                   <td className="px-2 py-2 text-right">
                     {tipo === "MANUAL" ? (
-                      <div className="flex justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingManual(r);
-                            setManualModalOpen(true);
-                          }}
-                          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            if (!window.confirm("Excluir esta receita manual?")) return;
-                            try {
-                              await deleteReceivableManualItem(r.id);
-                              await load();
-                            } catch (e) {
-                              if (isAxiosError(e)) setError(formatApiError(e));
-                              else setError("Erro ao excluir.");
-                            }
-                          }}
-                          className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
-                        >
-                          Excluir
-                        </button>
-                      </div>
+                      canEditReceivables ? (
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingManual(r);
+                              setManualModalOpen(true);
+                            }}
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!window.confirm("Excluir esta receita manual?")) return;
+                              try {
+                                await deleteReceivableManualItem(r.id);
+                                await load();
+                              } catch (e) {
+                                if (isAxiosError(e)) setError(formatApiError(e));
+                                else setError("Erro ao excluir.");
+                              }
+                            }}
+                            className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+                          >
+                            Excluir
+                          </button>
+                        </div>
+                      ) : null
                     ) : uiStatus === "CANCELADA" && canReactivateInvoices ? (
                       <button
                         type="button"

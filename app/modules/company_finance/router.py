@@ -10,8 +10,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user, require_permission
-from app.core.permission_codes import COMPANY_FINANCE_EDIT, COMPANY_FINANCE_VIEW
+from app.api.deps import get_current_user, require_permission, user_has_permission
+from app.core.permission_codes import (
+    COMPANY_FINANCE_EDIT,
+    COMPANY_FINANCE_VIEW,
+    DEBTS_EDIT,
+    DEBTS_VIEW,
+)
 from app.database.session import get_db
 from app.models.company_finance import CompanyFinancialItem
 from app.models.user import User
@@ -29,10 +34,49 @@ from app.schemas.company_finance import (
 from app.services.company_finance_service import CompanyFinanceService, parse_month
 
 
-_read = [Depends(require_permission(COMPANY_FINANCE_VIEW))]
-
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# --- Autorização por TIPO (isolamento de módulos) -----------------------------------------
+# Endividamento e Custos Fixos-Matriz compartilham os mesmos endpoints, distinguidos pelo `tipo`.
+# Cada um usa a permissão do SEU módulo, sem depender do outro:
+#   - tipo == "endividamento" -> debts.view / debts.edit
+#   - tipo == "custo_fixo"    -> company_finance.view / company_finance.edit
+def _view_code_for_tipo(tipo: str) -> str:
+    return DEBTS_VIEW if tipo == "endividamento" else COMPANY_FINANCE_VIEW
+
+
+def _edit_code_for_tipo(tipo: str) -> str:
+    return DEBTS_EDIT if tipo == "endividamento" else COMPANY_FINANCE_EDIT
+
+
+def _assert_view(user: User, tipo: str) -> None:
+    if not user_has_permission(user, _view_code_for_tipo(tipo)):
+        raise HTTPException(status_code=403, detail="Sem permissão para visualizar este módulo.")
+
+
+def _assert_edit(user: User, tipo: str) -> None:
+    if not user_has_permission(user, _edit_code_for_tipo(tipo)):
+        raise HTTPException(status_code=403, detail="Sem permissão para editar este módulo.")
+
+
+def require_finance_view_by_tipo(
+    tipo: str = Query(..., pattern="^(endividamento|custo_fixo)$"),
+    user: User = Depends(get_current_user),
+) -> None:
+    """Dependency de LEITURA para endpoints que recebem `tipo` na query."""
+    _assert_view(user, tipo)
+
+
+async def _item_tipo(db: AsyncSession, item_id: UUID) -> str | None:
+    """Lê apenas o `tipo` de um item (para autorizar mutações por módulo)."""
+    return (
+        await db.execute(select(CompanyFinancialItem.tipo).where(CompanyFinancialItem.id == item_id))
+    ).scalar_one_or_none()
+
+
+_read_by_tipo = [Depends(require_finance_view_by_tipo)]
 
 
 def _default_month() -> str:
@@ -67,7 +111,7 @@ async def _load_item(db: AsyncSession, item_id: UUID) -> CompanyFinancialItem | 
     return (await db.execute(q)).scalars().unique().one_or_none()
 
 
-@router.get("/items", response_model=list[CompanyFinancialItemRead], dependencies=_read)
+@router.get("/items", response_model=list[CompanyFinancialItemRead], dependencies=_read_by_tipo)
 async def list_items(
     tipo: str = Query(..., pattern="^(endividamento|custo_fixo)$"),
     competencia: str | None = Query(default=None, description="YYYY-MM — mês de contexto para pago no mês"),
@@ -79,12 +123,13 @@ async def list_items(
     return [CompanyFinancialItemRead.model_validate(r) for r in rows]
 
 
-@router.post("/items", response_model=CompanyFinancialItemRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_EDIT))])
+@router.post("/items", response_model=CompanyFinancialItemRead)
 async def create_item(
     payload: CompanyFinancialItemCreate,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> CompanyFinancialItemRead:
+    _assert_edit(actor, payload.tipo)
     svc = CompanyFinanceService(db)
     try:
         row = await svc.create_item(actor_user_id=actor.id, data=payload.model_dump())
@@ -99,7 +144,7 @@ async def create_item(
     return CompanyFinancialItemRead.model_validate(read)
 
 
-@router.patch("/items/{item_id}", response_model=CompanyFinancialItemRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_EDIT))])
+@router.patch("/items/{item_id}", response_model=CompanyFinancialItemRead)
 async def update_item(
     item_id: UUID,
     payload: CompanyFinancialItemUpdate,
@@ -107,7 +152,10 @@ async def update_item(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> CompanyFinancialItemRead:
-    _ = actor
+    tipo = await _item_tipo(db, item_id)
+    if tipo is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    _assert_edit(actor, tipo)
     svc = CompanyFinanceService(db)
     patch_data = payload.model_dump(exclude_unset=True)
     logger.info(
@@ -140,13 +188,16 @@ async def update_item(
     return CompanyFinancialItemRead.model_validate(read)
 
 
-@router.delete("/items/{item_id}", status_code=204, dependencies=[Depends(require_permission(COMPANY_FINANCE_EDIT))])
+@router.delete("/items/{item_id}", status_code=204)
 async def delete_item(
     item_id: UUID,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> None:
-    _ = actor
+    tipo = await _item_tipo(db, item_id)
+    if tipo is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    _assert_edit(actor, tipo)
     svc = CompanyFinanceService(db)
     try:
         ok = await svc.delete_item(item_id=item_id)
@@ -157,7 +208,7 @@ async def delete_item(
     await db.commit()
 
 
-@router.put("/items/{item_id}/payments", response_model=CompanyFinancialItemRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_EDIT))])
+@router.put("/items/{item_id}/payments", response_model=CompanyFinancialItemRead)
 async def replace_payments(
     item_id: UUID,
     payload: PagamentosReplace,
@@ -165,7 +216,10 @@ async def replace_payments(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> CompanyFinancialItemRead:
-    _ = actor
+    tipo = await _item_tipo(db, item_id)
+    if tipo is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    _assert_edit(actor, tipo)
     pags = [p.model_dump() for p in payload.pagamentos]
     logger.info(
         "company_finance.replace_payments START item_id=%s competencia=%s payload=%s",
@@ -218,7 +272,7 @@ async def replace_payments(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/kpis/endividamento", response_model=KpiEndividamentoRead, dependencies=_read)
+@router.get("/kpis/endividamento", response_model=KpiEndividamentoRead, dependencies=[Depends(require_permission(DEBTS_VIEW))])
 async def kpis_endividamento(
     competencia: str = Query(..., description="YYYY-MM"),
     db: AsyncSession = Depends(get_db),
@@ -228,7 +282,7 @@ async def kpis_endividamento(
     return KpiEndividamentoRead.model_validate(data)
 
 
-@router.get("/kpis/custos-fixos", response_model=KpiCustosFixosRead, dependencies=_read)
+@router.get("/kpis/custos-fixos", response_model=KpiCustosFixosRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_VIEW))])
 async def kpis_custos_fixos(
     competencia: str = Query(..., description="YYYY-MM"),
     db: AsyncSession = Depends(get_db),
@@ -238,7 +292,7 @@ async def kpis_custos_fixos(
     return KpiCustosFixosRead.model_validate(data)
 
 
-@router.get("/pendencias", response_model=PendenciasCustosFixosRead, dependencies=_read)
+@router.get("/pendencias", response_model=PendenciasCustosFixosRead, dependencies=_read_by_tipo)
 async def pendencias(
     tipo: str = Query(..., pattern="^(endividamento|custo_fixo)$"),
     competencia: str = Query(..., description="YYYY-MM"),
@@ -249,7 +303,7 @@ async def pendencias(
     return PendenciasCustosFixosRead.model_validate(data)
 
 
-@router.get("/pendencias/custos-fixos", response_model=PendenciasCustosFixosRead, dependencies=_read)
+@router.get("/pendencias/custos-fixos", response_model=PendenciasCustosFixosRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_VIEW))])
 async def pendencias_custos_fixos(
     competencia: str = Query(..., description="YYYY-MM"),
     db: AsyncSession = Depends(get_db),
@@ -260,7 +314,7 @@ async def pendencias_custos_fixos(
     return PendenciasCustosFixosRead.model_validate(data)
 
 
-@router.get("/chart-series", response_model=ChartSeriesRead, dependencies=_read)
+@router.get("/chart-series", response_model=ChartSeriesRead, dependencies=_read_by_tipo)
 async def chart_series(
     tipo: str = Query(..., pattern="^(endividamento|custo_fixo)$"),
     mes_inicio: str | None = Query(default=None, description="YYYY-MM"),

@@ -167,7 +167,9 @@ type DebtCreditorFilter =
 
 export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const gestorGlobalReadOnly = useGestorGlobalReadOnly();
-  const canEditCompanyFinance = usePermission("company_finance.edit");
+  // Isolamento por módulo: Endividamento usa debts.edit; Custos Fixos-Matriz usa company_finance.edit.
+  const editPermission = tipo === "endividamento" ? "debts.edit" : "company_finance.edit";
+  const canEditCompanyFinance = usePermission(editPermission);
   const financeReadOnly = gestorGlobalReadOnly || !canEditCompanyFinance;
   const financeReadOnlyTitle = financeReadOnly
     ? gestorGlobalReadOnly
