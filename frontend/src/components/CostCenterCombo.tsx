@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { costCenterOptionLabel } from "@/services/costCenters";
+
 const NEW_SENTINEL = "__new_cost_center__";
 
 /**
@@ -27,9 +29,12 @@ export function CostCenterCombo({
   id?: string;
 }) {
   const [creating, setCreating] = useState(false);
-  // Modo "novo" quando o usuário optou por criar OU quando o valor atual não está na lista
-  // (ex.: centro recém-criado ainda não recarregado) — assim não se perde o valor.
-  const isNewMode = creating || (!!value && !options.includes(value));
+  // Modo "novo" apenas quando o usuário optou explicitamente por criar um centro.
+  // Um valor já gravado que não está na lista atual (ex.: projeto encerrado) NÃO vira input de
+  // texto: ele é reexibido como opção selecionada rotulada "(encerrado)" — preserva o vínculo
+  // legado sem oferecê-lo para novos cadastros.
+  const isNewMode = creating;
+  const isLegacySelected = !!value && !options.includes(value);
 
   if (isNewMode) {
     return (
@@ -78,6 +83,11 @@ export function CostCenterCombo({
       className={className}
     >
       <option value="">Selecione…</option>
+      {/* Preserva um centro já gravado que não está mais na lista (legado/encerrado) —
+          reexibido como selecionado e rotulado, sem ser oferecido para novos cadastros. */}
+      {isLegacySelected ? (
+        <option value={value}>{costCenterOptionLabel(value, options)}</option>
+      ) : null}
       {options.map((cc) => (
         <option key={cc} value={cc}>
           {cc}

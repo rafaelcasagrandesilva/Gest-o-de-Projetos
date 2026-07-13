@@ -87,11 +87,9 @@ export async function listEmployees(params?: {
   return data;
 }
 
-/** Centros de Custo distintos (projetos + colaboradores) para o datalist do cadastro. */
-export async function fetchCostCenters(): Promise<string[]> {
-  const { data } = await api.get<string[]>("/collaborators/cost-centers");
-  return data;
-}
+// Centros de Custo: fonte única centralizada em `./costCenters`. Re-exportado aqui por
+// compatibilidade com imports existentes (`import { fetchCostCenters } from "@/services/employees"`).
+export { fetchCostCenters, costCenterOptionLabel } from "./costCenters";
 
 export type CollaboratorSearchItem = { id: string; name: string };
 
@@ -107,7 +105,13 @@ export async function createEmployee(payload: EmployeeCreate): Promise<Employee>
   return data;
 }
 
-export async function updateEmployee(id: string, payload: Partial<EmployeeCreate>): Promise<Employee> {
+export async function updateEmployee(
+  id: string,
+  payload: Partial<EmployeeCreate> & {
+    /** Competência a partir da qual o novo Centro de Custo vale (histórico). Ausente = atual. */
+    cost_center_effective_date?: string | null;
+  },
+): Promise<Employee> {
   const { data } = await api.patch<Employee>(`/employees/${id}/`, payload);
   return data;
 }
