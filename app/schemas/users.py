@@ -11,6 +11,10 @@ from app.schemas.common import UUIDTimestampRead
 class RoleRead(UUIDTimestampRead):
     name: str
     description: str | None = None
+    is_system: bool = False
+    is_active: bool = True
+    user_count: int = 0
+    permission_names: list[str] = []
 
 
 class UserRead(UUIDTimestampRead):
@@ -59,6 +63,19 @@ class UserUpdate(BaseModel):
 class RoleCreate(BaseModel):
     name: str = Field(min_length=2, max_length=50)
     description: str | None = Field(default=None, max_length=255)
+    is_active: bool = True
+    # Lista completa das permissões do perfil. Se `base_role_id` for informado e permission_names for
+    # None, as permissões são copiadas do perfil base (duplicação).
+    permission_names: list[str] | None = None
+    base_role_id: UUID | None = None
+
+
+class RoleUpdate(BaseModel):
+    # `name` só é aceito para perfis não-sistema (renome bloqueado nos de sistema).
+    name: str | None = Field(default=None, min_length=2, max_length=50)
+    description: str | None = Field(default=None, max_length=255)
+    is_active: bool | None = None
+    permission_names: list[str] | None = None
 
 
 class AssignRoleRequest(BaseModel):

@@ -124,27 +124,84 @@ def primary_role_name(user: User) -> str:
     return ROLE_CONSULTA
 
 
-def permission_names_from_user(user: User) -> set[str]:
-    """Lê vínculos user_permissions; se a tabela não existir ou houver erro de DB, retorna vazio (usa preset da role)."""
-    out: set[str] = set()
+def _user_permission_deltas(user: User) -> tuple[set[str], set[str]]:
+    """Adições (granted=True) e remoções (granted=False) individuais do usuário sobre o(s) perfil(is)."""
+    adds: set[str] = set()
+    removes: set[str] = set()
     try:
         for up in getattr(user, "user_permissions", []) or []:
-            if up.permission:
-                out.add(up.permission.name)
+            if not up.permission:
+                continue
+            # Só é REMOÇÃO quando granted é explicitamente False; None/ausente = adição (default).
+            if getattr(up, "granted", True) is False:
+                removes.add(up.permission.name)
+            else:
+                adds.add(up.permission.name)
     except Exception:
         logger.warning(
-            "permission_names_from_user: falha ao ler user_permissions (tabela ausente?).",
+            "_user_permission_deltas: falha ao ler user_permissions (tabela/coluna ausente?).",
             exc_info=True,
         )
-    return out
+    return adds, removes
+
+
+def permission_names_from_user(user: User) -> set[str]:
+    """Permissões concedidas EXPLICITAMENTE ao usuário (adições individuais, granted=True).
+
+    Usado por permissões de concessão explícita (EXPLICIT_GRANT_ONLY_PERMISSIONS) e pela sessão.
+    """
+    adds, _ = _user_permission_deltas(user)
+    return adds
+
+
+def _db_role_permission_names(user: User) -> set[str] | None:
+    """União das permissões de TODOS os perfis do usuário via role_permissions (vínculo vivo).
+
+    Retorna None quando a infraestrutura de role_permissions está ausente (ex.: antes da migration),
+    sinalizando fallback para os presets hardcoded — assim nunca se perde/altera o comportamento.
+    """
+    try:
+        out: set[str] = set()
+        for link in getattr(user, "roles", []) or []:
+            role = getattr(link, "role", None)
+            if role is None:
+                continue
+            for rp in getattr(role, "permissions", []) or []:
+                if rp.permission:
+                    out.add(rp.permission.name)
+        # Sem perfis OU perfil vazio → set() (modelo de deltas: efetivo = adições − remoções).
+        # None só no except abaixo (infra de role_permissions ausente) → fallback de preset legado.
+        return out
+    except Exception:
+        logger.warning(
+            "_db_role_permission_names: role_permissions indisponível; usando preset (fallback).",
+            exc_info=True,
+        )
+        return None
+
+
+def _preset_union(user: User) -> frozenset[str]:
+    """Fallback: união dos presets hardcoded de todos os perfis do usuário (comportamento legado)."""
+    out: set[str] = set()
+    for name in _user_role_names(user):
+        out |= set(ROLE_PRESET.get(name, PRESET_CONSULTA))
+    if not out:
+        out |= set(PRESET_CONSULTA)
+    return frozenset(out)
 
 
 def effective_permission_names(user: User) -> frozenset[str]:
-    raw = permission_names_from_user(user)
-    if raw:
-        return frozenset(raw)
-    preset = ROLE_PRESET.get(primary_role_name(user), PRESET_CONSULTA)
-    return frozenset(preset)
+    """Efetivo (vínculo vivo) = ∪ permissões dos perfis ∪ adições individuais − remoções individuais.
+
+    Se a tabela role_permissions estiver ausente/indisponível, usa o preset hardcoded como base
+    (compatibilidade) — mas ainda aplica os deltas individuais.
+    """
+    role_perms = _db_role_permission_names(user)
+    adds, removes = _user_permission_deltas(user)
+    if role_perms is None:
+        base = _preset_union(user)
+        return frozenset((set(base) | adds) - removes)
+    return frozenset((role_perms | adds) - removes)
 
 
 def user_has_permission(user: User, code: str) -> bool:

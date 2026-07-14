@@ -22,10 +22,12 @@ from app.schemas.users import (
     ResetPasswordRequest,
     RoleCreate,
     RoleRead,
+    RoleUpdate,
     UserCreate,
     UserRead,
     UserUpdate,
 )
+from app.services.roles_service import RolesService
 from app.services.users_service import UsersService
 
 
@@ -208,6 +210,11 @@ async def delete_user(
     )
 
 
+@router.get("/roles", response_model=list[RoleRead], dependencies=[Depends(require_permission(USERS_MANAGE))])
+async def list_roles(db: AsyncSession = Depends(get_db)) -> list[RoleRead]:
+    return [RoleRead.model_validate(r) for r in await RolesService(db).list_roles()]
+
+
 @router.post("/roles", response_model=RoleRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
 async def create_role(
     payload: RoleCreate,
@@ -215,14 +222,40 @@ async def create_role(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> RoleRead:
-    role = await UsersService(db).ensure_role(
-        actor_user_id=actor.id,
+    role = await RolesService(db).create_role(
         name=payload.name,
         description=payload.description,
+        is_active=payload.is_active,
+        permission_names=payload.permission_names,
+        base_role_id=payload.base_role_id,
         actor=actor,
         request=request,
     )
     return RoleRead.model_validate(role)
+
+
+@router.patch("/roles/{role_id}", response_model=RoleRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
+async def update_role(
+    role_id: UUID,
+    payload: RoleUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> RoleRead:
+    role = await RolesService(db).update_role(
+        role_id=role_id, data=payload.model_dump(exclude_unset=True), actor=actor, request=request
+    )
+    return RoleRead.model_validate(role)
+
+
+@router.delete("/roles/{role_id}", status_code=204, dependencies=[Depends(require_permission(USERS_MANAGE))])
+async def delete_role(
+    role_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> None:
+    await RolesService(db).delete_role(role_id=role_id, actor=actor, request=request)
 
 
 @router.post("/{user_id}/roles", status_code=204, dependencies=[Depends(require_permission(USERS_MANAGE))])

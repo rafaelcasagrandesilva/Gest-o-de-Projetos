@@ -9,17 +9,16 @@ from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import ROLE_ADMIN, ROLE_CONSULTA, ROLE_GESTOR
-from app.core.permission_codes import ALL_PERMISSION_CODES, PRESET_CONSULTA, ROLE_PRESET
+from app.api.deps import ROLE_CONSULTA
+from app.core.permission_codes import ALL_PERMISSION_CODES
 from app.core.security import PasswordHashingError, hash_password
+from app.models.permission import UserPermission
 from app.models.user import ProjectUser, Role, User, UserRole
 from app.repositories.permissions import PermissionRepository
 from app.repositories.projects import ProjectRepository
 from app.repositories.users import RoleRepository, UserRepository
 from app.services.audit_service import AuditService
 from app.services.utils import model_to_dict
-
-_VALID_ROLES = frozenset({ROLE_ADMIN, ROLE_GESTOR, ROLE_CONSULTA})
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +94,21 @@ class UsersService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado.")
         return user
 
+    async def _resolve_assignable_role(self, role_name: str, *, for_new_assignment: bool) -> Role:
+        """Valida o perfil pelo BANCO (não mais uma lista fixa). Para NOVOS vínculos, exige is_active."""
+        role = await self.roles.get_by_name(role_name)
+        if not role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Perfil inválido: {role_name!r}. Cadastre-o em Usuários → Perfis.",
+            )
+        if for_new_assignment and not role.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Perfil {role_name!r} está inativo e não pode ser atribuído a usuários.",
+            )
+        return role
+
     async def _apply_role_and_projects(
         self,
         *,
@@ -103,14 +117,8 @@ class UsersService:
         project_ids: list[UUID] | None,
         apply_permission_preset: bool = True,
     ) -> None:
-        if role_name not in _VALID_ROLES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Role inválida. Use ADMIN, GESTOR ou CONSULTA.",
-            )
-        role = await self.roles.get_by_name(role_name)
-        if not role:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role não encontrada.")
+        # `apply_permission_preset=True` agora significa "seguir integralmente o perfil" (zera deltas).
+        role = await self._resolve_assignable_role(role_name, for_new_assignment=True)
         await self.session.execute(delete(UserRole).where(UserRole.user_id == user_id))
         await self.session.execute(delete(ProjectUser).where(ProjectUser.user_id == user_id))
         self.session.add(UserRole(user_id=user_id, role_id=role.id))
@@ -119,12 +127,22 @@ class UsersService:
                 self.session.add(ProjectUser(project_id=pid, user_id=user_id, access_level="member"))
         await self.session.flush()
         if apply_permission_preset:
-            preset = ROLE_PRESET.get(role_name, PRESET_CONSULTA)
-            await PermissionRepository(self.session).ensure_permission_names(set(ALL_PERMISSION_CODES))
-            try:
-                await PermissionRepository(self.session).replace_user_permissions(user_id, set(preset))
-            except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+            # Sem deltas: o usuário passa a herdar exatamente as permissões do perfil (vínculo vivo).
+            await self.session.execute(delete(UserPermission).where(UserPermission.user_id == user_id))
+            await self.session.flush()
+
+    async def _save_permission_deltas(self, *, user_id: UUID, full_set: set[str]) -> None:
+        """Grava a lista efetiva desejada como deltas relativos à UNIÃO dos perfis do usuário."""
+        u = await self.users.get_with_roles(user_id)
+        role_perms: set[str] = set()
+        perm_repo = PermissionRepository(self.session)
+        for link in getattr(u, "roles", []) or []:
+            if link.role:
+                role_perms |= await perm_repo.role_permission_names(link.role.id)
+        try:
+            await perm_repo.set_user_permission_deltas(user_id, full_set, role_perms)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
     async def create_user(
         self,
@@ -205,11 +223,8 @@ class UsersService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="role_name não pode ser vazio.",
                 )
-            if rn not in _VALID_ROLES:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"role_name inválido: {rn!r}. Use ADMIN, GESTOR ou CONSULTA.",
-                )
+            # Validação dinâmica: perfil precisa existir no banco (e estar ativo para novo vínculo).
+            await self._resolve_assignable_role(rn, for_new_assignment=True)
             role_name = rn
 
         pids: list[UUID] | None = None
@@ -271,10 +286,8 @@ class UsersService:
                     apply_permission_preset=not skip_preset,
                 )
             if perm_set is not None:
-                try:
-                    await PermissionRepository(self.session).replace_user_permissions(user_id, perm_set)
-                except ValueError as e:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+                # Vínculo vivo: grava como DELTAS relativos ao(s) perfil(is) do usuário.
+                await self._save_permission_deltas(user_id=user_id, full_set=perm_set)
 
             ctx: dict = {
                 "descricao": "Atualização de usuário (perfil, projetos e/ou permissões)",

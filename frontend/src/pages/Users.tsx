@@ -3,29 +3,27 @@ import {
   activateUser,
   createUser,
   deactivateUser,
+  listRoles,
   listUsers,
   patchUser,
   resetUserPassword,
   softDeleteUser,
+  type RoleRow,
   type UserRow,
 } from "@/services/users";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
 import { usePermission } from "@/hooks/usePermission";
-import {
-  ALL_PERMISSION_CODES,
-  PERMISSION_LABELS,
-  ROLE_PERMISSION_PRESET,
-} from "@/permissions";
+import { ALL_PERMISSION_CODES, PERMISSION_LABELS } from "@/permissions";
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import { USER_SORT_COLUMNS, defaultUserSort } from "@/tableSort/users";
-
-const ROLES = ["ADMIN", "GESTOR", "CONSULTA"] as const;
-type RoleName = (typeof ROLES)[number];
+import { RolesManager } from "@/pages/RolesManager";
 
 export function Users() {
   const canManageUsers = usePermission("users.manage");
+  const [tab, setTab] = useState<"users" | "roles">("users");
+  const [roles, setRoles] = useState<RoleRow[]>([]);
   const [items, setItems] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +31,7 @@ export function Users() {
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
-  const [roleName, setRoleName] = useState<RoleName>("CONSULTA");
+  const [roleName, setRoleName] = useState<string>("CONSULTA");
   const [projectIds, setProjectIds] = useState<Set<string>>(new Set());
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [creating, setCreating] = useState(false);
@@ -42,10 +40,32 @@ export function Users() {
   const [resetPassword, setResetPassword] = useState("");
   const [resetting, setResetting] = useState(false);
   const [editing, setEditing] = useState<UserRow | null>(null);
-  const [editRole, setEditRole] = useState<RoleName>("CONSULTA");
+  const [editRole, setEditRole] = useState<string>("CONSULTA");
   const [editProjectIds, setEditProjectIds] = useState<Set<string>>(new Set());
   const [editPerms, setEditPerms] = useState<Set<string>>(new Set());
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // Perfis do banco (fonte dos selects). Só ativos são ofertáveis para NOVOS usuários.
+  const activeRoles = roles.filter((r) => r.is_active);
+  const roleByName = (name: string): RoleRow | undefined => roles.find((r) => r.name === name);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listRoles()
+      .then((rs) => {
+        if (cancelled) return;
+        setRoles(rs);
+        // default do formulário de criação = primeiro perfil ativo (CONSULTA se existir).
+        const def = rs.find((r) => r.name === "CONSULTA" && r.is_active) ?? rs.find((r) => r.is_active);
+        if (def) setRoleName((cur) => (rs.some((r) => r.name === cur && r.is_active) ? cur : def.name));
+      })
+      .catch(() => {
+        /* sem permissão / erro — selects caem para os nomes existentes */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
 
   async function loadProjects() {
     try {
@@ -142,12 +162,11 @@ export function Users() {
 
   function openEdit(u: UserRow) {
     setEditing(u);
-    const r = (u.role_names?.[0] as RoleName) || "CONSULTA";
-    const rn = ROLES.includes(r) ? r : "CONSULTA";
+    const rn = u.role_names?.[0] || "CONSULTA";
     setEditRole(rn);
     setEditProjectIds(new Set(u.project_ids || []));
-    const perms =
-      u.permission_names?.length > 0 ? u.permission_names : [...ROLE_PERMISSION_PRESET[rn]];
+    // O efetivo do usuário (permission_names) já vem resolvido do backend (perfil + deltas).
+    const perms = u.permission_names?.length ? u.permission_names : roleByName(rn)?.permission_names ?? [];
     setEditPerms(new Set(perms));
     setError(null);
   }
@@ -244,30 +263,50 @@ export function Users() {
           <h2 className="text-xl font-semibold text-slate-900">Usuários</h2>
           <p className="text-sm text-slate-500">Perfis, permissões e escopo por projetos vinculados</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="mr-2 flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={showDeleted}
-              onChange={(e) => setShowDeleted(e.target.checked)}
-              className="h-4 w-4 rounded border-slate-300"
-            />
-            Mostrar removidos
-          </label>
+        {tab === "users" && (
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="mr-2 flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={showDeleted}
+                onChange={(e) => setShowDeleted(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300"
+              />
+              Mostrar removidos
+            </label>
+            <button
+              type="button"
+              disabled={!canManageUsers}
+              onClick={() => setShowForm((v) => !v)}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {showForm ? "Fechar formulário" : "Novo usuário"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Abas: Usuários | Perfis (mesma permissão users.manage). */}
+      <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+        {(["users", "roles"] as const).map((t) => (
           <button
+            key={t}
             type="button"
-            disabled={!canManageUsers}
-            onClick={() => setShowForm((v) => !v)}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => setTab(t)}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+              tab === t ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
+            }`}
           >
-            {showForm ? "Fechar formulário" : "Novo usuário"}
+            {t === "users" ? "Usuários" : "Perfis"}
           </button>
-        </div>
+        ))}
       </div>
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
+
+      {tab === "roles" && <RolesManager canManage={canManageUsers} />}
 
       {editing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -282,22 +321,26 @@ export function Users() {
             </p>
             <form onSubmit={handleSaveEdit} className="mt-4 space-y-4">
               <div>
-                <label className="mb-1 block text-sm text-slate-600">Perfil (preset)</label>
+                <label className="mb-1 block text-sm text-slate-600">Perfil</label>
                 <select
                   value={editRole}
                   disabled={!canManageUsers}
                   onChange={(e) => {
-                    const r = e.target.value as RoleName;
+                    const r = e.target.value;
                     setEditRole(r);
-                    setEditPerms(new Set(ROLE_PERMISSION_PRESET[r]));
+                    setEditPerms(new Set(roleByName(r)?.permission_names ?? []));
                   }}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
                 >
-                  {ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
+                  {/* Perfis ativos + o perfil atual do usuário (mesmo se inativo, para não perder o vínculo). */}
+                  {roles
+                    .filter((r) => r.is_active || r.name === editRole)
+                    .map((r) => (
+                      <option key={r.id} value={r.name}>
+                        {r.name}
+                        {!r.is_active ? " (inativo)" : ""}
+                      </option>
+                    ))}
                 </select>
                 <p className="mt-1 text-xs text-slate-500">
                   Ao mudar o perfil, as permissões são preenchidas com o padrão; ajuste os itens abaixo se
@@ -418,7 +461,7 @@ export function Users() {
         </div>
       )}
 
-      {showForm && (
+      {tab === "users" && showForm && (
         <form
           onSubmit={handleCreate}
           className="max-w-lg space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
@@ -460,17 +503,17 @@ export function Users() {
             <select
               value={roleName}
               disabled={!canManageUsers}
-              onChange={(e) => setRoleName(e.target.value as RoleName)}
+              onChange={(e) => setRoleName(e.target.value)}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
             >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
+              {activeRoles.map((r) => (
+                <option key={r.id} value={r.name}>
+                  {r.name}
                 </option>
               ))}
             </select>
             <p className="mt-1 text-xs text-slate-500">
-              As permissões são definidas automaticamente pelo perfil; edite o usuário depois para ajustar.
+              O usuário herda as permissões do perfil; edite o usuário depois para ajustes individuais.
             </p>
           </div>
           <div>
@@ -506,7 +549,7 @@ export function Users() {
         </form>
       )}
 
-      {loading ? (
+      {tab === "users" && (loading ? (
         <div className="flex items-center gap-2 text-slate-500">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
           Carregando…
@@ -616,7 +659,7 @@ export function Users() {
             </tbody>
           </table>
         </div>
-      )}
+      ))}
     </div>
   );
 }

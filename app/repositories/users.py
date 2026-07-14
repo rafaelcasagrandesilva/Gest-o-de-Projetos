@@ -6,9 +6,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.permission import UserPermission
+from app.models.permission import RolePermission, UserPermission
 from app.models.user import Role, User, UserRole
 from app.repositories.base import Repository
+
+
+def _user_auth_loaders() -> tuple:
+    """Eager-load das relações usadas na resolução de permissões (vínculo vivo):
+    perfis + permissões de cada perfil (role_permissions) + permissões individuais (deltas)."""
+    return (
+        selectinload(User.roles).selectinload(UserRole.role).selectinload(Role.permissions).selectinload(
+            RolePermission.permission
+        ),
+        selectinload(User.user_permissions).selectinload(UserPermission.permission),
+    )
 
 
 class UserRepository(Repository[User]):
@@ -16,10 +27,7 @@ class UserRepository(Repository[User]):
         super().__init__(session, User)
 
     async def list(self, *, offset: int = 0, limit: int = 50, include_deleted: bool = False) -> list[User]:
-        stmt = select(User).options(
-            selectinload(User.roles).selectinload(UserRole.role),
-            selectinload(User.user_permissions).selectinload(UserPermission.permission),
-        )
+        stmt = select(User).options(*_user_auth_loaders())
         if not include_deleted:
             stmt = stmt.where(User.deleted_at.is_(None))
         stmt = stmt.offset(offset).limit(limit)
@@ -27,14 +35,7 @@ class UserRepository(Repository[User]):
         return list(res.scalars().all())
 
     async def get_with_roles(self, user_id: UUID) -> User | None:
-        stmt = (
-            select(User)
-            .options(
-                selectinload(User.roles).selectinload(UserRole.role),
-                selectinload(User.user_permissions).selectinload(UserPermission.permission),
-            )
-            .where(User.id == user_id)
-        )
+        stmt = select(User).options(*_user_auth_loaders()).where(User.id == user_id)
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
 

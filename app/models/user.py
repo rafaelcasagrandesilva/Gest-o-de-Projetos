@@ -12,7 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.base import Base, TimestampUUIDMixin
 
 if TYPE_CHECKING:
-    from app.models.permission import UserPermission
+    from app.models.permission import RolePermission, UserPermission
 
 
 class User(TimestampUUIDMixin, Base):
@@ -37,8 +37,15 @@ class Role(TimestampUUIDMixin, Base):
 
     name: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Perfis de sistema (ADMIN/GESTOR/CONSULTA): não podem ser excluídos nem renomeados.
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # Perfil inativo não é ofertável para NOVOS vínculos, mas segue valendo p/ usuários já vinculados.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
     users: Mapped[list["UserRole"]] = relationship(back_populates="role", cascade="all, delete-orphan")
+    permissions: Mapped[list["RolePermission"]] = relationship(
+        back_populates="role", cascade="all, delete-orphan"
+    )
 
 
 class UserRole(TimestampUUIDMixin, Base):

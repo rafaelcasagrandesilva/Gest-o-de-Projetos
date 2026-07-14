@@ -30,7 +30,7 @@ from app.models.project_operational import (
     ProjectVehicle,
 )
 from app.models.settings import SystemSettings
-from app.models.permission import Permission, UserPermission
+from app.models.permission import Permission, RolePermission, UserPermission
 from app.models.asset import Asset, AssetAssignment, AssetAttachment, AssetInspection
 from app.models.user import ProjectUser, Role, User, UserRole
 
@@ -79,6 +79,7 @@ __all__ = [
     "Permission",
     "ProjectUser",
     "Role",
+    "RolePermission",
     "User",
     "UserPermission",
     "UserRole",
