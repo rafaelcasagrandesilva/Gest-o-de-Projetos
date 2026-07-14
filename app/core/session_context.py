@@ -129,19 +129,55 @@ def primary_role_name(user: User) -> str:
     return names[0] if names else "CONSULTA"
 
 
-def permission_names_from_user(user: User) -> set[str]:
-    out: set[str] = set()
+def _user_permission_deltas(user: User) -> tuple[set[str], set[str]]:
+    """Adições (granted=True) e remoções (granted=False) individuais sobre o(s) perfil(is)."""
+    adds: set[str] = set()
+    removes: set[str] = set()
     for up in getattr(user, "user_permissions", []) or []:
-        if up.permission:
-            out.add(up.permission.name)
-    return out
+        if not up.permission:
+            continue
+        if getattr(up, "granted", True) is False:
+            removes.add(up.permission.name)
+        else:
+            adds.add(up.permission.name)
+    return adds, removes
+
+
+def permission_names_from_user(user: User) -> set[str]:
+    """Permissões concedidas EXPLICITAMENTE (adições individuais, granted=True)."""
+    adds, _ = _user_permission_deltas(user)
+    return adds
+
+
+def _db_role_permission_names(user: User) -> set[str] | None:
+    """União das permissões de TODOS os perfis do usuário via role_permissions (vínculo vivo).
+    None só quando a infra de role_permissions está ausente (fallback de preset legado)."""
+    try:
+        out: set[str] = set()
+        for link in getattr(user, "roles", []) or []:
+            role = getattr(link, "role", None)
+            if role is None:
+                continue
+            for rp in getattr(role, "permissions", []) or []:
+                if rp.permission:
+                    out.add(rp.permission.name)
+        return out
+    except Exception:
+        return None
 
 
 def effective_permission_names(user: User) -> frozenset[str]:
-    raw = permission_names_from_user(user)
-    if raw:
-        return frozenset(raw)
-    return frozenset(ROLE_PRESET.get(primary_role_name(user), PRESET_CONSULTA))
+    """Efetivo = ∪ permissões dos perfis ∪ adições individuais − remoções individuais.
+    Mesma regra usada na autorização (app/api/deps.py) — SEM somar ROLE_PRESET quando há perfis.
+    ROLE_PRESET só é fallback se a tabela role_permissions estiver ausente (infra pré-0091)."""
+    role_perms = _db_role_permission_names(user)
+    adds, removes = _user_permission_deltas(user)
+    if role_perms is None:
+        base: set[str] = set()
+        for name in role_names(user):
+            base |= set(ROLE_PRESET.get(name, PRESET_CONSULTA))
+        return frozenset((base | adds) - removes)
+    return frozenset((role_perms | adds) - removes)
 
 
 def _workspace_permission_from_module_permissions(names: frozenset[str], code: str) -> bool:

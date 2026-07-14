@@ -206,5 +206,90 @@ class RolesServiceDBTests(unittest.IsolatedAsyncioTestCase):
             await s.rollback()
 
 
+class PermissionRegression0091DisplayTests(unittest.IsolatedAsyncioTestCase):
+    """Regressão do incidente: session_permission_names (usado no permission_names da API/checklist)
+    somava o ROLE_PRESET (CONSULTA=22) via cópia stale em session_context, dando permissões que o
+    admin nunca marcou. Prova que o efetivo E a exibição = EXATAMENTE perfil + adições − remoções."""
+
+    async def asyncTearDown(self) -> None:
+        from sqlalchemy import text
+        from app.database.session import AsyncSessionLocal, engine
+
+        await engine.dispose()
+        async with AsyncSessionLocal() as s:
+            try:
+                await s.execute(text("DELETE FROM users WHERE email LIKE 'reg-%@ex.com'"))
+                await s.execute(text("DELETE FROM roles WHERE is_system=false AND name LIKE 'TESTE-%'"))
+                await s.commit()
+            except Exception:
+                await s.rollback()
+
+    async def _make_user_with_role(self, s, role_id):
+        from app.models.user import User, UserRole
+        from app.core.security import hash_password
+
+        u = User(email=f"reg-{uuid4().hex[:8]}@ex.com", full_name="Reg", password_hash=hash_password("secret1"), is_active=True)
+        s.add(u)
+        await s.flush()
+        s.add(UserRole(user_id=u.id, role_id=role_id))
+        await s.flush()
+        return u
+
+    async def _reload(self, s, uid):
+        from app.repositories.users import UserRepository
+        s.expire_all()
+        return await UserRepository(s).get_with_roles(uid)
+
+    async def test_profile_gives_exactly_its_permissions(self) -> None:
+        from sqlalchemy import text
+        from sqlalchemy.exc import ProgrammingError
+
+        from app.api.deps import effective_permission_names
+        from app.core.session_context import session_permission_names
+        from app.database.session import AsyncSessionLocal, engine
+        from app.repositories.permissions import PermissionRepository
+        from app.services.roles_service import RolesService
+
+        await engine.dispose()
+        EXACT = {"employees.view", "vehicles.view", "debts.view"}
+        # Permissões que estão no PRESET_CONSULTA mas NÃO no perfil TESTE — não podem vazar.
+        CANARIES = {"projects.view", "billing.view", "payables.view"}
+        async with AsyncSessionLocal() as s:
+            try:
+                await s.execute(text("SELECT granted FROM user_permissions LIMIT 1"))
+            except ProgrammingError:
+                self.skipTest("Migration 0091 ausente.")
+
+            role = await RolesService(s).create_role(
+                name=f"TESTE-{uuid4().hex[:6]}", description=None, is_active=True,
+                permission_names=sorted(EXACT), base_role_id=None, actor=None, request=None,
+            )
+            user = await self._make_user_with_role(s, role["id"])
+
+            # (a) efetivo = EXATAMENTE as 3
+            u = await self._reload(s, user.id)
+            self.assertEqual(set(effective_permission_names(u)), EXACT)
+
+            # (b) session_permission_names (permission_names da API/checklist) NÃO vaza o preset.
+            sess = set(session_permission_names(u))
+            self.assertTrue(EXACT.issubset(sess))
+            self.assertEqual(sess & CANARIES, set(), "ROLE_PRESET (CONSULTA) vazou no permission_names!")
+
+            # (c) com DELTAS: +costs.view (adição), -vehicles.view (remoção)
+            perm_repo = PermissionRepository(s)
+            role_perms = await perm_repo.role_permission_names(role["id"])
+            desired = (EXACT - {"vehicles.view"}) | {"costs.view"}
+            await perm_repo.set_user_permission_deltas(user.id, desired, role_perms)
+            await s.flush()
+            u2 = await self._reload(s, user.id)
+            self.assertEqual(set(effective_permission_names(u2)), {"employees.view", "debts.view", "costs.view"})
+            sess2 = set(session_permission_names(u2))
+            self.assertNotIn("vehicles.view", sess2)           # remoção individual respeitada
+            self.assertIn("costs.view", sess2)                 # adição individual presente
+            self.assertEqual(sess2 & CANARIES, set())          # nada de preset
+
+            await s.rollback()
+
+
 if __name__ == "__main__":
     unittest.main()
