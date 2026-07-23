@@ -11,126 +11,126 @@ from app.schemas.common import UUIDTimestampRead
 class ProjectResultRead(UUIDTimestampRead):
     project_id: UUID
     competencia: date
-    revenue_total: float
-    total_revenue: float
-    cost_total: float
-    total_cost: float
-    total_retention: float
-    operational_profit: float
-    net_profit: float
-    margin_operational: float
-    margin_net: float
-    profit: float
-    margin: float
+    revenue_total: float | None = None
+    total_revenue: float | None = None
+    cost_total: float | None = None
+    total_cost: float | None = None
+    total_retention: float | None = None
+    operational_profit: float | None = None
+    net_profit: float | None = None
+    margin_operational: float | None = None
+    margin_net: float | None = None
+    profit: float | None = None
+    margin: float | None = None
 
 
 class KPIRead(UUIDTimestampRead):
     project_id: UUID | None
     competencia: date
     name: str
-    value: float
+    value: float | None = None
 
 
 class MonthlyPoint(BaseModel):
     competencia: date
-    revenue_total: float
-    total_revenue: float
-    cost_total: float
-    total_cost: float
-    total_retention: float = 0
-    operational_profit: float = 0
-    net_profit: float = 0
-    margin_operational: float = 0
-    margin_net: float = 0
-    profit: float
-    margin: float
-    ebitda: float = 0
-    ebitda_margin: float = 0
-    operational_cost: float = 0
-    labor_cost: float = 0
-    vehicle_cost: float = 0
-    system_cost: float = 0
-    fixed_operational_cost: float = 0
-    tax_amount: float = 0
-    overhead_amount: float = 0
-    anticipation_amount: float = 0
-    labor_cost_pct: float = 0
-    vehicle_cost_pct: float = 0
-    system_cost_pct: float = 0
-    fixed_operational_cost_pct: float = 0
-    operational_cost_pct: float = 0
-    tax_amount_pct: float = 0
-    overhead_amount_pct: float = 0
-    anticipation_amount_pct: float = 0
+    revenue_total: float | None = None
+    total_revenue: float | None = None
+    cost_total: float | None = None
+    total_cost: float | None = None
+    total_retention: float | None = 0
+    operational_profit: float | None = 0
+    net_profit: float | None = 0
+    margin_operational: float | None = 0
+    margin_net: float | None = 0
+    profit: float | None = None
+    margin: float | None = None
+    ebitda: float | None = 0
+    ebitda_margin: float | None = 0
+    operational_cost: float | None = 0
+    labor_cost: float | None = 0
+    vehicle_cost: float | None = 0
+    system_cost: float | None = 0
+    fixed_operational_cost: float | None = 0
+    tax_amount: float | None = 0
+    overhead_amount: float | None = 0
+    anticipation_amount: float | None = 0
+    labor_cost_pct: float | None = 0
+    vehicle_cost_pct: float | None = 0
+    system_cost_pct: float | None = 0
+    fixed_operational_cost_pct: float | None = 0
+    operational_cost_pct: float | None = 0
+    tax_amount_pct: float | None = 0
+    overhead_amount_pct: float | None = 0
+    anticipation_amount_pct: float | None = 0
 
 
 class ProjectSummary(BaseModel):
     project_id: UUID
     competencia: date
-    revenue_total: float
-    total_revenue: float
-    cost_total: float
-    total_cost: float
-    total_retention: float = 0
-    operational_profit: float = 0
-    net_profit: float = 0
-    margin_operational: float = 0
-    margin_net: float = 0
-    profit: float
-    margin: float
-    ebitda: float = 0
-    ebitda_margin: float = 0
+    revenue_total: float | None = None
+    total_revenue: float | None = None
+    cost_total: float | None = None
+    total_cost: float | None = None
+    total_retention: float | None = 0
+    operational_profit: float | None = 0
+    net_profit: float | None = 0
+    margin_operational: float | None = 0
+    margin_net: float | None = 0
+    profit: float | None = None
+    margin: float | None = None
+    ebitda: float | None = 0
+    ebitda_margin: float | None = 0
     # Estrutura operacional + regras configuráveis
-    operational_cost: float = 0
-    labor_cost: float = 0
-    vehicle_cost: float = 0
-    system_cost: float = 0
-    fixed_operational_cost: float = 0
-    tax_amount: float = 0
-    overhead_amount: float = 0
-    anticipation_amount: float = 0
-    labor_cost_pct: float = 0
-    vehicle_cost_pct: float = 0
-    system_cost_pct: float = 0
-    fixed_operational_cost_pct: float = 0
-    operational_cost_pct: float = 0
-    tax_amount_pct: float = 0
-    overhead_amount_pct: float = 0
-    anticipation_amount_pct: float = 0
+    operational_cost: float | None = 0
+    labor_cost: float | None = 0
+    vehicle_cost: float | None = 0
+    system_cost: float | None = 0
+    fixed_operational_cost: float | None = 0
+    tax_amount: float | None = 0
+    overhead_amount: float | None = 0
+    anticipation_amount: float | None = 0
+    labor_cost_pct: float | None = 0
+    vehicle_cost_pct: float | None = 0
+    system_cost_pct: float | None = 0
+    fixed_operational_cost_pct: float | None = 0
+    operational_cost_pct: float | None = 0
+    tax_amount_pct: float | None = 0
+    overhead_amount_pct: float | None = 0
+    anticipation_amount_pct: float | None = 0
 
 
 class DirectorSummary(BaseModel):
     project_id: UUID | None = None
     competencia: date
-    revenue_total: float
-    total_revenue: float
-    cost_total: float
-    total_cost: float
-    total_retention: float = 0
-    operational_profit: float = 0
-    net_profit: float = 0
-    margin_operational: float = 0
-    margin_net: float = 0
-    profit: float
-    margin: float
-    ebitda: float = 0
-    ebitda_margin: float = 0
-    operational_cost: float = 0
-    labor_cost: float = 0
-    vehicle_cost: float = 0
-    system_cost: float = 0
-    fixed_operational_cost: float = 0
-    tax_amount: float = 0
-    overhead_amount: float = 0
-    anticipation_amount: float = 0
-    labor_cost_pct: float = 0
-    vehicle_cost_pct: float = 0
-    system_cost_pct: float = 0
-    fixed_operational_cost_pct: float = 0
-    operational_cost_pct: float = 0
-    tax_amount_pct: float = 0
-    overhead_amount_pct: float = 0
-    anticipation_amount_pct: float = 0
+    revenue_total: float | None = None
+    total_revenue: float | None = None
+    cost_total: float | None = None
+    total_cost: float | None = None
+    total_retention: float | None = 0
+    operational_profit: float | None = 0
+    net_profit: float | None = 0
+    margin_operational: float | None = 0
+    margin_net: float | None = 0
+    profit: float | None = None
+    margin: float | None = None
+    ebitda: float | None = 0
+    ebitda_margin: float | None = 0
+    operational_cost: float | None = 0
+    labor_cost: float | None = 0
+    vehicle_cost: float | None = 0
+    system_cost: float | None = 0
+    fixed_operational_cost: float | None = 0
+    tax_amount: float | None = 0
+    overhead_amount: float | None = 0
+    anticipation_amount: float | None = 0
+    labor_cost_pct: float | None = 0
+    vehicle_cost_pct: float | None = 0
+    system_cost_pct: float | None = 0
+    fixed_operational_cost_pct: float | None = 0
+    operational_cost_pct: float | None = 0
+    tax_amount_pct: float | None = 0
+    overhead_amount_pct: float | None = 0
+    anticipation_amount_pct: float | None = 0
 
 
 class FinancialDashboardSummary(BaseModel):
@@ -144,8 +144,8 @@ class FinancialDashboardSummary(BaseModel):
     period_end: date | None = None
     month_count: int | None = None
     # net_profit consolidado (mesma regra do card "Lucro líquido"), competência do summary
-    lucro_liquido_previsto: float = 0.0
-    lucro_liquido_realizado: float = 0.0
+    lucro_liquido_previsto: float | None = 0.0
+    lucro_liquido_realizado: float | None = 0.0
 
 
 class ProjectDashboardResponse(BaseModel):

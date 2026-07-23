@@ -135,14 +135,21 @@ class GridGovernsPayableTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await session.rollback()
 
-    async def test_floor_blocks_grid_sync_before_july_2026(self) -> None:
+    async def test_pre_july_open_competence_is_editable(self) -> None:
+        """Competência ABERTA anterior ao piso (caso DEX/Junho): editar a grade atualiza o CAP.
+
+        O piso só preserva o histórico — não pode impedir manutenção de competência aberta.
+        Uma linha automática já existente numa competência < JUL/2026, sem pagamento, deve
+        passar a valer o valor informado na grade.
+        """
+        from sqlalchemy import select
         from app.database.session import AsyncSessionLocal, engine
         from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType, PayableOrigin
         from app.services.payable_snapshot_service import PayableSnapshotService
 
         await engine.dispose()
         tag = uuid4().hex[:6]
-        past = date(2026, 6, 1)  # < piso
+        past = date(2026, 6, 1)  # < piso, porém competência ABERTA
 
         async with AsyncSessionLocal() as session:
             await self._prelude(session)
@@ -151,7 +158,7 @@ class GridGovernsPayableTests(unittest.IsolatedAsyncioTestCase):
                 session.add(item)
                 await session.flush()
 
-                # Linha automática hipotética numa competência anterior ao piso.
+                # Linha automática já existente numa competência anterior ao piso (aberta).
                 row = PayableSnapshot(
                     month=past,
                     type=PayableSnapshotType.FIXED_COST,
@@ -167,7 +174,7 @@ class GridGovernsPayableTests(unittest.IsolatedAsyncioTestCase):
                     paid=False,
                 )
                 session.add(row)
-                # Valor na grade para o mês anterior ao piso.
+                # Usuário informa o valor real da competência na grade.
                 from app.models.company_finance import CompanyFinancialPayment
 
                 session.add(CompanyFinancialPayment(item_id=item.id, competencia=past, valor=Decimal("100.00")))
@@ -176,9 +183,62 @@ class GridGovernsPayableTests(unittest.IsolatedAsyncioTestCase):
                 res = await PayableSnapshotService(session).sync_company_finance_item_months(
                     item_id=item.id, months={past}
                 )
-                self.assertEqual(res["synced"], 0)  # não retroage
+                self.assertEqual(res["synced"], 1)  # competência aberta é editável
+                self.assertEqual(res["skipped_paid"], [])
                 await session.refresh(row)
-                self.assertEqual(float(row.amount_final), 4732.0)  # inalterado
+                self.assertEqual(float(row.amount_final), 100.0)     # governado pela grade
+                self.assertEqual(float(row.amount_original), 100.0)  # sem saldo/ajuste
+            finally:
+                await session.rollback()
+
+    async def test_pre_july_grid_creates_missing_line_when_generated(self) -> None:
+        """Caso DEX real: competência aberta anterior ao piso, mês já materializado, sem linha.
+
+        Ao informar o valor na grade, o CAP passa a exibir a linha (criada pelo sync).
+        """
+        from sqlalchemy import select, text
+        from app.database.session import AsyncSessionLocal, engine
+        from app.models.company_finance import CompanyFinancialPayment
+        from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
+        from app.models.payable_snapshot_generation import PayableSnapshotGeneration
+        from app.services.payable_snapshot_service import PayableSnapshotService
+
+        await engine.dispose()
+        tag = uuid4().hex[:6]
+        past = date(2026, 6, 1)  # < piso
+
+        async with AsyncSessionLocal() as session:
+            await self._prelude(session)
+            try:
+                item = _fixed_item(tag)
+                session.add(item)
+                await session.flush()
+
+                # Mês materializado (snapshot gerado) porém SEM linha do item (piso não gerou).
+                if not await PayableSnapshotService(session).is_generated(month=past):
+                    session.add(PayableSnapshotGeneration(month=past))
+                await session.flush()
+
+                # Usuário informa o valor da competência na grade.
+                session.add(CompanyFinancialPayment(item_id=item.id, competencia=past, valor=Decimal("250.00")))
+                await session.flush()
+
+                res = await PayableSnapshotService(session).sync_company_finance_item_months(
+                    item_id=item.id, months={past}
+                )
+                self.assertEqual(res["synced"], 1)
+
+                row = (
+                    await session.execute(
+                        select(PayableSnapshot).where(
+                            PayableSnapshot.ref_id == item.id,
+                            PayableSnapshot.month == past,
+                            PayableSnapshot.type == PayableSnapshotType.FIXED_COST,
+                        )
+                    )
+                ).scalars().first()
+                self.assertIsNotNone(row)  # linha criada pela manutenção da grade
+                self.assertEqual(float(row.amount_final), 250.0)
             finally:
                 await session.rollback()
 

@@ -20,7 +20,7 @@ class ProjectLaborRead(UUIDTimestampRead):
     scenario: str = "REALIZADO"
     employee_id: UUID
     allocation_percentage: float
-    monthly_cost: float
+    monthly_cost: float | None = None
     cost_base_source: str = "CADASTRO"
     cost_salary_base: float | None = None
     cost_additional_costs: float | None = None
@@ -139,14 +139,14 @@ class ProjectLaborCostUpdate(BaseModel):
 
 
 class LaborCostBreakdown(BaseModel):
-    salary_base: float
-    periculosidade: float
-    adicional_dirigida: float
-    vr: float
-    horas_extras: float
-    encargos: float = 0
-    additional_costs: float = 0
-    ajuda_custo: float = 0
+    salary_base: float | None = None
+    periculosidade: float | None = None
+    adicional_dirigida: float | None = None
+    vr: float | None = None
+    horas_extras: float | None = None
+    encargos: float | None = 0
+    additional_costs: float | None = 0
+    ajuda_custo: float | None = 0
 
 
 class ProjectLaborDetailItem(BaseModel):
@@ -155,9 +155,9 @@ class ProjectLaborDetailItem(BaseModel):
     name: str
     tipo: str
     allocation_percentage: float
-    full_cost: float
-    allocated_cost: float
-    total_cost: float
+    full_cost: float | None = None
+    allocated_cost: float | None = None
+    total_cost: float | None = None
     breakdown: LaborCostBreakdown
     uses_cost_total_override: bool = False
     cost_base_source: str = "CADASTRO"
@@ -185,7 +185,7 @@ class ProjectVehicleRead(UUIDTimestampRead):
     fuel_type: str | None = None
     km_per_month: float | None = None
     fuel_cost_realized: float | None = None
-    monthly_cost: float
+    monthly_cost: float | None = None
     # Combustível para comparativo previsto × realizado (previsto = estimado por km; realizado = informado).
     display_fuel_cost: float | None = None
     fuel_cost_per_km_realized: float | None = None
@@ -235,7 +235,7 @@ class ProjectSystemCostRead(UUIDTimestampRead):
     competencia: date
     scenario: str = "REALIZADO"
     name: str
-    value: float
+    value: float | None = None
 
 
 class ProjectSystemCostCreate(BaseModel):
@@ -258,7 +258,7 @@ class ProjectOperationalFixedRead(UUIDTimestampRead):
     competencia: date
     scenario: str = "REALIZADO"
     name: str
-    value: float
+    value: float | None = None
 
 
 class ProjectOperationalFixedCreate(BaseModel):

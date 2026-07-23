@@ -19,7 +19,7 @@ import { PeriodFilter } from "@/components/PeriodFilter";
 import { TruncatedCell } from "@/components/TruncatedText";
 import { listProjects, type Project } from "@/services/projects";
 import { formatApiError } from "@/utils/apiError";
-import { normalizeCurrencyForApi, parseCurrencyInput } from "@/utils/currency";
+import { formatCurrencyOrDash, normalizeCurrencyForApi, parseCurrencyInput } from "@/utils/currency";
 import { PayablesImportModal } from "@/components/PayablesImportModal";
 import { SortableTh } from "@/components/table";
 import { useTableSort, type TableSortHeaderProps } from "@/hooks/useTableSort";
@@ -44,6 +44,9 @@ function formatBRL(n: number): string {
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+/** Valor monetário ou "—" quando redigido pelo backend — helper compartilhado (fonte única). */
+const money = formatCurrencyOrDash;
+
 /** Valor numérico para input (pt-BR: milhar com ponto, decimal com vírgula), alinhado ao restante da tela. */
 function formatMoneyFieldBr(n: number): string {
   if (!Number.isFinite(n)) return "";
@@ -66,7 +69,8 @@ function statusBadgeClass(s: PayableSnapshotStatus, isOverpaid = false): string 
   return "bg-amber-100 text-amber-900 ring-amber-200";
 }
 
-function saldoClassName(remaining: number, isOverpaid: boolean): string {
+function saldoClassName(remaining: number | null, isOverpaid: boolean): string {
+  if (remaining == null) return "text-slate-600";
   if (isOverpaid || remaining < -0.005) return "text-amber-800";
   if (remaining > 0.005) return "text-slate-900";
   return "text-slate-600";
@@ -95,9 +99,9 @@ function payableTipoLabel(r: PayableSnapshotRow): string {
 
 export function Payables() {
   const { user } = useAuth();
-  const canView = usePermission("payables.view");
+  const canView = usePermission("payables.list");
   // CAP tem permissão de edição PRÓPRIA (antes usava costs.edit, acoplado ao módulo de Custos).
-  const canEdit = usePermission("payables.edit");
+  const canEdit = usePermission("payables.update");
   const canRegenerateSnapshot = Boolean(user?.is_superuser);
   const canReconcileSnapshot = usePermission("payable_snapshot.reconcile");
 
@@ -286,6 +290,12 @@ export function Payables() {
   });
 
   const totals = useMemo(() => {
+    // Sem "Dados sensíveis" o backend redige os valores (null) → totais ficam ocultos ("—"),
+    // não zerados (evita número enganoso). Redação é tudo-ou-nada por usuário.
+    const redacted = filteredRows.some((r) => r.amount_final == null);
+    if (redacted) {
+      return { total: null as number | null, pago: null as number | null, emAberto: null as number | null };
+    }
     let total = 0;
     let pago = 0;
     for (const r of filteredRows) {
@@ -328,13 +338,13 @@ export function Payables() {
     const row = actionModal.row;
     const amt = parseCurrencyInput(modalAmount.trim());
     if (!Number.isFinite(amt) || amt <= 0) return null;
-    const newPaid = Math.round((row.amount_paid + amt) * 100) / 100;
-    const newRemaining = Math.round((row.amount_final - newPaid) * 100) / 100;
-    if (newPaid > row.amount_final + 0.02) {
+    const newPaid = Math.round(((row.amount_paid ?? 0) + amt) * 100) / 100;
+    const newRemaining = Math.round(((row.amount_final ?? 0) - newPaid) * 100) / 100;
+    if (newPaid > (row.amount_final ?? 0) + 0.02) {
       return {
         newPaid,
         newRemaining,
-        overpaidAmount: Math.round((newPaid - row.amount_final) * 100) / 100,
+        overpaidAmount: Math.round((newPaid - (row.amount_final ?? 0)) * 100) / 100,
       };
     }
     return { newPaid, newRemaining, overpaidAmount: 0 };
@@ -345,7 +355,7 @@ export function Payables() {
     setError(null);
     setModalObs("");
     setModalReversalReason("");
-    setModalAmount(row.amount_paid > 0 ? formatMoneyFieldBr(row.amount_paid) : "");
+    setModalAmount((row.amount_paid ?? 0) > 0 ? formatMoneyFieldBr(row.amount_paid ?? 0) : "");
     setActionModal({ open: true, mode: "reverse", row });
   }
 
@@ -483,7 +493,7 @@ export function Payables() {
     if (!canEdit) return;
     setError(null);
     setEditingId(row.id);
-    setEditValue(row.amount_final);
+    setEditValue(row.amount_final ?? 0);
     setEditDate(row.due_date.slice(0, 10));
     setEditIncludeInDashboard(row.include_in_dashboard !== false);
   }
@@ -596,13 +606,13 @@ export function Payables() {
       )}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Kpi label="Total (valor final)" value={formatBRL(totals.total)} />
+        <Kpi label="Total (valor final)" value={money(totals.total)} />
         <Kpi
           label={periodMode === "MONTH" ? "Pago no período" : "Pago (acumulado)"}
-          value={formatBRL(totals.pago)}
+          value={money(totals.pago)}
           accent="text-emerald-800"
         />
-        <Kpi label="Em aberto" value={formatBRL(totals.emAberto)} accent="text-amber-800" />
+        <Kpi label="Em aberto" value={money(totals.emAberto)} accent="text-amber-800" />
       </section>
 
       <section className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -797,9 +807,9 @@ export function Payables() {
             </h3>
             <p className="mt-1 text-sm text-slate-600">{actionModal.row.name}</p>
             <p className="mt-2 text-xs text-slate-500">
-              Valor final: <span className="font-medium text-slate-700">{formatBRL(actionModal.row.amount_final)}</span>
+              Valor final: <span className="font-medium text-slate-700">{money(actionModal.row.amount_final)}</span>
               {" · "}
-              Pago: <span className="font-medium text-slate-700">{formatBRL(actionModal.row.amount_paid)}</span>
+              Pago: <span className="font-medium text-slate-700">{money(actionModal.row.amount_paid)}</span>
               {" · "}
               Saldo:{" "}
               <span
@@ -808,7 +818,7 @@ export function Payables() {
                   actionModal.row.is_overpaid,
                 )}`}
               >
-                {formatBRL(actionModal.row.amount_remaining)}
+                {money(actionModal.row.amount_remaining)}
               </span>
             </p>
             {modalOverpaymentPreview && modalOverpaymentPreview.overpaidAmount > 0.02 ? (
@@ -1043,7 +1053,7 @@ function PayablesSnapshotTable({
           ) : (
             rows.map((r) => {
               const isEditing = editingId === r.id;
-              const temPago = r.amount_paid > 0.005;
+              const temPago = (r.amount_paid ?? 0) > 0.005;
               return (
                 <tr key={r.id} className="hover:bg-slate-50/80">
                   <td className="whitespace-nowrap px-2 py-1.5 text-slate-700">{payableTipoLabel(r)}</td>
@@ -1076,7 +1086,7 @@ function PayablesSnapshotTable({
                     <TruncatedCell value={r.cost_center} maxWidthClass="max-w-[160px]" />
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-slate-700">
-                    {formatBRL(r.amount_original)}
+                    {money(r.amount_original)}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right align-middle tabular-nums text-slate-900">
                     {isEditing ? (
@@ -1098,11 +1108,11 @@ function PayablesSnapshotTable({
                         className="w-full min-w-[5.5rem] rounded border border-slate-300 px-1.5 py-0.5 text-right text-sm"
                       />
                     ) : (
-                      formatBRL(r.amount_final)
+                      money(r.amount_final)
                     )}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-slate-800">
-                    {formatBRL(r.amount_paid)}
+                    {money(r.amount_paid)}
                   </td>
                   <td
                     className={`whitespace-nowrap px-2 py-1.5 text-right tabular-nums font-medium ${saldoClassName(
@@ -1110,7 +1120,7 @@ function PayablesSnapshotTable({
                       r.is_overpaid,
                     )}`}
                   >
-                    {formatBRL(r.amount_remaining)}
+                    {money(r.amount_remaining)}
                     {r.is_overpaid ? (
                       <span className="ml-1 text-[10px] font-normal text-amber-700">(adiant.)</span>
                     ) : null}

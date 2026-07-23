@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment, RenegotiationType
 from app.models.company_finance import CompanyFinancialItemType
 from app.models.employee import Employee
+from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.schemas.company_finance import PagamentoMes
 from app.services.company_finance_cost_center import (
     CompanyFinanceCostCenterService,
@@ -19,7 +20,7 @@ from app.services.company_finance_cost_center import (
     default_system_for_tipo,
 )
 from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_total_cost
-from app.services.payable_snapshot_service import PayableSnapshotService
+from app.services.payable_snapshot_service import PayableSnapshotService, payable_snapshot_payment_status
 from app.services.settings_service import SettingsService
 from app.utils.lifecycle import DELETE_WITH_MOVEMENT_MSG, normalize_lifecycle
 
@@ -42,25 +43,47 @@ def _f(v: object) -> float:
     return float(v) if v is not None else 0.0
 
 
-def _debt_base_amount(it: CompanyFinancialItem) -> float:
-    """Saldo base para endividamento: renegociado (se aplicável) senão valor_referencia."""
-    if getattr(it, "has_renegotiation", False) and getattr(it, "renegotiated_amount", None) is not None:
-        return _f(it.renegotiated_amount)
+def debt_base_amount(it: CompanyFinancialItem) -> float:
+    """Base financeira ÚNICA da dívida (fonte da verdade — usar em TODOS os cálculos).
+
+    Regra oficial: uma renegociação VÁLIDA substitui completamente o valor original.
+        se has_renegotiation == True e renegotiated_amount > 0:
+            base = renegotiated_amount
+        senão:
+            base = valor_referencia
+
+    `renegotiated_amount <= 0` (inclui 0,00 de registros legados/UNIQUE incompletos) é tratado
+    como "valor renegociado inexistente" → cai automaticamente no valor_referencia, sem alterar
+    o dado persistido. Assim Valor da Dívida, Pago Total, Saldo Restante e % Quitado usam
+    exatamente a mesma base.
+    """
+    reneg = getattr(it, "renegotiated_amount", None)
+    if getattr(it, "has_renegotiation", False) and reneg is not None and _f(reneg) > 0:
+        return _f(reneg)
     return _f(it.valor_referencia)
 
 
-def compose_debt_nome(employee_full_name: str | None, item_description: str | None) -> str:
-    """Nome composto de um Endividamento: "<colaborador> - <descrição>".
+# Compat: nome anterior mantido como alias da fonte única (evita quebrar imports/chamadas).
+_debt_base_amount = debt_base_amount
 
-    Sem colaborador → apenas a descrição. Sem descrição → apenas o colaborador (borda).
-    Usado para preencher `nome` automaticamente (Opção B: o campo Nome deixa de ser
-    editado manualmente em Endividamento, mas é preservado internamente).
+
+def debt_nome_for(
+    *, employee_full_name: str | None, nome: str | None, item_description: str | None
+) -> str:
+    """Nome de um Endividamento (mesmo padrão do Custos Fixos).
+
+    - Tipo Colaborador (colaborador vinculado) → nome = colaborador;
+    - Tipo Manual → nome informado pelo usuário;
+    - Fallback de compatibilidade (registros/API sem nome) → a descrição.
+    O nome NÃO embute mais a descrição (que passa a ser apenas complementar).
     """
-    desc = (item_description or "").strip()
-    name = (employee_full_name or "").strip()
-    if name and desc:
-        return f"{name} - {desc}"
-    return desc or name
+    emp = (employee_full_name or "").strip()
+    if emp:
+        return emp
+    name = (nome or "").strip()
+    if name:
+        return name
+    return (item_description or "").strip()
 
 
 def _default_category(tipo: str) -> str:
@@ -163,10 +186,41 @@ class CompanyFinanceService:
         )
         rows = (await self.db.execute(q)).scalars().unique().all()
         comp_date = parse_month(competencia) if competencia else None
+        # Fonte única da verdade: consulta (somente leitura) o Contas a Pagar da competência
+        # para espelhar pago/status no Extrato Analítico. NÃO gera snapshot nem altera nada.
+        cap_map = await self._cap_rows_for_competence(list(rows), tipo, comp_date)
         out: list[dict] = []
         for it in rows:
-            out.append(await self._item_to_read(it, comp_date))
+            out.append(await self._item_to_read(it, comp_date, cap_row=cap_map.get(it.id)))
         return out
+
+    async def _cap_rows_for_competence(
+        self, items: list[CompanyFinancialItem], tipo: str, comp_date: date | None
+    ) -> dict[UUID, PayableSnapshot]:
+        """Lançamentos do Contas a Pagar (PayableSnapshot) da competência, por `ref_id`.
+
+        Somente leitura: NÃO chama a geração automática (não materializa o snapshot) — reflete
+        exatamente o que já existe no CAP. Idempotência por (competência, ref_id) garante no
+        máximo uma linha corporativa por item. Vazio quando não há competência/itens.
+        """
+        if comp_date is None or not items:
+            return {}
+        types = (
+            (PayableSnapshotType.FIXED_COST,)
+            if tipo == "custo_fixo"
+            else (PayableSnapshotType.ENDIVIDAMENTO, PayableSnapshotType.FINANCIAL)
+        )
+        ids = [it.id for it in items]
+        rows = (
+            await self.db.execute(
+                select(PayableSnapshot).where(
+                    PayableSnapshot.month == comp_date,
+                    PayableSnapshot.ref_id.in_(ids),
+                    PayableSnapshot.type.in_(types),
+                )
+            )
+        ).scalars().all()
+        return {r.ref_id: r for r in rows if r.ref_id is not None}
 
     async def _employee_full_name(self, employee_id: UUID | None) -> str | None:
         if employee_id is None:
@@ -192,7 +246,12 @@ class CompanyFinanceService:
             "cost_center_system": getattr(it, "cost_center_system", None),
         }
 
-    async def _item_to_read(self, it: CompanyFinancialItem, competencia: date | None) -> dict:
+    async def _item_to_read(
+        self,
+        it: CompanyFinancialItem,
+        competencia: date | None,
+        cap_row: PayableSnapshot | None = None,
+    ) -> dict:
         pags = sorted(it.payments, key=lambda p: p.competencia)
         pagamentos = [PagamentoMes(mes=month_key(p.competencia), valor=_f(p.valor)).model_dump() for p in pags]
         total_pago = sum(_f(p.valor) for p in it.payments)
@@ -219,6 +278,21 @@ class CompanyFinanceService:
 
         cc_fields = await self._cost_center_fields(it)
 
+        # Espelho do Contas a Pagar da competência (fonte oficial de pagamento/status para o
+        # Extrato Analítico). cap_row é o lançamento corporativo; None quando ainda não existe.
+        cap_fields = {
+            "cap_has_line": cap_row is not None,
+            "cap_amount_paid": _f(getattr(cap_row, "amount_paid", None)) if cap_row is not None else 0.0,
+            "cap_status": (
+                payable_snapshot_payment_status(
+                    amount_paid=cap_row.amount_paid, amount_final=cap_row.amount_final
+                )
+                if cap_row is not None
+                else None
+            ),
+            "cap_is_obsolete": bool(getattr(cap_row, "is_obsolete", False)) if cap_row is not None else False,
+        }
+
         if it.tipo == "endividamento":
             restante = max(0.0, debt_base - total_pago)
             progresso = (total_pago / debt_base) if debt_base > 0 else 0.0
@@ -234,8 +308,10 @@ class CompanyFinanceService:
                 "nome": it.nome,
                 "item_description": getattr(it, "item_description", None),
                 "valor_referencia": ref,
+                "debt_base": debt_base,
                 "category": getattr(it, "category", None) or _default_category(it.tipo),
                 **cc_fields,
+                **cap_fields,
                 "description": getattr(it, "description", None),
                 "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
                 "is_monthly_required": bool(getattr(it, "is_monthly_required", False)),
@@ -274,8 +350,10 @@ class CompanyFinanceService:
             "nome": it.nome,
             "item_description": getattr(it, "item_description", None),
             "valor_referencia": ref,
+            "debt_base": debt_base,
             "category": getattr(it, "category", None) or _default_category(it.tipo),
             **cc_fields,
+            **cap_fields,
             "description": getattr(it, "description", None),
             "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
             "is_monthly_required": bool(getattr(it, "is_monthly_required", False)),
@@ -317,10 +395,17 @@ class CompanyFinanceService:
         # descrição própria é o identificador e o `nome` é composto automaticamente.
         item_description = (data.get("item_description") or "").strip() or None
         if data["tipo"] == "endividamento":
+            # Padrão Custos Fixos: Tipo Manual (Nome) ou Colaborador (colaborador). O
+            # colaborador é só identificação — nunca matriz/percentual. Descrição é
+            # complementar (opcional). item_type permanece MANUAL (compatibilidade).
             item_type = CompanyFinancialItemType.MANUAL
             percentual = None
             emp_name = await self._employee_full_name(employee_id)
-            nome = compose_debt_nome(emp_name, item_description)
+            nome = debt_nome_for(
+                employee_full_name=emp_name,
+                nome=data.get("nome"),
+                item_description=item_description,
+            )
         else:
             item_description = None
             nome = (data.get("nome") or "").strip()
@@ -442,9 +527,14 @@ class CompanyFinanceService:
         if row.tipo == "endividamento":
             row.item_type = CompanyFinancialItemType.MANUAL
             row.percentual = None
-            # Nome é sempre derivado de colaborador + descrição (Opção B).
+            # Colaborador → nome = colaborador; Manual → nome informado (já aplicado acima
+            # a partir de data["nome"], se enviado). Descrição é apenas complementar.
             emp_name = await self._employee_full_name(row.employee_id)
-            row.nome = compose_debt_nome(emp_name, row.item_description) or row.nome
+            row.nome = debt_nome_for(
+                employee_full_name=emp_name,
+                nome=row.nome,
+                item_description=row.item_description,
+            ) or row.nome
         elif row.item_type != CompanyFinancialItemType.COLABORADOR_MATRIZ:
             row.employee_id = None
             row.percentual = None

@@ -14,7 +14,7 @@ import {
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
 import { usePermission } from "@/hooks/usePermission";
-import { ALL_PERMISSION_CODES, PERMISSION_LABELS } from "@/permissions";
+import { PermissionGrid } from "@/components/PermissionGrid";
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import { USER_SORT_COLUMNS, defaultUserSort } from "@/tableSort/users";
@@ -309,87 +309,85 @@ export function Users() {
       {tab === "roles" && <RolesManager canManage={canManageUsers} />}
 
       {editing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4">
           <div
             role="dialog"
             aria-modal="true"
-            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-lg"
+            className="flex h-[95vh] w-[95vw] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg"
           >
-            <h3 className="text-lg font-semibold text-slate-900">Editar usuário</h3>
-            <p className="mt-1 text-sm text-slate-500">
-              {editing.full_name} ({editing.email})
-            </p>
-            <form onSubmit={handleSaveEdit} className="mt-4 space-y-4">
-              <div>
-                <label className="mb-1 block text-sm text-slate-600">Perfil</label>
-                <select
-                  value={editRole}
-                  disabled={!canManageUsers}
-                  onChange={(e) => {
-                    const r = e.target.value;
-                    setEditRole(r);
-                    setEditPerms(new Set(roleByName(r)?.permission_names ?? []));
-                  }}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
-                >
-                  {/* Perfis ativos + o perfil atual do usuário (mesmo se inativo, para não perder o vínculo). */}
-                  {roles
-                    .filter((r) => r.is_active || r.name === editRole)
-                    .map((r) => (
-                      <option key={r.id} value={r.name}>
-                        {r.name}
-                        {!r.is_active ? " (inativo)" : ""}
-                      </option>
-                    ))}
-                </select>
-                <p className="mt-1 text-xs text-slate-500">
-                  Ao mudar o perfil, as permissões são preenchidas com o padrão; ajuste os itens abaixo se
-                  necessário.
+            <form onSubmit={handleSaveEdit} className="flex h-full min-h-0 flex-col">
+              {/* Cabeçalho fixo */}
+              <div className="shrink-0 border-b border-slate-100 px-6 py-4">
+                <h3 className="text-lg font-semibold text-slate-900">Editar usuário</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  {editing.full_name} ({editing.email})
                 </p>
               </div>
-              <div>
-                  <p className="mb-2 text-sm font-medium text-slate-700">Projetos vinculados (escopo de dados)</p>
-                  <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-slate-100 p-3">
-                    {allProjects.length === 0 ? (
-                      <p className="text-sm text-slate-500">Nenhum projeto listado.</p>
-                    ) : (
-                      allProjects.map((p) => (
-                        <label key={p.id} className="flex cursor-pointer items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            disabled={!canManageUsers}
-                            checked={editProjectIds.has(p.id)}
-                            onChange={() => toggleEditProject(p.id)}
-                          />
-                          <span>{p.name}</span>
-                        </label>
-                      ))
-                    )}
+
+              {/* Miolo: campos (fixos) + grade (rola nos dois eixos) */}
+              <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-4">
+                <div className="shrink-0 grid gap-4 lg:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm text-slate-600">Perfil</label>
+                    <select
+                      value={editRole}
+                      disabled={!canManageUsers}
+                      onChange={(e) => {
+                        const r = e.target.value;
+                        setEditRole(r);
+                        setEditPerms(new Set(roleByName(r)?.permission_names ?? []));
+                      }}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
+                    >
+                      {/* Perfis ativos + o perfil atual do usuário (mesmo se inativo, para não perder o vínculo). */}
+                      {roles
+                        .filter((r) => r.is_active || r.name === editRole)
+                        .map((r) => (
+                          <option key={r.id} value={r.name}>
+                            {r.name}
+                            {!r.is_active ? " (inativo)" : ""}
+                          </option>
+                        ))}
+                    </select>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Ao mudar o perfil, as permissões são preenchidas com o padrão; ajuste os itens abaixo se
+                      necessário.
+                    </p>
+                  </div>
+                  <div>
+                    <p className="mb-2 text-sm font-medium text-slate-700">Projetos vinculados (escopo de dados)</p>
+                    <div className="max-h-40 space-y-2 overflow-y-auto rounded-lg border border-slate-100 p-3">
+                      {allProjects.length === 0 ? (
+                        <p className="text-sm text-slate-500">Nenhum projeto listado.</p>
+                      ) : (
+                        allProjects.map((p) => (
+                          <label key={p.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              disabled={!canManageUsers}
+                              checked={editProjectIds.has(p.id)}
+                              onChange={() => toggleEditProject(p.id)}
+                            />
+                            <span>{p.name}</span>
+                          </label>
+                        ))
+                      )}
+                    </div>
                   </div>
                 </div>
-              <div>
-                <p className="mb-2 text-sm font-medium text-slate-700">Permissões</p>
-                <div className="max-h-64 space-y-2 overflow-y-auto rounded-lg border border-slate-100 p-3">
-                  {ALL_PERMISSION_CODES.map((code) => (
-                    <label key={code} className="flex cursor-pointer items-start gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        className="mt-0.5"
-                        disabled={!canManageUsers}
-                        checked={editPerms.has(code)}
-                        onChange={() => toggleEditPerm(code)}
-                      />
-                      <span>
-                        <span className="font-mono text-xs text-slate-500">{code}</span>
-                        <span className="ml-2 text-slate-700">
-                          {PERMISSION_LABELS[code] ?? code}
-                        </span>
-                      </span>
-                    </label>
-                  ))}
+
+                <p className="shrink-0 text-sm font-medium text-slate-700">Permissões</p>
+                <div className="min-h-0 flex-1">
+                  <PermissionGrid
+                    selected={editPerms}
+                    onToggle={toggleEditPerm}
+                    disabled={!canManageUsers}
+                  />
                 </div>
               </div>
-              <div className="flex justify-end gap-2">
+
+              {/* Rodapé fixo */}
+              <div className="flex shrink-0 justify-end gap-2 border-t border-slate-100 px-6 py-3">
                 <button
                   type="button"
                   onClick={() => setEditing(null)}

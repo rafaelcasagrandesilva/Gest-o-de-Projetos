@@ -23,7 +23,7 @@ def _money(v: object) -> float:
 
 class PagamentoMes(BaseModel):
     mes: str = Field(..., description="YYYY-MM")
-    valor: float = Field(..., ge=0)
+    valor: float | None = Field(default=None, ge=0)  # Optional para redação (grade mensal)
 
     @field_validator("mes")
     @classmethod
@@ -79,6 +79,9 @@ class CompanyFinancialItemCreate(BaseModel):
         if self.has_renegotiation:
             if self.renegotiated_amount is None:
                 raise ValueError("renegotiated_amount é obrigatório quando has_renegotiation=true")
+            # Renegociação válida exige valor > 0 (0 não faz sentido financeiro; base da dívida).
+            if float(self.renegotiated_amount) <= 0:
+                raise ValueError("renegotiated_amount deve ser maior que zero quando has_renegotiation=true")
             if self.renegotiation_type is None:
                 raise ValueError("renegotiation_type é obrigatório quando has_renegotiation=true")
             if self.renegotiation_type == "INSTALLMENTS":
@@ -109,15 +112,18 @@ class CompanyFinancialItemCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_debt_fields(self) -> "CompanyFinancialItemCreate":
-        # Endividamento: descrição própria é obrigatória (identificador da dívida). O
-        # colaborador é opcional (apenas identificação — sem matriz/percentual). O `nome`
-        # é composto no serviço; nunca usa COLABORADOR_MATRIZ.
+        # Endividamento segue o mesmo padrão do Custos Fixos: Tipo Manual (Nome) ou
+        # Colaborador (colaborador vinculado — só identificação, sem matriz/percentual). A
+        # descrição passa a ser complementar (opcional). O `nome` é resolvido no serviço;
+        # nunca usa COLABORADOR_MATRIZ. Exige ao menos um identificador.
         if self.tipo != "endividamento":
             return self
-        if not (self.item_description and self.item_description.strip()):
-            raise ValueError("item_description é obrigatório para Endividamento.")
         self.item_type = "MANUAL"
         self.percentual = None
+        has_nome = bool(self.nome and self.nome.strip())
+        has_desc = bool(self.item_description and self.item_description.strip())
+        if self.employee_id is None and not has_nome and not has_desc:
+            raise ValueError("Informe o Nome (Manual) ou selecione um Colaborador.")
         return self
 
 
@@ -183,6 +189,9 @@ class CompanyFinancialItemUpdate(BaseModel):
         if has:
             if self.renegotiated_amount is None:
                 raise ValueError("renegotiated_amount é obrigatório quando has_renegotiation=true")
+            # Renegociação válida exige valor > 0 (0 não faz sentido financeiro; base da dívida).
+            if float(self.renegotiated_amount) <= 0:
+                raise ValueError("renegotiated_amount deve ser maior que zero quando has_renegotiation=true")
             if self.renegotiation_type is None:
                 raise ValueError("renegotiation_type é obrigatório quando has_renegotiation=true")
             if self.renegotiation_type == "INSTALLMENTS":
@@ -218,7 +227,10 @@ class CompanyFinancialItemRead(BaseModel):
     percentual: float | None = None
     nome: str
     item_description: str | None = None
-    valor_referencia: float
+    valor_referencia: float | None = None
+    # Base financeira ÚNICA da dívida (fonte da verdade): renegociado válido (> 0) senão
+    # valor_referencia. Valor da Dívida/Pago Total/Saldo Restante/% Quitado usam esta base.
+    debt_base: float | None = 0
     category: str | None = None
     cost_center_ref: str
     cost_center: str
@@ -241,12 +253,18 @@ class CompanyFinancialItemRead(BaseModel):
     renegotiation_first_payment_date: date | None = None
     renegotiation_due_day: int | None = None
     pagamentos: list[PagamentoMes]
-    total_pago: float
-    pago_mes: float = 0
+    total_pago: float | None = None
+    pago_mes: float | None = 0
     restante: float | None = None
-    progresso: float
+    progresso: float | None = None
     status: str | None = None
     progresso_mes: float | None = None
+    # Espelho do Contas a Pagar da competência (fonte oficial de pagamento/status no Extrato
+    # Analítico). Somente leitura; não altera a geração/sincronização do CAP.
+    cap_has_line: bool = False
+    cap_amount_paid: float | None = 0
+    cap_status: str | None = None
+    cap_is_obsolete: bool = False
     # Aviso transitório da sincronização grade→CAP: preenchido apenas na resposta do
     # PUT de pagamentos quando algum mês não pôde ser ajustado por já ter pagamento
     # registrado (ajuste manual necessário). Não é persistido.
@@ -260,15 +278,15 @@ class PagamentosReplace(BaseModel):
 
 
 class KpiEndividamentoRead(BaseModel):
-    total_endividamento: float
-    total_pago_mes: float
-    saldo_restante: float
+    total_endividamento: float | None = None
+    total_pago_mes: float | None = None
+    saldo_restante: float | None = None
     quantidade_itens: int
 
 
 class KpiCustosFixosRead(BaseModel):
-    total_esperado_mes: float
-    total_pago_mes: float
+    total_esperado_mes: float | None = None
+    total_pago_mes: float | None = None
     quantidade_itens: int
 
 
@@ -284,7 +302,7 @@ class PendenciaLancamentoRead(BaseModel):
     competencia: str  # YYYY-MM
     category: str | None = None
     cost_center: str | None = None
-    valor_referencia: float
+    valor_referencia: float | None = None
     ultimo_valor: float | None = None  # último valor lançado em competência anterior
     ultimo_mes: str | None = None  # YYYY-MM da última competência com valor
     origem: Literal["manual", "renegociacao"] = "manual"
@@ -294,13 +312,13 @@ class PendenciasCustosFixosRead(BaseModel):
     competencia: str  # YYYY-MM
     quantidade: int
     pendencias: list[PendenciaLancamentoRead]
-    total_previsto: float = 0
-    total_pago: float = 0
+    total_previsto: float | None = 0
+    total_pago: float | None = 0
 
 
 class ChartPoint(BaseModel):
     mes: str
-    pagamentos_mes: float
+    pagamentos_mes: float | None = None
     saldo_restante_total: float | None = None
 
 

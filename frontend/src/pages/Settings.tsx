@@ -43,8 +43,8 @@ function toUtcEnd(isoDate: string): string {
 }
 
 export function Settings() {
-  const canEditSettings = usePermission("settings.edit");
-  const canViewSettings = usePermission("settings.view");
+  const canEditSettings = usePermission("settings.update");
+  const canViewSettings = usePermission("settings.read");
   const canExportAudit = usePermission("audit.export");
   const location = useLocation();
   const auditSectionRef = useRef<HTMLElement | null>(null);

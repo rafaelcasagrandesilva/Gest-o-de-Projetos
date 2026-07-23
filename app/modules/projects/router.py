@@ -17,19 +17,21 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.core.permission_codes import (
-    EMPLOYEES_EDIT,
-    EMPLOYEES_VIEW,
+    EMPLOYEES_LIST,
+    EMPLOYEES_UPDATE,
     PROJECTS_CREATE,
     PROJECTS_DELETE,
     PROJECTS_DOCUMENTS_DELETE,
     PROJECTS_DOCUMENTS_UPLOAD,
     PROJECTS_DOCUMENTS_VIEW,
-    PROJECTS_EDIT,
-    PROJECTS_VIEW,
+    PROJECTS_LIST,
+    PROJECTS_READ,
+    PROJECTS_UPDATE,
     USERS_MANAGE,
 )
 from app.models.project_document import ProjectDocument, ProjectDocumentCategory
 from app.core.scenario import coerce_scenario, parse_scenario
+from app.api.sensitive import redact_for
 from app.database.session import get_db
 from app.models.user import ProjectUser, User
 from app.schemas.employees import EmployeeAllocationCreate, EmployeeAllocationRead
@@ -50,7 +52,7 @@ from app.services.projects_service import ProjectsService
 router = APIRouter()
 
 
-@router.get("/", response_model=list[ProjectRead], dependencies=[Depends(require_permission(PROJECTS_VIEW))])
+@router.get("/", response_model=list[ProjectRead], dependencies=[Depends(require_permission(PROJECTS_LIST))])
 async def list_projects(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -69,13 +71,13 @@ async def list_projects(
         r = ProjectRead.model_validate(p)
         r.additive_months_total = months.get(p.id, 0)
         out.append(r)
-    return out
+    return [redact_for("project", _m, user) for _m in out]
 
 
 @router.get(
     "/{project_id}/allocations",
     response_model=list[EmployeeAllocationRead],
-    dependencies=[Depends(require_permission(EMPLOYEES_VIEW))],
+    dependencies=[Depends(require_permission(EMPLOYEES_LIST))],
 )
 async def list_project_allocations(
     project_id: UUID,
@@ -85,19 +87,19 @@ async def list_project_allocations(
         description="Primeiro dia do mês: retorna apenas alocações ativas nesta competência.",
     ),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> list[EmployeeAllocationRead]:
     scenario = coerce_scenario(scenario_param)
     rows = await EmployeesService(db).list_allocations_by_project(
         project_id=project_id, scenario=scenario, competencia=competencia
     )
-    return [EmployeeAllocationRead.model_validate(r) for r in rows]
+    return [redact_for("employee_allocation", EmployeeAllocationRead.model_validate(r), user) for r in rows]
 
 
 @router.post(
     "/{project_id}/allocations",
     response_model=EmployeeAllocationRead,
-    dependencies=[Depends(require_permission(EMPLOYEES_EDIT))],
+    dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))],
 )
 async def create_project_allocation(
     project_id: UUID,
@@ -116,14 +118,14 @@ async def create_project_allocation(
     row = await EmployeesService(db).create_allocation(
         actor_user_id=actor.id, data=data, actor=actor, request=request
     )
-    return EmployeeAllocationRead.model_validate(row)
+    return redact_for("employee_allocation", EmployeeAllocationRead.model_validate(row), actor)
 
 
-@router.get("/{project_id}", response_model=ProjectDetailRead, dependencies=[Depends(require_permission(PROJECTS_VIEW))])
+@router.get("/{project_id}", response_model=ProjectDetailRead, dependencies=[Depends(require_permission(PROJECTS_READ))])
 async def get_project(
     project_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> ProjectDetailRead:
     proj = await ProjectsService(db).get_project_detail(project_id)
     read = ProjectDetailRead.model_validate(proj)
@@ -131,61 +133,61 @@ async def get_project(
     read.additive_months_total = sum(
         int("".join(ch for ch in str(a.additive_duration or "") if ch.isdigit()) or 0) for a in proj.additives
     )
-    return read
+    return redact_for("project", read, user)
 
 
 @router.get(
     "/{project_id}/additives",
     response_model=list[ProjectContractAdditiveRead],
-    dependencies=[Depends(require_permission(PROJECTS_VIEW))],
+    dependencies=[Depends(require_permission(PROJECTS_READ))],
 )
 async def list_project_additives(
     project_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> list[ProjectContractAdditiveRead]:
     proj = await ProjectsService(db).get_project_detail(project_id)
-    return [ProjectContractAdditiveRead.model_validate(a) for a in proj.additives]
+    return [redact_for("project", ProjectContractAdditiveRead.model_validate(a), user) for a in proj.additives]
 
 
 @router.post(
     "/{project_id}/additives",
     response_model=ProjectContractAdditiveRead,
     status_code=201,
-    dependencies=[Depends(require_permission(PROJECTS_EDIT))],
+    dependencies=[Depends(require_permission(PROJECTS_UPDATE))],
 )
 async def create_project_additive(
     project_id: UUID,
     payload: ProjectContractAdditiveCreate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> ProjectContractAdditiveRead:
     row = await ProjectsService(db).add_additive(project_id=project_id, data=payload.model_dump())
-    return ProjectContractAdditiveRead.model_validate(row)
+    return redact_for("project", ProjectContractAdditiveRead.model_validate(row), user)
 
 
 @router.patch(
     "/{project_id}/additives/{additive_id}",
     response_model=ProjectContractAdditiveRead,
-    dependencies=[Depends(require_permission(PROJECTS_EDIT))],
+    dependencies=[Depends(require_permission(PROJECTS_UPDATE))],
 )
 async def update_project_additive(
     project_id: UUID,
     additive_id: UUID,
     payload: ProjectContractAdditiveUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> ProjectContractAdditiveRead:
     row = await ProjectsService(db).update_additive(
         project_id=project_id, additive_id=additive_id, data=payload.model_dump(exclude_unset=True)
     )
-    return ProjectContractAdditiveRead.model_validate(row)
+    return redact_for("project", ProjectContractAdditiveRead.model_validate(row), user)
 
 
 @router.delete(
     "/{project_id}/additives/{additive_id}",
     status_code=204,
-    dependencies=[Depends(require_permission(PROJECTS_EDIT))],
+    dependencies=[Depends(require_permission(PROJECTS_UPDATE))],
 )
 async def delete_project_additive(
     project_id: UUID,
@@ -310,10 +312,10 @@ async def create_project(
     proj = await ProjectsService(db).create_project(
         actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
     )
-    return ProjectRead.model_validate(proj)
+    return redact_for("project", ProjectRead.model_validate(proj), actor)
 
 
-@router.patch("/{project_id}", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_EDIT))])
+@router.patch("/{project_id}", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_UPDATE))])
 async def update_project(
     project_id: UUID,
     payload: ProjectUpdate,
@@ -329,7 +331,7 @@ async def update_project(
         actor=actor,
         request=request,
     )
-    return ProjectRead.model_validate(proj)
+    return redact_for("project", ProjectRead.model_validate(proj), actor)
 
 
 @router.delete("/{project_id}", status_code=204, dependencies=[Depends(require_permission(PROJECTS_DELETE))])
@@ -345,7 +347,7 @@ async def delete_project(
     )
 
 
-@router.patch("/{project_id}/deactivate", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_EDIT))])
+@router.patch("/{project_id}/deactivate", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_UPDATE))])
 async def deactivate_project(
     project_id: UUID,
     request: Request,
@@ -354,10 +356,10 @@ async def deactivate_project(
     _: User = Depends(require_project_access),
 ) -> ProjectRead:
     proj = await ProjectsService(db).deactivate_project(project_id=project_id, actor=actor, request=request)
-    return ProjectRead.model_validate(proj)
+    return redact_for("project", ProjectRead.model_validate(proj), actor)
 
 
-@router.patch("/{project_id}/activate", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_EDIT))])
+@router.patch("/{project_id}/activate", response_model=ProjectRead, dependencies=[Depends(require_permission(PROJECTS_UPDATE))])
 async def activate_project(
     project_id: UUID,
     request: Request,
@@ -366,7 +368,7 @@ async def activate_project(
     _: User = Depends(require_project_access),
 ) -> ProjectRead:
     proj = await ProjectsService(db).activate_project(project_id=project_id, actor=actor, request=request)
-    return ProjectRead.model_validate(proj)
+    return redact_for("project", ProjectRead.model_validate(proj), actor)
 
 
 @router.post("/{project_id}/users/{user_id}", status_code=204, dependencies=[Depends(require_permission(USERS_MANAGE))])

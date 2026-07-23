@@ -501,13 +501,14 @@ def render_payroll_bytes(
 def render_vehicles_bytes(
     data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
 ) -> tuple[bytes, str, str]:
-    headers = ["Placa", "Modelo", "Descrição", "Tipo", "Condutor", "Custo mensal", "Status", "Criado em", "Atualizado em"]
+    headers = ["Placa", "Modelo", "Descrição", "Tipo", "Centro de Custo", "Condutor", "Custo mensal", "Status", "Criado em", "Atualizado em"]
     rows = [
         [
             r["placa"],
             r.get("modelo") or "",
             r.get("descricao") or "",
             r["tipo"],
+            r.get("centro_custo") or "—",
             r.get("condutor") or "—",
             format_brl(r["custo_mensal"]),
             "Ativo" if r["ativo"] else "Inativo",

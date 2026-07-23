@@ -56,9 +56,11 @@ type Props = {
   byCategory: AssetDashboardGroupRow[];
   byCostCenter: AssetDashboardCostCenterRow[];
   physicalCondition: AssetDashboardPhysicalRow[];
+  /** Exibir valores monetários (assets.sensitive). Sem isso, só quantidades. */
+  showSensitive: boolean;
 };
 
-export function AssetsDashboardCharts({ byCategory, byCostCenter, physicalCondition }: Props) {
+export function AssetsDashboardCharts({ byCategory, byCostCenter, physicalCondition, showSensitive }: Props) {
   const categoryData = byCategory.map((r) => ({
     name: r.label,
     count: r.count,
@@ -107,7 +109,9 @@ export function AssetsDashboardCharts({ byCategory, byCostCenter, physicalCondit
                 </Pie>
                 <Tooltip
                   formatter={(v: number, _n, p) => [
-                    `${v} itens · ${formatBRL(Number((p?.payload as { value?: number })?.value ?? 0))}`,
+                    showSensitive
+                      ? `${v} itens · ${formatBRL(Number((p?.payload as { value?: number })?.value ?? 0))}`
+                      : `${v} itens`,
                     String(p?.name ?? ""),
                   ]}
                 />
@@ -125,7 +129,7 @@ export function AssetsDashboardCharts({ byCategory, byCostCenter, physicalCondit
                   {d.name}
                 </span>
                 <span className="tabular-nums text-slate-500">
-                  {d.count} · {formatBRL(d.value)}
+                  {showSensitive ? `${d.count} · ${formatBRL(d.value)}` : d.count}
                 </span>
               </li>
             ))}
@@ -150,12 +154,15 @@ export function AssetsDashboardCharts({ byCategory, byCostCenter, physicalCondit
               />
               <Legend />
               <Bar dataKey="count" name="Quantidade" fill="#4F46E5" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="value" name="Valor (R$)" fill="#22C55E" radius={[4, 4, 0, 0]} />
+              {showSensitive ? (
+                <Bar dataKey="value" name="Valor (R$)" fill="#22C55E" radius={[4, 4, 0, 0]} />
+              ) : null}
             </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
 
+      {showSensitive ? (
       <div className={`${CHART_CARD} lg:col-span-2`}>
         <p className="text-sm font-semibold text-slate-900">Valor patrimonial por centro de custo</p>
         <p className="mt-0.5 text-xs text-slate-500">Soma do valor de aquisição por centro ou projeto</p>
@@ -233,6 +240,7 @@ export function AssetsDashboardCharts({ byCategory, byCostCenter, physicalCondit
           </table>
         </div>
       </div>
+      ) : null}
     </div>
   );
 }

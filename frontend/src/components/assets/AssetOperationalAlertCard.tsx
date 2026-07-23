@@ -12,6 +12,8 @@ type Props = {
   emptyLabel?: string;
   badge?: string;
   extraLine?: string;
+  /** Exibir o valor monetário (assets.sensitive). Sem isso, mostra só a quantidade. */
+  showAmount?: boolean;
 };
 
 const TONE_STYLES: Record<
@@ -47,6 +49,7 @@ export function AssetOperationalAlertCard({
   emptyLabel = "Nenhum ativo nesta condição.",
   badge,
   extraLine,
+  showAmount = true,
 }: Props) {
   const styles = TONE_STYLES[tone];
   const hasItems = count > 0;
@@ -68,7 +71,9 @@ export function AssetOperationalAlertCard({
           <p className="mt-1 text-xs text-slate-500">
             {count === 1 ? "ativo impactado" : "ativos impactados"}
           </p>
-          <p className="mt-2 text-sm font-medium tabular-nums text-slate-800">{formatBRL(amountTotal)}</p>
+          {showAmount ? (
+            <p className="mt-2 text-sm font-medium tabular-nums text-slate-800">{formatBRL(amountTotal)}</p>
+          ) : null}
           {extraLine ? <p className="mt-1 text-xs text-slate-600">{extraLine}</p> : null}
           <Link
             to={viewHref}

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
 import { usePermission } from "@/hooks/usePermission";
 import {
   activateProject,
@@ -30,9 +29,8 @@ function statusLabel(p: Project): { label: string; cls: string } {
 }
 
 export function Projects() {
-  const readOnly = useConsultaReadOnly();
   const canCreateProject = usePermission("projects.create");
-  const canEditProject = usePermission("projects.edit");
+  const canEditProject = usePermission("projects.update");
   const canDeleteProject = usePermission("projects.delete");
   const [items, setItems] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -79,7 +77,7 @@ export function Projects() {
     };
   }, []);
 
-  const canManageAny = useMemo(() => !readOnly && (canEditProject || canDeleteProject), [readOnly, canEditProject, canDeleteProject]);
+  const canManageAny = useMemo(() => canEditProject || canDeleteProject, [canEditProject, canDeleteProject]);
 
   const { sortedRows, headerSort } = useTableSort(items, PROJECT_SORT_COLUMNS, {
     defaultCompare: defaultProjectSort,
@@ -119,7 +117,7 @@ export function Projects() {
           <h2 className="text-xl font-semibold text-slate-900">Projetos</h2>
           <p className="text-sm text-slate-500">Lista e cadastro de projetos</p>
         </div>
-        {!readOnly && canCreateProject && (
+        {canCreateProject && (
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -136,7 +134,7 @@ export function Projects() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
 
-      {showForm && !readOnly && canCreateProject && (
+      {showForm && canCreateProject && (
         <form
           onSubmit={handleCreate}
           className="max-w-lg space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
@@ -365,7 +363,7 @@ export function Projects() {
         open={detailProject !== null}
         projectId={detailProject?.id ?? null}
         projectName={detailProject?.name}
-        canEdit={canEditProject && !readOnly}
+        canEdit={canEditProject}
         onClose={() => setDetailProject(null)}
       />
     </div>

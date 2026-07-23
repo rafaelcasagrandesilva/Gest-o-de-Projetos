@@ -19,8 +19,8 @@ export interface ReceivableInvoice {
   due_days: number;
   due_date: string;
   competence_month: string | null;
-  gross_amount: number;
-  net_amount: number;
+  gross_amount: number | null;
+  net_amount: number | null;
   client_name: string | null;
   notes: string | null;
   is_official: boolean;
@@ -29,9 +29,9 @@ export interface ReceivableInvoice {
   advance_amount_received: number | null;
   advance_amount_due: number | null;
   advance_due_date: string | null;
-  received_amount: number;
+  received_amount: number | null;
   received_date: string | null;
-  interest_amount: number;
+  interest_amount: number | null;
   advance_cost_value: number | null;
   advance_interest_rate: number | null;
   advance_monthly_rate: number | null;
@@ -81,8 +81,8 @@ export interface InvoiceAnticipation {
   id: string;
   invoice_id: string;
   institution: string;
-  amount_received: number;
-  amount_to_repay: number;
+  amount_received: number | null;
+  amount_to_repay: number | null;
   data_recebimento: string;
   due_date: string;
   created_at: string;
@@ -95,10 +95,10 @@ export interface InvoiceAnticipation {
 }
 
 export interface ReceivableKpis {
-  total_a_receber: number;
-  total_bruto_a_receber: number;
-  recebido_no_mes: number;
-  em_atraso_valor: number;
+  total_a_receber: number | null;
+  total_bruto_a_receber: number | null;
+  recebido_no_mes: number | null;
+  em_atraso_valor: number | null;
   total_nfs: number;
 }
 
@@ -148,11 +148,11 @@ export interface ReceivableViewRow {
   issue_date: string;
   due_date: string;
   received_at?: string | null;
-  net_value: number;
-  amount_received_advance: number;
-  amount_received_customer: number;
-  total_received: number;
-  remaining: number;
+  net_value: number | null;
+  amount_received_advance: number | null;
+  amount_received_customer: number | null;
+  total_received: number | null;
+  remaining: number | null;
   status: ReceivableViewStatus;
   /** Preenchido quando a NF está cancelada (visível só com invoices.reactivate). */
   invoice_status?: InvoiceStatus | null;
@@ -183,8 +183,8 @@ export interface ReceivableManualItem {
   numero_referencia?: string | null;
   data_emissao: string;
   data_vencimento: string;
-  valor_liquido: number;
-  valor_recebido: number;
+  valor_liquido: number | null;
+  valor_recebido: number | null;
   data_recebimento?: string | null;
   observacao?: string | null;
   include_in_dashboard?: boolean;
@@ -236,7 +236,7 @@ export async function createReceivableInvoice(payload: {
   issue_date: string;
   due_days: 30 | 60 | 90;
   competence_month: string;
-  gross_amount: number;
+  gross_amount: number | null;
   net_amount?: number | null;
   client_name?: string | null;
   notes?: string | null;
@@ -259,8 +259,8 @@ export async function updateReceivableInvoice(
     issue_date: string;
     due_days: 30 | 60 | 90;
     competence_month: string | null;
-    gross_amount: number;
-    net_amount: number;
+    gross_amount: number | null;
+    net_amount: number | null;
     client_name: string | null;
     notes: string | null;
     is_official: boolean;
@@ -269,7 +269,7 @@ export async function updateReceivableInvoice(
     advance_amount_received: number | null;
     advance_amount_due: number | null;
     advance_due_date: string | null;
-    received_amount: number;
+    received_amount: number | null;
     received_date: string | null;
     status: InvoiceStatus;
     include_in_dashboard: boolean;

@@ -3,7 +3,7 @@ import { usePermission } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { listProjects, type Project } from "@/services/projects";
 import { createRevenue, deleteRevenue, listRevenues, type Revenue } from "@/services/financial";
-import { normalizeCurrencyForApi, sanitizeCurrencyTyping } from "@/utils/currency";
+import { formatCurrencyOrDash, normalizeCurrencyForApi, sanitizeCurrencyTyping } from "@/utils/currency";
 import { isAxiosError } from "axios";
 
 function monthStartInput(): string {
@@ -16,7 +16,10 @@ function scenarioLabel(s: ScenarioKind): string {
 }
 
 export function RevenuePage() {
-  const canEditBilling = usePermission("billing.view");
+  // Autorização por verbo (backend é a fonte da verdade): criar/excluir dependem das
+  // permissões próprias, não de "billing.read" (que apenas dá acesso de leitura à tela).
+  const canCreateBilling = usePermission("billing.create");
+  const canDeleteBilling = usePermission("billing.delete");
   const { globalScenario } = useScenario();
   /** Cenário dos lançamentos nesta tela (independente do seletor global do header). */
   const [pageScenario, setPageScenario] = useState<ScenarioKind>(globalScenario);
@@ -73,7 +76,7 @@ export function RevenuePage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!canEditBilling) return;
+    if (!canCreateBilling) return;
     if (!projectId) return;
     const scenLabel = scenarioLabel(pageScenario);
     const scenHuman = pageScenario === "PREVISTO" ? "PREVISTO (previsão)" : "REALIZADO (efetivo)";
@@ -106,7 +109,7 @@ export function RevenuePage() {
   }
 
   async function handleDelete(id: string) {
-    if (!canEditBilling) return;
+    if (!canDeleteBilling) return;
     if (!confirm("Excluir lançamento?")) return;
     try {
       await deleteRevenue(id);
@@ -225,7 +228,7 @@ export function RevenuePage() {
                 <input
                   type="month"
                   required
-                  disabled={!canEditBilling}
+                  disabled={!canCreateBilling}
                   value={competencia}
                   onChange={(e) => setCompetencia(e.target.value)}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
@@ -238,7 +241,7 @@ export function RevenuePage() {
                   type="number"
                   min={0}
                   step="0.01"
-                  disabled={!canEditBilling}
+                  disabled={!canCreateBilling}
                   value={amount}
                   onChange={(e) => setAmount(sanitizeCurrencyTyping(e.target.value))}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
@@ -248,7 +251,7 @@ export function RevenuePage() {
                 <label className="mb-1 block text-xs text-slate-500">Status</label>
                 <select
                   value={status}
-                  disabled={!canEditBilling}
+                  disabled={!canCreateBilling}
                   onChange={(e) => setStatus(e.target.value as "previsto" | "recebido")}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
                 >
@@ -260,7 +263,7 @@ export function RevenuePage() {
                 <label className="mb-1 block text-xs text-slate-500">Descrição</label>
                 <input
                   value={description}
-                  disabled={!canEditBilling}
+                  disabled={!canCreateBilling}
                   onChange={(e) => setDescription(e.target.value)}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
                 />
@@ -269,7 +272,7 @@ export function RevenuePage() {
                 <input
                   id="rev-retention"
                   type="checkbox"
-                  disabled={!canEditBilling}
+                  disabled={!canCreateBilling}
                   checked={hasRetention}
                   onChange={(e) => setHasRetention(e.target.checked)}
                   className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60"
@@ -281,7 +284,7 @@ export function RevenuePage() {
             </div>
             <button
               type="submit"
-              disabled={!canEditBilling}
+              disabled={!canCreateBilling}
               className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50 ${
                 isPrevisto ? "bg-blue-600 hover:bg-blue-500" : "bg-emerald-600 hover:bg-emerald-500"
               }`}
@@ -320,18 +323,16 @@ export function RevenuePage() {
                   .map((r) => (
                     <tr key={r.id} className="border-b border-slate-50">
                       <td className="px-4 py-3">{r.competencia}</td>
-                      <td className="px-4 py-3 tabular-nums">
-                        {r.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-                      </td>
+                      <td className="px-4 py-3 tabular-nums">{formatCurrencyOrDash(r.amount)}</td>
                       <td className="px-4 py-3 tabular-nums text-slate-600">
-                        {r.retention_value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                        {formatCurrencyOrDash(r.retention_value)}
                       </td>
                       <td className="px-4 py-3">{r.status}</td>
                       <td className="px-4 py-3 text-slate-600">{r.description ?? "—"}</td>
                       <td className="px-4 py-3 text-right">
                         <button
                           type="button"
-                          disabled={!canEditBilling}
+                          disabled={!canDeleteBilling}
                           onClick={() => handleDelete(r.id)}
                           className="text-sm text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
                         >

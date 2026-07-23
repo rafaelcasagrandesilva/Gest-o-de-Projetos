@@ -25,28 +25,38 @@ function formatPeriodPt(iso: string): string {
 
 type PeriodMode = "single" | "range" | "lastN";
 
-function formatMoney(n: number): string {
+// Valores podem vir `null` do backend quando o usuário não tem "Dados sensíveis"
+// (redact_for). Toda renderização monetária/percentual trata null → "—" (mesmo padrão
+// de formatCurrencyOrDash), evitando exceção (tela branca) ao chamar métodos em null.
+const SENSITIVE_DASH = "—";
+
+function formatMoney(n: number | null | undefined): string {
+  if (n == null) return SENSITIVE_DASH;
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function formatPct(n: number): string {
+function formatPct(n: number | null | undefined): string {
+  if (n == null) return SENSITIVE_DASH;
   return `${(n * 100).toFixed(1)}%`;
 }
 
 /** Margem em fração da receita (ex.: 0,15 → 15,0%). */
-function formatPercentage(n: number): string {
+function formatPercentage(n: number | null | undefined): string {
   return formatPct(n);
 }
 
-function getProfitColor(value: number): string {
+function getProfitColor(value: number | null | undefined): string {
+  if (value == null) return "text-gray-900";
   if (value > 0) return "text-green-600";
   if (value < 0) return "text-red-600";
   return "text-gray-900";
 }
 
 /** Percentual já em escala 0–100 (backend). */
-function formatMoneyVsRevenue(money: number, pctOfRevenue: number): string {
-  return `${formatMoney(money)} (${pctOfRevenue.toFixed(1)}%)`;
+function formatMoneyVsRevenue(money: number | null | undefined, pctOfRevenue: number | null | undefined): string {
+  if (money == null) return SENSITIVE_DASH;
+  const pct = pctOfRevenue == null ? "" : ` (${pctOfRevenue.toFixed(1)}%)`;
+  return `${formatMoney(money)}${pct}`;
 }
 
 export function Dashboard() {
@@ -484,7 +494,7 @@ export function Dashboard() {
         />
         <KpiCard
           label={multiMonth ? `Retenção (R$) (${scenarioLabelShort}) — período` : `Retenção (R$) (${scenarioLabelShort})`}
-          value={formatMoney(s.total_retention ?? 0)}
+          value={formatMoney(s.total_retention)}
           subtitle={multiMonth ? "Soma dos meses selecionados" : undefined}
         />
         <KpiCard
@@ -501,9 +511,9 @@ export function Dashboard() {
         />
         <KpiCard
           label={`EBITDA (${scenarioLabelShort})`}
-          value={formatMoney(s.ebitda ?? 0)}
-          accent={getProfitColor(s.ebitda ?? 0)}
-          subtitle={`Margem EBITDA${multiMonth ? " no período" : ""}: ${formatPercentage(s.ebitda_margin ?? 0)}`}
+          value={formatMoney(s.ebitda)}
+          accent={getProfitColor(s.ebitda)}
+          subtitle={`Margem EBITDA${multiMonth ? " no período" : ""}: ${formatPercentage(s.ebitda_margin)}`}
         />
       </div>
 
@@ -515,49 +525,49 @@ export function Dashboard() {
           <div>
             <dt className="text-slate-500">Operacional total</dt>
             <dd className="font-medium tabular-nums text-slate-900">
-              {formatMoneyVsRevenue(s.operational_cost ?? 0, s.operational_cost_pct ?? 0)}
+              {formatMoneyVsRevenue(s.operational_cost, s.operational_cost_pct)}
             </dd>
           </div>
           <div>
             <dt className="text-slate-500">Mão de obra</dt>
             <dd className="font-medium tabular-nums text-slate-900">
-              {formatMoneyVsRevenue(s.labor_cost ?? 0, s.labor_cost_pct ?? 0)}
+              {formatMoneyVsRevenue(s.labor_cost, s.labor_cost_pct)}
             </dd>
           </div>
           <div>
             <dt className="text-slate-500">Veículos</dt>
             <dd className="font-medium tabular-nums text-slate-900">
-              {formatMoneyVsRevenue(s.vehicle_cost ?? 0, s.vehicle_cost_pct ?? 0)}
+              {formatMoneyVsRevenue(s.vehicle_cost, s.vehicle_cost_pct)}
             </dd>
           </div>
           <div>
             <dt className="text-slate-500">Sistemas</dt>
             <dd className="font-medium tabular-nums text-slate-900">
-              {formatMoneyVsRevenue(s.system_cost ?? 0, s.system_cost_pct ?? 0)}
+              {formatMoneyVsRevenue(s.system_cost, s.system_cost_pct)}
             </dd>
           </div>
           <div>
             <dt className="text-slate-500">Fixos operacionais</dt>
             <dd className="font-medium tabular-nums text-slate-900">
-              {formatMoneyVsRevenue(s.fixed_operational_cost ?? 0, s.fixed_operational_cost_pct ?? 0)}
+              {formatMoneyVsRevenue(s.fixed_operational_cost, s.fixed_operational_cost_pct)}
             </dd>
           </div>
           <div>
             <dt className="text-slate-500">Impostos (sobre receita)</dt>
             <dd className="font-medium tabular-nums text-slate-900">
-              {formatMoneyVsRevenue(s.tax_amount ?? 0, s.tax_amount_pct ?? 0)}
+              {formatMoneyVsRevenue(s.tax_amount, s.tax_amount_pct)}
             </dd>
           </div>
           <div>
             <dt className="text-slate-500">Rateio / overhead</dt>
             <dd className="font-medium tabular-nums text-slate-900">
-              {formatMoneyVsRevenue(s.overhead_amount ?? 0, s.overhead_amount_pct ?? 0)}
+              {formatMoneyVsRevenue(s.overhead_amount, s.overhead_amount_pct)}
             </dd>
           </div>
           <div>
             <dt className="text-slate-500">Antecipação</dt>
             <dd className="font-medium tabular-nums text-slate-900">
-              {formatMoneyVsRevenue(s.anticipation_amount ?? 0, s.anticipation_amount_pct ?? 0)}
+              {formatMoneyVsRevenue(s.anticipation_amount, s.anticipation_amount_pct)}
             </dd>
           </div>
         </dl>
@@ -586,8 +596,9 @@ function ScenarioCompareCard({
   higherIsWorse = false,
 }: {
   label: string;
-  previsto: number;
-  realizado: number;
+  // Podem vir null quando redigidos por "Dados sensíveis" (redact_for) → exibe "—".
+  previsto: number | null;
+  realizado: number | null;
   /**
    * Para métricas em que “realizado maior que previsto” é desfavorável (ex.: Custo total),
    * inverte a cor do Δ: estouro (realizado &gt; previsto) fica vermelho; economia, verde.
@@ -595,10 +606,12 @@ function ScenarioCompareCard({
    */
   higherIsWorse?: boolean;
 }) {
-  const delta = realizado - previsto;
-  const pct = previsto !== 0 ? (delta / previsto) * 100 : null;
+  // Sem ambos os valores (ex.: redigidos), não há delta calculável → "—".
+  const hasBoth = previsto != null && realizado != null;
+  const delta = hasBoth ? realizado - previsto : null;
+  const pct = hasBoth && previsto !== 0 ? ((delta as number) / previsto) * 100 : null;
   let deltaCls = "text-slate-700";
-  if (delta !== 0) {
+  if (delta != null && delta !== 0) {
     const favorable = higherIsWorse ? delta < 0 : delta > 0;
     deltaCls = favorable ? "text-emerald-700" : "text-red-700";
   }

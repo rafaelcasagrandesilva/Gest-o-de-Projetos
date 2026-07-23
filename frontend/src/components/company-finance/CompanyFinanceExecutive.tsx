@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -15,7 +15,6 @@ import {
   createCompanyFinanceItem,
   deleteCompanyFinanceItem,
   fetchChartSeries,
-  fetchKpiCustosFixos,
   fetchKpiEndividamento,
   fetchPendencias,
   listCompanyFinanceItems,
@@ -50,11 +49,11 @@ import { ViewModeToggle } from "@/components/finance/ViewModeToggle";
 import { itemMatchesSearch } from "@/components/company-finance/itemSearch";
 import { CollapsiblePanel, PrimaryAddButton } from "@/components/ExpandableFormSection";
 import { isAxiosError } from "axios";
-import { GESTOR_GLOBAL_EDIT_TOOLTIP, useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
 import { usePermission } from "@/hooks/usePermission";
 import {
   formatCurrency,
   formatCurrencyInputFromApi,
+  formatCurrencyOrDash,
   normalizeCurrencyForApi,
 } from "@/utils/currency";
 
@@ -85,9 +84,9 @@ function parseBRLInput(raw: string): number {
 function buildPagamentosPayload(
   monthKeys: string[],
   localPayments: Record<string, string>,
-  originalPagamentos: { mes: string; valor: number }[],
+  originalPagamentos: { mes: string; valor: number | null }[],
 ): { mes: string; valor: number }[] {
-  const originalByMes = new Map(originalPagamentos.map((p) => [p.mes, p.valor]));
+  const originalByMes = new Map(originalPagamentos.map((p) => [p.mes, p.valor ?? 0]));
   return monthKeys
     .map((mes) => ({
       mes,
@@ -165,16 +164,17 @@ type DebtCreditorFilter =
   | "HAS_RENEGOTIATION"
   | "NO_RENEGOTIATION";
 
+/** Tooltip de campo bloqueado por FALTA DE PERMISSÃO (não mais por perfil). */
+const FINANCE_EDIT_NO_PERM = "Sem permissão para editar (finanças da empresa).";
+
 export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
-  const gestorGlobalReadOnly = useGestorGlobalReadOnly();
+  // Fase 1: sem gate por perfil. Edição depende só da permissão do módulo.
   // Isolamento por módulo: Endividamento usa debts.edit; Custos Fixos-Matriz usa company_finance.edit.
-  const editPermission = tipo === "endividamento" ? "debts.edit" : "company_finance.edit";
+  const editPermission = tipo === "endividamento" ? "debts.update" : "company_finance.update";
   const canEditCompanyFinance = usePermission(editPermission);
-  const financeReadOnly = gestorGlobalReadOnly || !canEditCompanyFinance;
+  const financeReadOnly = !canEditCompanyFinance;
   const financeReadOnlyTitle = financeReadOnly
-    ? gestorGlobalReadOnly
-      ? GESTOR_GLOBAL_EDIT_TOOLTIP
-      : "Sem permissão para editar (finanças da empresa)."
+    ? "Sem permissão para editar (finanças da empresa)."
     : undefined;
   const [competencia, setCompetencia] = useState(() => {
     const d = new Date();
@@ -182,7 +182,6 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   });
   const [items, setItems] = useState<CompanyFinancialItem[]>([]);
   const [kpiDebt, setKpiDebt] = useState<Awaited<ReturnType<typeof fetchKpiEndividamento>> | null>(null);
-  const [kpiFixed, setKpiFixed] = useState<Awaited<ReturnType<typeof fetchKpiCustosFixos>> | null>(null);
   const [pendencias, setPendencias] = useState<PendenciaLancamento[]>([]);
   const [pendTotals, setPendTotals] = useState<{ previsto: number; pago: number }>({ previsto: 0, pago: 0 });
   const [chartPoints, setChartPoints] = useState<ChartPoint[]>([]);
@@ -194,6 +193,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   // Filtros globais da tela (Tipo/Status): aplicados à Visão Executiva e ao Extrato Analítico.
   const [requiredFilter, setRequiredFilter] = useState<RequiredFilter>("ALL");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  // Filtro por Centro de Custo (somente Custos Fixos) — escopo da PÁGINA (cards, pendências e listas).
+  // Guarda o rótulo do centro (mesmo exibido/cadastrado); "" = Todos (comportamento atual).
+  const [costCenterFilter, setCostCenterFilter] = useState<string>("");
   const [view, setView] = useState<"executive" | "analytic">("executive");
   const [draftName, setDraftName] = useState("");
   const [draftRef, setDraftRef] = useState("");
@@ -376,10 +378,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       if (tipo === "endividamento") {
         const k = await fetchKpiEndividamento(competencia);
         setKpiDebt(k);
-        setKpiFixed(null);
       } else {
-        const k = await fetchKpiCustosFixos(competencia);
-        setKpiFixed(k);
+        // Custos Fixos: os cards derivam dos próprios itens (escopo por Centro de Custo),
+        // usando os valores já calculados pelo backend — sem uma consulta de KPI dedicada.
         setKpiDebt(null);
       }
     } catch (e) {
@@ -426,10 +427,26 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     [chartPoints],
   );
 
+  // Centros de custo existentes entre os itens (mesmos rótulos usados no cadastro). Fonte do filtro.
+  const costCenterOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const it of items) {
+      const cc = (it.cost_center ?? "").trim();
+      if (cc) set.add(cc);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [items]);
+
+  // Itens pendentes na competência (universo bruto do backend, independente dos filtros de tela) —
+  // usado só para a opção "Pendentes" do filtro Tipo. Fica desacoplado de filteredItems (sem ciclo).
   const pendingItemIds = useMemo(() => new Set(pendencias.map((p) => p.item_id)), [pendencias]);
 
   const filteredItems = useMemo(() => {
     let list = items;
+    // Centro de Custo (Custos Fixos) — combina com Tipo/Status/Busca (interseção dos critérios).
+    if (costCenterFilter) {
+      list = list.filter((it) => (it.cost_center ?? "") === costCenterFilter);
+    }
     if (tipo === "endividamento") {
       list = list.filter((it) => {
         const hasLegal = Boolean(it.has_legal_process);
@@ -464,7 +481,43 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       list = list.filter((it) => itemMatchesSearch(it, itemSearch, projectOptions, tipo));
     }
     return list;
-  }, [tipo, items, creditorFilter, requiredFilter, statusFilter, pendingItemIds, itemSearch, projectOptions]);
+  }, [tipo, items, costCenterFilter, creditorFilter, requiredFilter, statusFilter, pendingItemIds, itemSearch, projectOptions]);
+
+  // Cards de Custos Fixos: refletem exatamente os ITENS EXIBIDOS (filteredItems = Centro + Tipo +
+  // Busca), somando os valores que o backend JÁ calcula por item (valor_referencia = esperado no mês;
+  // pago_mes = pago no mês). Sob "Todos"/sem busca é idêntico ao KPI do backend; com filtro, acompanha
+  // a lista. Preserva "—" quando os valores vêm redigidos por falta de "Dados sensíveis"
+  // (valor_referencia null → não somar como zero).
+  const fixedKpi = useMemo(() => {
+    if (tipo !== "custo_fixo") return null;
+    const money = filteredItems;
+    const redacted = money.length > 0 && money[0].valor_referencia == null;
+    return {
+      total_esperado_mes: redacted ? null : money.reduce((s, it) => s + (it.valor_referencia ?? 0), 0),
+      total_pago_mes: redacted ? null : money.reduce((s, it) => s + (it.pago_mes ?? 0), 0),
+      quantidade_itens: money.length,
+    };
+  }, [tipo, filteredItems]);
+
+  // Pendências no MESMO universo dos demais componentes (filteredItems = Competência + Tipo + Busca +
+  // Centro): a LISTA do backend (com histórico/último valor) é restrita aos itens exibidos, e os TOTAIS
+  // das obrigatoriedades são recomputados sobre os itens obrigatórios ATIVOS exibidos — mesma base do
+  // backend (valor_referencia previsto, pago_mes pago). Sob "Todos" é idêntico ao backend. Endividamento
+  // mantém o backend (lógica de renegociação).
+  const filteredItemIds = useMemo(() => new Set(filteredItems.map((it) => it.id)), [filteredItems]);
+
+  const shownPendencias = useMemo(
+    () => (tipo === "custo_fixo" ? pendencias.filter((p) => filteredItemIds.has(p.item_id)) : pendencias),
+    [tipo, pendencias, filteredItemIds],
+  );
+
+  const shownPendTotals = useMemo(() => {
+    if (tipo !== "custo_fixo") return pendTotals;
+    const required = filteredItems.filter((it) => (it.is_active ?? true) && it.is_monthly_required);
+    const previsto = required.reduce((s, it) => s + (it.valor_referencia ?? 0), 0);
+    const pago = required.reduce((s, it) => s + (it.pago_mes ?? 0), 0);
+    return { previsto, pago };
+  }, [tipo, filteredItems, pendTotals]);
 
   const { sortedRows: sortedFilteredItems, headerSort } = useTableSort(
     filteredItems,
@@ -481,11 +534,15 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         : draftName.trim();
     const itemDescription = draftItemDescription.trim();
     const ref = calculatedRef;
-    // Endividamento: descrição é o identificador (nome é composto no backend); colaborador
-    // é opcional. Demais tipos exigem nome como antes.
+    // Endividamento segue o padrão do Custos Fixos: Manual exige Nome; Colaborador exige
+    // colaborador. Descrição é complementar (opcional). Demais tipos exigem nome.
     if (tipo === "endividamento") {
-      if (!itemDescription) {
-        setError("Informe a descrição da dívida.");
+      if (draftItemType === "MANUAL" && !draftName.trim()) {
+        setError("Informe o nome do item.");
+        return;
+      }
+      if (draftItemType === "COLABORADOR_MATRIZ" && !draftEmployeeId) {
+        setError("Selecione um colaborador.");
         return;
       }
     } else if (!nome) {
@@ -519,18 +576,26 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     try {
       await createCompanyFinanceItem({
         tipo,
-        // Endividamento: nome é composto no backend a partir de colaborador + descrição.
-        nome: tipo === "endividamento" ? undefined : nome,
-        item_description: tipo === "endividamento" ? itemDescription : undefined,
+        // Endividamento: Manual envia o Nome; Colaborador deriva o nome do colaborador no backend.
+        nome:
+          tipo === "endividamento"
+            ? draftItemType === "MANUAL"
+              ? draftName.trim()
+              : undefined
+            : nome,
+        item_description: tipo === "endividamento" ? itemDescription || undefined : undefined,
         valor_referencia: ref,
         category: draftCategory.trim() || defaultCategory(tipo),
         cost_center_ref: draftCostCenterRef || defaultCostCenterRef(tipo),
         description: draftDescription.trim() || null,
         recurrence: draftRecurrence.trim() || defaultRecurrence(tipo),
+        // Endividamento sempre persiste item_type=MANUAL (o "Colaborador" é só identificação).
         item_type: tipo === "custo_fixo" ? draftItemType : "MANUAL",
         employee_id:
           tipo === "endividamento"
-            ? draftEmployeeId || null
+            ? draftItemType === "COLABORADOR_MATRIZ"
+              ? draftEmployeeId || null
+              : null
             : tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ"
               ? draftEmployeeId
               : null,
@@ -712,6 +777,23 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               ))}
             </select>
           </label>
+          {tipo === "custo_fixo" && (
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-slate-700">Centro de custo</span>
+              <select
+                value={costCenterFilter}
+                onChange={(e) => setCostCenterFilter(e.target.value)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm"
+              >
+                <option value="">Todos</option>
+                {costCenterOptions.map((cc) => (
+                  <option key={cc} value={cc}>
+                    {cc}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {tipo === "endividamento" && (
             <label className="flex flex-col gap-1 text-sm">
               <span className="font-medium text-slate-700">Status</span>
@@ -749,41 +831,41 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {tipo === "endividamento" && kpiDebt && (
           <>
-            <KpiCard label="Total de endividamento" value={formatBRL(kpiDebt.total_endividamento)} />
-            <KpiCard label="Total pago no mês" value={formatBRL(kpiDebt.total_pago_mes)} />
-            <KpiCard label="Saldo restante" value={formatBRL(kpiDebt.saldo_restante)} accent="text-amber-800" />
+            <KpiCard label="Total de endividamento" value={formatCurrencyOrDash(kpiDebt.total_endividamento)} />
+            <KpiCard label="Total pago no mês" value={formatCurrencyOrDash(kpiDebt.total_pago_mes)} />
+            <KpiCard label="Saldo restante" value={formatCurrencyOrDash(kpiDebt.saldo_restante)} accent="text-amber-800" />
             <KpiCard label="Quantidade de itens" value={String(kpiDebt.quantidade_itens)} />
           </>
         )}
-        {tipo === "custo_fixo" && kpiFixed && (
+        {tipo === "custo_fixo" && fixedKpi && !(loading && items.length === 0) && (
           <>
-            <KpiCard label="Total esperado no mês" value={formatBRL(kpiFixed.total_esperado_mes)} />
-            <KpiCard label="Total pago no mês" value={formatBRL(kpiFixed.total_pago_mes)} />
-            <KpiCard label="Itens cadastrados" value={String(kpiFixed.quantidade_itens)} />
+            <KpiCard label="Total esperado no mês" value={formatCurrencyOrDash(fixedKpi.total_esperado_mes)} />
+            <KpiCard label="Total pago no mês" value={formatCurrencyOrDash(fixedKpi.total_pago_mes)} />
+            <KpiCard label="Itens cadastrados" value={String(fixedKpi.quantidade_itens)} />
             <KpiCard
               label="Cobertura do mês"
               value={
-                kpiFixed.total_esperado_mes > 0
-                  ? `${((kpiFixed.total_pago_mes / kpiFixed.total_esperado_mes) * 100).toFixed(1)}%`
+                fixedKpi.total_esperado_mes != null && fixedKpi.total_pago_mes != null && fixedKpi.total_esperado_mes > 0
+                  ? `${((fixedKpi.total_pago_mes / fixedKpi.total_esperado_mes) * 100).toFixed(1)}%`
                   : "—"
               }
             />
           </>
         )}
-        {loading && !kpiDebt && !kpiFixed && (
+        {loading && !kpiDebt && !(tipo === "custo_fixo" && items.length > 0) && (
           <p className="col-span-full text-sm text-slate-500">Carregando indicadores…</p>
         )}
       </section>
 
       {/* Pendências de Lançamento (custos fixos e endividamento) — controle operacional */}
       <PendingEntriesSection
-        pendencias={pendencias}
+        pendencias={shownPendencias}
         competencia={competencia}
         readOnly={financeReadOnly}
         readOnlyTitle={financeReadOnlyTitle}
         onPreencher={handlePreencherValor}
-        totalPrevisto={pendTotals.previsto}
-        totalPago={pendTotals.pago}
+        totalPrevisto={shownPendTotals.previsto}
+        totalPago={shownPendTotals.pago}
       />
 
       {/* Seletor de visão (logo abaixo dos cards principais) */}
@@ -800,6 +882,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         <CompanyFinanceAnalyticTable
           items={filteredItems}
           tipo={tipo}
+          competencia={competencia}
           search={itemSearch}
           readOnly={financeReadOnly}
           readOnlyTitle={financeReadOnlyTitle}
@@ -942,24 +1025,23 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       >
         <h2 className="text-sm font-medium text-slate-800">Novo item</h2>
         <form onSubmit={handleCreate} className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-          {tipo === "custo_fixo" && (
-            <label className="flex w-full min-w-[220px] flex-col gap-1 text-sm sm:w-56">
-              <span className="text-slate-600">Tipo</span>
-              <select
-                value={draftItemType}
-                onChange={(e) => setDraftItemType(e.target.value as "MANUAL" | "COLABORADOR_MATRIZ")}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2"
-                disabled={financeReadOnly}
-              >
-                <option value="MANUAL">Manual</option>
-                <option value="COLABORADOR_MATRIZ">Colaborador</option>
-              </select>
-            </label>
-          )}
+          {/* Tipo (Manual/Colaborador) — mesmo padrão em Custos Fixos e Endividamento. */}
+          <label className="flex w-full min-w-[220px] flex-col gap-1 text-sm sm:w-56">
+            <span className="text-slate-600">Tipo</span>
+            <select
+              value={draftItemType}
+              onChange={(e) => setDraftItemType(e.target.value as "MANUAL" | "COLABORADOR_MATRIZ")}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2"
+              disabled={financeReadOnly}
+            >
+              <option value="MANUAL">Manual</option>
+              <option value="COLABORADOR_MATRIZ">Colaborador</option>
+            </select>
+          </label>
 
-          {/* Endividamento: o Nome é composto automaticamente (colaborador + descrição) —
-              o campo é escondido e substituído por Colaborador (opcional) + Descrição. */}
-          {tipo === "custo_fixo" && (
+          {/* Nome: Custo Fixo sempre (auto-preenchido quando Colaborador); Endividamento só no
+              tipo Manual. No tipo Colaborador o nome é o próprio colaborador. */}
+          {(tipo === "custo_fixo" || draftItemType === "MANUAL") && (
             <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-sm">
               <span className="text-slate-600">Nome</span>
               <input
@@ -968,14 +1050,15 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                 className="rounded-lg border border-slate-300 px-3 py-2"
                 placeholder="Ex.: Financiamento veículos"
                 required
-                disabled={financeReadOnly || draftItemType === "COLABORADOR_MATRIZ"}
+                disabled={financeReadOnly || (tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ")}
               />
             </label>
           )}
           {tipo === "endividamento" && (
             <>
+              {draftItemType === "COLABORADOR_MATRIZ" && (
               <label className="flex w-full min-w-[200px] flex-col gap-1 text-sm sm:w-64">
-                <span className="text-slate-600">Colaborador (opcional)</span>
+                <span className="text-slate-600">Colaborador *</span>
                 <div className="relative">
                   <input
                     value={draftEmployeeQuery}
@@ -1038,14 +1121,14 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                   </p>
                 ) : null}
               </label>
+              )}
               <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-sm">
-                <span className="text-slate-600">Descrição da dívida *</span>
+                <span className="text-slate-600">Descrição (opcional)</span>
                 <input
                   value={draftItemDescription}
                   onChange={(e) => setDraftItemDescription(e.target.value)}
                   className="rounded-lg border border-slate-300 px-3 py-2"
                   placeholder="Ex.: Acordo de Remuneração"
-                  required
                   disabled={financeReadOnly}
                 />
               </label>
@@ -1614,7 +1697,7 @@ function FinanceItemCard({
   const [localPayments, setLocalPayments] = useState<Record<string, string>>(() => {
     const m: Record<string, string> = {};
     for (const p of item.pagamentos) {
-      m[p.mes] = p.valor > 0 ? formatCurrencyInputFromApi(p.valor) : "";
+      m[p.mes] = p.valor != null && p.valor > 0 ? formatCurrencyInputFromApi(p.valor) : "";
     }
     return m;
   });
@@ -1624,6 +1707,10 @@ function FinanceItemCard({
   // Endividamento: descrição própria + colaborador (vínculo opcional, só identificação).
   const [structureItemDescription, setStructureItemDescription] = useState(item.item_description ?? "");
   const [structureEmployeeId, setStructureEmployeeId] = useState(item.employee_id ?? "");
+  // Endividamento: Tipo Manual/Colaborador (derivado da presença de colaborador).
+  const [structureDebtType, setStructureDebtType] = useState<"MANUAL" | "COLABORADOR_MATRIZ">(
+    item.employee_id ? "COLABORADOR_MATRIZ" : "MANUAL",
+  );
   const [structureEmployeeName, setStructureEmployeeName] = useState(item.employee_name ?? "");
   const [structureEmployeeQuery, setStructureEmployeeQuery] = useState("");
   const [structureEmployeeOptions, setStructureEmployeeOptions] = useState<Employee[]>([]);
@@ -1674,7 +1761,7 @@ function FinanceItemCard({
   useEffect(() => {
     const m: Record<string, string> = {};
     for (const p of item.pagamentos) {
-      m[p.mes] = p.valor > 0 ? formatCurrencyInputFromApi(p.valor) : "";
+      m[p.mes] = p.valor != null && p.valor > 0 ? formatCurrencyInputFromApi(p.valor) : "";
     }
     setLocalPayments(m);
   }, [item.id, paymentsSyncKey]);
@@ -1684,6 +1771,7 @@ function FinanceItemCard({
     setStructureName(item.nome);
     setStructureItemDescription(item.item_description ?? "");
     setStructureEmployeeId(item.employee_id ?? "");
+    setStructureDebtType(item.employee_id ? "COLABORADOR_MATRIZ" : "MANUAL");
     setStructureEmployeeName(item.employee_name ?? "");
     setStructureEmployeeQuery("");
     setStructureEmployeeOptions([]);
@@ -1734,16 +1822,29 @@ function FinanceItemCard({
   const [paymentsError, setPaymentsError] = useState<string | null>(null);
   const [paymentsSuccess, setPaymentsSuccess] = useState<string | null>(null);
   const [paymentsSaving, setPaymentsSaving] = useState(false);
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Valores já salvos (baseline) e quais competências têm alterações pendentes: a grade
+  // NÃO faz autosave — o usuário digita livremente e só o botão "Salvar agora" persiste.
+  const savedByMes = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const p of item.pagamentos) m.set(p.mes, p.valor ?? 0);
+    return m;
+  }, [item.pagamentos]);
+  const dirtyMonths = useMemo(() => {
+    const s = new Set<string>();
+    for (const mes of monthKeys) {
+      const cur = parseBRLInput(localPayments[mes] ?? "");
+      const saved = savedByMes.get(mes) ?? 0;
+      if (Math.abs(cur - saved) > 0.005) s.add(mes);
+    }
+    return s;
+  }, [monthKeys, localPayments, savedByMes]);
+  const hasPending = dirtyMonths.size > 0;
 
   const persist = useCallback(async () => {
     if (readOnly) {
-      setPaymentsError(GESTOR_GLOBAL_EDIT_TOOLTIP);
+      setPaymentsError(FINANCE_EDIT_NO_PERM);
       return;
-    }
-    if (debounceTimer.current) {
-      clearTimeout(debounceTimer.current);
-      debounceTimer.current = null;
     }
     setPaymentsError(null);
     setPaymentsSuccess(null);
@@ -1764,7 +1865,7 @@ function FinanceItemCard({
       const saved = await replaceCompanyFinancePayments(item.id, pagamentos, competencia);
       const m: Record<string, string> = {};
       for (const p of saved.pagamentos) {
-        m[p.mes] = p.valor > 0 ? formatCurrencyInputFromApi(p.valor) : "";
+        m[p.mes] = p.valor != null && p.valor > 0 ? formatCurrencyInputFromApi(p.valor) : "";
       }
       setLocalPayments(m);
       await onSaved();
@@ -1793,14 +1894,11 @@ function FinanceItemCard({
     }
   }, [readOnly, monthKeys, localPayments, item.id, item.pagamentos, competencia, onSaved]);
 
-  const persistRef = useRef(persist);
-  persistRef.current = persist;
-
   function updateMonth(mes: string, raw: string) {
     if (readOnly) return;
+    // Sem autosave, sem formatação/máscara e sem chamar o backend enquanto digita: apenas
+    // guarda o texto. A persistência (e o update do Contas a Pagar) ocorre no "Salvar agora".
     setLocalPayments((prev) => ({ ...prev, [mes]: raw }));
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => void persistRef.current(), 450);
   }
 
   async function saveStructure() {
@@ -1808,8 +1906,12 @@ function FinanceItemCard({
     const nome = structureName.trim();
     const itemDescription = structureItemDescription.trim();
     if (tipo === "endividamento") {
-      if (!itemDescription) {
-        setStructureError("Informe a descrição da dívida.");
+      if (structureDebtType === "MANUAL" && !nome) {
+        setStructureError("Informe o nome do item.");
+        return;
+      }
+      if (structureDebtType === "COLABORADOR_MATRIZ" && !structureEmployeeId) {
+        setStructureError("Selecione um colaborador.");
         return;
       }
     } else if (!nome) {
@@ -1821,9 +1923,14 @@ function FinanceItemCard({
       return;
     }
     const payload: Parameters<typeof updateCompanyFinanceItem>[1] = {
-      // Endividamento: nome é composto no backend (colaborador + descrição).
+      // Endividamento: Manual envia o Nome; Colaborador vincula o colaborador (nome derivado
+      // no backend). Descrição é complementar (opcional). Demais tipos enviam o Nome.
       ...(tipo === "endividamento"
-        ? { item_description: itemDescription, employee_id: structureEmployeeId || null }
+        ? {
+            item_description: itemDescription || null,
+            employee_id: structureDebtType === "COLABORADOR_MATRIZ" ? structureEmployeeId || null : null,
+            ...(structureDebtType === "MANUAL" ? { nome } : {}),
+          }
         : { nome }),
       valor_referencia: parseBRLInput(structureRef),
       category: structureCategory.trim() || defaultCategory(tipo),
@@ -1944,17 +2051,17 @@ function FinanceItemCard({
             )}
             <div>
               <dt className="text-xs text-slate-500">{tipo === "endividamento" ? "Total pago" : "Total pago (hist.)"}</dt>
-              <dd className="font-medium text-slate-900">{formatBRL(item.total_pago)}</dd>
+              <dd className="font-medium text-slate-900">{formatCurrencyOrDash(item.total_pago)}</dd>
             </div>
             {tipo === "endividamento" && item.restante != null && (
               <div>
                 <dt className="text-xs text-slate-500">Restante</dt>
-                <dd className="font-medium text-slate-900">{formatBRL(item.restante)}</dd>
+                <dd className="font-medium text-slate-900">{formatCurrencyOrDash(item.restante)}</dd>
               </div>
             )}
             <div>
               <dt className="text-xs text-slate-500">Pago no mês</dt>
-              <dd className="font-medium text-slate-900">{formatBRL(item.pago_mes)}</dd>
+              <dd className="font-medium text-slate-900">{formatCurrencyOrDash(item.pago_mes)}</dd>
             </div>
           </dl>
           <div className="mt-3">
@@ -1987,7 +2094,7 @@ function FinanceItemCard({
                 type="button"
                 onClick={() => setEditingStructure((v) => !v)}
                 disabled={readOnly || structureSaving}
-                title={readOnly ? GESTOR_GLOBAL_EDIT_TOOLTIP : undefined}
+                title={readOnly ? FINANCE_EDIT_NO_PERM : undefined}
                 className="rounded-lg px-3 py-1.5 text-sm font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50 disabled:opacity-50"
               >
                 {editingStructure ? "Fechar edição" : "Editar estrutura"}
@@ -2023,7 +2130,33 @@ function FinanceItemCard({
                 {tipo === "endividamento" ? (
                   <>
                     <label className="flex flex-col gap-1 text-sm">
-                      <span className="text-slate-600">Colaborador (opcional)</span>
+                      <span className="text-slate-600">Tipo</span>
+                      <select
+                        value={structureDebtType}
+                        onChange={(e) =>
+                          setStructureDebtType(e.target.value as "MANUAL" | "COLABORADOR_MATRIZ")
+                        }
+                        className="rounded border border-slate-300 bg-white px-2 py-1.5"
+                        disabled={readOnly || structureSaving}
+                      >
+                        <option value="MANUAL">Manual</option>
+                        <option value="COLABORADOR_MATRIZ">Colaborador</option>
+                      </select>
+                    </label>
+                    {structureDebtType === "MANUAL" ? (
+                      <label className="flex flex-col gap-1 text-sm">
+                        <span className="text-slate-600">Nome</span>
+                        <input
+                          value={structureName}
+                          onChange={(e) => setStructureName(e.target.value)}
+                          className="rounded border border-slate-300 px-2 py-1.5"
+                          placeholder="Ex.: Financiamento X"
+                          disabled={readOnly || structureSaving}
+                        />
+                      </label>
+                    ) : (
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Colaborador *</span>
                       <div className="relative">
                         <input
                           value={structureEmployeeQuery}
@@ -2088,8 +2221,9 @@ function FinanceItemCard({
                         </p>
                       ) : null}
                     </label>
+                    )}
                     <label className="flex flex-col gap-1 text-sm">
-                      <span className="text-slate-600">Descrição da dívida *</span>
+                      <span className="text-slate-600">Descrição (opcional)</span>
                       <input
                         value={structureItemDescription}
                         onChange={(e) => setStructureItemDescription(e.target.value)}
@@ -2363,25 +2497,37 @@ function FinanceItemCard({
               </dl>
             </div>
           )}
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Pagamentos por mês (12 meses)</p>
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Pagamentos por mês (12 meses)</p>
+            {hasPending ? (
+              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 ring-1 ring-blue-200">
+                {dirtyMonths.size} alteração(ões) não salva(s)
+              </span>
+            ) : null}
+          </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            {monthKeys.map((mes) => (
-              <label key={mes} className="flex flex-col gap-1 text-xs">
-                <span className="font-medium text-slate-600">
-                  {mesLabel(mes)} <span className="font-normal text-slate-400">({mes})</span>
-                </span>
-                <input
-                  value={localPayments[mes] ?? ""}
-                  onChange={(e) => updateMonth(mes, e.target.value)}
-                  onBlur={() => void persistRef.current()}
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                  placeholder="0"
-                  inputMode="decimal"
-                  disabled={readOnly}
-                  title={readOnly ? GESTOR_GLOBAL_EDIT_TOOLTIP : undefined}
-                />
-              </label>
-            ))}
+            {monthKeys.map((mes) => {
+              const pending = dirtyMonths.has(mes);
+              return (
+                <label key={mes} className="flex flex-col gap-1 text-xs">
+                  <span className="font-medium text-slate-600">
+                    {mesLabel(mes)} <span className="font-normal text-slate-400">({mes})</span>
+                    {pending ? <span className="ml-1 text-blue-600" title="Alteração não salva">●</span> : null}
+                  </span>
+                  <input
+                    value={localPayments[mes] ?? ""}
+                    onChange={(e) => updateMonth(mes, e.target.value)}
+                    className={`rounded border px-2 py-1.5 text-sm ${
+                      pending ? "border-blue-500 ring-1 ring-blue-200" : "border-slate-300"
+                    }`}
+                    placeholder="0"
+                    inputMode="decimal"
+                    disabled={readOnly}
+                    title={readOnly ? FINANCE_EDIT_NO_PERM : undefined}
+                  />
+                </label>
+              );
+            })}
           </div>
           {(paymentsError || paymentsSuccess) && (
             <div className="mt-3 text-sm">
@@ -2396,17 +2542,31 @@ function FinanceItemCard({
                 if (import.meta.env.DEV) console.info("[company-finance] botão Salvar agora");
                 void persist();
               }}
-              disabled={readOnly || paymentsSaving}
-              title={readOnly ? GESTOR_GLOBAL_EDIT_TOOLTIP : undefined}
-              className="rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50 disabled:opacity-50"
+              disabled={readOnly || paymentsSaving || !hasPending}
+              title={
+                readOnly
+                  ? FINANCE_EDIT_NO_PERM
+                  : hasPending
+                    ? "Salva todas as competências alteradas e atualiza o Contas a Pagar."
+                    : "Nenhuma alteração pendente."
+              }
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium ring-1 disabled:opacity-50 ${
+                hasPending
+                  ? "bg-indigo-600 text-white ring-indigo-600 hover:bg-indigo-700"
+                  : "bg-white text-indigo-700 ring-indigo-200 hover:bg-indigo-50"
+              }`}
             >
-              {paymentsSaving ? "Salvando…" : "Salvar agora"}
+              {paymentsSaving
+                ? "Salvando…"
+                : hasPending
+                  ? `Salvar agora (${dirtyMonths.size})`
+                  : "Salvar agora"}
             </button>
             <button
               type="button"
               onClick={onToggleActive}
               disabled={readOnly}
-              title={readOnly ? GESTOR_GLOBAL_EDIT_TOOLTIP : undefined}
+              title={readOnly ? FINANCE_EDIT_NO_PERM : undefined}
               className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-50"
             >
               {isActive ? "Inativar" : "Reativar"}
@@ -2415,7 +2575,7 @@ function FinanceItemCard({
               type="button"
               onClick={onDelete}
               disabled={readOnly}
-              title={readOnly ? GESTOR_GLOBAL_EDIT_TOOLTIP : undefined}
+              title={readOnly ? FINANCE_EDIT_NO_PERM : undefined}
               className="rounded-lg px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"
             >
               Excluir item

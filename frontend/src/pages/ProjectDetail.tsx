@@ -568,7 +568,7 @@ function LaborCostEditor({
 export function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
   const { globalScenario } = useScenario();
-  const canEditProjectStructure = usePermission("projects.edit");
+  const canEditProjectStructure = usePermission("projects.update");
   const structureReadOnly = !canEditProjectStructure;
   const [editScenario, setEditScenario] = useState<ScenarioKind>(globalScenario);
   const [project, setProject] = useState<Project | null>(null);

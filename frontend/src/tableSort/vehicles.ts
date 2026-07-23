@@ -6,6 +6,7 @@ export type FleetVehicleSortColumn =
   | "plate"
   | "model"
   | "type"
+  | "cost_center"
   | "monthly_cost"
   | "driver"
   | "active";
@@ -27,6 +28,7 @@ export const FLEET_VEHICLE_SORT_COLUMNS: Record<FleetVehicleSortColumn, SortColu
   plate: { kind: "text", getValue: (v) => v.plate },
   model: { kind: "text", getValue: (v) => v.model ?? "" },
   type: { kind: "text", getValue: (v) => fleetTypeLabel(v.type) },
+  cost_center: { kind: "text", getValue: (v) => v.cost_center ?? "" },
   monthly_cost: { kind: "money", getValue: (v) => v.monthly_cost },
   driver: { kind: "text", getValue: (v) => v.driver_name ?? "" },
   active: { kind: "boolean", getValue: (v) => v.active },

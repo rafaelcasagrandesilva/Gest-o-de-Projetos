@@ -11,9 +11,8 @@ import { listEmployees, fetchCostCenters, type Employee } from "@/services/emplo
 import { fetchSettings, type SystemSettings } from "@/services/settings";
 import { CostCenterCombo } from "@/components/CostCenterCombo";
 import { isAxiosError } from "axios";
-import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
 import { usePermission } from "@/hooks/usePermission";
-import { useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
+import { useAuxiliaryResource } from "@/hooks/useAuxiliaryResource";
 import { CollaboratorSelect } from "@/components/CollaboratorSelect";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 import { SortableTh } from "@/components/table";
@@ -119,36 +118,54 @@ function vehicleCostCenterChanged(form: FormState): boolean {
 }
 
 export function Vehicles() {
-  const canEditVehicles = usePermission("vehicles.edit");
-  const readOnly = useConsultaReadOnly() || useGestorGlobalReadOnly() || !canEditVehicles;
+  // Fase 2: verbos específicos. Criar → create; editar → update; excluir → delete.
+  const canCreateVehicles = usePermission("vehicles.create");
+  const canUpdateVehicles = usePermission("vehicles.update");
+  const canDeleteVehicles = usePermission("vehicles.delete");
+  // Acesso ao MÓDULO = Visualizar (vehicles.read). Referenciar sozinho não abre a tela.
+  const canAccessModule = usePermission("vehicles.read");
+  // Dados Sensíveis: só com vehicles.sensitive aparecem custo mensal, cards e totais financeiros.
+  const canSeeSensitive = usePermission("vehicles.sensitive");
+  const canReferenceEmployees = usePermission("employees.reference");
+  const canReferenceCostCenter = usePermission("cost_center.reference");
+  const readOnly = !canUpdateVehicles;
   const [items, setItems] = useState<FleetVehicle[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [creating, setCreating] = useState(false);
+  // Modal de cadastro (substitui o formulário fixo; mesmo padrão dos demais módulos).
+  const [showCreate, setShowCreate] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [referenceCompetencia] = useState(monthStartIso);
-  const [costCenterOptions, setCostCenterOptions] = useState<string[]>([]);
+  // Filtro por Centro de Custo (server-side, igualdade estrita). "" = Todos.
+  const [costCenterFilter, setCostCenterFilter] = useState("");
+  // Opções do filtro: derivadas dos Centros de Custo presentes na frota, capturadas no load "Todos"
+  // (permanecem estáveis quando um filtro está aplicado). Não exige cost_center.reference.
+  const [allCostCenters, setAllCostCenters] = useState<string[]>([]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void fetchCostCenters()
-      .then((cc) => {
-        if (!cancelled) setCostCenterOptions(cc);
-      })
-      .catch(() => {
-        if (!cancelled) setCostCenterOptions([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Recursos AUXILIARES (padrão SGC): condutor (colaboradores) e Centros de Custo. Carregam de forma
+  // independente do recurso principal (lista de veículos). Sem permissão, o controle apenas some —
+  // a tela NÃO falha.
+  const employeesAux = useAuxiliaryResource<Employee[]>(
+    () => listEmployees({ competencia: referenceCompetencia }),
+    [],
+    [referenceCompetencia],
+    canReferenceEmployees,
+  );
+  const costCentersAux = useAuxiliaryResource<string[]>(
+    () => fetchCostCenters(),
+    [],
+    [],
+    canReferenceCostCenter,
+  );
+  const employees = employeesAux.data;
+  const costCenterOptions = costCentersAux.data;
 
   async function reload() {
     const [data, st] = await Promise.all([
-      listFleetVehicles({ include_inactive: true, limit: 200 }),
+      listFleetVehicles({ include_inactive: true, limit: 200, cost_center: costCenterFilter }),
       fetchSettings().catch(() => null),
     ]);
     setItems(data);
@@ -194,15 +211,22 @@ export function Vehicles() {
       setLoading(true);
       setError(null);
       try {
-        const [fleet, em, st] = await Promise.all([
-          listFleetVehicles({ include_inactive: true, limit: 200 }),
-          listEmployees({ competencia: referenceCompetencia }).catch(() => [] as Employee[]),
+        // Recurso PRINCIPAL (obrigatório): a lista de veículos, JÁ FILTRADA por Centro de Custo no
+        // servidor. Condutor/Centros de Custo são auxiliares e não derrubam esta carga.
+        const [fleet, st] = await Promise.all([
+          listFleetVehicles({ include_inactive: true, limit: 200, cost_center: costCenterFilter }),
           fetchSettings().catch(() => null),
         ]);
         if (!cancelled) {
           setItems(fleet);
-          setEmployees(em);
           setSettings(st);
+          // Opções do filtro: só recalcula no load "Todos" (sem filtro), para não colapsar a lista.
+          if (!costCenterFilter) {
+            const ccs = Array.from(
+              new Set(fleet.map((v) => (v.cost_center ?? "").trim()).filter((c) => c !== "")),
+            ).sort((a, b) => a.localeCompare(b, "pt-BR"));
+            setAllCostCenters(ccs);
+          }
         }
       } catch (e) {
         if (!cancelled) {
@@ -215,12 +239,23 @@ export function Vehicles() {
     return () => {
       cancelled = true;
     };
-  }, [referenceCompetencia]);
+  }, [referenceCompetencia, costCenterFilter]);
 
   const employeeName = (id: string | null) => {
     if (!id) return "—";
     return employees.find((e) => e.id === id)?.full_name ?? id.slice(0, 8) + "…";
   };
+
+  function openCreate() {
+    // Abre o modal com um formulário limpo, pré-preenchendo o custo padrão do tipo (mesma
+    // regra do formulário fixo anterior) — nenhuma validação/comportamento de cadastro muda.
+    setError(null);
+    setForm({
+      ...emptyForm,
+      monthly_cost: settings ? monthlyFixedCostByType(emptyForm.vehicle_type, settings) : 0,
+    });
+    setShowCreate(true);
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -249,6 +284,8 @@ export function Vehicles() {
         start_date: form.start_date,
         end_date: form.end_date || null,
       });
+      // Sucesso: fecha o modal, reseta o form e atualiza lista+cards (reload preserva o filtro).
+      setShowCreate(false);
       setForm(emptyForm);
       await reload();
     } catch (err) {
@@ -299,6 +336,15 @@ export function Vehicles() {
     }
   }
 
+  // Acesso ao módulo exige Visualizar (vehicles.read). Sem isso, nada é renderizado.
+  if (!canAccessModule) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        Você não tem permissão para acessar o módulo Veículos.
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <div>
@@ -309,16 +355,57 @@ export function Vehicles() {
         </p>
       </div>
 
+      {/* Filtro por Centro de Custo (topo) + botão de cadastro — filtro filtra a frota no servidor. */}
+      <div className="flex flex-wrap items-end gap-4">
+        <div className="min-w-[14rem]">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Centro de Custo (filtro)</label>
+          <select
+            value={costCenterFilter}
+            onChange={(e) => setCostCenterFilter(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+          >
+            <option value="">Todos os centros de custo</option>
+            {allCostCenters.map((cc) => (
+              <option key={cc} value={cc}>
+                {cc}
+              </option>
+            ))}
+          </select>
+        </div>
+        {canCreateVehicles && (
+          <button
+            type="button"
+            onClick={openCreate}
+            className="ml-auto rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700"
+          >
+            + Novo veículo
+          </button>
+        )}
+      </div>
+
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
 
-      {!readOnly && (
-      <form
-        onSubmit={handleCreate}
-        className="max-w-2xl space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
-      >
-        <h3 className="font-medium text-slate-900">Novo veículo</h3>
+      {showCreate && canCreateVehicles && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-lg"
+        >
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-slate-900">Novo veículo</h3>
+            <button
+              type="button"
+              onClick={() => setShowCreate(false)}
+              aria-label="Fechar"
+              className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            >
+              ✕
+            </button>
+          </div>
+          <form onSubmit={handleCreate} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label className="mb-1 block text-sm text-slate-600">Placa</label>
@@ -412,7 +499,7 @@ export function Vehicles() {
               type="date"
               value={form.start_date}
               onChange={(e) => setForm((f) => ({ ...f, start_date: e.target.value }))}
-              disabled={readOnly}
+              disabled={!canCreateVehicles}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
             />
           </div>
@@ -422,19 +509,30 @@ export function Vehicles() {
               value={form.driver_employee_id}
               selectedName={employees.find((e) => e.id === form.driver_employee_id)?.full_name ?? null}
               onChange={(id) => setForm((f) => ({ ...f, driver_employee_id: id }))}
-              disabled={readOnly}
+              disabled={!canCreateVehicles}
               placeholder="Digite para buscar…"
             />
           </div>
         </div>
-        <button
-          type="submit"
-          disabled={creating}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
-        >
-          {creating ? "Salvando…" : "Cadastrar"}
-        </button>
-      </form>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setShowCreate(false)}
+            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            disabled={creating}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+          >
+            {creating ? "Salvando…" : "Cadastrar"}
+          </button>
+        </div>
+          </form>
+        </div>
+      </div>
       )}
 
       {loading ? (
@@ -451,12 +549,15 @@ export function Vehicles() {
                 <p className="text-sm font-medium text-slate-500">Total de veículos ativos</p>
                 <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{fleetSummary.totalVehicles}</p>
               </div>
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <p className="text-sm font-medium text-slate-500">Custo total da frota</p>
-                <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">
-                  {formatCurrency(fleetSummary.totalCost)}
-                </p>
-              </div>
+              {/* Cartão financeiro: só com vehicles.sensitive. */}
+              {canSeeSensitive && (
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-sm font-medium text-slate-500">Custo total da frota</p>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">
+                    {formatCurrency(fleetSummary.totalCost)}
+                  </p>
+                </div>
+              )}
             </div>
             <div className="grid gap-4 sm:grid-cols-3">
               {FLEET_SUMMARY_TYPES.map(({ key, title }) => {
@@ -465,8 +566,15 @@ export function Vehicles() {
                   <div key={key} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                     <p className="text-sm font-medium text-slate-500">{title}</p>
                     <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{row.count}</p>
-                    <p className="mt-1 text-sm tabular-nums text-slate-600">{formatCurrency(row.cost)}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">veículos · custo mensal do tipo</p>
+                    {/* Custo por categoria: só com vehicles.sensitive. A contagem (não financeira) permanece. */}
+                    {canSeeSensitive ? (
+                      <>
+                        <p className="mt-1 text-sm tabular-nums text-slate-600">{formatCurrency(row.cost)}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">veículos · custo mensal do tipo</p>
+                      </>
+                    ) : (
+                      <p className="mt-0.5 text-xs text-slate-500">veículos ativos</p>
+                    )}
                   </div>
                 );
               })}
@@ -480,10 +588,14 @@ export function Vehicles() {
                 <SortableTh label="Placa" column="plate" variant="standard" {...headerSort} />
                 <SortableTh label="Modelo" column="model" variant="standard" {...headerSort} />
                 <SortableTh label="Tipo" column="type" variant="standard" {...headerSort} />
-                <SortableTh label="Custo mensal" column="monthly_cost" variant="standard" {...headerSort} />
+                {/* Centro de Custo: informação NÃO financeira — sempre visível. */}
+                <SortableTh label="Centro de Custo" column="cost_center" variant="standard" {...headerSort} />
+                {canSeeSensitive && (
+                  <SortableTh label="Custo mensal" column="monthly_cost" variant="standard" {...headerSort} />
+                )}
                 <SortableTh label="Condutor" column="driver" variant="standard" {...headerSort} />
                 <SortableTh label="Ativo" column="active" variant="standard" {...headerSort} />
-                {!readOnly && <th className="px-4 py-3" />}
+                {(canUpdateVehicles || canDeleteVehicles) && <th className="px-4 py-3" />}
               </tr>
             </thead>
             <tbody>
@@ -494,7 +606,12 @@ export function Vehicles() {
                     <TruncatedCell value={v.model} maxWidthClass="max-w-[280px]" />
                   </td>
                   <td className="px-4 py-3">{typeLabel(v.type)}</td>
-                  <td className="px-4 py-3 font-medium tabular-nums">{formatCurrency(v.monthly_cost ?? 0)}</td>
+                  <td className="min-w-0 max-w-[220px] px-4 py-3 align-middle text-slate-600">
+                    <TruncatedCell value={v.cost_center || "—"} maxWidthClass="max-w-[220px]" />
+                  </td>
+                  {canSeeSensitive && (
+                    <td className="px-4 py-3 font-medium tabular-nums">{formatCurrency(v.monthly_cost ?? 0)}</td>
+                  )}
                   <td className="min-w-0 max-w-[260px] px-4 py-3 align-middle">
                     <TruncatedText maxWidthClass="max-w-[260px]">
                       {v.driver_name ?? employeeName(v.driver_employee_id)}
@@ -513,20 +630,23 @@ export function Vehicles() {
                       </button>
                     )}
                   </td>
-                  {!readOnly && (
+                  {(canUpdateVehicles || canDeleteVehicles) && (
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setEditingId(editingId === v.id ? null : v.id)}
-                        className="text-sm text-slate-600 hover:text-slate-900"
-                      >
-                        {editingId === v.id ? "Fechar" : "Editar"}
-                      </button>
-                      {v.active && (
+                      {canUpdateVehicles && (
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(editingId === v.id ? null : v.id)}
+                          className="text-sm text-slate-600 hover:text-slate-900"
+                        >
+                          {editingId === v.id ? "Fechar" : "Editar"}
+                        </button>
+                      )}
+                      {/* Excluir: aparece SÓ com vehicles.delete, independente de Editar. */}
+                      {v.active && canDeleteVehicles && (
                         <button
                           type="button"
                           onClick={() => handleSoftDelete(v)}
-                          className="ml-3 text-sm text-red-600 hover:underline"
+                          className={`text-sm text-red-600 hover:underline${canUpdateVehicles ? " ml-3" : ""}`}
                         >
                           Excluir
                         </button>

@@ -29,7 +29,8 @@ const ADVANCE_BASIS_OPTIONS: { value: AdvanceBasis; label: string }[] = [
 /**
  * Valor antecipado de uma NF conforme a base — fonte única no front, com a mesma
  * regra base→valor do backend `LeptaOperationHandler.compute_item_advanced_amount`:
- * BRUTO → bruto; LIQUIDO → líquido; LIQUIDO_MENOS_10 → líquido − 10%.
+ * BRUTO → bruto; LIQUIDO → líquido; LIQUIDO_MENOS_10 → líquido − 10% do BRUTO
+ * (a retenção de 10% incide sobre o bruto, não sobre o líquido).
  * Retorna o valor bruto (sem arredondar por item) — o arredondamento a centavos
  * fica com quem usa: o total previsto do LEPTA (arredonda a soma, como já fazia) e
  * o pré-preenchimento do Daycoval (formata o campo em 2 casas). Assim o LEPTA
@@ -37,7 +38,7 @@ const ADVANCE_BASIS_OPTIONS: { value: AdvanceBasis; label: string }[] = [
  */
 function advancedAmountForBasis(inv: AdvanceBatchEligibleInvoice, basis: AdvanceBasis): number {
   if (basis === "LIQUIDO") return inv.net_amount;
-  if (basis === "LIQUIDO_MENOS_10") return inv.net_amount * 0.9;
+  if (basis === "LIQUIDO_MENOS_10") return inv.net_amount - inv.gross_amount * 0.1;
   return inv.gross_amount; // BRUTO (default seguro)
 }
 

@@ -24,9 +24,8 @@ import {
 } from "@/services/employees";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
-import { useConsultaReadOnly } from "@/hooks/useConsultaReadOnly";
 import { usePermission } from "@/hooks/usePermission";
-import { useGestorGlobalReadOnly } from "@/hooks/useGestorGlobalReadOnly";
+import { useAuxiliaryResource } from "@/hooks/useAuxiliaryResource";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 import { CollapsiblePanel } from "@/components/ExpandableFormSection";
 import { parseCurrencyInput } from "@/utils/currency";
@@ -652,11 +651,27 @@ function CadastroColaboradorFields({
 }
 
 export function Employees() {
-  const canEditEmployees = usePermission("employees.edit");
-  const readOnly = useConsultaReadOnly() || useGestorGlobalReadOnly() || !canEditEmployees;
+  // Fase 2: verbos específicos. Criar → create; editar → update; excluir → delete.
+  const canCreateEmployees = usePermission("employees.create");
+  const canUpdateEmployees = usePermission("employees.update");
+  const canDeleteEmployees = usePermission("employees.delete");
+  // Acesso ao MÓDULO = Visualizar (employees.read). Referenciar sozinho não abre a tela.
+  const canAccessModule = usePermission("employees.read");
+  // Dados Sensíveis: só com employees.sensitive aparecem salário/custos e os blocos da competência.
+  const canSeeSensitive = usePermission("employees.sensitive");
+  // `readOnly` = sem poder de edição (gate da coluna de ações e dos campos de edição).
+  const readOnly = !canUpdateEmployees;
   const [items, setItems] = useState<Employee[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  // Recurso AUXILIAR (filtro por Projeto): carregado de forma independente do recurso principal
+  // (a lista de colaboradores). Sem projects.list, o filtro é ocultado — a página NÃO falha.
+  const canFilterByProject = usePermission("projects.list");
+  const projectsAux = useAuxiliaryResource<Project[]>(
+    () => listProjects(),
+    [],
+    [],
+    canFilterByProject,
+  );
   const [payrollLoading, setPayrollLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -676,6 +691,13 @@ export function Employees() {
   const [historyEmp, setHistoryEmp] = useState<Employee | null>(null);
 
   const refreshPayroll = useCallback(async () => {
+    // Sem Dados Sensíveis, os blocos financeiros não existem — não busca a folha (evita 403).
+    if (!canSeeSensitive) {
+      setPayPrev(null);
+      setPayReal(null);
+      setPayrollLoading(false);
+      return;
+    }
     setPayrollLoading(true);
     try {
       const base = {
@@ -700,7 +722,7 @@ export function Employees() {
     } finally {
       setPayrollLoading(false);
     }
-  }, [referenceCompetencia, filterProjectId]);
+  }, [referenceCompetencia, filterProjectId, canSeeSensitive]);
 
   const payroll = scenario === "PREVISTO" ? payPrev : payReal;
 
@@ -727,14 +749,10 @@ export function Employees() {
     let cancelled = false;
     (async () => {
       try {
-        const [emps, projs] = await Promise.all([
-          listEmployees({ competencia: referenceCompetencia, limit: 200 }),
-          listProjects(),
-        ]);
-        if (!cancelled) {
-          setItems(emps);
-          setProjects(projs);
-        }
+        // Recurso PRINCIPAL (obrigatório): só a lista de colaboradores. O filtro por Projeto é
+        // auxiliar e carrega em separado (useAuxiliaryResource), então não pode derrubar esta carga.
+        const emps = await listEmployees({ competencia: referenceCompetencia, limit: 200 });
+        if (!cancelled) setItems(emps);
       } catch {
         if (!cancelled) setError("Erro ao listar colaboradores.");
       } finally {
@@ -890,6 +908,15 @@ export function Employees() {
     });
   }
 
+  // Acesso ao módulo exige Visualizar (employees.read). Sem isso, nada é renderizado.
+  if (!canAccessModule) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        Você não tem permissão para acessar o módulo Colaboradores.
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <div>
@@ -932,28 +959,32 @@ export function Employees() {
             ))}
           </div>
         </div>
-        <div className="min-w-[12rem]">
-          <label className="mb-1 block text-xs font-medium text-slate-600">Projeto (filtro)</label>
-          <select
-            value={filterProjectId}
-            onChange={(e) => setFilterProjectId(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-          >
-            <option value="">Todos os projetos</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* Filtro auxiliar: só aparece quando o recurso de Projetos está disponível (usuário tem
+            projects.list). Sem acesso, o controle some — nenhuma mensagem de erro. */}
+        {projectsAux.available && (
+          <div className="min-w-[12rem]">
+            <label className="mb-1 block text-xs font-medium text-slate-600">Projeto (filtro)</label>
+            <select
+              value={filterProjectId}
+              onChange={(e) => setFilterProjectId(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            >
+              <option value="">Todos os projetos</option>
+              {projectsAux.data.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
 
-      {!readOnly && (
+      {canCreateEmployees && (
         <div>
           <button
             type="button"
@@ -978,10 +1009,14 @@ export function Employees() {
                   <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
                   <th className="px-4 py-3 font-medium text-slate-600">Cargo</th>
                   <th className="px-4 py-3 font-medium text-slate-600">Tipo</th>
-                  <th className="px-4 py-3 text-right font-medium text-slate-600">Salário base</th>
-                  <th className="px-4 py-3 text-right font-medium text-slate-600">Custo mês</th>
+                  {canSeeSensitive && (
+                    <>
+                      <th className="px-4 py-3 text-right font-medium text-slate-600">Salário base</th>
+                      <th className="px-4 py-3 text-right font-medium text-slate-600">Custo mês</th>
+                    </>
+                  )}
                   <th className="px-4 py-3 font-medium text-slate-600">Ativo</th>
-                  {!readOnly && <th className="px-4 py-3" />}
+                  {(canUpdateEmployees || canDeleteEmployees) && <th className="px-4 py-3" />}
                 </tr>
               </thead>
               <tbody>
@@ -994,12 +1029,16 @@ export function Employees() {
                       <TruncatedCell value={emp.role_title} maxWidthClass="max-w-[220px]" />
                     </td>
                     <td className="px-4 py-3">{emp.employment_type}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                      {emp.salary_base != null ? formatMoney(emp.salary_base) : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-right font-medium tabular-nums text-slate-900">
-                      {formatMoney(emp.total_cost)}
-                    </td>
+                    {canSeeSensitive && (
+                      <>
+                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+                          {emp.salary_base != null ? formatMoney(emp.salary_base) : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-right font-medium tabular-nums text-slate-900">
+                          {formatMoney(emp.total_cost)}
+                        </td>
+                      </>
+                    )}
                     <td className="px-4 py-3">
                       {readOnly ? (
                         <span>{emp.is_active ? "Sim" : "Não"}</span>
@@ -1013,29 +1052,36 @@ export function Employees() {
                         </button>
                       )}
                     </td>
-                    {!readOnly && (
+                    {(canUpdateEmployees || canDeleteEmployees) && (
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => setEditingId(editingId === emp.id ? null : emp.id)}
-                          className="text-sm text-slate-600 hover:text-slate-900"
-                        >
-                          {editingId === emp.id ? "Fechar" : "Editar"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setHistoryEmp(emp)}
-                          className="ml-3 text-sm text-slate-600 hover:text-slate-900"
-                        >
-                          Histórico
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(emp.id)}
-                          className="ml-3 text-sm text-red-600 hover:underline"
-                        >
-                          Excluir
-                        </button>
+                        {canUpdateEmployees && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setEditingId(editingId === emp.id ? null : emp.id)}
+                              className="text-sm text-slate-600 hover:text-slate-900"
+                            >
+                              {editingId === emp.id ? "Fechar" : "Editar"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setHistoryEmp(emp)}
+                              className="ml-3 text-sm text-slate-600 hover:text-slate-900"
+                            >
+                              Histórico
+                            </button>
+                          </>
+                        )}
+                        {/* Excluir: aparece SÓ com employees.delete, independente de Editar (spec Caso 5). */}
+                        {canDeleteEmployees && (
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(emp.id)}
+                            className="ml-3 text-sm text-red-600 hover:underline"
+                          >
+                            Excluir
+                          </button>
+                        )}
                       </td>
                     )}
                   </tr>
@@ -1046,6 +1092,9 @@ export function Employees() {
         </div>
       )}
 
+      {/* Resumo/Custos da competência: só existem com Dados Sensíveis (employees.sensitive). */}
+      {canSeeSensitive && (
+        <>
       {/* RESUMO DA COMPETÊNCIA — inicia recolhido. */}
       <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <button
@@ -1264,6 +1313,8 @@ export function Employees() {
           </div>
         </CollapsiblePanel>
       </section>
+        </>
+      )}
 
       {editingId && !readOnly && (
         <EditEmployeePanel
@@ -1281,7 +1332,7 @@ export function Employees() {
 
       {/* DRAWER — Novo colaborador (oculto por padrão). Mesmo formulário/regras de antes,
           apenas movido para um painel lateral. */}
-      {showNewDrawer && !readOnly && (
+      {showNewDrawer && canCreateEmployees && (
         <div
           className="fixed inset-0 z-50 flex justify-end bg-black/40"
           role="dialog"

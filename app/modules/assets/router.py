@@ -8,9 +8,18 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.api.deps import get_current_user, require_permission
+from app.api.deps import get_current_user, require_permission, user_has_permission
+from app.api.sensitive import ASSET_SENSITIVE_FIELDS, redact
 from app.database.session import get_db
-from app.core.permission_codes import ASSETS_EDIT, ASSETS_VIEW, WORKSPACE_ASSETS_ACCESS
+from app.core.permission_codes import (
+    ASSETS_CREATE,
+    ASSETS_DELETE,
+    ASSETS_LIST,
+    ASSETS_READ,
+    ASSETS_SENSITIVE,
+    ASSETS_UPDATE,
+    WORKSPACE_ASSETS_ACCESS,
+)
 from app.models.asset import AssetAttachmentType, AssetPhysicalCondition, AssetStatus
 from app.models.user import User
 from app.schemas.assets import (
@@ -33,19 +42,61 @@ from app.services.assets_service import AssetsService
 
 router = APIRouter()
 
-_read = [Depends(require_permission(ASSETS_VIEW))]
-_edit = [Depends(require_permission(ASSETS_EDIT))]
+# Modelo de verbos (Fase 2). Listagens → assets.list; detalhe/leitura → assets.read;
+# criar/editar/excluir o ativo → create/update/delete; mutações de sub-recursos (movimentações,
+# ensaios, anexos) → assets.update (gerenciam os dados do ativo, não excluem o ativo).
+_list = [Depends(require_permission(ASSETS_LIST))]
+_read = [Depends(require_permission(ASSETS_READ))]
+_create = [Depends(require_permission(ASSETS_CREATE))]
+_update = [Depends(require_permission(ASSETS_UPDATE))]
+_delete = [Depends(require_permission(ASSETS_DELETE))]
 _workspace = [Depends(require_permission(WORKSPACE_ASSETS_ACCESS))]
 
 
-@router.get("/meta/categories", response_model=list[str], dependencies=_read + _workspace)
+def _redact_dashboard(d: AssetDashboardRead) -> AssetDashboardRead:
+    """Omite (zera) TODOS os agregados MONETÁRIOS do dashboard patrimonial, preservando as
+    quantidades (count/asset_count/damaged_count). Usado quando o usuário não tem assets.sensitive:
+    o backend deixa de enviar valores (valor total/em uso/disponível/manutenção/perdido, valor por
+    categoria/estado físico e valor por centro de custo)."""
+    zero_cv = lambda cv: cv.model_copy(update={"value": 0.0})
+    status = d.status.model_copy(
+        update={
+            "total": zero_cv(d.status.total),
+            "in_use": zero_cv(d.status.in_use),
+            "available": zero_cv(d.status.available),
+            "maintenance": zero_cv(d.status.maintenance),
+            "lost_or_discarded": zero_cv(d.status.lost_or_discarded),
+        }
+    )
+    alerts = d.alerts.model_copy(
+        update={
+            "expired_inspections": d.alerts.expired_inspections.model_copy(update={"amount_total": 0.0}),
+            "expiring_inspections": d.alerts.expiring_inspections.model_copy(update={"amount_total": 0.0}),
+            "without_holder": d.alerts.without_holder.model_copy(update={"amount_total": 0.0}),
+            "fair_condition": d.alerts.fair_condition.model_copy(update={"amount_total": 0.0}),
+        }
+    )
+    return d.model_copy(
+        update={
+            "status": status,
+            "physical_condition": [r.model_copy(update={"value": 0.0}) for r in d.physical_condition],
+            "by_category": [r.model_copy(update={"value": 0.0}) for r in d.by_category],
+            "by_cost_center": [
+                r.model_copy(update={"amount_total": 0.0, "average_value": 0.0}) for r in d.by_cost_center
+            ],
+            "alerts": alerts,
+        }
+    )
+
+
+@router.get("/meta/categories", response_model=list[str], dependencies=_list + _workspace)
 async def list_categories(
     scope: str | None = Query(default=None, description="patrimonial | epi | all (default all)"),
 ) -> list[str]:
     return AssetsService.categories_meta(scope=scope)
 
 
-@router.get("", response_model=list[AssetListItem], dependencies=_read + _workspace)
+@router.get("", response_model=list[AssetListItem], dependencies=_list + _workspace)
 async def list_assets(
     q: str | None = Query(default=None),
     category: str | None = Query(default=None),
@@ -59,9 +110,10 @@ async def list_assets(
     exclude_epi: bool = Query(default=False, description="Excluir categoria EPI (patrimônio)"),
     only_epi: bool = Query(default=False, description="Somente categoria EPI"),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> list[AssetListItem]:
     svc = AssetsService(db)
-    return await svc.list_assets(
+    rows = await svc.list_assets(
         q=q,
         category=category,
         status=status,
@@ -74,9 +126,11 @@ async def list_assets(
         exclude_epi=exclude_epi,
         only_epi=only_epi,
     )
+    _inc = user_has_permission(user, ASSETS_SENSITIVE)
+    return [redact(r, ASSET_SENSITIVE_FIELDS, _inc) for r in rows]
 
 
-@router.get("/epis", response_model=list[AssetListItem], dependencies=_read + _workspace)
+@router.get("/epis", response_model=list[AssetListItem], dependencies=_list + _workspace)
 async def list_epis(
     q: str | None = Query(default=None),
     status: AssetStatus | None = Query(default=None),
@@ -87,10 +141,11 @@ async def list_epis(
     without_holder: bool | None = Query(default=None),
     physical_condition: AssetPhysicalCondition | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> list[AssetListItem]:
     """Listagem operacional de EPIs (mesma tabela `assets`, escopo EPI)."""
     svc = AssetsService(db)
-    return await svc.list_assets(
+    rows = await svc.list_assets(
         q=q,
         status=status,
         employee_id=employee_id,
@@ -101,36 +156,52 @@ async def list_epis(
         physical_condition=physical_condition,
         only_epi=True,
     )
+    _inc = user_has_permission(user, ASSETS_SENSITIVE)
+    return [redact(r, ASSET_SENSITIVE_FIELDS, _inc) for r in rows]
 
 
 @router.get("/dashboard", response_model=AssetDashboardRead, dependencies=_read + _workspace)
-async def assets_dashboard(db: AsyncSession = Depends(get_db)) -> AssetDashboardRead:
-    return await AssetsDashboardService(db).get_dashboard()
+async def assets_dashboard(
+    db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> AssetDashboardRead:
+    dash = await AssetsDashboardService(db).get_dashboard()
+    # Sem assets.sensitive: omite os valores monetários dos cards/gráficos (mantém as quantidades).
+    if not user_has_permission(user, ASSETS_SENSITIVE):
+        dash = _redact_dashboard(dash)
+    return dash
 
 
-@router.post("", response_model=AssetRead, dependencies=_edit + _workspace)
-async def create_asset(payload: AssetCreate, db: AsyncSession = Depends(get_db)) -> AssetRead:
+@router.post("", response_model=AssetRead, dependencies=_create + _workspace)
+async def create_asset(
+    payload: AssetCreate, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> AssetRead:
     svc = AssetsService(db)
     try:
         row = await svc.create_asset(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.commit()
-    return row
+    # Criar NÃO concede ver: sem assets.sensitive, o valor recém-cadastrado volta omitido.
+    return redact(row, ASSET_SENSITIVE_FIELDS, user_has_permission(user, ASSETS_SENSITIVE))
 
 
 @router.get("/{asset_id}", response_model=AssetDetail, dependencies=_read + _workspace)
-async def get_asset_detail(asset_id: UUID, db: AsyncSession = Depends(get_db)) -> AssetDetail:
+async def get_asset_detail(
+    asset_id: UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> AssetDetail:
     svc = AssetsService(db)
     row = await svc.get_detail(asset_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Ativo não encontrado")
-    return row
+    return redact(row, ASSET_SENSITIVE_FIELDS, user_has_permission(user, ASSETS_SENSITIVE))
 
 
-@router.patch("/{asset_id}", response_model=AssetRead, dependencies=_edit + _workspace)
+@router.patch("/{asset_id}", response_model=AssetRead, dependencies=_update + _workspace)
 async def update_asset(
-    asset_id: UUID, payload: AssetUpdate, db: AsyncSession = Depends(get_db)
+    asset_id: UUID,
+    payload: AssetUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> AssetRead:
     svc = AssetsService(db)
     try:
@@ -140,10 +211,11 @@ async def update_asset(
     if row is None:
         raise HTTPException(status_code=404, detail="Ativo não encontrado")
     await db.commit()
-    return row
+    # Editar NÃO concede ver: sem assets.sensitive, o valor salvo volta omitido.
+    return redact(row, ASSET_SENSITIVE_FIELDS, user_has_permission(user, ASSETS_SENSITIVE))
 
 
-@router.delete("/{asset_id}", status_code=204, dependencies=_edit + _workspace)
+@router.delete("/{asset_id}", status_code=204, dependencies=_delete + _workspace)
 async def delete_asset(asset_id: UUID, db: AsyncSession = Depends(get_db)) -> None:
     svc = AssetsService(db)
     ok = await svc.soft_delete_asset(asset_id)
@@ -155,7 +227,7 @@ async def delete_asset(asset_id: UUID, db: AsyncSession = Depends(get_db)) -> No
 @router.delete(
     "/{asset_id}/assignments/{assignment_id}",
     status_code=204,
-    dependencies=_edit + _workspace,
+    dependencies=_update + _workspace,
 )
 async def delete_assignment(
     asset_id: UUID, assignment_id: UUID, db: AsyncSession = Depends(get_db)
@@ -167,7 +239,7 @@ async def delete_assignment(
     await db.commit()
 
 
-@router.post("/{asset_id}/assignments", response_model=AssetAssignmentRead, dependencies=_edit + _workspace)
+@router.post("/{asset_id}/assignments", response_model=AssetAssignmentRead, dependencies=_update + _workspace)
 async def create_assignment(
     asset_id: UUID, payload: AssetAssignmentCreate, db: AsyncSession = Depends(get_db)
 ) -> AssetAssignmentRead:
@@ -185,7 +257,7 @@ async def create_assignment(
 @router.post(
     "/{asset_id}/assignments/{assignment_id}/return",
     response_model=AssetAssignmentRead,
-    dependencies=_edit + _workspace,
+    dependencies=_update + _workspace,
 )
 async def return_assignment(
     asset_id: UUID,
@@ -207,7 +279,7 @@ async def return_assignment(
 @router.patch(
     "/{asset_id}/assignments/{assignment_id}/return",
     response_model=AssetAssignmentRead,
-    dependencies=_edit + _workspace,
+    dependencies=_update + _workspace,
 )
 async def update_return_assignment(
     asset_id: UUID,
@@ -229,7 +301,7 @@ async def update_return_assignment(
 @router.delete(
     "/{asset_id}/assignments/{assignment_id}/return",
     response_model=AssetAssignmentRead,
-    dependencies=_edit + _workspace,
+    dependencies=_update + _workspace,
 )
 async def delete_return_assignment(
     asset_id: UUID,
@@ -250,7 +322,7 @@ async def delete_return_assignment(
 @router.delete(
     "/{asset_id}/inspections/{inspection_id}",
     status_code=204,
-    dependencies=_edit + _workspace,
+    dependencies=_update + _workspace,
 )
 async def delete_inspection(
     asset_id: UUID, inspection_id: UUID, db: AsyncSession = Depends(get_db)
@@ -262,7 +334,7 @@ async def delete_inspection(
     await db.commit()
 
 
-@router.post("/{asset_id}/inspections", response_model=AssetInspectionRead, dependencies=_edit + _workspace)
+@router.post("/{asset_id}/inspections", response_model=AssetInspectionRead, dependencies=_update + _workspace)
 async def create_inspection(
     asset_id: UUID, payload: AssetInspectionCreate, db: AsyncSession = Depends(get_db)
 ) -> AssetInspectionRead:
@@ -274,7 +346,7 @@ async def create_inspection(
     return row
 
 
-@router.post("/{asset_id}/attachments", response_model=AssetAttachmentRead, dependencies=_edit + _workspace)
+@router.post("/{asset_id}/attachments", response_model=AssetAttachmentRead, dependencies=_update + _workspace)
 async def upload_attachment(
     asset_id: UUID,
     file: UploadFile = File(...),
@@ -332,7 +404,7 @@ async def download_attachment(
 @router.delete(
     "/{asset_id}/attachments/{attachment_id}",
     status_code=204,
-    dependencies=_edit + _workspace,
+    dependencies=_update + _workspace,
 )
 async def delete_attachment(
     asset_id: UUID, attachment_id: UUID, db: AsyncSession = Depends(get_db)

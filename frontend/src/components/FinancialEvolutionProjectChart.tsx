@@ -44,7 +44,8 @@ const MONTH_SHORT_PT = [
   "Dez",
 ] as const;
 
-function formatBRL(n: number): string {
+function formatBRL(n: number | null | undefined): string {
+  if (n == null) return "—"; // redigido por "Dados sensíveis"
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
@@ -215,6 +216,24 @@ export function FinancialEvolutionProjectChart({ monthlySeries, scenario, multiM
     }
     return rows;
   }, [chartData, isSinglePeriod, showReceita, showCusto, showLucro]);
+
+  // "Dados sensíveis": quando os valores vêm redigidos (null) do backend, o gráfico é
+  // exclusivamente financeiro e não faz sentido — exibe estado de valores ocultos (mantém
+  // o card na tela). Detecção runtime-safe (o tipo declara number, mas pode vir null).
+  const redacted =
+    monthlySeries.length > 0 &&
+    monthlySeries.every((p) => (p as { total_revenue: number | null }).total_revenue == null);
+
+  if (redacted) {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+        <h3 className="text-sm font-medium text-slate-700">Evolução financeira ({scenarioLabel})</h3>
+        <div className="mt-4 flex h-40 items-center justify-center rounded-lg border border-dashed border-slate-200 text-sm text-slate-500">
+          Valores ocultos — sem permissão de Dados Sensíveis.
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">

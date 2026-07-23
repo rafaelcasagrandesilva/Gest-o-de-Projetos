@@ -17,6 +17,7 @@ import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 import { formatApiError } from "@/utils/apiError";
 import {
   formatCurrencyInputFromApi,
+  formatCurrencyOrDash,
   normalizeCurrencyForApi,
   sanitizeCurrencyTyping,
 } from "@/utils/currency";
@@ -78,7 +79,7 @@ function statusBadgeClass(s: ReceivableUiStatus): string {
 export function Receivables() {
   const canReactivateInvoices = usePermission("invoices.reactivate");
   // Edição de receitas manuais tem permissão PRÓPRIA (antes usava invoices.edit).
-  const canEditReceivables = usePermission("receivables.edit");
+  const canEditReceivables = usePermission("receivables.update");
   const [reactivatingId, setReactivatingId] = useState<string | null>(null);
   const [periodMode, setPeriodMode] = useState<"MONTH" | "ALL">("MONTH");
   const [period, setPeriod] = useState(() => monthToYm(new Date()));
@@ -168,6 +169,14 @@ export function Receivables() {
     return { total_receber: total, recebido, em_aberto: emAberto, em_atraso: Math.round(atraso * 100) / 100 };
   }, [viewRows]);
 
+  // Sem "Dados sensíveis" (receivables.sensitive) o backend omite os valores (null) → KPIs
+  // e totais ficam ocultos ("—"), não zerados. Redação é tudo-ou-nada por usuário.
+  const valuesRedacted = useMemo(
+    () => viewRows.some(({ r }) => r.net_value == null),
+    [viewRows],
+  );
+  const kpiMoney = (n: number) => (valuesRedacted ? "—" : formatBRL(n));
+
   return (
     <div className="space-y-5">
       <div>
@@ -186,9 +195,9 @@ export function Receivables() {
       )}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Kpi label="Total a receber" value={formatBRL(kpis.total_receber)} />
-        <Kpi label="Recebido" value={formatBRL(kpis.recebido)} />
-        <Kpi label="Em aberto" value={formatBRL(kpis.em_aberto)} accent="text-amber-800" />
+        <Kpi label="Total a receber" value={kpiMoney(kpis.total_receber)} />
+        <Kpi label="Recebido" value={kpiMoney(kpis.recebido)} />
+        <Kpi label="Em aberto" value={kpiMoney(kpis.em_aberto)} accent="text-amber-800" />
       </section>
 
       <section className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -305,7 +314,7 @@ export function Receivables() {
                 </td>
               </tr>
             ) : (
-              sortedRows.map(({ r, tipo, net, saldo, uiStatus }) => (
+              sortedRows.map(({ r, tipo, uiStatus }) => (
                 <tr key={r.id} className="hover:bg-slate-50/80">
                   <td className="px-2 py-2">
                     {tipo === "MANUAL" ? (
@@ -353,17 +362,17 @@ export function Receivables() {
                   </td>
                   <td className="whitespace-nowrap px-2 py-2">{formatDateBr(r.issue_date)}</td>
                   <td className="whitespace-nowrap px-2 py-2">{formatDateBr(r.due_date)}</td>
-                  <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatBRL(net)}</td>
+                  <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatCurrencyOrDash(r.net_value)}</td>
                   <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                    {formatBRL(Number(r.amount_received_advance ?? 0))}
+                    {formatCurrencyOrDash(r.amount_received_advance)}
                   </td>
                   <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                    {formatBRL(Number(r.amount_received_customer ?? 0))}
+                    {formatCurrencyOrDash(r.amount_received_customer)}
                   </td>
                   <td className="whitespace-nowrap px-2 py-2">
                     {uiStatus !== "RECEBIDO" || !r.received_at ? "—" : formatDateBr(r.received_at)}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatBRL(saldo)}</td>
+                  <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatCurrencyOrDash(r.remaining)}</td>
                   <td className="px-2 py-2">
                     <span
                       className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${statusBadgeClass(uiStatus)}`}

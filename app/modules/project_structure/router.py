@@ -15,6 +15,7 @@ from app.api.deps import (
 )
 from app.core.permission_codes import PROJECTS_EDIT
 from app.core.scenario import coerce_scenario, parse_scenario
+from app.api.sensitive import redact_for
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.project_structure import (
@@ -62,10 +63,11 @@ async def get_project_labor_details(
     competencia: date = Query(..., description="Primeiro dia do mês"),
     scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> list[ProjectLaborDetailItem]:
     sc = coerce_scenario(scenario_param)
-    return await _svc(db).list_labor_details(project_id=project_id, competencia=competencia, scenario=sc)
+    _rows = await _svc(db).list_labor_details(project_id=project_id, competencia=competencia, scenario=sc)
+    return [redact_for("project_labor_detail", _m, user) for _m in _rows]
 
 
 @router.get("/{project_id}/structure/labors", response_model=list[ProjectLaborRead])
@@ -74,10 +76,11 @@ async def list_structure_labors(
     competencia: date = Query(..., description="Primeiro dia do mês"),
     scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> list[ProjectLaborRead]:
     sc = coerce_scenario(scenario_param)
-    return await _svc(db).list_labors_read(project_id=project_id, competencia=competencia, scenario=sc)
+    _rows = await _svc(db).list_labors_read(project_id=project_id, competencia=competencia, scenario=sc)
+    return [redact_for("project_labor", _m, user) for _m in _rows]
 
 
 @router.post("/{project_id}/structure/labors", response_model=ProjectLaborRead, dependencies=_write)
@@ -93,7 +96,7 @@ async def create_structure_labor(
     sc = parse_scenario(data.get("scenario"), default=default_scenario_for_create(actor))
     await assert_may_write_scenario(user=actor, scenario=sc, db=db, project_id=project_id)
     data["scenario"] = sc
-    return await _svc(db).create_labor(project_id=project_id, data=data, actor=actor, request=request)
+    return redact_for("project_labor", await _svc(db).create_labor(project_id=project_id, data=data, actor=actor, request=request), actor)
 
 
 @router.post(
@@ -180,9 +183,9 @@ async def patch_structure_labor_costs(
 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
     await assert_may_write_scenario(user=actor, scenario=row.scenario, db=db, project_id=project_id)
-    return await _svc(db).update_labor_costs(
+    return redact_for("project_labor", await _svc(db).update_labor_costs(
         project_id=project_id, labor_id=labor_id, payload=payload, actor=actor, request=request
-    )
+    ), actor)
 
 
 @router.delete("/{project_id}/structure/labors/{labor_id}", status_code=204, dependencies=_write)
@@ -212,10 +215,11 @@ async def list_structure_vehicles(
     competencia: date = Query(...),
     scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> list[ProjectVehicleRead]:
     sc = coerce_scenario(scenario_param)
-    return await _svc(db).list_project_vehicles_read(project_id=project_id, competencia=competencia, scenario=sc)
+    _rows = await _svc(db).list_project_vehicles_read(project_id=project_id, competencia=competencia, scenario=sc)
+    return [redact_for("project_vehicle", _m, user) for _m in _rows]
 
 
 @router.post("/{project_id}/structure/vehicles", response_model=ProjectVehicleRead, dependencies=_write)
@@ -230,7 +234,7 @@ async def create_structure_vehicle(
     sc = parse_scenario(data.get("scenario"), default=default_scenario_for_create(actor))
     await assert_may_write_scenario(user=actor, scenario=sc, db=db, project_id=project_id)
     data["scenario"] = sc
-    return await _svc(db).create_project_vehicle(project_id=project_id, data=data)
+    return redact_for("project_vehicle", await _svc(db).create_project_vehicle(project_id=project_id, data=data), actor)
 
 
 @router.patch("/{project_id}/structure/vehicles/{vehicle_id}", response_model=ProjectVehicleRead, dependencies=_write)
@@ -248,9 +252,9 @@ async def update_structure_vehicle(
 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
     await assert_may_write_scenario(user=actor, scenario=row.scenario, db=db, project_id=project_id)
-    return await _svc(db).update_project_vehicle(
+    return redact_for("project_vehicle", await _svc(db).update_project_vehicle(
         allocation_id=vehicle_id, data=payload.model_dump(exclude_unset=True)
-    )
+    ), actor)
 
 
 @router.delete("/{project_id}/structure/vehicles/{vehicle_id}", status_code=204, dependencies=_write)
@@ -279,11 +283,11 @@ async def list_structure_systems(
     competencia: date = Query(...),
     scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> list[ProjectSystemCostRead]:
     sc = coerce_scenario(scenario_param)
     rows = await _svc(db).list_systems(project_id=project_id, competencia=competencia, scenario=sc)
-    return [ProjectSystemCostRead.model_validate(r) for r in rows]
+    return [redact_for("project_value", ProjectSystemCostRead.model_validate(r), user) for r in rows]
 
 
 @router.post("/{project_id}/structure/systems", response_model=ProjectSystemCostRead, dependencies=_write)
@@ -299,7 +303,7 @@ async def create_structure_system(
     await assert_may_write_scenario(user=actor, scenario=sc, db=db, project_id=project_id)
     data["scenario"] = sc
     row = await _svc(db).create_system(project_id=project_id, data=data)
-    return ProjectSystemCostRead.model_validate(row)
+    return redact_for("project_value", ProjectSystemCostRead.model_validate(row), actor)
 
 
 @router.patch("/{project_id}/structure/systems/{system_id}", response_model=ProjectSystemCostRead, dependencies=_write)
@@ -318,7 +322,7 @@ async def update_structure_system(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
     await assert_may_write_scenario(user=actor, scenario=row.scenario, db=db, project_id=project_id)
     row = await _svc(db).update_system(system_id=system_id, data=payload.model_dump(exclude_unset=True))
-    return ProjectSystemCostRead.model_validate(row)
+    return redact_for("project_value", ProjectSystemCostRead.model_validate(row), actor)
 
 
 @router.delete("/{project_id}/structure/systems/{system_id}", status_code=204, dependencies=_write)
@@ -347,11 +351,11 @@ async def list_structure_fixed(
     competencia: date = Query(...),
     scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> list[ProjectOperationalFixedRead]:
     sc = coerce_scenario(scenario_param)
     rows = await _svc(db).list_fixed(project_id=project_id, competencia=competencia, scenario=sc)
-    return [ProjectOperationalFixedRead.model_validate(r) for r in rows]
+    return [redact_for("project_value", ProjectOperationalFixedRead.model_validate(r), user) for r in rows]
 
 
 @router.post("/{project_id}/structure/fixed-operational", response_model=ProjectOperationalFixedRead, dependencies=_write)
@@ -367,7 +371,7 @@ async def create_structure_fixed(
     await assert_may_write_scenario(user=actor, scenario=sc, db=db, project_id=project_id)
     data["scenario"] = sc
     row = await _svc(db).create_fixed(project_id=project_id, data=data)
-    return ProjectOperationalFixedRead.model_validate(row)
+    return redact_for("project_value", ProjectOperationalFixedRead.model_validate(row), actor)
 
 
 @router.patch(
@@ -390,7 +394,7 @@ async def update_structure_fixed(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
     await assert_may_write_scenario(user=actor, scenario=row.scenario, db=db, project_id=project_id)
     row = await _svc(db).update_fixed(fixed_id=fixed_id, data=payload.model_dump(exclude_unset=True))
-    return ProjectOperationalFixedRead.model_validate(row)
+    return redact_for("project_value", ProjectOperationalFixedRead.model_validate(row), actor)
 
 
 @router.delete("/{project_id}/structure/fixed-operational/{fixed_id}", status_code=204, dependencies=_write)

@@ -57,6 +57,7 @@ class FleetService:
         include_inactive: bool = False,
         cost_center: str | None = None,
         competence=None,
+        cost_center_exact: str | None = None,
     ) -> list[Vehicle]:
         return await self.vehicles.list_ordered(
             offset=offset,
@@ -64,6 +65,7 @@ class FleetService:
             include_inactive=include_inactive,
             cost_center=cost_center,
             competence=competence,
+            cost_center_exact=cost_center_exact,
         )
 
     async def list_active_for_project(

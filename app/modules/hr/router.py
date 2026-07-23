@@ -13,7 +13,15 @@ from app.api.deps import (
     get_current_user,
     require_permission,
 )
-from app.core.permission_codes import EMPLOYEES_EDIT, EMPLOYEES_VIEW
+from app.api.deps import user_has_permission
+from app.api.sensitive import EMPLOYEE_SENSITIVE_FIELDS, redact
+from app.core.permission_codes import (
+    EMPLOYEES_CREATE,
+    EMPLOYEES_DELETE,
+    EMPLOYEES_LIST,
+    EMPLOYEES_SENSITIVE,
+    EMPLOYEES_UPDATE,
+)
 from app.core.scenario import parse_scenario
 from app.database.session import get_db
 from app.models.user import User
@@ -27,12 +35,13 @@ from app.schemas.employees import (
 from app.services.employees_service import EmployeesService, default_cost_reference
 
 
-_read = [Depends(require_permission(EMPLOYEES_VIEW))]
+# Modelo de verbos (Fase 2): listagem → employees.list; mutações → create/update/delete.
+_list = [Depends(require_permission(EMPLOYEES_LIST))]
 
 router = APIRouter()
 
 
-@router.get("/employees", response_model=list[EmployeeRead], dependencies=_read)
+@router.get("/employees", response_model=list[EmployeeRead], dependencies=_list)
 async def list_employees(
     db: AsyncSession = Depends(get_db),
     offset: int = Query(default=0, ge=0),
@@ -46,14 +55,18 @@ async def list_employees(
         default=None,
         description="Primeiro dia do mês de competência para custo CLT na resposta.",
     ),
+    user: User = Depends(get_current_user),
 ) -> list[EmployeeRead]:
     comp = competencia or default_cost_reference()
-    return await EmployeesService(db).list_employees_read_for_project(
+    rows = await EmployeesService(db).list_employees_read_for_project(
         offset=offset, limit=limit, competencia=comp, search=search, project_id=project_id
     )
+    # Dados sensíveis (salário, custos, PIX) só para quem tem employees.sensitive.
+    include = user_has_permission(user, EMPLOYEES_SENSITIVE)
+    return [redact(r, EMPLOYEE_SENSITIVE_FIELDS, include) for r in rows]
 
 
-@router.post("/employees", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
+@router.post("/employees", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_CREATE))])
 async def create_employee(
     payload: EmployeeCreate,
     request: Request,
@@ -68,7 +81,7 @@ async def create_employee(
     return await svc.employee_to_read(row, competencia=comp)
 
 
-@router.patch("/employees/{employee_id}", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
+@router.patch("/employees/{employee_id}", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))])
 async def update_employee(
     employee_id,
     payload: EmployeeUpdate,
@@ -92,7 +105,7 @@ async def update_employee(
     return await svc.employee_to_read(row, competencia=comp)
 
 
-@router.delete("/employees/{employee_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
+@router.delete("/employees/{employee_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_DELETE))])
 async def delete_employee(
     employee_id,
     request: Request,
@@ -104,7 +117,7 @@ async def delete_employee(
     )
 
 
-@router.post("/allocations", response_model=EmployeeAllocationRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
+@router.post("/allocations", response_model=EmployeeAllocationRead, dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))])
 async def create_allocation(
     payload: EmployeeAllocationCreate,
     request: Request,

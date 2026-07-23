@@ -18,7 +18,7 @@ class VehicleRead(UUIDTimestampRead):
     model: str | None = None
     description: str | None = None
     vehicle_type: str = Field(serialization_alias="type")
-    monthly_cost: float
+    monthly_cost: float | None = None
     driver_employee_id: UUID | None = None
     driver_name: str | None = None
     # Cache do Centro de Custo vigente (fonte da verdade é temporal — histórico).

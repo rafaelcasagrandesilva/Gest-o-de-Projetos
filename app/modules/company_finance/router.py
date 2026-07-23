@@ -11,12 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, require_permission, user_has_permission
-from app.core.permission_codes import (
-    COMPANY_FINANCE_EDIT,
-    COMPANY_FINANCE_VIEW,
-    DEBTS_EDIT,
-    DEBTS_VIEW,
-)
+from app.api.sensitive import redact_for
+from app.core.permission_codes import COMPANY_FINANCE_READ, DEBTS_READ
 from app.database.session import get_db
 from app.models.company_finance import CompanyFinancialItem
 from app.models.user import User
@@ -35,6 +31,11 @@ from app.services.company_finance_service import CompanyFinanceService, parse_mo
 
 
 router = APIRouter()
+
+
+def _sensitive_resource_for_tipo(tipo: str) -> str:
+    """Recurso de Dados Sensíveis por tipo: Endividamento→debts, Custo Fixo→company_finance."""
+    return "debt_item" if tipo == "endividamento" else "custo_fixo_item"
 logger = logging.getLogger(__name__)
 
 
@@ -43,22 +44,24 @@ logger = logging.getLogger(__name__)
 # Cada um usa a permissão do SEU módulo, sem depender do outro:
 #   - tipo == "endividamento" -> debts.view / debts.edit
 #   - tipo == "custo_fixo"    -> company_finance.view / company_finance.edit
-def _view_code_for_tipo(tipo: str) -> str:
-    return DEBTS_VIEW if tipo == "endividamento" else COMPANY_FINANCE_VIEW
+# Modelo de verbos por TIPO: endividamento → debts.<verbo>; custo_fixo → company_finance.<verbo>.
+def _verb_code_for_tipo(tipo: str, verb: str) -> str:
+    resource = "debts" if tipo == "endividamento" else "company_finance"
+    return f"{resource}.{verb}"
 
 
-def _edit_code_for_tipo(tipo: str) -> str:
-    return DEBTS_EDIT if tipo == "endividamento" else COMPANY_FINANCE_EDIT
+def _read_code_for_tipo(tipo: str) -> str:
+    return DEBTS_READ if tipo == "endividamento" else COMPANY_FINANCE_READ
 
 
 def _assert_view(user: User, tipo: str) -> None:
-    if not user_has_permission(user, _view_code_for_tipo(tipo)):
+    if not user_has_permission(user, _read_code_for_tipo(tipo)):
         raise HTTPException(status_code=403, detail="Sem permissão para visualizar este módulo.")
 
 
-def _assert_edit(user: User, tipo: str) -> None:
-    if not user_has_permission(user, _edit_code_for_tipo(tipo)):
-        raise HTTPException(status_code=403, detail="Sem permissão para editar este módulo.")
+def _assert_verb(user: User, tipo: str, verb: str) -> None:
+    if not user_has_permission(user, _verb_code_for_tipo(tipo, verb)):
+        raise HTTPException(status_code=403, detail="Sem permissão para esta operação neste módulo.")
 
 
 def require_finance_view_by_tipo(
@@ -116,11 +119,13 @@ async def list_items(
     tipo: str = Query(..., pattern="^(endividamento|custo_fixo)$"),
     competencia: str | None = Query(default=None, description="YYYY-MM — mês de contexto para pago no mês"),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> list[CompanyFinancialItemRead]:
     svc = CompanyFinanceService(db)
     comp = competencia or _default_month()
     rows = await svc.list_items(tipo=tipo, competencia=comp)
-    return [CompanyFinancialItemRead.model_validate(r) for r in rows]
+    res = _sensitive_resource_for_tipo(tipo)
+    return [redact_for(res, CompanyFinancialItemRead.model_validate(r), actor) for r in rows]
 
 
 @router.post("/items", response_model=CompanyFinancialItemRead)
@@ -129,7 +134,7 @@ async def create_item(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> CompanyFinancialItemRead:
-    _assert_edit(actor, payload.tipo)
+    _assert_verb(actor, payload.tipo, "create")
     svc = CompanyFinanceService(db)
     try:
         row = await svc.create_item(actor_user_id=actor.id, data=payload.model_dump())
@@ -141,7 +146,9 @@ async def create_item(
         raise HTTPException(status_code=500, detail="Falha ao carregar item")
     comp = _default_month()
     read = await svc._item_to_read(loaded, parse_month(comp))
-    return CompanyFinancialItemRead.model_validate(read)
+    return redact_for(
+        _sensitive_resource_for_tipo(payload.tipo), CompanyFinancialItemRead.model_validate(read), actor
+    )
 
 
 @router.patch("/items/{item_id}", response_model=CompanyFinancialItemRead)
@@ -155,7 +162,7 @@ async def update_item(
     tipo = await _item_tipo(db, item_id)
     if tipo is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")
-    _assert_edit(actor, tipo)
+    _assert_verb(actor, tipo, "update")
     svc = CompanyFinanceService(db)
     patch_data = payload.model_dump(exclude_unset=True)
     logger.info(
@@ -185,7 +192,9 @@ async def update_item(
         read.get("cost_center_project_id"),
         read.get("cost_center_system"),
     )
-    return CompanyFinancialItemRead.model_validate(read)
+    return redact_for(
+        _sensitive_resource_for_tipo(tipo), CompanyFinancialItemRead.model_validate(read), actor
+    )
 
 
 @router.delete("/items/{item_id}", status_code=204)
@@ -197,7 +206,7 @@ async def delete_item(
     tipo = await _item_tipo(db, item_id)
     if tipo is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")
-    _assert_edit(actor, tipo)
+    _assert_verb(actor, tipo, "delete")
     svc = CompanyFinanceService(db)
     try:
         ok = await svc.delete_item(item_id=item_id)
@@ -219,7 +228,7 @@ async def replace_payments(
     tipo = await _item_tipo(db, item_id)
     if tipo is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")
-    _assert_edit(actor, tipo)
+    _assert_verb(actor, tipo, "update")
     pags = [p.model_dump() for p in payload.pagamentos]
     logger.info(
         "company_finance.replace_payments START item_id=%s competencia=%s payload=%s",
@@ -257,7 +266,7 @@ async def replace_payments(
                 "automaticamente. Ajuste o lançamento manualmente para preservar o histórico."
             )
         logger.info("company_finance.replace_payments OK item_id=%s competencia=%s", item_id, comp)
-        return result
+        return redact_for(_sensitive_resource_for_tipo(tipo), result, actor)
     except HTTPException:
         raise
     except Exception as e:
@@ -272,24 +281,26 @@ async def replace_payments(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/kpis/endividamento", response_model=KpiEndividamentoRead, dependencies=[Depends(require_permission(DEBTS_VIEW))])
+@router.get("/kpis/endividamento", response_model=KpiEndividamentoRead, dependencies=[Depends(require_permission(DEBTS_READ))])
 async def kpis_endividamento(
     competencia: str = Query(..., description="YYYY-MM"),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> KpiEndividamentoRead:
     svc = CompanyFinanceService(db)
     data = await svc.kpis_endividamento(competencia=competencia)
-    return KpiEndividamentoRead.model_validate(data)
+    return redact_for("kpi_endividamento", KpiEndividamentoRead.model_validate(data), actor)
 
 
-@router.get("/kpis/custos-fixos", response_model=KpiCustosFixosRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_VIEW))])
+@router.get("/kpis/custos-fixos", response_model=KpiCustosFixosRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_READ))])
 async def kpis_custos_fixos(
     competencia: str = Query(..., description="YYYY-MM"),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> KpiCustosFixosRead:
     svc = CompanyFinanceService(db)
     data = await svc.kpis_custos_fixos(competencia=competencia)
-    return KpiCustosFixosRead.model_validate(data)
+    return redact_for("kpi_custos_fixos", KpiCustosFixosRead.model_validate(data), actor)
 
 
 @router.get("/pendencias", response_model=PendenciasCustosFixosRead, dependencies=_read_by_tipo)
@@ -297,21 +308,24 @@ async def pendencias(
     tipo: str = Query(..., pattern="^(endividamento|custo_fixo)$"),
     competencia: str = Query(..., description="YYYY-MM"),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> PendenciasCustosFixosRead:
     svc = CompanyFinanceService(db)
     data = await svc.pendencias(tipo=tipo, competencia=competencia)
-    return PendenciasCustosFixosRead.model_validate(data)
+    _res = "debt_pendencias" if tipo == "endividamento" else "custo_fixo_pendencias"
+    return redact_for(_res, PendenciasCustosFixosRead.model_validate(data), actor)
 
 
-@router.get("/pendencias/custos-fixos", response_model=PendenciasCustosFixosRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_VIEW))])
+@router.get("/pendencias/custos-fixos", response_model=PendenciasCustosFixosRead, dependencies=[Depends(require_permission(COMPANY_FINANCE_READ))])
 async def pendencias_custos_fixos(
     competencia: str = Query(..., description="YYYY-MM"),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> PendenciasCustosFixosRead:
     """Alias de compatibilidade — equivale a /pendencias?tipo=custo_fixo."""
     svc = CompanyFinanceService(db)
     data = await svc.pendencias_custos_fixos(competencia=competencia)
-    return PendenciasCustosFixosRead.model_validate(data)
+    return redact_for("custo_fixo_pendencias", PendenciasCustosFixosRead.model_validate(data), actor)
 
 
 @router.get("/chart-series", response_model=ChartSeriesRead, dependencies=_read_by_tipo)
@@ -320,6 +334,7 @@ async def chart_series(
     mes_inicio: str | None = Query(default=None, description="YYYY-MM"),
     mes_fim: str | None = Query(default=None, description="YYYY-MM"),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> ChartSeriesRead:
     svc = CompanyFinanceService(db)
     default_start, default_end = _month_range_default_end()
@@ -327,4 +342,5 @@ async def chart_series(
     start = mes_inicio or default_start
     points_raw = await svc.chart_series(tipo=tipo, mes_inicio=start, mes_fim=end)
     points = [ChartPoint.model_validate(p) for p in points_raw]
-    return ChartSeriesRead(points=points)
+    _res = "debt_chart" if tipo == "endividamento" else "custo_fixo_chart"
+    return redact_for(_res, ChartSeriesRead(points=points), actor)

@@ -5,7 +5,8 @@ export type RenegotiationType = "UNIQUE" | "INSTALLMENTS";
 
 export interface PagamentoMes {
   mes: string;
-  valor: number;
+  /** `null` quando redigido por falta de "Dados sensíveis". */
+  valor: number | null;
 }
 
 export interface CompanyFinancialItem {
@@ -20,6 +21,8 @@ export interface CompanyFinancialItem {
   /** Descrição própria do item (identificador da dívida em Endividamento). */
   item_description?: string | null;
   valor_referencia: number;
+  /** Base financeira ÚNICA da dívida (renegociado válido > 0 senão valor_referencia). */
+  debt_base?: number;
   category?: string | null;
   cost_center_ref?: string;
   cost_center: string;
@@ -42,26 +45,31 @@ export interface CompanyFinancialItem {
   start_date?: string | null;
   end_date?: string | null;
   pagamentos: PagamentoMes[];
-  total_pago: number;
-  pago_mes: number;
+  total_pago: number | null;
+  pago_mes: number | null;
   restante: number | null;
   progresso: number;
   status: string | null;
   progresso_mes: number | null;
+  /** Espelho do Contas a Pagar da competência (fonte oficial de pagamento/status). */
+  cap_has_line?: boolean;
+  cap_amount_paid?: number;
+  cap_status?: "ABERTO" | "PARCIAL" | "PAGO" | null;
+  cap_is_obsolete?: boolean;
   /** Aviso da sincronização grade→CAP (só na resposta do PUT de pagamentos). */
   payable_sync_warning?: string | null;
 }
 
 export interface KpiEndividamento {
-  total_endividamento: number;
-  total_pago_mes: number;
-  saldo_restante: number;
+  total_endividamento: number | null;
+  total_pago_mes: number | null;
+  saldo_restante: number | null;
   quantidade_itens: number;
 }
 
 export interface KpiCustosFixos {
-  total_esperado_mes: number;
-  total_pago_mes: number;
+  total_esperado_mes: number | null;
+  total_pago_mes: number | null;
   quantidade_itens: number;
 }
 
@@ -106,7 +114,7 @@ export async function createCompanyFinanceItem(payload: {
   /** Opcional em Endividamento (composto no backend a partir de colaborador + descrição). */
   nome?: string;
   item_description?: string | null;
-  valor_referencia: number;
+  valor_referencia: number | null;
   category?: string | null;
   cost_center_ref: string;
   description?: string | null;

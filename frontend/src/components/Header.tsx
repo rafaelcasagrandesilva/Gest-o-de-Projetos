@@ -11,6 +11,13 @@ export function Header() {
   const navigate = useNavigate();
   const perms = user?.permission_names;
 
+  // Fase 1: badge "somente leitura" por PERMISSÃO (sem mutação), não mais pelo perfil CONSULTA.
+  const isReadOnlyUser =
+    !!perms?.length &&
+    !perms.some(
+      (c) => c.endsWith(".create") || c.endsWith(".update") || c.endsWith(".delete") || c.endsWith(".edit") || c === "users.manage",
+    );
+
   const canProjects = hasPermission(perms, "workspace.projects.access");
   const canFinance = hasPermission(perms, "workspace.finance.access");
   const canIndicators = hasPermission(perms, "workspace.indicators.access");
@@ -86,7 +93,7 @@ export function Header() {
         )}
       </div>
       <div className="flex items-center gap-4">
-        {user?.role_names?.includes("CONSULTA") && (
+        {isReadOnlyUser && (
           <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-900">
             Acesso somente leitura
           </span>

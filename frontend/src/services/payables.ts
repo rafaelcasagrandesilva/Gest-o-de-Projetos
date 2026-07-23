@@ -55,12 +55,14 @@ export interface PayableSnapshotRow {
   /** Origem rastreável do lançamento (PROJECT, FIXED_COST, DEBT, MANUAL, PAYROLL, …). */
   origin: string | null;
 
-  amount_original: number;
-  amount_final: number;
-  amount_paid: number;
-  amount_remaining: number;
+  // Valores monetários: `null` quando o backend redige por falta de "Dados sensíveis"
+  // (payables.sensitive). O frontend exibe "—" nesses casos.
+  amount_original: number | null;
+  amount_final: number | null;
+  amount_paid: number | null;
+  amount_remaining: number | null;
   is_overpaid: boolean;
-  overpaid_amount: number;
+  overpaid_amount: number | null;
 
   due_date: string;
   payment_date: string | null;
@@ -76,7 +78,7 @@ export interface PayableSnapshotRow {
   /** Data do último pagamento ativo (evento de caixa). */
   last_payment_date: string | null;
   /** Soma dos pagamentos com data no mês filtrado (visão operacional). */
-  paid_in_period?: number;
+  paid_in_period?: number | null;
   competence_out_of_view?: boolean;
 }
 

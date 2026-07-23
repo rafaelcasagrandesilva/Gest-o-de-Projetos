@@ -24,8 +24,8 @@ import { useTableSort } from "@/hooks/useTableSort";
 import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
 import { defaultInvoiceSort, INVOICE_SORT_COLUMNS } from "@/tableSort/invoices";
 import {
-  formatCurrency,
   formatCurrencyInputFromApi,
+  formatCurrencyOrDash,
   normalizeCurrencyForApi,
 } from "@/utils/currency";
 
@@ -41,10 +41,6 @@ function formatAxiosDetail(e: unknown): string {
     }
   }
   return e.message || "Falha na requisição.";
-}
-
-function formatBRL(n: number): string {
-  return formatCurrency(n);
 }
 
 function formatDateBr(iso: string): string {
@@ -178,7 +174,7 @@ function emptyEditDraft(): EditDraft {
 }
 
 export function Invoices() {
-  const canEditInvoices = usePermission("invoices.edit");
+  const canEditInvoices = usePermission("invoices.update");
   const canReactivateInvoices = usePermission("invoices.reactivate");
   const [reactivatingId, setReactivatingId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -516,13 +512,13 @@ export function Invoices() {
       )}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <Kpi label="Total Líquido a receber" value={kpis ? formatBRL(kpis.total_a_receber) : "—"} />
-        <Kpi label="Total Bruto a receber" value={kpis ? formatBRL(kpis.total_bruto_a_receber) : "—"} />
+        <Kpi label="Total Líquido a receber" value={kpis ? formatCurrencyOrDash(kpis.total_a_receber) : "—"} />
+        <Kpi label="Total Bruto a receber" value={kpis ? formatCurrencyOrDash(kpis.total_bruto_a_receber) : "—"} />
         <Kpi
           label={periodMode === "ALL" ? "Recebido (total)" : "Recebido no mês"}
-          value={kpis ? formatBRL(kpis.recebido_no_mes) : "—"}
+          value={kpis ? formatCurrencyOrDash(kpis.recebido_no_mes) : "—"}
         />
-        <Kpi label="Em atraso" value={kpis ? formatBRL(kpis.em_atraso_valor) : "—"} accent="text-red-800" />
+        <Kpi label="Em atraso" value={kpis ? formatCurrencyOrDash(kpis.em_atraso_valor) : "—"} accent="text-red-800" />
         <Kpi label="Total de NFs" value={kpis ? String(kpis.total_nfs) : "—"} />
       </section>
 
@@ -872,10 +868,10 @@ export function Invoices() {
                       <td className="whitespace-nowrap px-2 py-2 tabular-nums">{formatCompetenceBr(row.competence_month)}</td>
                       <td className="whitespace-nowrap px-2 py-2">{row.due_days} d</td>
                       <td className="whitespace-nowrap px-2 py-2">{formatDateBr(row.due_date)}</td>
-                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatBRL(row.gross_amount)}</td>
-                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatBRL(row.net_amount)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatCurrencyOrDash(row.gross_amount)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatCurrencyOrDash(row.net_amount)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                        {formatBRL(row.received_amount)}
+                        {formatCurrencyOrDash(row.received_amount)}
                       </td>
                       <td className="px-2 py-2">
                         <span
@@ -1161,10 +1157,10 @@ export function Invoices() {
                                               </span>
                                             </td>
                                             <td className="px-3 py-2 text-right tabular-nums">
-                                              {typeof op.advanced_amount === "number" ? formatBRL(op.advanced_amount) : "—"}
+                                              {formatCurrencyOrDash(op.advanced_amount)}
                                             </td>
                                             <td className="px-3 py-2 text-right tabular-nums">
-                                              {typeof op.received_amount === "number" ? formatBRL(op.received_amount) : "—"}
+                                              {formatCurrencyOrDash(op.received_amount)}
                                             </td>
                                           </tr>
                                         ))}

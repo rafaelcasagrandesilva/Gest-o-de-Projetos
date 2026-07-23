@@ -14,14 +14,19 @@ class RevenueRead(UUIDTimestampRead):
     project_id: UUID
     competencia: date
     scenario: str = "REALIZADO"
-    amount: float
+    # Optional para redação (Dados sensíveis). Sem `billing.sensitive`, backend omite (None).
+    amount: float | None = None
     description: str | None = None
     status: str
     has_retention: bool
 
     @computed_field
     @property
-    def retention_value(self) -> float:
+    def retention_value(self) -> float | None:
+        # Null-safe: quando `amount` é redigido (None), a retenção também fica oculta (None).
+        # Para quem tem sensitive, o valor é idêntico ao anterior (cálculo inalterado).
+        if self.amount is None:
+            return None
         return revenue_retention_value(amount=self.amount, has_retention=self.has_retention)
 
 
@@ -46,7 +51,7 @@ class RevenueUpdate(BaseModel):
 class InvoiceRead(UUIDTimestampRead):
     project_id: UUID
     competencia: date
-    amount: float
+    amount: float | None = None  # Optional para redação (Dados sensíveis).
     due_date: date
     status: str
     supplier: str | None = None
@@ -73,7 +78,7 @@ class InvoiceUpdate(BaseModel):
 class InvoiceAnticipationRead(UUIDTimestampRead):
     invoice_id: UUID
     anticipated_at: date
-    fee_amount: float
+    fee_amount: float | None = None  # Optional para redação (Dados sensíveis).
     notes: str | None = None
 
 

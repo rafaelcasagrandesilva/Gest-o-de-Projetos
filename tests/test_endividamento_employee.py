@@ -19,7 +19,7 @@ def _debt_create_data(**over) -> dict:
 
     base = dict(
         tipo="endividamento",
-        item_description="Acordo de Remuneração",
+        nome="Acordo de Remuneração",
         valor_referencia=3000.0,
         cost_center_ref="FINANCEIRO",
         is_monthly_required=True,
@@ -30,21 +30,33 @@ def _debt_create_data(**over) -> dict:
 
 
 class DebtEmployeeSchemaTests(unittest.TestCase):
-    def test_compose_debt_nome(self) -> None:
-        from app.services.company_finance_service import compose_debt_nome
+    def test_debt_nome_for(self) -> None:
+        from app.services.company_finance_service import debt_nome_for
 
+        # Colaborador → nome = colaborador (sem embutir a descrição).
         self.assertEqual(
-            compose_debt_nome("Sigmar Dupre", "Acordo de Remuneração"),
-            "Sigmar Dupre - Acordo de Remuneração",
+            debt_nome_for(
+                employee_full_name="Sigmar Dupre", nome=None, item_description="Acordo de Remuneração"
+            ),
+            "Sigmar Dupre",
         )
-        self.assertEqual(compose_debt_nome(None, "Empréstimo Particular"), "Empréstimo Particular")
-        self.assertEqual(compose_debt_nome("Sigmar", None), "Sigmar")
+        # Manual → nome informado.
+        self.assertEqual(
+            debt_nome_for(employee_full_name=None, nome="Financiamento X", item_description="Acordo"),
+            "Financiamento X",
+        )
+        # Fallback de compatibilidade → descrição quando não há nome/colaborador.
+        self.assertEqual(
+            debt_nome_for(employee_full_name=None, nome=None, item_description="Empréstimo Particular"),
+            "Empréstimo Particular",
+        )
 
-    def test_description_required_for_debt(self) -> None:
+    def test_debt_requires_identifier(self) -> None:
         from pydantic import ValidationError
 
         from app.schemas.company_finance import CompanyFinancialItemCreate
 
+        # Sem Nome, sem Colaborador e sem descrição → inválido.
         with self.assertRaises(ValidationError):
             CompanyFinancialItemCreate(
                 tipo="endividamento",
@@ -52,6 +64,16 @@ class DebtEmployeeSchemaTests(unittest.TestCase):
                 cost_center_ref="FINANCEIRO",
                 start_date=date(2099, 1, 1),
             )
+        # Apenas Nome (Manual) → válido; descrição é opcional.
+        ok = CompanyFinancialItemCreate(
+            tipo="endividamento",
+            nome="Dívida Manual",
+            valor_referencia=100.0,
+            cost_center_ref="FINANCEIRO",
+            start_date=date(2099, 1, 1),
+        )
+        self.assertEqual(ok.item_type, "MANUAL")
+        self.assertIsNone(ok.item_description)
 
     def test_debt_never_matrix(self) -> None:
         data = _debt_create_data(item_type="COLABORADOR_MATRIZ", percentual=50)
@@ -118,17 +140,19 @@ class DebtEmployeeDBTests(unittest.IsolatedAsyncioTestCase):
             session.add(emp)
             await session.flush()
 
-            # (1) Endividamento SEM colaborador → nome = descrição.
+            # (1) Endividamento Manual → nome informado; descrição complementar distinta.
             it_no_emp = await cf.create_item(
                 actor_user_id=uuid4(),
-                data=_debt_create_data(item_description=f"Empréstimo Particular {tag}"),
+                data=_debt_create_data(
+                    nome=f"Empréstimo {tag}", item_description=f"Empréstimo Particular {tag}"
+                ),
             )
             created_item_ids.append(it_no_emp.id)
             self.assertIsNone(it_no_emp.employee_id)
             self.assertEqual(it_no_emp.item_description, f"Empréstimo Particular {tag}")
-            self.assertEqual(it_no_emp.nome, f"Empréstimo Particular {tag}")
+            self.assertEqual(it_no_emp.nome, f"Empréstimo {tag}")
 
-            # (2) Endividamento COM colaborador → nome = "<colaborador> - <descrição>".
+            # (2) Endividamento Colaborador → nome = colaborador (descrição separada).
             it_emp1 = await cf.create_item(
                 actor_user_id=uuid4(),
                 data=_debt_create_data(
@@ -138,7 +162,7 @@ class DebtEmployeeDBTests(unittest.IsolatedAsyncioTestCase):
             created_item_ids.append(it_emp1.id)
             self.assertEqual(it_emp1.employee_id, emp.id)
             self.assertEqual(it_emp1.item_description, f"Acordo de Remuneração {tag}")
-            self.assertEqual(it_emp1.nome, f"Sigmar {tag} - Acordo de Remuneração {tag}")
+            self.assertEqual(it_emp1.nome, f"Sigmar {tag}")
 
             # (3) Segundo endividamento para o MESMO colaborador → independente.
             it_emp2 = await cf.create_item(
@@ -173,10 +197,10 @@ class DebtEmployeeDBTests(unittest.IsolatedAsyncioTestCase):
             }
             self.assertEqual(set(snaps), set(created_item_ids))
 
-            # Sem colaborador: Credor = descrição; item_description preenchido.
+            # Manual: name = nome; descrição complementar separada (sem duplicar).
             s0 = snaps[it_no_emp.id]
             self.assertEqual(s0.type, PayableSnapshotType.ENDIVIDAMENTO)
-            self.assertEqual(s0.name, f"Empréstimo Particular {tag}")
+            self.assertEqual(s0.name, f"Empréstimo {tag}")
             self.assertEqual(s0.item_description, f"Empréstimo Particular {tag}")
 
             # Com colaborador: Credor = colaborador; Descrição separada.

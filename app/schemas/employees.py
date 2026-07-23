@@ -22,7 +22,7 @@ class EmployeeRead(UUIDTimestampRead):
     pix_key: str | None = None
     salary_base: float | None = None
     additional_costs: float | None = None
-    total_cost: float
+    total_cost: float | None = None
     is_active: bool
     # Ciclo de vida: start_date = admissão; end_date = desligamento.
     start_date: date | None = None
@@ -151,7 +151,7 @@ class CLTCostPreviewRequest(BaseModel):
 
 
 class CLTCostPreviewResponse(BaseModel):
-    total_cost: float
+    total_cost: float | None = None
     business_days: int
     reference_month: date
 

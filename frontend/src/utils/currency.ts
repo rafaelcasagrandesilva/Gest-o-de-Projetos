@@ -74,6 +74,19 @@ export function formatCurrency(n: number): string {
   return BRL_CURRENCY.format(n);
 }
 
+/**
+ * Placeholder padrão de valor ocultado por "Dados sensíveis" (backend envia `null`).
+ * Fonte ÚNICA para toda a renderização de valores monetários que podem ser redigidos —
+ * evita tratamento individual por tela.
+ */
+export const SENSITIVE_PLACEHOLDER = "—";
+
+/** Exibe o valor monetário formatado, ou "—" quando redigido pelo backend (null/undefined). */
+export function formatCurrencyOrDash(n: number | null | undefined): string {
+  if (n == null) return SENSITIVE_PLACEHOLDER;
+  return formatCurrency(n);
+}
+
 /** Ex.: 365575.21 → "365.575,21" (campos de formulário, sem símbolo R$). */
 export function formatCurrencyField(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "";

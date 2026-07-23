@@ -6,9 +6,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_permission
-from app.core.permission_codes import EMPLOYEES_VIEW
+from app.api.deps import get_current_user, require_permission, user_has_permission
+from app.api.sensitive import EMPLOYEE_SENSITIVE_FIELDS, redact
+from app.core.permission_codes import COST_CENTER_REFERENCE, EMPLOYEES_LIST, EMPLOYEES_REFERENCE, EMPLOYEES_SENSITIVE
 from app.database.session import get_db
+from app.models.user import User
 from app.schemas.employees import EmployeeRead
 from app.services.employees_service import EmployeesService, default_cost_reference
 
@@ -16,7 +18,7 @@ from app.services.employees_service import EmployeesService, default_cost_refere
 router = APIRouter()
 
 
-@router.get("", response_model=list[EmployeeRead], dependencies=[Depends(require_permission(EMPLOYEES_VIEW))])
+@router.get("", response_model=list[EmployeeRead], dependencies=[Depends(require_permission(EMPLOYEES_LIST))])
 async def list_collaborators(
     db: AsyncSession = Depends(get_db),
     search: str | None = Query(default=None, description="Busca por nome (ILIKE em full_name)."),
@@ -27,14 +29,21 @@ async def list_collaborators(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     competencia: date | None = Query(default=None, description="Competência para custo (opcional)."),
+    user: User = Depends(get_current_user),
 ) -> list[EmployeeRead]:
     comp = competencia or default_cost_reference()
-    return await EmployeesService(db).list_employees_read_for_project(
+    rows = await EmployeesService(db).list_employees_read_for_project(
         offset=offset, limit=limit, competencia=comp, search=search, project_id=project_id
     )
+    include = user_has_permission(user, EMPLOYEES_SENSITIVE)
+    return [redact(r, EMPLOYEE_SENSITIVE_FIELDS, include) for r in rows]
 
 
-@router.get("/search", response_model=list[dict], dependencies=[Depends(require_permission(EMPLOYEES_VIEW))])
+@router.get(
+    "/search",
+    response_model=list[dict],
+    dependencies=[Depends(require_permission(EMPLOYEES_REFERENCE))],
+)
 async def search_collaborators(
     db: AsyncSession = Depends(get_db),
     q: str | None = Query(default=None, max_length=255),
@@ -45,8 +54,10 @@ async def search_collaborators(
     limit: int = Query(default=20, ge=1, le=50),
 ) -> list[dict]:
     """
-    Endpoint leve para selects/autocomplete.
-    Retorna apenas {id, name}. Com `project_id`, filtra pelo Centro de Custo do projeto.
+    Endpoint leve de REFERÊNCIA para selects/autocomplete (Etapa 2).
+    Exige apenas `employees.reference` — quem tem `employees.view` continua passando (o legado
+    implica reference no grafo). Retorna EXCLUSIVAMENTE {id, name}: nunca salário, custo, encargos
+    ou qualquer dado financeiro. Com `project_id`, filtra pelo Centro de Custo do projeto.
     """
     term = (q or "").strip()
     if not term:
@@ -60,7 +71,7 @@ async def search_collaborators(
 @router.get(
     "/cost-centers",
     response_model=list[str],
-    dependencies=[Depends(require_permission(EMPLOYEES_VIEW))],
+    dependencies=[Depends(require_permission(COST_CENTER_REFERENCE))],
 )
 async def list_cost_centers(db: AsyncSession = Depends(get_db)) -> list[str]:
     """Centros de Custo disponíveis para os selects de cadastro.

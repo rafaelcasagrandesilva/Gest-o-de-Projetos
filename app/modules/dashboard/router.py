@@ -15,8 +15,9 @@ from app.api.deps import (
     user_may_use_dashboard_global,
     user_sees_all_projects,
 )
-from app.core.permission_codes import DASHBOARD_DIRECTOR, DASHBOARD_VIEW
+from app.core.permission_codes import DASHBOARD_DIRECTOR, DASHBOARD_READ
 from app.core.scenario import Scenario, coerce_scenario
+from app.api.sensitive import redact_for
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.dashboard import (
@@ -68,7 +69,7 @@ def _resolve_dashboard_period(
 @router.get(
     "/projects/{project_id}/summary",
     response_model=ProjectSummary,
-    dependencies=[Depends(require_permission(DASHBOARD_VIEW))],
+    dependencies=[Depends(require_permission(DASHBOARD_READ))],
 )
 async def project_summary(
     project_id: UUID,
@@ -77,20 +78,20 @@ async def project_summary(
         default=None, alias="scenario", description="PREVISTO ou REALIZADO; omitir = REALIZADO"
     ),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> ProjectSummary:
     sc = coerce_scenario(scenario_param)
     try:
         data = await DashboardService(db).resumo_por_projeto(
             project_id=project_id, competencia=competencia, scenario=sc
         )
-        return ProjectSummary.model_validate(data)
+        return redact_for("dashboard_summary", ProjectSummary.model_validate(data), user)
     except Exception:
         logger.exception("Erro em dashboard/projects/{id}/summary")
         raise
 
 
-@router.get("/summary", response_model=FinancialDashboardSummary, dependencies=[Depends(require_permission(DASHBOARD_VIEW))])
+@router.get("/summary", response_model=FinancialDashboardSummary, dependencies=[Depends(require_permission(DASHBOARD_READ))])
 async def financial_summary(
     competencia: date | None = None,
     start_date: date | None = Query(default=None, description="Início do período (1º do mês)"),
@@ -150,7 +151,7 @@ async def financial_summary(
             start=period_start,
             end=period_end,
         )
-        return FinancialDashboardSummary(
+        return redact_for("dashboard_financial_summary", FinancialDashboardSummary(
             scenario=sc.value,
             summary=DirectorSummary.model_validate(s),
             monthly_series=[MonthlyPoint.model_validate(x) for x in monthly_for_scenario],
@@ -161,7 +162,7 @@ async def financial_summary(
             month_count=month_count,
             lucro_liquido_previsto=lp,
             lucro_liquido_realizado=lr,
-        )
+        ), user)
     except HTTPException:
         raise
     except Exception:
@@ -172,7 +173,7 @@ async def financial_summary(
 @router.get(
     "/project/{project_id}",
     response_model=ProjectDashboardResponse,
-    dependencies=[Depends(require_permission(DASHBOARD_VIEW))],
+    dependencies=[Depends(require_permission(DASHBOARD_READ))],
 )
 async def project_financial_dashboard(
     project_id: UUID,
@@ -187,7 +188,7 @@ async def project_financial_dashboard(
     ),
     scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_access),
+    user: User = Depends(require_project_access),
 ) -> ProjectDashboardResponse:
     sc = coerce_scenario(scenario_param)
     try:
@@ -215,7 +216,7 @@ async def project_financial_dashboard(
             scenario=Scenario.REALIZADO,
         )
         monthly_for_scenario = series_real if sc == Scenario.REALIZADO else series_prev
-        return ProjectDashboardResponse(
+        return redact_for("dashboard_project_response", ProjectDashboardResponse(
             summary=ProjectSummary.model_validate(s),
             monthly_series=[MonthlyPoint.model_validate(x) for x in monthly_for_scenario],
             monthly_series_previsto=[MonthlyPoint.model_validate(x) for x in series_prev],
@@ -223,7 +224,7 @@ async def project_financial_dashboard(
             period_start=period_start,
             period_end=period_end,
             month_count=month_count,
-        )
+        ), user)
     except HTTPException:
         raise
     except Exception:
@@ -246,13 +247,13 @@ async def director_summary(
     sc = coerce_scenario(scenario_param)
     try:
         data = await DashboardService(db).resumo_geral_diretor(competencia=competencia, scenario=sc)
-        return DirectorSummary.model_validate(data)
+        return redact_for("dashboard_summary", DirectorSummary.model_validate(data), user)
     except Exception:
         logger.exception("Erro em dashboard/director/summary")
         raise
 
 
-@router.get("/kpis", response_model=list[KPIRead], dependencies=[Depends(require_permission(DASHBOARD_VIEW))])
+@router.get("/kpis", response_model=list[KPIRead], dependencies=[Depends(require_permission(DASHBOARD_READ))])
 async def kpis(
     competencia: date,
     project_id: UUID | None = Query(default=None),
@@ -270,4 +271,4 @@ async def kpis(
     if project_id is not None:
         _ = await require_project_access(project_id=project_id, user=user, db=db)
     rows = await DashboardService(db).kpis_por_mes(competencia=competencia, project_id=project_id)
-    return [KPIRead.model_validate(r) for r in rows]
+    return [redact_for("dashboard_point", KPIRead.model_validate(r), user) for r in rows]

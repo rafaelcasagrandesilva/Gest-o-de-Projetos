@@ -9,11 +9,12 @@ export interface Revenue {
   project_id: string;
   competencia: string;
   scenario?: string;
-  amount: number;
+  // `null` quando redigido por falta de "Dados sensíveis" (billing.sensitive).
+  amount: number | null;
   description: string | null;
   status: string;
   has_retention: boolean;
-  retention_value: number;
+  retention_value: number | null;
 }
 
 export interface RevenueCreate {

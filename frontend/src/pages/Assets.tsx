@@ -23,7 +23,8 @@ import {
   type AssetPhysicalCondition,
   type AssetStatus,
 } from "@/services/assets";
-import { listProjects, type Project } from "@/services/projects";
+import { type Project } from "@/services/projects";
+import { listCostCenterRefs, costCenterRefsAsProjects } from "@/services/costCenters";
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import { ASSET_SORT_COLUMNS, defaultAssetSort } from "@/tableSort/assets";
@@ -63,7 +64,12 @@ export function Assets({ variant = "patrimonial" }: AssetsPageProps) {
   useEffect(() => {
     setWorkspace("assets");
   }, [setWorkspace]);
-  const canEdit = hasPermission(user?.permission_names, "assets.edit");
+  // Fase 2: a listagem só oferece criação → depende de assets.create.
+  const canEdit = hasPermission(user?.permission_names, "assets.create");
+  // Dados Sensíveis: só com assets.sensitive aparecem os valores monetários (coluna Valor etc.).
+  const canSeeSensitive = hasPermission(user?.permission_names, "assets.sensitive");
+  // Coluna "Valor" só no patrimônio (não-EPI) E com assets.sensitive.
+  const showValueColumn = !isEpi && canSeeSensitive;
 
   const [items, setItems] = useState<AssetListItem[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
@@ -189,12 +195,12 @@ export function Assets({ variant = "patrimonial" }: AssetsPageProps) {
   useEffect(() => {
     void (async () => {
       try {
-        const [cats, projs] = await Promise.all([
+        const [cats, ccRefs] = await Promise.all([
           fetchAssetCategories(categoryScope),
-          listProjects(),
+          listCostCenterRefs(),
         ]);
         setCategories(cats);
-        setProjects(projs);
+        setProjects(costCenterRefsAsProjects(ccRefs));
         if (isEpi) {
           setCreateCategory(EPI_MACRO_CATEGORY);
         } else if (cats.length && !createCategory) {
@@ -370,7 +376,7 @@ export function Assets({ variant = "patrimonial" }: AssetsPageProps) {
               <SortableTh label="Categoria" column="category" variant="standard" {...headerSort} />
               <SortableTh label="Responsável" column="holder" variant="standard" {...headerSort} />
               <SortableTh label="Centro de custo" column="cost_center" variant="standard" {...headerSort} />
-              {!isEpi ? (
+              {showValueColumn ? (
                 <SortableTh label="Valor" column="value" variant="standard" {...headerSort} />
               ) : null}
               <th className="px-4 py-3">Indicadores</th>
@@ -380,13 +386,13 @@ export function Assets({ variant = "patrimonial" }: AssetsPageProps) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={isEpi ? 7 : 8} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={showValueColumn ? 8 : 7} className="px-4 py-8 text-center text-slate-500">
                   Carregando…
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td colSpan={isEpi ? 7 : 8} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={showValueColumn ? 8 : 7} className="px-4 py-8 text-center text-slate-500">
                   {isEpi ? "Nenhum EPI encontrado." : "Nenhum ativo encontrado."}
                 </td>
               </tr>
@@ -405,7 +411,7 @@ export function Assets({ variant = "patrimonial" }: AssetsPageProps) {
                   </td>
                   <td className="px-4 py-3">{row.current_holder_name ?? "—"}</td>
                   <td className="px-4 py-3">{row.cost_center_label ?? "—"}</td>
-                  {!isEpi ? (
+                  {showValueColumn ? (
                     <td className="px-4 py-3 text-slate-700">
                       {row.purchase_value != null ? formatBRL(row.purchase_value) : "—"}
                     </td>

@@ -10,52 +10,47 @@ import {
 } from "@/services/reports";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
-type ReportDef = { id: ReportType; label: string; roles: string[]; perm?: string };
-
-const R_ALL: string[] = ["ADMIN", "GESTOR", "CONSULTA"];
-const R_ADMIN_ONLY: string[] = ["ADMIN"];
+// Fase 1: visibilidade por PERMISSÃO (espelha app/modules/reports/router._REPORT_TYPE_VIEW_PERMISSION),
+// nunca por perfil. `perm` ausente = sem exigência de módulo (basta reports.view do próprio menu).
+type ReportDef = { id: ReportType; label: string; perm?: string };
 
 const REPORT_GROUPS: { label: string; reports: ReportDef[] }[] = [
   {
     label: "Financeiro",
     reports: [
-      { id: "payables_detailed", label: "Contas a pagar — detalhado", roles: R_ALL, perm: "payables.view" },
-      { id: "receivables_detailed", label: "Contas a receber — detalhado", roles: R_ALL, perm: "receivables.view" },
-      { id: "invoices_detailed", label: "Notas fiscais — detalhado", roles: R_ALL, perm: "invoices.view" },
-      { id: "invoices", label: "Notas fiscais — resumo (legado)", roles: R_ALL, perm: "invoices.view" },
-      { id: "debt", label: "Endividamento — matriz mensal", roles: R_ALL },
-      { id: "fixed_costs", label: "Custos fixos (empresa) — matriz mensal", roles: R_ALL },
-      { id: "revenues", label: "Receitas lançadas (faturamento)", roles: R_ALL },
+      { id: "payables_detailed", label: "Contas a pagar — detalhado", perm: "payables.view" },
+      { id: "receivables_detailed", label: "Contas a receber — detalhado", perm: "receivables.view" },
+      { id: "invoices_detailed", label: "Notas fiscais — detalhado", perm: "invoices.view" },
+      { id: "invoices", label: "Notas fiscais — resumo (legado)", perm: "invoices.view" },
+      { id: "debt", label: "Endividamento — matriz mensal", perm: "debts.view" },
+      { id: "fixed_costs", label: "Custos fixos (empresa) — matriz mensal", perm: "company_finance.view" },
+      { id: "revenues", label: "Receitas lançadas (faturamento)", perm: "billing.view" },
     ],
   },
   {
     label: "Projetos",
     reports: [
-      {
-        id: "project_summary",
-        label: "Projeto — resumo financeiro e custos",
-        roles: R_ALL,
-      },
-      { id: "company_summary", label: "Empresa — resumo financeiro por projeto", roles: R_ALL },
-      { id: "dashboard", label: "Dashboard — série mensal receita/custos/margem", roles: R_ALL },
+      { id: "project_summary", label: "Projeto — resumo financeiro e custos" },
+      { id: "company_summary", label: "Empresa — resumo financeiro por projeto" },
+      { id: "dashboard", label: "Dashboard — série mensal receita/custos/margem", perm: "dashboard.view" },
     ],
   },
   {
     label: "Patrimônio",
     reports: [
-      { id: "assets_inventory", label: "Inventário patrimonial", roles: R_ALL, perm: "assets.view" },
-      { id: "assets_in_use", label: "Ativos em uso", roles: R_ALL, perm: "assets.view" },
-      { id: "assets_inspections", label: "Inspeções e vencimentos", roles: R_ALL, perm: "assets.view" },
-      { id: "assets_movements", label: "Movimentações patrimoniais", roles: R_ALL, perm: "assets.view" },
+      { id: "assets_inventory", label: "Inventário patrimonial", perm: "assets.view" },
+      { id: "assets_in_use", label: "Ativos em uso", perm: "assets.view" },
+      { id: "assets_inspections", label: "Inspeções e vencimentos", perm: "assets.view" },
+      { id: "assets_movements", label: "Movimentações patrimoniais", perm: "assets.view" },
     ],
   },
   {
     label: "Administrativo",
     reports: [
-      { id: "employees", label: "Colaboradores — nome, tipo e custo", roles: R_ALL },
-      { id: "payroll", label: "Folha de Pagamento — fechamento mensal", roles: R_ALL },
-      { id: "vehicles", label: "Frota — placa, tipo, custo e status", roles: R_ALL },
-      { id: "users", label: "Usuários do sistema", roles: R_ADMIN_ONLY },
+      { id: "employees", label: "Colaboradores — nome, tipo e custo", perm: "employees.export" },
+      { id: "payroll", label: "Folha de Pagamento — fechamento mensal", perm: "employees.export" },
+      { id: "vehicles", label: "Frota — placa, tipo, custo e status", perm: "vehicles.export" },
+      { id: "users", label: "Usuários do sistema", perm: "users.manage" },
     ],
   },
 ];
@@ -68,19 +63,15 @@ function monthDefault(): string {
 export function Reports() {
   const { user } = useAuth();
   const { globalScenario } = useScenario();
-  const roles = user?.role_names ?? [];
   const permissionNames = user?.permission_names;
 
   const visibleGroups = useMemo(() => {
     return REPORT_GROUPS.map((g) => ({
       ...g,
-      reports: g.reports.filter((d) => {
-        if (!d.roles.some((r) => roles.includes(r))) return false;
-        if (d.perm && !hasPermission(permissionNames, d.perm)) return false;
-        return true;
-      }),
+      // Fase 1: só permissão. `perm` ausente = visível a quem acessa Relatórios (reports.view do menu).
+      reports: g.reports.filter((d) => !d.perm || hasPermission(permissionNames, d.perm)),
     })).filter((g) => g.reports.length > 0);
-  }, [roles, permissionNames]);
+  }, [permissionNames]);
 
   const visible = useMemo(() => visibleGroups.flatMap((g) => g.reports), [visibleGroups]);
 
@@ -113,7 +104,8 @@ export function Reports() {
   const [dashMonths, setDashMonths] = useState(6);
   const [reportScenario, setReportScenario] = useState<ReportScenario>(globalScenario);
 
-  const canGlobalDashboard = roles.includes("ADMIN") || roles.includes("CONSULTA");
+  // Fase 1: dashboard consolidado (sem projeto) depende da permissão dashboard.director, não do perfil.
+  const canGlobalDashboard = hasPermission(permissionNames, "dashboard.director");
 
   const loadProjects = useCallback(async () => {
     setLoadingProjects(true);

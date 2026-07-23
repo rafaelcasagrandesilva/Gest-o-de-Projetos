@@ -475,7 +475,9 @@ class OperationalReportService:
             "rows": out_rows,
         }
 
-    async def generate_assets_inventory(self, *, filters: dict[str, Any]) -> dict[str, Any]:
+    async def generate_assets_inventory(
+        self, *, filters: dict[str, Any], include_sensitive: bool = True
+    ) -> dict[str, Any]:
         svc = AssetsService(self.session)
         from app.models.asset import AssetPhysicalCondition
 
@@ -542,7 +544,8 @@ class OperationalReportService:
                     "responsavel": item.current_holder_name or "",
                     "centro_custo": item.cost_center_label or "",
                     "projeto": projeto,
-                    "valor": float(item.purchase_value or 0),
+                    # Financeiro: omitido sem assets.sensitive (relatório sai sem o valor).
+                    "valor": (float(item.purchase_value or 0) if include_sensitive else ""),
                     "status": item.status.value if hasattr(item.status, "value") else str(item.status),
                     "estado_fisico": (
                         item.physical_condition.value
@@ -557,7 +560,9 @@ class OperationalReportService:
             )
         return {"title": "Inventário patrimonial", "filters": filters, "rows": rows}
 
-    async def generate_assets_in_use(self, *, filters: dict[str, Any]) -> dict[str, Any]:
+    async def generate_assets_in_use(
+        self, *, filters: dict[str, Any], include_sensitive: bool = True
+    ) -> dict[str, Any]:
         svc = AssetsService(self.session)
         items = await svc.list_assets(status=AssetStatus.IN_USE)
         asset_ids = [i.id for i in items]
@@ -597,7 +602,8 @@ class OperationalReportService:
                         if item.physical_condition and hasattr(item.physical_condition, "value")
                         else ""
                     ),
-                    "valor": float(item.purchase_value or 0),
+                    # Financeiro: omitido sem assets.sensitive.
+                    "valor": (float(item.purchase_value or 0) if include_sensitive else ""),
                 }
             )
         return {"title": "Ativos em uso", "filters": filters, "rows": rows}

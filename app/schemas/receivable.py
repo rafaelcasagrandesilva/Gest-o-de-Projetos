@@ -67,8 +67,9 @@ class ReceivableInvoiceRead(UUIDTimestampRead):
     due_days: int
     due_date: date
     competence_month: date | None = None
-    gross_amount: float
-    net_amount: float
+    # Optional para redação (Dados sensíveis). Sem a permissão, backend omite (None).
+    gross_amount: float | None = None
+    net_amount: float | None = None
     client_name: str | None = None
     notes: str | None = None
     is_official: bool = True
@@ -78,9 +79,9 @@ class ReceivableInvoiceRead(UUIDTimestampRead):
     advance_amount_due: float | None = None
     advance_due_date: date | None = None
     anticipations: list["InvoiceAnticipationRead"] = Field(default_factory=list)
-    received_amount: float
+    received_amount: float | None = None
     received_date: date | None = None
-    interest_amount: float
+    interest_amount: float | None = None
     advance_cost_value: float | None = None
     advance_interest_rate: float | None = None
     advance_monthly_rate: float | None = None
@@ -183,8 +184,8 @@ class InvoiceAnticipationRead(UUIDTimestampRead):
     invoice_id: UUID
     include_in_dashboard: bool = True
     institution: str
-    amount_received: float
-    amount_to_repay: float
+    amount_received: float | None = None
+    amount_to_repay: float | None = None
     data_recebimento: date
     due_date: date
     juros_total: float | None = None
@@ -226,10 +227,10 @@ class InvoiceAnticipationUpdate(BaseModel):
 
 
 class ReceivableKpisRead(BaseModel):
-    total_a_receber: float
-    total_bruto_a_receber: float
-    recebido_no_mes: float
-    em_atraso_valor: float
+    total_a_receber: float | None = None
+    total_bruto_a_receber: float | None = None
+    recebido_no_mes: float | None = None
+    em_atraso_valor: float | None = None
     total_nfs: int
 
 
@@ -248,11 +249,13 @@ class ReceivableViewRead(UUIDTimestampRead):
     issue_date: date
     due_date: date
     received_at: date | None = None
-    net_value: float
-    amount_received_advance: float
-    amount_received_customer: float
-    total_received: float
-    remaining: float
+    # Valores monetários Optional para redação (Dados sensíveis) — omitidos (None) sem a
+    # permissão. Não altera cálculo: para quem tem sensitive o payload é idêntico ao anterior.
+    net_value: float | None = None
+    amount_received_advance: float | None = None
+    amount_received_customer: float | None = None
+    total_received: float | None = None
+    remaining: float | None = None
     status: ReceivableViewStatus
     invoice_status: str | None = None
     observacao: str | None = None
@@ -307,8 +310,8 @@ class ReceivableManualItemRead(UUIDTimestampRead):
     numero_referencia: str | None = None
     data_emissao: date
     data_vencimento: date
-    valor_liquido: float
-    valor_recebido: float
+    valor_liquido: float | None = None
+    valor_recebido: float | None = None
     data_recebimento: date | None = None
     observacao: str | None = None
     include_in_dashboard: bool = True

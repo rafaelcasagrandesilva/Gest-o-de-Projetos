@@ -12,7 +12,8 @@ import {
   YAxis,
 } from "recharts";
 
-function formatCurrency(n: number): string {
+function formatCurrency(n: number | null | undefined): string {
+  if (n == null) return "—";
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 

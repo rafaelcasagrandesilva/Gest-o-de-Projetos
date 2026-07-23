@@ -21,6 +21,7 @@ class VehicleRepository(Repository[Vehicle]):
         include_inactive: bool = False,
         cost_center: str | None = None,
         competence: date | None = None,
+        cost_center_exact: str | None = None,
     ) -> list[Vehicle]:
         stmt = select(Vehicle).where(Vehicle.deleted_at.is_(None))
         if not include_inactive:
@@ -40,6 +41,11 @@ class VehicleRepository(Repository[Vehicle]):
                 else Vehicle.cost_center
             )
             stmt = stmt.where(or_(func.lower(eff_cc) == cc.lower(), eff_cc.is_(None)))
+        # Filtro ESTRITO do MÓDULO de Veículos: apenas o Centro de Custo vigente exato
+        # (sem incluir veículos sem centro). Independente do filtro temporal acima.
+        cc_exact = (cost_center_exact or "").strip()
+        if cc_exact:
+            stmt = stmt.where(func.lower(Vehicle.cost_center) == cc_exact.lower())
         stmt = stmt.order_by(Vehicle.plate).offset(offset).limit(limit)
         res = await self.session.execute(stmt)
         return list(res.scalars().all())

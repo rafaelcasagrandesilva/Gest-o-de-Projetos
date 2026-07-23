@@ -12,8 +12,16 @@ from app.api.deps import (
     ensure_project_access,
     get_current_user,
     require_permission,
+    user_has_permission,
 )
-from app.core.permission_codes import VEHICLES_EDIT, VEHICLES_VIEW
+from app.api.sensitive import VEHICLE_SENSITIVE_FIELDS, redact
+from app.core.permission_codes import (
+    VEHICLES_CREATE,
+    VEHICLES_SENSITIVE,
+    VEHICLES_DELETE,
+    VEHICLES_LIST,
+    VEHICLES_UPDATE,
+)
 from app.core.scenario import parse_scenario
 from app.database.session import get_db
 from app.models.user import User
@@ -22,12 +30,13 @@ from app.services.fleet_service import FleetService, fleet_vehicle_to_read
 from app.services.employees_service import default_cost_reference
 
 
-_read = [Depends(require_permission(VEHICLES_VIEW))]
+# Modelo de verbos (Fase 2): listagens exigem vehicles.list; mutações usam create/update/delete.
+_list = [Depends(require_permission(VEHICLES_LIST))]
 
 router = APIRouter()
 
 
-@router.get("", response_model=list[VehicleRead], dependencies=_read)
+@router.get("", response_model=list[VehicleRead], dependencies=_list)
 async def list_vehicles(
     db: AsyncSession = Depends(get_db),
     offset: int = Query(default=0, ge=0),
@@ -37,16 +46,24 @@ async def list_vehicles(
         default=False,
         description="LEGADO: Somente veículos ativos. Use /vehicles/active ou include_inactive.",
     ),
+    cost_center: str | None = Query(
+        default=None,
+        description="Filtra a frota por Centro de Custo (igualdade estrita). Omitido = todos.",
+    ),
+    user: User = Depends(get_current_user),
 ) -> list[VehicleRead]:
     # Compat: se active_only=true, força não incluir inativos.
     eff_include_inactive = bool(include_inactive)
     if active_only:
         eff_include_inactive = False
-    rows = await FleetService(db).list_vehicles(offset=offset, limit=limit, include_inactive=eff_include_inactive)
-    return [fleet_vehicle_to_read(r) for r in rows]
+    rows = await FleetService(db).list_vehicles(
+        offset=offset, limit=limit, include_inactive=eff_include_inactive, cost_center_exact=cost_center
+    )
+    _inc = user_has_permission(user, VEHICLES_SENSITIVE)
+    return [redact(fleet_vehicle_to_read(r), VEHICLE_SENSITIVE_FIELDS, _inc) for r in rows]
 
 
-@router.get("/active", response_model=list[VehicleRead], dependencies=_read)
+@router.get("/active", response_model=list[VehicleRead], dependencies=_list)
 async def list_active_vehicles(
     db: AsyncSession = Depends(get_db),
     offset: int = Query(default=0, ge=0),
@@ -59,6 +76,7 @@ async def list_active_vehicles(
         default=None,
         description="Competência para resolver o Centro de Custo VIGENTE do veículo (histórico).",
     ),
+    user: User = Depends(get_current_user),
 ) -> list[VehicleRead]:
     if project_id is not None:
         rows = await FleetService(db).list_active_for_project(
@@ -69,10 +87,11 @@ async def list_active_vehicles(
         )
     else:
         rows = await FleetService(db).list_vehicles(offset=offset, limit=limit, include_inactive=False)
-    return [fleet_vehicle_to_read(r) for r in rows]
+    _inc = user_has_permission(user, VEHICLES_SENSITIVE)
+    return [redact(fleet_vehicle_to_read(r), VEHICLE_SENSITIVE_FIELDS, _inc) for r in rows]
 
 
-@router.post("", response_model=VehicleRead, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
+@router.post("", response_model=VehicleRead, dependencies=[Depends(require_permission(VEHICLES_CREATE))])
 async def create_vehicle(
     payload: VehicleCreate,
     request: Request,
@@ -82,10 +101,12 @@ async def create_vehicle(
     row = await FleetService(db).create_vehicle(
         actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
     )
-    return fleet_vehicle_to_read(row)
+    # Criar NÃO concede ver: sem vehicles.sensitive, o custo mensal recém-cadastrado volta omitido.
+    _inc = user_has_permission(actor, VEHICLES_SENSITIVE)
+    return redact(fleet_vehicle_to_read(row), VEHICLE_SENSITIVE_FIELDS, _inc)
 
 
-@router.patch("/{vehicle_id}", response_model=VehicleRead, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
+@router.patch("/{vehicle_id}", response_model=VehicleRead, dependencies=[Depends(require_permission(VEHICLES_UPDATE))])
 async def update_vehicle(
     vehicle_id: UUID,
     payload: VehicleUpdate,
@@ -100,10 +121,12 @@ async def update_vehicle(
         actor=actor,
         request=request,
     )
-    return fleet_vehicle_to_read(row)
+    # Editar NÃO concede ver: sem vehicles.sensitive, o custo mensal salvo volta omitido.
+    _inc = user_has_permission(actor, VEHICLES_SENSITIVE)
+    return redact(fleet_vehicle_to_read(row), VEHICLE_SENSITIVE_FIELDS, _inc)
 
 
-@router.delete("/{vehicle_id}", status_code=204, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
+@router.delete("/{vehicle_id}", status_code=204, dependencies=[Depends(require_permission(VEHICLES_DELETE))])
 async def delete_vehicle(
     vehicle_id: UUID,
     request: Request,
@@ -116,7 +139,7 @@ async def delete_vehicle(
     )
 
 
-@router.post("/usages", response_model=VehicleUsageRead, dependencies=[Depends(require_permission(VEHICLES_EDIT))])
+@router.post("/usages", response_model=VehicleUsageRead, dependencies=[Depends(require_permission(VEHICLES_UPDATE))])
 async def create_usage(
     payload: VehicleUsageCreate,
     request: Request,

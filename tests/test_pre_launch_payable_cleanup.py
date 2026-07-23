@@ -62,15 +62,17 @@ class PreLaunchGuardDBTests(unittest.IsolatedAsyncioTestCase):
                     )
                     return r.scalar_one_or_none() is not None
 
-                # Competência anterior ao piso → NÃO gera (guard retorna 0).
-                created_before = await svc._generate_company_finance_payables(payment_month=date(2026, 6, 1))
-                self.assertEqual(created_before, 0)
+                # Competência anterior ao piso, item SEM valor na grade → NÃO gera.
+                # (O piso só bloqueia geração baseada no valor de REFERÊNCIA; itens com valor
+                #  explícito na grade podem gerar mesmo abaixo do piso — testado à parte.)
+                await svc._generate_company_finance_payables(payment_month=date(2026, 6, 1))
+                await session.flush()
                 self.assertFalse(await has_row(date(2026, 6, 1)))
 
-                # Competência muito anterior → idem.
-                self.assertEqual(
-                    await svc._generate_company_finance_payables(payment_month=date(2020, 1, 1)), 0
-                )
+                # Competência muito anterior → idem (sem grade, não retroage).
+                await svc._generate_company_finance_payables(payment_month=date(2020, 1, 1))
+                await session.flush()
+                self.assertFalse(await has_row(date(2020, 1, 1)))
 
                 # Competência >= piso → gera normalmente (mês futuro isolado).
                 await svc._generate_company_finance_payables(payment_month=date(2099, 5, 1))

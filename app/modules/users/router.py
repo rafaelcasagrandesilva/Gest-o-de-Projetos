@@ -10,6 +10,7 @@ from app.core.permission_codes import USERS_MANAGE
 from app.core.session_context import (
     SESSION_VERSION,
     default_workspace_for_user,
+    effective_permission_names,
     resolve_workspace_for_user,
     session_permission_names,
 )
@@ -41,9 +42,17 @@ def _user_payload(
     has_all_projects_linked: bool,
     default_workspace: str,
     current_workspace: str,
+    admin_view: bool = False,
 ) -> dict:
     role_names = [link.role.name for link in (getattr(user, "roles", []) or []) if getattr(link, "role", None)]
-    perm_names = session_permission_names(user, is_superuser=is_app_superuser(user))
+    # `admin_view`: telas de administração (editar usuário) precisam do EFETIVO COMPLETO — inclusive
+    # códigos ainda inativos — para os checkboxes refletirem/gravarem o estado real (round-trip
+    # idempotente com os deltas). `/me` (gating) continua com a projeção de sessão FILTRADA, que
+    # esconde códigos inativos. NÃO usar session_permission_names na visão administrativa.
+    if admin_view:
+        perm_names = sorted(effective_permission_names(user))
+    else:
+        perm_names = session_permission_names(user, is_superuser=is_app_superuser(user))
     skip = {"roles", "project_links", "audit_logs", "user_permissions"}
     d = {k: v for k, v in user.__dict__.items() if not k.startswith("_") and k not in skip}
     return {
@@ -66,6 +75,7 @@ async def _to_user_read(
     *,
     all_project_ids: list[UUID] | None = None,
     requested_workspace: str | None = None,
+    admin_view: bool = False,
 ) -> UserRead:
     repo = ProjectRepository(db)
     pids = await repo.list_project_ids_for_user(user_id=user.id)
@@ -86,6 +96,7 @@ async def _to_user_read(
             has_all_projects_linked=has_all,
             default_workspace=default_workspace,
             current_workspace=current_workspace,
+            admin_view=admin_view,
         )
     )
 
@@ -111,7 +122,7 @@ async def list_users(
     all_pids = await ProjectRepository(db).list_all_project_ids()
     out: list[UserRead] = []
     for u in users:
-        out.append(await _to_user_read(db, u, all_project_ids=all_pids))
+        out.append(await _to_user_read(db, u, all_project_ids=all_pids, admin_view=True))
     return out
 
 
@@ -123,7 +134,7 @@ async def activate_user(
     actor: User = Depends(get_current_user),
 ) -> UserRead:
     u = await UsersService(db).set_active(actor_user_id=actor.id, user_id=user_id, active=True, actor=actor, request=request)
-    return await _to_user_read(db, u)
+    return await _to_user_read(db, u, admin_view=True)
 
 
 @router.patch("/{user_id}/deactivate", response_model=UserRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
@@ -134,7 +145,7 @@ async def deactivate_user(
     actor: User = Depends(get_current_user),
 ) -> UserRead:
     u = await UsersService(db).set_active(actor_user_id=actor.id, user_id=user_id, active=False, actor=actor, request=request)
-    return await _to_user_read(db, u)
+    return await _to_user_read(db, u, admin_view=True)
 
 
 @router.post("/", response_model=UserRead, dependencies=[Depends(require_permission(USERS_MANAGE))])
@@ -155,7 +166,7 @@ async def create_user(
         actor=actor,
         request=request,
     )
-    return await _to_user_read(db, user)
+    return await _to_user_read(db, user, admin_view=True)
 
 
 @router.post(
@@ -195,7 +206,7 @@ async def update_user(
         actor=actor,
         request=request,
     )
-    return await _to_user_read(db, user)
+    return await _to_user_read(db, user, admin_view=True)
 
 
 @router.delete("/{user_id}", status_code=204, dependencies=[Depends(require_permission(USERS_MANAGE))])

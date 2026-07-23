@@ -50,7 +50,8 @@ import {
   type AssetPhysicalCondition,
   type AssetStatus,
 } from "@/services/assets";
-import { listProjects, type Project } from "@/services/projects";
+import { type Project } from "@/services/projects";
+import { listCostCenterRefs, costCenterRefsAsProjects } from "@/services/costCenters";
 import { formatApiError } from "@/utils/apiError";
 
 function todayIsoLocal(): string {
@@ -104,7 +105,12 @@ export function AssetDetailPage() {
   useEffect(() => {
     setWorkspace("assets");
   }, [setWorkspace]);
-  const canEdit = hasPermission(user?.permission_names, "assets.edit");
+  // Fase 2: editar campos/sub-recursos → assets.update; excluir o ativo → assets.delete.
+  const canUpdate = hasPermission(user?.permission_names, "assets.update");
+  const canDelete = hasPermission(user?.permission_names, "assets.delete");
+  // Dados Sensíveis: valores monetários só com assets.sensitive. Editores sem sensitive ainda podem
+  // ALTERAR o valor (campo editável), mas não VISUALIZAR o valor atual (vem mascarado do backend).
+  const canSeeSensitive = hasPermission(user?.permission_names, "assets.sensitive");
 
   const [detail, setDetail] = useState<AssetDetail | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -154,7 +160,9 @@ export function AssetDetailPage() {
 
   useEffect(() => {
     void load();
-    void listProjects().then(setProjects).catch(() => undefined);
+    void listCostCenterRefs()
+      .then((refs) => setProjects(costCenterRefsAsProjects(refs)))
+      .catch(() => undefined);
     void fetchAssetCategories(isEpiModule ? "epi" : "patrimonial")
       .then(setCategories)
       .catch(() =>
@@ -163,7 +171,7 @@ export function AssetDetailPage() {
   }, [isEpiModule, load]);
 
   async function saveGeneral() {
-    if (!detail || !canEdit) return;
+    if (!detail || !canUpdate) return;
     setSaving(true);
     try {
       await updateAsset(detail.id, {
@@ -406,7 +414,7 @@ export function AssetDetailPage() {
             />
           </div>
         </div>
-        {canEdit ? (
+        {canDelete ? (
           <button
             type="button"
             onClick={() => setConfirm({ type: "asset" })}
@@ -440,7 +448,7 @@ export function AssetDetailPage() {
             <label className="text-sm sm:col-span-2">
               <span className="text-slate-600">Nome do item</span>
               <input
-                disabled={!canEdit}
+                disabled={!canUpdate}
                 value={detail.name}
                 onChange={(e) => patch("name", e.target.value)}
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -449,7 +457,7 @@ export function AssetDetailPage() {
             <label className="text-sm">
               <span className="text-slate-600">Categoria</span>
               <select
-                disabled={!canEdit}
+                disabled={!canUpdate}
                 value={detail.category}
                 onChange={(e) => patch("category", e.target.value)}
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -469,7 +477,7 @@ export function AssetDetailPage() {
             <label className="text-sm">
               <span className="text-slate-600">Tags</span>
               <input
-                disabled={!canEdit}
+                disabled={!canUpdate}
                 value={tagsInput}
                 onChange={(e) => setTagsInput(e.target.value)}
                 placeholder="isolado, medição, ATPV…"
@@ -488,7 +496,7 @@ export function AssetDetailPage() {
             <label className="text-sm">
               <span className="text-slate-600">Status</span>
               <select
-                disabled={!canEdit}
+                disabled={!canUpdate}
                 value={detail.status}
                 onChange={(e) => patch("status", e.target.value as AssetStatus)}
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -503,7 +511,7 @@ export function AssetDetailPage() {
             <label className="text-sm">
               <span className="text-slate-600">Estado físico</span>
               <select
-                disabled={!canEdit}
+                disabled={!canUpdate}
                 value={detail.physical_condition ?? ""}
                 onChange={(e) =>
                   patch("physical_condition", (e.target.value || null) as AssetPhysicalCondition | null)
@@ -521,15 +529,15 @@ export function AssetDetailPage() {
                 <AssetPhysicalConditionBadge condition={detail.physical_condition} />
               </div>
             </label>
-            {!isEpiItem ? (
+            {!isEpiItem && (canSeeSensitive || canUpdate) ? (
               <label className="text-sm">
                 <span className="text-slate-600">Valor do item (R$)</span>
                 <AssetMoneyInput
-                  disabled={!canEdit}
+                  disabled={!canUpdate}
                   value={purchaseValueInput}
                   onChange={setPurchaseValueInput}
                 />
-                {detail.purchase_value != null && detail.purchase_value > 0 ? (
+                {canSeeSensitive && detail.purchase_value != null && detail.purchase_value > 0 ? (
                   <p className="mt-1 text-xs text-slate-500">{formatBRL(detail.purchase_value)}</p>
                 ) : null}
               </label>
@@ -540,13 +548,13 @@ export function AssetDetailPage() {
                 value={detail.cost_center_ref ?? ""}
                 onChange={(ref) => patch("cost_center_ref", ref)}
                 projects={projects}
-                disabled={!canEdit}
+                disabled={!canUpdate}
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
               />
             </label>
             {assetSupportsSize(detail.category) ? (
               <AssetSizeField
-                disabled={!canEdit}
+                disabled={!canUpdate}
                 value={detail.size ?? ""}
                 onChange={(v) => patch("size", v.trim() ? v : null)}
                 className="text-sm"
@@ -555,7 +563,7 @@ export function AssetDetailPage() {
             <label className="text-sm sm:col-span-2">
               <span className="text-slate-600">Descrição</span>
               <textarea
-                disabled={!canEdit}
+                disabled={!canUpdate}
                 value={detail.description ?? ""}
                 onChange={(e) => patch("description", e.target.value || null)}
                 rows={2}
@@ -567,7 +575,7 @@ export function AssetDetailPage() {
                 <label className="text-sm">
                   <span className="text-slate-600">Marca</span>
                   <input
-                    disabled={!canEdit}
+                    disabled={!canUpdate}
                     value={detail.brand ?? ""}
                     onChange={(e) => patch("brand", e.target.value || null)}
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -576,7 +584,7 @@ export function AssetDetailPage() {
                 <label className="text-sm">
                   <span className="text-slate-600">Modelo</span>
                   <input
-                    disabled={!canEdit}
+                    disabled={!canUpdate}
                     value={detail.model ?? ""}
                     onChange={(e) => patch("model", e.target.value || null)}
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -585,7 +593,7 @@ export function AssetDetailPage() {
                 <label className="text-sm">
                   <span className="text-slate-600">Nº série</span>
                   <input
-                    disabled={!canEdit}
+                    disabled={!canUpdate}
                     value={detail.serial_number ?? ""}
                     onChange={(e) => patch("serial_number", e.target.value || null)}
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -594,7 +602,7 @@ export function AssetDetailPage() {
                 <label className="text-sm">
                   <span className="text-slate-600">IMEI</span>
                   <input
-                    disabled={!canEdit}
+                    disabled={!canUpdate}
                     value={detail.imei ?? ""}
                     onChange={(e) => patch("imei", e.target.value || null)}
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -603,7 +611,7 @@ export function AssetDetailPage() {
                 <label className="text-sm">
                   <span className="text-slate-600">Etiqueta patrimonial</span>
                   <input
-                    disabled={!canEdit}
+                    disabled={!canUpdate}
                     value={detail.patrimony_tag ?? ""}
                     onChange={(e) => patch("patrimony_tag", e.target.value || null)}
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -615,7 +623,7 @@ export function AssetDetailPage() {
               <label className="text-sm">
                 <span className="text-slate-600">CA</span>
                 <input
-                  disabled={!canEdit}
+                  disabled={!canUpdate}
                   value={detail.ca_number ?? ""}
                   onChange={(e) => patch("ca_number", e.target.value || null)}
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -627,7 +635,7 @@ export function AssetDetailPage() {
                 <label className="text-sm">
                   <span className="text-slate-600">Marca</span>
                   <input
-                    disabled={!canEdit}
+                    disabled={!canUpdate}
                     value={detail.brand ?? ""}
                     onChange={(e) => patch("brand", e.target.value || null)}
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -636,7 +644,7 @@ export function AssetDetailPage() {
                 <label className="text-sm">
                   <span className="text-slate-600">Modelo</span>
                   <input
-                    disabled={!canEdit}
+                    disabled={!canUpdate}
                     value={detail.model ?? ""}
                     onChange={(e) => patch("model", e.target.value || null)}
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -645,7 +653,7 @@ export function AssetDetailPage() {
                 <label className="text-sm">
                   <span className="text-slate-600">Nº série / patrimônio</span>
                   <input
-                    disabled={!canEdit}
+                    disabled={!canUpdate}
                     value={detail.serial_number ?? detail.patrimony_tag ?? ""}
                     onChange={(e) => patch("serial_number", e.target.value || null)}
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -656,14 +664,14 @@ export function AssetDetailPage() {
             <label className="text-sm sm:col-span-2">
               <span className="text-slate-600">Observações</span>
               <textarea
-                disabled={!canEdit}
+                disabled={!canUpdate}
                 value={detail.notes ?? ""}
                 onChange={(e) => patch("notes", e.target.value || null)}
                 rows={3}
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
               />
             </label>
-            {canEdit ? (
+            {canUpdate ? (
               <div className="sm:col-span-2">
                 <button
                   type="button"
@@ -686,7 +694,7 @@ export function AssetDetailPage() {
                   <strong>Responsável atual:</strong> {openAssignment.employee_name} (desde{" "}
                   {openAssignment.delivery_date})
                 </p>
-                {canEdit ? (
+                {canUpdate ? (
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <p className="text-xs text-slate-600 sm:col-span-2">
                       Devolvendo: <strong>{openAssignment.employee_name}</strong>
@@ -748,7 +756,7 @@ export function AssetDetailPage() {
                   </div>
                 ) : null}
               </div>
-            ) : canEdit ? (
+            ) : canUpdate ? (
               <div className="space-y-3 rounded-lg border border-slate-200 p-4">
                 <p className="text-sm font-medium">Nova entrega</p>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -895,7 +903,7 @@ export function AssetDetailPage() {
                           <p className="text-xs text-amber-700">Em aberto</p>
                         )}
                       </div>
-                      {canEdit ? (
+                      {canUpdate ? (
                         <div className="flex shrink-0 flex-col items-end gap-1">
                           {a.return_date ? (
                             <>
@@ -934,7 +942,7 @@ export function AssetDetailPage() {
 
         {tab === "inspections" ? (
           <div className="space-y-5">
-            {canEdit ? (
+            {canUpdate ? (
               <div className="grid gap-3 rounded-lg border border-slate-200 p-4 sm:grid-cols-3">
                 <input id="insp-type" placeholder="Tipo (ensaio, CA, calibração…)" className="rounded border px-3 py-2 text-sm" />
                 <input id="insp-date" type="date" className="rounded border px-3 py-2 text-sm" />
@@ -962,7 +970,7 @@ export function AssetDetailPage() {
                     {i.expiration_date && i.expiration_alert ? (
                       <AssetExpirationBadge show level={i.expiration_alert} date={i.expiration_date} />
                     ) : null}
-                    {canEdit ? (
+                    {canUpdate ? (
                       <button
                         type="button"
                         onClick={() => setConfirm({ type: "inspection", id: i.id })}
@@ -980,7 +988,7 @@ export function AssetDetailPage() {
 
         {tab === "files" ? (
           <div className="space-y-4">
-            {canEdit ? (
+            {canUpdate ? (
               <div className="flex flex-wrap items-end gap-2">
                 <select id="upload-type" className="rounded border px-3 py-2 text-sm">
                   {ATTACHMENT_TYPES.map((t) => (
@@ -1017,7 +1025,7 @@ export function AssetDetailPage() {
                         Baixar
                       </button>
                     ) : null}
-                    {canEdit ? (
+                    {canUpdate ? (
                       <button
                         type="button"
                         onClick={() => setConfirm({ type: "attachment", id: a.id })}

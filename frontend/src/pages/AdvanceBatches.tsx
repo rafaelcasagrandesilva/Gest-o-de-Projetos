@@ -31,7 +31,7 @@ const STATUS_META: Record<AdvanceBatchStatus, { label: string; cls: string }> = 
 };
 
 export function AdvanceBatches() {
-  const canEditInvoices = usePermission("invoices.edit");
+  const canEditInvoices = usePermission("invoices.update");
   const navigate = useNavigate();
   const [rows, setRows] = useState<AdvanceBatch[]>([]);
   const [loading, setLoading] = useState(true);

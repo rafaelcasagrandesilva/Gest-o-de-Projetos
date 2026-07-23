@@ -1,45 +1,124 @@
 import { useMemo, useState } from "react";
 import type { CompanyFinancialItem, TipoFinanceiro } from "@/services/companyFinance";
-import { formatCurrency } from "@/utils/currency";
+import { formatCurrencyOrDash } from "@/utils/currency";
 import { StatusBadge, type StatusTone } from "@/components/finance/StatusBadge";
 
 type SortDir = "asc" | "desc";
 
-/** Saldo pendente (endividamento), reaproveitando `restante` já carregado. */
-function saldoOf(item: CompanyFinancialItem): number {
-  if (item.restante != null) return item.restante;
-  return Math.max(0, item.valor_referencia - item.total_pago);
+/** Valores redigidos por "Dados sensíveis": backend envia `valor_referencia = null`. */
+function isRedacted(item: CompanyFinancialItem): boolean {
+  return item.valor_referencia == null;
 }
 
-/** % Quitado = (total_pago / valor_referencia) * 100. */
-function pctQuitadoOf(item: CompanyFinancialItem): number {
-  if (!(item.valor_referencia > 0)) return 0;
-  return (item.total_pago / item.valor_referencia) * 100;
+/** Base financeira ÚNICA da dívida (espelha a fonte da verdade do backend): renegociado
+ *  válido (> 0) senão valor_referencia. Null quando redigido. */
+function baseOf(item: CompanyFinancialItem): number | null {
+  if (isRedacted(item)) return null;
+  const base = item.debt_base;
+  if (base != null && base > 0) return base;
+  return item.valor_referencia;
 }
 
-/** Valor anual estimado para custo fixo: valor mensal × 12. */
-function valorAnualOf(item: CompanyFinancialItem): number {
-  return item.valor_referencia * 12;
+/** % Quitado da dívida inteira = (Pago Total / base) * 100. Null quando redigido. */
+function pctQuitadoOf(item: CompanyFinancialItem): number | null {
+  const base = baseOf(item);
+  if (base == null || item.total_pago == null) return null;
+  if (!(base > 0)) return 0;
+  return (item.total_pago / base) * 100;
 }
 
-function formatPct(n: number): string {
+/** Saldo Restante da dívida inteira = base − Pago Total (nunca negativo). Null quando redigido. */
+function saldoOf(item: CompanyFinancialItem): number | null {
+  const base = baseOf(item);
+  if (base == null || item.total_pago == null) return null;
+  return Math.max(0, base - item.total_pago);
+}
+
+function formatPctOrDash(n: number | null): string {
+  if (n == null) return "—";
   return `${n.toFixed(1).replace(".", ",")}%`;
 }
 
-/** Status de exibição derivado dos mesmos dados (sem nova regra). */
-function statusOf(item: CompanyFinancialItem, tipo: TipoFinanceiro): { label: string; tone: StatusTone } {
-  if (tipo === "endividamento") {
-    if (item.status === "quitado" || pctQuitadoOf(item) >= 100) return { label: "Quitado", tone: "green" };
-    if (item.has_legal_process) return { label: "Judicial", tone: "red" };
-    if (item.has_renegotiation) return { label: "Renegociado", tone: "blue" };
-    if (item.total_pago > 0) return { label: "Parcial", tone: "amber" };
-    return { label: "Em aberto", tone: "red" };
+/** Valor lançado na grade mensal para a competência (YYYY-MM); null quando não informado. */
+function gridValueForMonth(item: CompanyFinancialItem, mes: string): number | null {
+  const p = item.pagamentos.find((x) => x.mes === mes);
+  return p && p.valor != null && p.valor > 0 ? p.valor : null;
+}
+
+/** Valor Mensal — regra do CAP: grade (se lançada) senão valor de referência. Null se redigido. */
+function valorMensalOf(item: CompanyFinancialItem, competencia: string): number | null {
+  const g = gridValueForMonth(item, competencia);
+  if (g != null) return g;
+  return item.valor_referencia; // number | null
+}
+
+/** Valor Anual híbrido: grade (se lançada) senão referência, por mês. Null se redigido. */
+function valorAnualOf(item: CompanyFinancialItem, competencia: string): number | null {
+  if (isRedacted(item)) return null;
+  const year = competencia.slice(0, 4);
+  let total = 0;
+  for (let m = 1; m <= 12; m++) {
+    const mes = `${year}-${String(m).padStart(2, "0")}`;
+    const g = gridValueForMonth(item, mes);
+    total += g != null ? g : (item.valor_referencia ?? 0);
   }
-  // custo_fixo: cobertura do mês (pago_mes vs valor mensal esperado).
-  const ref = item.valor_referencia;
-  if (ref > 0 && item.pago_mes >= ref) return { label: "Pago", tone: "green" };
-  if (item.pago_mes > 0) return { label: "Parcial", tone: "amber" };
-  return { label: "Pendente", tone: "red" };
+  return total;
+}
+
+/** Pago no mês — espelho do CAP (amount_paid); null quando redigido, 0 quando sem lançamento. */
+function capPaidOf(item: CompanyFinancialItem): number | null {
+  if (isRedacted(item)) return null;
+  return item.cap_amount_paid ?? 0;
+}
+
+/** Saldo (Custos Fixos) = Valor Mensal − Pago no mês. Null quando redigido. */
+function saldoMensalOf(item: CompanyFinancialItem, competencia: string): number | null {
+  const mensal = valorMensalOf(item, competencia);
+  const pago = capPaidOf(item);
+  if (mensal == null || pago == null) return null;
+  return mensal - pago;
+}
+
+/** Status financeiro espelhado do Contas a Pagar; null quando ainda não há lançamento. */
+function capStatusDisplay(item: CompanyFinancialItem): { label: string; tone: StatusTone } | null {
+  if (!item.cap_has_line) return null;
+  if (item.cap_is_obsolete) return { label: "Cancelado", tone: "red" };
+  switch (item.cap_status) {
+    case "PAGO":
+      return { label: "Pago", tone: "green" };
+    case "PARCIAL":
+      return { label: "Parcial", tone: "blue" };
+    case "ABERTO":
+      return { label: "Em aberto", tone: "amber" };
+    default:
+      return null;
+  }
+}
+
+/** Nome com ícones discretos de Processo Judicial (⚖️) e Renegociação (🔄) — só no Extrato. */
+function nameCell(item: CompanyFinancialItem): React.ReactNode {
+  return (
+    <span className="font-medium text-slate-900">
+      {item.has_legal_process ? (
+        <span className="mr-1" title="Processo judicial" aria-label="Processo judicial">
+          ⚖️
+        </span>
+      ) : null}
+      {item.has_renegotiation ? (
+        <span className="mr-1" title="Renegociado" aria-label="Renegociado">
+          🔄
+        </span>
+      ) : null}
+      {item.nome}
+    </span>
+  );
+}
+
+/** Célula de Status — espelha o CAP; "—" quando não há lançamento na competência. */
+function statusCell(item: CompanyFinancialItem): React.ReactNode {
+  const s = capStatusDisplay(item);
+  if (!s) return <span className="text-slate-400">—</span>;
+  return <StatusBadge label={s.label} tone={s.tone} />;
 }
 
 type Column = {
@@ -53,7 +132,7 @@ type Column = {
   cell: (i: CompanyFinancialItem) => React.ReactNode;
 };
 
-function buildColumns(tipo: TipoFinanceiro): Column[] {
+function buildColumns(tipo: TipoFinanceiro, competencia: string): Column[] {
   const categoria: Column = {
     key: "category",
     label: "Categoria",
@@ -70,18 +149,33 @@ function buildColumns(tipo: TipoFinanceiro): Column[] {
     sortValue: (i) => i.cost_center ?? "",
     cell: (i) => <span className="text-slate-600">{i.cost_center || "—"}</span>,
   };
+  // Status: espelha SOMENTE o status financeiro do Contas a Pagar (não calcula nada).
   const status: Column = {
     key: "status",
     label: "Status",
     align: "left",
     sortable: false,
+    cell: (i) => statusCell(i),
+  };
+  // Pago no mês: consulta o Contas a Pagar (amount_paid) — 0,00 quando não há lançamento.
+  const pagoNoMes: Column = {
+    key: "pago_mes",
+    label: "Pago no mês",
+    align: "right",
+    sortable: true,
+    sortValue: (i) => capPaidOf(i) ?? -1,
     cell: (i) => {
-      const s = statusOf(i, tipo);
-      return <StatusBadge label={s.label} tone={s.tone} />;
+      const v = capPaidOf(i);
+      return (
+        <span className={`tabular-nums ${(v ?? 0) > 0.009 ? "text-emerald-700" : "text-slate-500"}`}>
+          {formatCurrencyOrDash(v)}
+        </span>
+      );
     },
   };
 
   if (tipo === "endividamento") {
+    // Módulo exclusivo de Endividamento → coluna "Categoria" omitida (todos têm a mesma).
     return [
       {
         key: "nome",
@@ -89,35 +183,38 @@ function buildColumns(tipo: TipoFinanceiro): Column[] {
         align: "left",
         sortable: true,
         sortValue: (i) => i.nome,
-        cell: (i) => <span className="font-medium text-slate-900">{i.nome}</span>,
+        cell: (i) => nameCell(i),
       },
-      categoria,
       centroCusto,
       {
         key: "valor_referencia",
-        label: "Referência",
+        label: "Valor da Dívida",
         align: "right",
         sortable: true,
-        sortValue: (i) => i.valor_referencia,
-        cell: (i) => <span className="tabular-nums text-slate-700">{formatCurrency(i.valor_referencia)}</span>,
+        sortValue: (i) => baseOf(i) ?? -1,
+        cell: (i) => <span className="tabular-nums text-slate-700">{formatCurrencyOrDash(baseOf(i))}</span>,
       },
       {
         key: "total_pago",
-        label: "Pago",
+        label: "Pago Total",
         align: "right",
         sortable: true,
-        sortValue: (i) => i.total_pago,
-        cell: (i) => <span className="tabular-nums text-emerald-700">{formatCurrency(i.total_pago)}</span>,
+        sortValue: (i) => i.total_pago ?? -1,
+        cell: (i) => <span className="tabular-nums text-emerald-700">{formatCurrencyOrDash(i.total_pago)}</span>,
       },
       {
         key: "saldo",
-        label: "Saldo",
+        label: "Saldo Restante",
         align: "right",
         sortable: true,
-        sortValue: (i) => saldoOf(i),
+        sortValue: (i) => saldoOf(i) ?? -1,
         cell: (i) => {
           const s = saldoOf(i);
-          return <span className={`tabular-nums ${s > 0.009 ? "text-rose-600" : "text-slate-500"}`}>{formatCurrency(s)}</span>;
+          return (
+            <span className={`tabular-nums ${(s ?? 0) > 0.009 ? "text-rose-600" : "text-slate-500"}`}>
+              {formatCurrencyOrDash(s)}
+            </span>
+          );
         },
       },
       {
@@ -125,9 +222,10 @@ function buildColumns(tipo: TipoFinanceiro): Column[] {
         label: "% Quitado",
         align: "right",
         sortable: true,
-        sortValue: (i) => pctQuitadoOf(i),
-        cell: (i) => <span className="tabular-nums text-slate-700">{formatPct(pctQuitadoOf(i))}</span>,
+        sortValue: (i) => pctQuitadoOf(i) ?? -1,
+        cell: (i) => <span className="tabular-nums text-slate-700">{formatPctOrDash(pctQuitadoOf(i))}</span>,
       },
+      pagoNoMes,
       status,
     ];
   }
@@ -140,7 +238,7 @@ function buildColumns(tipo: TipoFinanceiro): Column[] {
       align: "left",
       sortable: true,
       sortValue: (i) => i.nome,
-      cell: (i) => <span className="font-medium text-slate-900">{i.nome}</span>,
+      cell: (i) => nameCell(i),
     },
     categoria,
     centroCusto,
@@ -149,28 +247,36 @@ function buildColumns(tipo: TipoFinanceiro): Column[] {
       label: "Valor Mensal",
       align: "right",
       sortable: true,
-      sortValue: (i) => i.valor_referencia,
-      cell: (i) => <span className="tabular-nums text-slate-700">{formatCurrency(i.valor_referencia)}</span>,
+      sortValue: (i) => valorMensalOf(i, competencia) ?? -1,
+      cell: (i) => (
+        <span className="tabular-nums text-slate-700">{formatCurrencyOrDash(valorMensalOf(i, competencia))}</span>
+      ),
     },
     {
       key: "valor_anual",
       label: "Valor Anual",
       align: "right",
       sortable: true,
-      sortValue: (i) => valorAnualOf(i),
-      cell: (i) => <span className="tabular-nums text-slate-700">{formatCurrency(valorAnualOf(i))}</span>,
+      sortValue: (i) => valorAnualOf(i, competencia) ?? -1,
+      cell: (i) => (
+        <span className="tabular-nums text-slate-700">{formatCurrencyOrDash(valorAnualOf(i, competencia))}</span>
+      ),
     },
+    pagoNoMes,
     {
-      key: "pago_mes",
-      label: "Pago no mês",
+      key: "saldo",
+      label: "Saldo",
       align: "right",
       sortable: true,
-      sortValue: (i) => i.pago_mes,
-      cell: (i) => (
-        <span className={`tabular-nums ${i.pago_mes > 0.009 ? "text-emerald-700" : "text-slate-500"}`}>
-          {formatCurrency(i.pago_mes)}
-        </span>
-      ),
+      sortValue: (i) => saldoMensalOf(i, competencia) ?? -1,
+      cell: (i) => {
+        const s = saldoMensalOf(i, competencia);
+        return (
+          <span className={`tabular-nums ${Math.abs(s ?? 0) > 0.009 ? "text-rose-600" : "text-slate-500"}`}>
+            {formatCurrencyOrDash(s)}
+          </span>
+        );
+      },
     },
     status,
   ];
@@ -198,7 +304,7 @@ export const STATUS_FILTER_OPTIONS: { key: StatusFilter; label: string }[] = [
 /** Predicado do filtro de status (endividamento). Critérios multi (Judicial/Renegociado podem coexistir). */
 export function matchesStatusFilter(item: CompanyFinancialItem, key: StatusFilter): boolean {
   if (key === "ALL") return true;
-  const quitado = item.status === "quitado" || pctQuitadoOf(item) >= 100;
+  const quitado = item.status === "quitado" || (pctQuitadoOf(item) ?? 0) >= 100;
   switch (key) {
     case "QUITADO":
       return quitado;
@@ -207,9 +313,9 @@ export function matchesStatusFilter(item: CompanyFinancialItem, key: StatusFilte
     case "RENEGOCIADO":
       return !quitado && Boolean(item.has_renegotiation);
     case "PARCIAL":
-      return !quitado && item.total_pago > 0;
+      return !quitado && (item.total_pago ?? 0) > 0;
     case "ABERTO":
-      return !quitado && item.total_pago <= 0;
+      return !quitado && (item.total_pago ?? 0) <= 0;
     default:
       return true;
   }
@@ -218,6 +324,7 @@ export function matchesStatusFilter(item: CompanyFinancialItem, key: StatusFilte
 export function CompanyFinanceAnalyticTable({
   items,
   tipo,
+  competencia,
   search,
   readOnly = false,
   readOnlyTitle,
@@ -225,12 +332,13 @@ export function CompanyFinanceAnalyticTable({
 }: {
   items: CompanyFinancialItem[];
   tipo: TipoFinanceiro;
+  competencia: string;
   search: string;
   readOnly?: boolean;
   readOnlyTitle?: string;
   onToggleRequired?: (itemId: string, value: boolean) => void | Promise<void>;
 }) {
-  const columns = useMemo(() => buildColumns(tipo), [tipo]);
+  const columns = useMemo(() => buildColumns(tipo, competencia), [tipo, competencia]);
   const showRequiredColumn = true;
   const [sortKey, setSortKey] = useState<string>("nome");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -267,7 +375,7 @@ export function CompanyFinanceAnalyticTable({
   // aqui só ordenamos. Mantém exatamente os mesmos registros que a Visão Executiva.
   const visibleRows = sorted;
 
-  const minWidth = tipo === "endividamento" ? "min-w-[860px]" : "min-w-[920px]";
+  const minWidth = tipo === "endividamento" ? "min-w-[1040px]" : "min-w-[980px]";
 
   return (
     <section className="space-y-4">

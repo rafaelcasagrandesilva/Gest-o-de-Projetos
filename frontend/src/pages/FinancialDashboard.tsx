@@ -41,7 +41,11 @@ const MONTH_SHORT_PT = [
   "Dez",
 ] as const;
 
-function formatBRL(n: number): string {
+const SENSITIVE_DASH = "—";
+
+// Null-safe: valor monetário omitido (Dados Sensíveis) chega null → "—" (sem crash no render).
+function formatBRL(n: number | null | undefined): string {
+  if (n == null) return SENSITIVE_DASH;
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
@@ -279,6 +283,12 @@ export function FinancialDashboard() {
 
   const summaryCaixaNeg = (summary?.caixa ?? 0) < -0.01;
 
+  // Dados Sensíveis: sem `financial_dashboard.sensitive` o backend envia os valores como null.
+  // Detecta a redação pelos KPIs (todos os valores omitidos) para exibir "Valores ocultos" no
+  // gráfico — exclusivamente financeiro — em vez de séries zeradas enganosas.
+  const redacted =
+    summary != null && summary.faturamento == null && summary.pago == null && summary.caixa == null;
+
   return (
     <div className="space-y-5">
       <DashboardToolbar
@@ -385,7 +395,12 @@ export function FinancialDashboard() {
         </div>
 
         <div className="mt-4 h-[380px]">
-          {chartData.length === 0 ? (
+          {redacted ? (
+            <div className="flex h-full flex-col items-center justify-center gap-1 text-center text-sm text-slate-500">
+              <span className="font-medium text-slate-700">Valores ocultos</span>
+              <span>Sem permissão de Dados Sensíveis para o Dashboard Financeiro.</span>
+            </div>
+          ) : chartData.length === 0 ? (
             <p className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados no período.</p>
           ) : isSinglePeriod ? (
             <div className="flex h-full flex-col">
@@ -676,13 +691,13 @@ export function FinancialDashboard() {
 
                         <div
                           className={`rounded-lg border px-4 py-3 text-sm ${
-                            breakdown.total < -0.01 ? "border-red-200 bg-red-50" : "border-slate-200 bg-slate-50"
+                            (breakdown.total ?? 0) < -0.01 ? "border-red-200 bg-red-50" : "border-slate-200 bg-slate-50"
                           }`}
                         >
                           <span className="font-semibold">CAIXA (recebido - pago):</span>{" "}
                           <span
                             className={`tabular-nums font-semibold ${
-                              breakdown.total < -0.01 ? "text-red-700" : "text-slate-900"
+                              (breakdown.total ?? 0) < -0.01 ? "text-red-700" : "text-slate-900"
                             }`}
                           >
                             {formatBRL(breakdown.total)}

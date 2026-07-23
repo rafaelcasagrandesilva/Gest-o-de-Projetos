@@ -6,6 +6,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.employees.router import router as employees_router
 from app.modules.collaborators.router import router as collaborators_router
+from app.modules.cost_centers.router import router as cost_centers_router
 from app.modules.financial.router import router as financial_router
 from app.modules.fleet.router import router as fleet_router
 from app.modules.hr.router import router as hr_router
@@ -34,6 +35,7 @@ protected.include_router(project_structure_router, prefix="/projects", tags=["pr
 protected.include_router(settings_router, prefix="/settings", tags=["settings"])
 protected.include_router(employees_router, prefix="/employees", tags=["employees"])
 protected.include_router(collaborators_router, prefix="/collaborators", tags=["collaborators"])
+protected.include_router(cost_centers_router, prefix="/cost-centers", tags=["cost-centers"])
 protected.include_router(hr_router, prefix="/hr", tags=["hr"])
 protected.include_router(fleet_router, prefix="/vehicles", tags=["vehicles"])
 protected.include_router(financial_router, prefix="/financial", tags=["financial"])

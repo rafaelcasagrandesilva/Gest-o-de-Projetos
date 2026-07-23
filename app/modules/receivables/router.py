@@ -16,8 +16,16 @@ from app.api.deps import (
     user_sees_all_projects,
 )
 from app.core.config import settings
-from app.core.permission_codes import INVOICES_EDIT, INVOICES_REACTIVATE, INVOICES_VIEW
+from app.core.permission_codes import (
+    INVOICES_CREATE,
+    INVOICES_DELETE,
+    INVOICES_LIST,
+    INVOICES_READ,
+    INVOICES_REACTIVATE,
+    INVOICES_UPDATE,
+)
 from app.database.session import get_db
+from app.api.sensitive import redact_for
 from app.models.user import User
 from app.schemas.receivable import (
     ReceivableInvoiceCreate,
@@ -57,17 +65,26 @@ async def _invoice_read(
     batch_svc: ReceivableAdvanceBatchService,
     inv,
     prefix: str,
+    user: User,
 ) -> ReceivableInvoiceRead:
-    """Monta o read de uma NF já com o histórico N:N (contador + operações)."""
+    """Monta o read de uma NF já com o histórico N:N (contador + operações).
+
+    Aplica a redação de Dados Sensíveis (invoices.sensitive) — inclusive nas estruturas
+    aninhadas (antecipações/lote/histórico) — antes de devolver.
+    """
     counts = await batch_svc.confirmed_operation_counts([inv.id])
     history = await batch_svc.invoice_history_map([inv.id])
-    return ReceivableInvoiceRead.model_validate(
-        svc.invoice_to_read(
-            inv,
-            api_prefix=prefix,
-            anticipation_count=counts.get(inv.id, 0),
-            advance_operations=history.get(inv.id, []),
-        )
+    return redact_for(
+        "invoices",
+        ReceivableInvoiceRead.model_validate(
+            svc.invoice_to_read(
+                inv,
+                api_prefix=prefix,
+                anticipation_count=counts.get(inv.id, 0),
+                advance_operations=history.get(inv.id, []),
+            )
+        ),
+        user,
     )
 
 
@@ -80,7 +97,7 @@ def _pdf_disk_path(stored: str) -> Path:
     return p
 
 
-_read_view = [Depends(require_permission(INVOICES_VIEW))]
+_read_view = [Depends(require_permission(INVOICES_LIST))]
 
 invoices_router = APIRouter()
 
@@ -138,13 +155,17 @@ async def list_invoices(
         counts = await batch_svc.confirmed_operation_counts(ids)
         history = await batch_svc.invoice_history_map(ids)
         return [
-            ReceivableInvoiceRead.model_validate(
-                svc.invoice_to_read(
-                    r,
-                    api_prefix=prefix,
-                    anticipation_count=counts.get(r.id, 0),
-                    advance_operations=history.get(r.id, []),
-                )
+            redact_for(
+                "invoices",
+                ReceivableInvoiceRead.model_validate(
+                    svc.invoice_to_read(
+                        r,
+                        api_prefix=prefix,
+                        anticipation_count=counts.get(r.id, 0),
+                        advance_operations=history.get(r.id, []),
+                    )
+                ),
+                user,
             )
             for r in rows
         ]
@@ -200,7 +221,7 @@ async def get_kpis(
             data = await svc.kpis(project_id=None, project_ids=allowed, **common)
     else:
         data = await svc.kpis(project_id=project_id, project_ids=None, **common)
-    return ReceivableKpisRead.model_validate(data)
+    return redact_for("invoices_kpis", ReceivableKpisRead.model_validate(data), user)
 
 
 @invoices_router.get(
@@ -263,7 +284,7 @@ async def list_eligible_invoices_for_batch(
 
 # --- Instituições de Antecipação (cadastro próprio do domínio financeiro) ---
 
-_edit_view = [Depends(require_permission(INVOICES_EDIT))]
+_edit_view = [Depends(require_permission(INVOICES_UPDATE))]
 
 
 @invoices_router.get(
@@ -367,7 +388,7 @@ async def get_advance_batch(
 @invoices_router.post(
     "/advance-batches",
     response_model=AdvanceBatchRead,
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
 )
 async def create_advance_batch(
     payload: AdvanceBatchCreate,
@@ -414,7 +435,7 @@ async def create_advance_batch(
 @invoices_router.post(
     "/advance-batches/{batch_id}/confirm",
     response_model=AdvanceBatchRead,
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
 )
 async def confirm_advance_batch(
     batch_id: UUID,
@@ -436,7 +457,7 @@ async def confirm_advance_batch(
 @invoices_router.patch(
     "/advance-batches/{batch_id}",
     response_model=AdvanceBatchRead,
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
 )
 async def update_advance_batch(
     batch_id: UUID,
@@ -474,7 +495,7 @@ async def update_advance_batch(
 @invoices_router.delete(
     "/advance-batches/{batch_id}",
     status_code=204,
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
 )
 async def cancel_advance_batch(
     batch_id: UUID,
@@ -492,7 +513,7 @@ async def cancel_advance_batch(
 @invoices_router.delete(
     "/advance-batches/{batch_id}/hard",
     status_code=204,
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
 )
 async def delete_advance_batch_hard(
     batch_id: UUID,
@@ -507,7 +528,7 @@ async def delete_advance_batch_hard(
     await db.commit()
 
 
-@invoices_router.post("", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
+@invoices_router.post("", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_CREATE))])
 async def create_invoice(
     payload: ReceivableInvoiceCreate,
     db: AsyncSession = Depends(get_db),
@@ -521,7 +542,7 @@ async def create_invoice(
     if loaded is None:
         raise HTTPException(status_code=500, detail="Falha ao carregar NF")
     prefix = settings.api_v1_prefix.rstrip("/")
-    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix)
+    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix, actor)
 
 
 @invoices_router.post(
@@ -554,10 +575,10 @@ async def reactivate_invoice(
     if loaded is None:
         raise HTTPException(status_code=404, detail="NF não encontrada.")
     prefix = settings.api_v1_prefix.rstrip("/")
-    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix)
+    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix, actor)
 
 
-@invoices_router.patch("/{invoice_id}", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
+@invoices_router.patch("/{invoice_id}", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_UPDATE))])
 async def update_invoice(
     invoice_id: UUID,
     payload: ReceivableInvoiceUpdate,
@@ -581,10 +602,10 @@ async def update_invoice(
     if loaded is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
     prefix = settings.api_v1_prefix.rstrip("/")
-    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix)
+    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix, actor)
 
 
-@invoices_router.delete("/{invoice_id}", status_code=204, dependencies=[Depends(require_permission(INVOICES_EDIT))])
+@invoices_router.delete("/{invoice_id}", status_code=204, dependencies=[Depends(require_permission(INVOICES_UPDATE))])
 async def delete_invoice(
     invoice_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -620,7 +641,7 @@ _ANTICIPATION_DISCONTINUED_MSG = (
 
 @invoices_router.post(
     "/{invoice_id}/anticipations",
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
 )
 async def add_anticipation(invoice_id: UUID) -> None:
     raise HTTPException(status_code=410, detail=_ANTICIPATION_DISCONTINUED_MSG)
@@ -628,7 +649,7 @@ async def add_anticipation(invoice_id: UUID) -> None:
 
 @invoices_router.delete(
     "/{invoice_id}/anticipations/{anticipation_id}",
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
 )
 async def delete_anticipation(invoice_id: UUID, anticipation_id: UUID) -> None:
     raise HTTPException(status_code=410, detail=_ANTICIPATION_DISCONTINUED_MSG)
@@ -636,7 +657,7 @@ async def delete_anticipation(invoice_id: UUID, anticipation_id: UUID) -> None:
 
 @invoices_router.patch(
     "/{invoice_id}/anticipations/{anticipation_id}",
-    dependencies=[Depends(require_permission(INVOICES_EDIT))],
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
 )
 async def update_anticipation(invoice_id: UUID, anticipation_id: UUID) -> None:
     raise HTTPException(status_code=410, detail=_ANTICIPATION_DISCONTINUED_MSG)
@@ -662,7 +683,7 @@ async def download_invoice_pdf(
     return FileResponse(path, media_type="application/pdf", filename=safe_name)
 
 
-@invoices_router.post("/{invoice_id}/pdf", dependencies=[Depends(require_permission(INVOICES_EDIT))])
+@invoices_router.post("/{invoice_id}/pdf", dependencies=[Depends(require_permission(INVOICES_UPDATE))])
 async def upload_invoice_pdf(
     invoice_id: UUID,
     file: UploadFile = File(...),
@@ -728,7 +749,7 @@ async def upload_invoice_pdf(
     if loaded is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
     prefix = settings.api_v1_prefix.rstrip("/")
-    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix)
+    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix, actor)
 
 
 @invoices_router.get("/{invoice_id}/files", response_model=list[ReceivableInvoiceFileRead], dependencies=_read_view)
@@ -784,7 +805,7 @@ async def download_invoice_file(
     return FileResponse(path, media_type=row.content_type or "application/pdf", filename=safe)
 
 
-@invoices_router.delete("/{invoice_id}/pdf", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
+@invoices_router.delete("/{invoice_id}/pdf", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_UPDATE))])
 async def delete_invoice_pdf(
     invoice_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -821,4 +842,4 @@ async def delete_invoice_pdf(
     if loaded is None:
         raise HTTPException(status_code=404, detail="NF não encontrada")
     prefix = settings.api_v1_prefix.rstrip("/")
-    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix)
+    return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix, actor)

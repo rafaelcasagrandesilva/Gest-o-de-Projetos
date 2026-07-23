@@ -171,8 +171,23 @@ class ReportService:
         )
         return {"competencia": comp.isoformat()[:7], "scenario": sc.value, "rows": rows}
 
+    # Chaves financeiras dos relatórios de Colaboradores/Folha — omitidas sem employees.sensitive.
+    _EMPLOYEES_REPORT_SENSITIVE_KEYS = (
+        "salario_base", "custos_adicionais", "custo_total_cadastro", "pj_horas_mes",
+        "pj_custo_adicional", "custo_projetos", "custo_administrativo", "custo",
+        "pix_tipo", "pix_chave",
+    )
+    _PAYROLL_REPORT_SENSITIVE_KEYS = (
+        "salario_base", "salario_liquido", "beneficios", "vr", "vt", "ajuda_custo",
+        "endividamentos", "endividamentos_itens", "outros", "total_folha", "pix_tipo", "pix_chave",
+    )
+
     async def generate_employees_report(
-        self, *, competencia: date | None, scenario: str | Scenario = DEFAULT_SCENARIO
+        self,
+        *,
+        competencia: date | None,
+        scenario: str | Scenario = DEFAULT_SCENARIO,
+        include_sensitive: bool = True,
     ) -> dict[str, Any]:
         comp = competencia or default_cost_reference()
         sc = coerce_scenario(scenario)
@@ -235,10 +250,19 @@ class ReportService:
                     "atualizado_em": emp.updated_at.isoformat() if (emp and getattr(emp, "updated_at", None)) else "",
                 }
             )
+        if not include_sensitive:
+            rows = [
+                {k: ("" if k in self._EMPLOYEES_REPORT_SENSITIVE_KEYS else v) for k, v in row.items()}
+                for row in rows
+            ]
         return {"competencia_ref": comp.isoformat(), "scenario": sc.value, "rows": rows}
 
     async def generate_payroll_report(
-        self, *, competencia: date | None, scenario: str | Scenario = DEFAULT_SCENARIO
+        self,
+        *,
+        competencia: date | None,
+        scenario: str | Scenario = DEFAULT_SCENARIO,
+        include_sensitive: bool = True,
     ) -> dict[str, Any]:
         """Folha de Pagamento (fechamento mensal): 1 linha por colaborador com o valor
         efetivamente pago na competência (holerite real CLT / contratado PJ + VR +
@@ -446,9 +470,20 @@ class ReportService:
             "total_ajuda_custo": round(t_ajuda, 2),
             "total_geral": round(t_geral, 2),
         }
+        if not include_sensitive:
+            # Folha sem employees.sensitive: omite valores por linha e zera os totais monetários.
+            rows = [
+                {k: ("" if k in self._PAYROLL_REPORT_SENSITIVE_KEYS else v) for k, v in row.items()}
+                for row in rows
+            ]
+            summary = {
+                k: (0 if k.startswith("total_") else v) for k, v in summary.items()
+            }
         return {"competencia_ref": comp.isoformat(), "scenario": sc.value, "rows": rows, "summary": summary}
 
-    async def generate_vehicles_report(self, *, active_only: bool) -> dict[str, Any]:
+    async def generate_vehicles_report(
+        self, *, active_only: bool, include_sensitive: bool = True
+    ) -> dict[str, Any]:
         rows = await FleetService(self.session).list_vehicles(
             offset=0, limit=10_000, include_inactive=not active_only
         )
@@ -461,8 +496,11 @@ class ReportService:
                     "modelo": getattr(r, "model", None) or "",
                     "descricao": getattr(r, "description", None) or "",
                     "tipo": v.vehicle_type,
+                    # Centro de Custo é informação NÃO financeira: sempre presente (independe de sensitive).
+                    "centro_custo": v.cost_center or "",
                     "condutor": v.driver_name,
-                    "custo_mensal": float(v.monthly_cost or 0),
+                    # Financeiro: omitido sem vehicles.sensitive (relatório sai sem o custo mensal).
+                    "custo_mensal": (float(v.monthly_cost or 0) if include_sensitive else ""),
                     "ativo": v.is_active,
                     "criado_em": r.created_at.isoformat() if getattr(r, "created_at", None) else "",
                     "atualizado_em": r.updated_at.isoformat() if getattr(r, "updated_at", None) else "",

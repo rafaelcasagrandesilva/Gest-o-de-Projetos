@@ -43,7 +43,9 @@ class LeptaOperationHandler(BaseOperationHandler):
         if basis == BASIS_NET:
             return round(net, 2)
         if basis == BASIS_NET_MINUS_10:
-            return round(net * 0.90, 2)
+            # Líquido − retenção de 10% sobre o BRUTO da NF (a retenção incide no bruto,
+            # não no líquido): LiquidoDescontado = Liquido − (Bruto × 0,10).
+            return round(net - gross * 0.10, 2)
         # BRUTO (default seguro).
         return round(gross, 2)
 

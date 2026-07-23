@@ -6,13 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_permission
-from app.core.permission_codes import ALERTS_VIEW, SYSTEM_ADMIN
+from app.core.permission_codes import ALERTS_READ, SYSTEM_ADMIN
 from app.database.session import get_db
 from app.schemas.alerts import AlertRead, AlertResolveRequest
 from app.services.alerts_service import AlertsService
 
 
-_read = [Depends(require_permission(ALERTS_VIEW))]
+_read = [Depends(require_permission(ALERTS_READ))]
 
 router = APIRouter()
 

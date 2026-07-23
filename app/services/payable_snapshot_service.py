@@ -616,16 +616,23 @@ class PayableSnapshotService:
     def _company_finance_payable_identity(item: CompanyFinancialItem) -> tuple[str, str | None]:
         """(name, item_description) exibidos no Contas a Pagar.
 
-        Endividamento: `name` = Credor (colaborador vinculado; senão a própria descrição;
-        senão o nome legado) e `item_description` = descrição própria do item. Demais tipos
-        (custo fixo/projeto): `name` = `item.nome` e `item_description` = None (inalterado).
+        Padrão único (igual ao Custos Fixos): `name` identifica o item e `item_description`
+        apenas complementa (subtítulo, opcional).
+
+        Endividamento: `name` = colaborador vinculado (tipo Colaborador) ou o próprio
+        `item.nome` (tipo Manual); `item_description` = descrição complementar quando houver.
+        Para não duplicar, a descrição é omitida quando coincide com o nome (compatível com
+        cadastros legados onde o nome era composto a partir da descrição). Demais tipos
+        (custo fixo/projeto): `name` = `item.nome`, `item_description` = None (inalterado).
         """
         if item.tipo == "endividamento":
-            desc = (getattr(item, "item_description", None) or "").strip() or None
             emp = getattr(item, "employee", None)
             emp_name = _employee_display_name(emp) if emp is not None else None
-            credor = (emp_name or desc or str(item.nome or "")).strip() or str(item.nome or "")
-            return credor, desc
+            name = (emp_name or str(item.nome or "")).strip() or str(item.nome or "")
+            desc = (getattr(item, "item_description", None) or "").strip() or None
+            if desc is not None and desc.casefold() == name.casefold():
+                desc = None  # evita subtítulo duplicado (nome == descrição)
+            return name, desc
         return str(item.nome or "").strip(), None
 
     async def _company_finance_snapshot_meta(self, item: CompanyFinancialItem) -> tuple[PayableSnapshotType, str, str]:
@@ -698,22 +705,80 @@ class PayableSnapshotService:
             return _money2(item.renegotiated_amount)
         return _money2(item.valor_referencia)
 
+    def _company_finance_item_eligible_for_comp(
+        self, item: CompanyFinancialItem, comp: date
+    ) -> bool:
+        """Item elegível a lançamento automático na competência (ciclo de vida + vigência).
+
+        Mesma regra da geração, SEM o piso de implantação: item ativo, vigência cobrindo o
+        mês e, para endividamento, "Obrigatório mensal". Usada para materializar a linha
+        quando o usuário informa explicitamente o valor da competência na grade (manutenção
+        de competência ABERTA anterior ao piso — ex.: DEX em Junho).
+        """
+        if not bool(getattr(item, "is_active", True)):
+            return False
+        _, month_end = _month_bounds(comp)
+        start = getattr(item, "start_date", None)
+        end = getattr(item, "end_date", None)
+        if start is not None and start > month_end:
+            return False
+        if end is not None and end < comp:
+            return False
+        if item.tipo == "endividamento" and not bool(getattr(item, "is_monthly_required", False)):
+            return False
+        return True
+
+    async def _company_finance_grid_value(self, *, item_id: UUID, comp: date) -> Decimal | None:
+        """Valor informado na grade mensal (`company_financial_payments`) da competência.
+
+        É o "valor oficial da competência": quando presente, o Contas a Pagar passa a usá-lo
+        EXCLUSIVAMENTE (não importa se maior/menor/igual ao valor de referência); NÃO gera
+        saldo/crédito/ajuste — apenas define o valor. Ausente → None (o chamador cai no valor
+        de referência como fallback).
+        """
+        val = await self.session.scalar(
+            select(CompanyFinancialPayment.valor).where(
+                CompanyFinancialPayment.item_id == item_id,
+                CompanyFinancialPayment.competencia == normalize_competencia(comp),
+            )
+        )
+        return _money2(val) if val is not None else None
+
+    async def _company_finance_grid_map(
+        self, item_ids: list[UUID], comp: date
+    ) -> dict[UUID, Decimal]:
+        """Mapa item_id → valor da grade na competência (lote; usado pela geração)."""
+        if not item_ids:
+            return {}
+        rows = (
+            await self.session.execute(
+                select(CompanyFinancialPayment.item_id, CompanyFinancialPayment.valor).where(
+                    CompanyFinancialPayment.item_id.in_(item_ids),
+                    CompanyFinancialPayment.competencia == normalize_competencia(comp),
+                )
+            )
+        ).all()
+        return {iid: _money2(val) for iid, val in rows if val is not None}
+
     async def _generate_company_finance_payables(self, *, payment_month: date) -> int:
         """Gera automaticamente os lançamentos de Custos Fixos e Endividamento.
 
         Regras (o CADASTRO governa a linha de contas a pagar):
         - Custos Fixos: item ativo e competência dentro da vigência (início/encerramento);
         - Endividamento: além disso, apenas quando `is_monthly_required` (Obrigatório = Sim).
+        Valor oficial da competência: valor informado na grade mensal
+        (`company_financial_payments`) quando existir; senão, o valor de REFERÊNCIA (fallback).
         Idempotente por (competência, ref_id): se já existir um lançamento daquele item na
         competência (inclusive de gerações anteriores/legado), NÃO cria de novo. Nunca
-        apaga nada. Valor congelado no momento da geração (alterar o cadastro só afeta
-        competências futuras).
+        apaga nada.
         """
         comp = normalize_competencia(payment_month)
-        # Não retroage: competências anteriores à implantação (JUL/2026) nunca geram
-        # Custos Fixos/Endividamento automaticamente. JUL/2026 em diante segue igual.
-        if comp < COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE:
-            return 0
+        # Piso de implantação (JUL/2026): abaixo do corte NÃO se gera automaticamente a partir
+        # do valor de REFERÊNCIA (não retroage / preserva o histórico). Porém, se o usuário
+        # informou explicitamente o valor da competência na grade mensal (manutenção deliberada
+        # de uma competência ABERTA — ex.: DEX em Junho), a linha é gerada com esse valor.
+        # JUL/2026 em diante gera normalmente (grade se houver; senão referência).
+        below_floor = comp < COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE
         _, month_end = _month_bounds(comp)
         settings = await SettingsService(self.session).get_or_create()
         due = _default_due_date(comp, day=10)
@@ -752,6 +817,9 @@ class PayableSnapshotService:
             .all()
         )
 
+        # Valores informados na grade mensal desta competência (governam o valor oficial).
+        grid_map = await self._company_finance_grid_map([it.id for it in items], comp)
+
         created = 0
         for item in items:
             if item.id in existing_refs:
@@ -759,7 +827,16 @@ class PayableSnapshotService:
             # Endividamento só gera automaticamente quando obrigatório.
             if item.tipo == "endividamento" and not bool(getattr(item, "is_monthly_required", False)):
                 continue
-            value = self._company_finance_monthly_value(item, comp=comp, settings=settings)
+            grid_val = grid_map.get(item.id)
+            # Piso: sem valor explícito na grade, competências anteriores a JUL/2026 não geram.
+            if below_floor and grid_val is None:
+                continue
+            # Valor oficial da competência: grade se informada; senão, valor de referência.
+            value = (
+                grid_val
+                if grid_val is not None
+                else self._company_finance_monthly_value(item, comp=comp, settings=settings)
+            )
             if value <= 0:
                 continue
             snap_type, category, origin = self._company_finance_payable_labels(item)
@@ -805,11 +882,14 @@ class PayableSnapshotService:
         - origin ∈ (FIXED_COST, DEBT)  → gerados automaticamente pelo cadastro corporativo;
         - competência < first_competence (JUL/2026);
         - sem QUALQUER pagamento registrado: amount_paid <= 0 E sem linha em payable_payments
-          (ativa ou estornada).
+          (ativa ou estornada);
+        - SEM valor informado na grade mensal (`company_financial_payments`) para aquela
+          competência: linhas com valor de grade representam manutenção DELIBERADA de uma
+          competência aberta (ex.: DEX em Junho) e são preservadas.
 
         NUNCA remove: manuais (origin MANUAL), de projeto/colaborador (origin PROJECT/NULL),
-        antecipações, nem linhas com pagamento. `dry_run=True` apenas conta (não deleta).
-        Retorna relatório: total removido/candidato e quantidade por competência.
+        antecipações, linhas com pagamento nem linhas com valor informado na grade.
+        `dry_run=True` apenas conta (não deleta). Retorna relatório.
         """
         first = normalize_competencia(first_competence)
         stmt = (
@@ -825,6 +905,30 @@ class PayableSnapshotService:
             .order_by(PayableSnapshot.month.asc())
         )
         rows = list((await self.session.execute(stmt)).scalars().all())
+
+        # Preserva linhas cujo valor foi informado explicitamente na grade mensal para aquela
+        # competência (manutenção deliberada de competência aberta anterior ao piso).
+        grid_pairs: set[tuple[UUID, date]] = set()
+        ref_ids = {r.ref_id for r in rows if r.ref_id is not None}
+        if ref_ids:
+            grid_rows = (
+                await self.session.execute(
+                    select(
+                        CompanyFinancialPayment.item_id, CompanyFinancialPayment.competencia
+                    ).where(
+                        CompanyFinancialPayment.item_id.in_(ref_ids),
+                        CompanyFinancialPayment.competencia < first,
+                    )
+                )
+            ).all()
+            grid_pairs = {(iid, normalize_competencia(c)) for iid, c in grid_rows}
+        rows = [
+            r
+            for r in rows
+            if r.ref_id is None
+            or (r.ref_id, normalize_competencia(r.month)) not in grid_pairs
+        ]
+
         by_competence: dict[str, int] = {}
         for r in rows:
             key = f"{r.month:%Y-%m}"
@@ -899,21 +1003,24 @@ class PayableSnapshotService:
     async def sync_company_finance_item_months(
         self, *, item_id: UUID, months: set[date]
     ) -> dict:
-        """A grade mensal governa o valor da competência no Contas a Pagar.
+        """A grade mensal governa o valor oficial da competência no Contas a Pagar.
 
         Regra funcional (Custos Fixos/Endividamento):
-        - o CADASTRO gera automaticamente a PRIMEIRA linha da competência (valor de
-          referência) — feito em `_generate_company_finance_payables`, aqui NÃO se cria;
-        - depois que a competência existe, o valor efetivo passa a ser governado pela
-          grade mensal (`company_financial_payments`): editar a caixa do mês atualiza o
-          lançamento correspondente do CAP (amount_original, amount_final e, por
-          consequência, o saldo). Sem valor na grade → volta ao valor de referência.
+        - a geração (`_generate_company_finance_payables`) cria a linha das competências
+          elegíveis; o valor oficial da competência é o valor informado na grade mensal
+          (`company_financial_payments`) quando existir e, senão, o valor de REFERÊNCIA;
+        - editar a caixa do mês atualiza o lançamento correspondente do CAP
+          (amount_original E amount_final → NÃO gera saldo/crédito/ajuste; apenas define o
+          valor oficial). Sem valor na grade → volta ao valor de referência (fallback).
 
         Localiza a linha por (tipo corporativo FIXED_COST/ENDIVIDAMENTO) + `ref_id` +
-        `month`. Só sincroniza quando NÃO há pagamento (amount_paid == 0 E nenhum
-        payable_payment ativo); havendo pagamento, preserva o histórico e reporta o mês
-        para aviso ao usuário (ajuste manual). Respeita o piso de implantação (JUL/2026)
-        e nunca toca competências anteriores. Não altera Dashboard/KPIs/geração.
+        `month`. Se a linha existir e estiver ABERTA, atualiza; havendo pagamento, preserva
+        o histórico e reporta o mês para aviso ao usuário. Se a linha NÃO existir e o
+        usuário informou explicitamente o valor na grade (competência aberta, mês já
+        materializado, item elegível), a linha é CRIADA — inclusive em competências
+        anteriores ao piso JUL/2026 (manutenção de competência aberta, ex.: DEX em Junho).
+        O piso só bloqueia ação baseada SOMENTE na referência (sem valor na grade), para
+        preservar o histórico e não retroagir. Não altera Dashboard/KPIs paga/consolidada.
 
         Retorna {"synced": int, "skipped_paid": list[date]}.
         """
@@ -926,22 +1033,23 @@ class PayableSnapshotService:
         if item is None:
             return {"synced": 0, "skipped_paid": []}
         settings = await SettingsService(self.session).get_or_create()
+        cc_svc = CompanyFinanceCostCenterService(self.session)
 
         for raw_month in months:
             comp = normalize_competencia(raw_month)
-            # Não retroage: competências anteriores ao piso nunca são sincronizadas.
-            if comp < COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE:
+            below_floor = comp < COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE
+
+            # Valor oficial da competência: grade (se informada) senão valor de referência.
+            grid_val = await self._company_finance_grid_value(item_id=item_id, comp=comp)
+
+            # Piso de implantação: abaixo de JUL/2026 só há manutenção quando o usuário
+            # informou explicitamente o valor na grade (competência aberta). Sem grade →
+            # não age (preserva o histórico; nunca cria/atualiza a partir só da referência).
+            if below_floor and grid_val is None:
                 continue
 
-            # Valor efetivo do mês: valor da grade (se lançado) senão valor de referência.
-            grid_val = await self.session.scalar(
-                select(CompanyFinancialPayment.valor).where(
-                    CompanyFinancialPayment.item_id == item_id,
-                    CompanyFinancialPayment.competencia == comp,
-                )
-            )
             new_amount = (
-                _money2(grid_val)
+                grid_val
                 if grid_val is not None
                 else self._company_finance_monthly_value(item, comp=comp, settings=settings)
             )
@@ -960,8 +1068,48 @@ class PayableSnapshotService:
                     )
                 )
             ).scalars().first()
+
             if row is None:
-                # A geração cria a primeira linha; o sync só atualiza linhas existentes.
+                # A geração cria a linha das competências elegíveis. Aqui só criamos quando o
+                # usuário informou explicitamente o valor da competência (grade) e o mês já foi
+                # materializado — cobre a competência ABERTA anterior ao piso (ex.: DEX/Junho)
+                # sem poluir meses ainda não gerados nem suprimir a geração de custos de projeto.
+                if grid_val is None:
+                    continue
+                if not self._company_finance_item_eligible_for_comp(item, comp):
+                    continue
+                if not await self.is_generated(month=comp):
+                    continue
+                snap_type, category, origin = self._company_finance_payable_labels(item)
+                cost_center = await cc_svc.resolve_label(item)
+                name, item_description = self._company_finance_payable_identity(item)
+                row = PayableSnapshot(
+                    month=comp,
+                    type=snap_type,
+                    ref_id=item_id,
+                    project_id=None,
+                    name=name,
+                    item_description=item_description,
+                    cost_center=cost_center,
+                    category=category,
+                    origin=origin,
+                    amount_original=new_amount,
+                    amount_final=new_amount,
+                    amount_paid=Decimal("0"),
+                    due_date=_default_due_date(comp, day=10),
+                    paid=False,
+                    payment_date=None,
+                    observation=None,
+                )
+                self.session.add(row)
+                synced += 1
+                _log_payable_dynamic_sync(
+                    action="grid_create",
+                    row=row,
+                    before_original=Decimal("0"),
+                    before_final=Decimal("0"),
+                    before_paid=Decimal("0"),
+                )
                 continue
 
             # Guarda de pagamento: havendo qualquer pagamento (valor pago > 0 ou pagamento

@@ -7,7 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_permission
-from app.core.permission_codes import PAYABLES_EDIT, PAYABLES_VIEW
+from app.core.permission_codes import (
+    PAYABLES_CREATE,
+    PAYABLES_DELETE,
+    PAYABLES_LIST,
+    PAYABLES_UPDATE,
+)
 from app.database.session import get_db
 from app.models.payable import Payable
 from app.models.user import User
@@ -16,8 +21,11 @@ from app.services.payable_service import PayableService, payable_status
 
 router = APIRouter()
 
-_read = [Depends(require_permission(PAYABLES_VIEW))]
-_write = [Depends(require_permission(PAYABLES_EDIT))]
+# Modelo de verbos (CAP): list p/ listagem; create/update/delete por método.
+_read = [Depends(require_permission(PAYABLES_LIST))]
+_create = [Depends(require_permission(PAYABLES_CREATE))]
+_update = [Depends(require_permission(PAYABLES_UPDATE))]
+_delete = [Depends(require_permission(PAYABLES_DELETE))]
 
 
 def _to_read(row) -> PayableRead:
@@ -67,7 +75,7 @@ async def list_payables(
     return [_to_read(r) for r in rows]
 
 
-@router.post("", response_model=PayableRead, dependencies=_write)
+@router.post("", response_model=PayableRead, dependencies=_create)
 async def create_payable(
     payload: PayableCreate,
     db: AsyncSession = Depends(get_db),
@@ -81,7 +89,7 @@ async def create_payable(
     return _to_read(row)
 
 
-@router.patch("/{payable_id}", response_model=PayableRead, dependencies=_write)
+@router.patch("/{payable_id}", response_model=PayableRead, dependencies=_update)
 async def update_payable(
     payable_id: UUID,
     payload: PayableUpdate,
@@ -117,7 +125,7 @@ async def update_payable(
     return _to_read(row)
 
 
-@router.patch("/{payable_id}/pay", response_model=PayableRead, dependencies=_write)
+@router.patch("/{payable_id}/pay", response_model=PayableRead, dependencies=_update)
 async def mark_paid(
     payable_id: UUID,
     payload: PayablePay,
@@ -134,7 +142,7 @@ async def mark_paid(
     return _to_read(row)
 
 
-@router.delete("/{payable_id}", status_code=204, dependencies=_write)
+@router.delete("/{payable_id}", status_code=204, dependencies=_delete)
 async def delete_payable(
     payable_id: UUID,
     db: AsyncSession = Depends(get_db),

@@ -28,6 +28,8 @@ from app.core.permission_codes import (
     DEBTS_VIEW,
     EMPLOYEES_EDIT,
     EMPLOYEES_VIEW,
+    expand_permissions,
+    FINANCIAL_DASHBOARD_READ,
     INVOICES_EDIT,
     INVOICES_VIEW,
     PAYABLES_EDIT,
@@ -78,31 +80,14 @@ ROLE_ADMIN = "ADMIN"
 ROLE_GESTOR = "GESTOR"
 ROLE_CONSULTA = "CONSULTA"
 
-# Acesso total explícito (emergência / operação) — não substitui RBAC após migração completa.
-_DEFAULT_SUPERUSER_EMAILS = frozenset(
-    {
-        "rafael.casagrande@meconsulting.com.br",
-    }
-)
-
-
-def _configured_superuser_emails() -> frozenset[str]:
-    raw = (settings.app_superuser_emails or "").strip()
-    if raw:
-        return frozenset(x.strip().lower() for x in raw.split(",") if x.strip())
-    return _DEFAULT_SUPERUSER_EMAILS
-
-
-def _is_superuser_email(user: User) -> bool:
-    return (user.email or "").strip().lower() in _configured_superuser_emails()
-
-
 def is_app_superuser(user: User) -> bool:
+    """Fase 1: o BACKDOOR de e-mail superusuário foi REMOVIDO — não há mais bypass por e-mail.
+
+    Todo acesso é explicado exclusivamente pelas permissões do usuário. Para "acesso total", basta o
+    usuário possuir todas as permissões. Mantido retornando False por compatibilidade dos chamadores
+    (montagem de sessão/rotas), que passam a nunca receber privilégio implícito.
     """
-    Conta operacional com privilégios totais (lista explícita de e-mails em `_SUPERUSER_EMAILS`).
-    Não confundir com role ADMIN do RBAC — usado para ações destrutivas / emergência.
-    """
-    return _is_superuser_email(user)
+    return False
 
 
 def _token_from_credentials(credentials: HTTPAuthorizationCredentials) -> str:
@@ -205,19 +190,20 @@ def effective_permission_names(user: User) -> frozenset[str]:
 
 
 def user_has_permission(user: User, code: str) -> bool:
-    """Verifica permissão por código. Role ADMIN e e-mail superuser têm acesso total às ações."""
+    """Verifica permissão por código.
+
+    Fase 1: autorização depende EXCLUSIVAMENTE das permissões concedidas ao usuário (perfil + deltas).
+    NÃO há mais atalho por perfil (role ADMIN), por e-mail (superuser) nem por `system.admin` liberando
+    funcionalidades de negócio. `system.admin` concede apenas as funcionalidades administrativas do
+    sistema, via grafo (`SYSTEM_ADMIN ⇒ users.manage/settings.*`). O perfil ADMIN continua com acesso
+    total porque suas permissões (role_permissions) já contêm todos os códigos.
+    """
     if code in EXPLICIT_GRANT_ONLY_PERMISSIONS:
         return code in permission_names_from_user(user)
-    if _is_superuser_email(user):
-        return True
-    if ROLE_ADMIN in _user_role_names(user):
-        return True
     names = effective_permission_names(user)
-    if SYSTEM_ADMIN in names:
-        return True
-    if code in names:
-        return True
-    if code in (PROJECTS_VIEW_LIST, PROJECTS_VIEW_DETAIL) and PROJECTS_VIEW in names:
+    # Fecho transitivo do modelo de verbos (inclui projects.view ⇒ view_list/detail e
+    # system.admin ⇒ funcionalidades administrativas do sistema).
+    if code in expand_permissions(names):
         return True
     if code == WORKSPACE_PROJECTS_ACCESS and names.intersection(
         {
@@ -247,6 +233,7 @@ def user_has_permission(user: User, code: str) -> bool:
         return True
     if code == WORKSPACE_FINANCE_ACCESS and names.intersection(
         {
+            FINANCIAL_DASHBOARD_READ,
             PAYABLES_VIEW,
             PAYABLES_EDIT,
             RECEIVABLES_VIEW,
@@ -289,11 +276,11 @@ def user_has_any_permission(user: User, *codes: str) -> bool:
 
 
 def user_sees_all_projects(user: User) -> bool:
-    """Escopo global de projetos (independente de project_users)."""
-    if _is_superuser_email(user):
-        return True
-    if ROLE_ADMIN in _user_role_names(user):
-        return True
+    """Escopo global de projetos (independente de project_users).
+
+    Fase 1: só as permissões de sistema `system.admin`/`system.all_projects` concedem visão global —
+    sem atalho por role ADMIN nem por e-mail superuser.
+    """
     names = effective_permission_names(user)
     return SYSTEM_ADMIN in names or SYSTEM_ALL_PROJECTS in names
 
@@ -467,37 +454,11 @@ def require_permission(*codes: str) -> Callable:
     return _dep
 
 
-def require_roles(*allowed: str) -> Callable:
-    allowed_set = set(allowed)
-
-    async def _dep(user: User = Depends(get_current_user)) -> User:
-        role_names = _user_role_names(user)
-        if ROLE_ADMIN in role_names:
-            return user
-        if not role_names.intersection(allowed_set):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
-        return user
-
-    return _dep
-
-
 async def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Funcionalidades administrativas do sistema — exige a PERMISSÃO system.admin (não o perfil)."""
     if not user_has_permission(user, SYSTEM_ADMIN):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Apenas administradores.")
     return user
-
-
-async def require_admin_role(user: User = Depends(get_current_user)) -> User:
-    """Apenas usuário com role ADMIN (exportação de auditoria, operações restritas ao perfil)."""
-    if ROLE_ADMIN not in _user_role_names(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Apenas administradores.")
-    return user
-
-
-async def require_gestor_or_admin(user: User = Depends(get_current_user)) -> User:
-    if user_has_any_permission(user, SYSTEM_ADMIN, PROJECTS_EDIT):
-        return user
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão.")
 
 
 async def ensure_project_access(*, user: User, project_id: UUID, db: AsyncSession) -> None:

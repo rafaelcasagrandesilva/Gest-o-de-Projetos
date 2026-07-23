@@ -13,8 +13,8 @@ class ProjectFixedCostRead(UUIDTimestampRead):
     competencia: date
     scenario: str = "REALIZADO"
     name: str
-    amount_real: float
-    amount_calculated: float
+    amount_real: float | None = None
+    amount_calculated: float | None = None
 
 
 class ProjectFixedCostCreate(BaseModel):
@@ -29,8 +29,8 @@ class ProjectFixedCostCreate(BaseModel):
 class CorporateCostRead(UUIDTimestampRead):
     competencia: date
     name: str
-    amount_real: float
-    amount_calculated: float
+    amount_real: float | None = None
+    amount_calculated: float | None = None
 
 
 class CorporateCostCreate(BaseModel):
@@ -44,8 +44,8 @@ class CostAllocationRead(UUIDTimestampRead):
     corporate_cost_id: UUID
     project_id: UUID
     competencia: date
-    allocated_amount_real: float
-    allocated_amount_calculated: float
+    allocated_amount_real: float | None = None
+    allocated_amount_calculated: float | None = None
 
 
 class CostAllocationCreate(BaseModel):

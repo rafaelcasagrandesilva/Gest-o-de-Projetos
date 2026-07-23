@@ -43,12 +43,14 @@ class PayableSnapshotRead(UUIDTimestampRead):
     # do `type` para linhas legadas — ver ReceivablePayables read builder.
     origin: str | None = None
 
-    amount_original: float
-    amount_final: float
-    amount_paid: float
-    amount_remaining: float
+    # Valores monetários: Optional para permitir redação (Dados sensíveis) — o backend envia
+    # None quando o usuário não tem `payables.sensitive`. Não altera cálculo algum.
+    amount_original: float | None = None
+    amount_final: float | None = None
+    amount_paid: float | None = None
+    amount_remaining: float | None = None
     is_overpaid: bool = False
-    overpaid_amount: float = 0.0
+    overpaid_amount: float | None = 0.0
 
     due_date: date
     payment_date: date | None
@@ -62,8 +64,8 @@ class PayableSnapshotRead(UUIDTimestampRead):
     reconciled_at: datetime | None = None
     status: PayableSnapshotStatus
     last_payment_date: date | None = None
-    # Valor pago com payment_date no mês da listagem (fluxo de caixa do período).
-    paid_in_period: float = 0.0
+    # Valor pago com payment_date no mês da listagem (fluxo de caixa do período). Optional p/ redação.
+    paid_in_period: float | None = 0.0
     # Competência da obrigação fora do mês filtrado na tela operacional.
     competence_out_of_view: bool = False
 

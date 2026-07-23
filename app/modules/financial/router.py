@@ -16,24 +16,32 @@ from app.api.deps import (
     get_accessible_project_ids,
     get_current_user,
     get_current_workspace,
-    is_app_superuser,
     require_permission,
     user_has_permission,
     user_sees_all_projects,
 )
 from app.core.permission_codes import (
-    BILLING_VIEW,
+    BILLING_CREATE,
+    BILLING_DELETE,
+    BILLING_LIST,
+    BILLING_READ,
+    BILLING_UPDATE,
+    FINANCIAL_DASHBOARD_READ,
     INVOICES_REACTIVATE,
-    INVOICES_EDIT,
-    INVOICES_VIEW,
-    PAYABLES_VIEW,
-    PAYABLES_EDIT,
+    INVOICES_CREATE,
+    INVOICES_LIST,
+    INVOICES_UPDATE,
+    PAYABLES_LIST,
+    PAYABLES_UPDATE,
     PAYABLE_SNAPSHOT_RECONCILE,
-    RECEIVABLES_VIEW,
-    RECEIVABLES_EDIT,
+    RECEIVABLES_CREATE,
+    RECEIVABLES_DELETE,
+    RECEIVABLES_LIST,
+    RECEIVABLES_UPDATE,
 )
 from app.core.scenario import coerce_scenario, parse_scenario
 from app.database.session import get_db
+from app.api.sensitive import redact_for
 from app.models.user import User
 from app.schemas.financial import (
     InvoiceAnticipationCreate,
@@ -93,7 +101,7 @@ from app.schemas.financial_dashboard import (
 from app.services.financial_dashboard_service import FinancialDashboardService
 
 
-_read = [Depends(require_permission(BILLING_VIEW))]
+_read = [Depends(require_permission(BILLING_LIST))]
 
 router = APIRouter()
 
@@ -108,7 +116,7 @@ def _receivable_view_status(*, net_value: float, total_received: float) -> str:
     return "RECEBIDO"
 
 
-@router.get("/receivables", response_model=list[ReceivableViewRead], dependencies=[Depends(require_permission(RECEIVABLES_VIEW))])
+@router.get("/receivables", response_model=list[ReceivableViewRead], dependencies=[Depends(require_permission(RECEIVABLES_LIST))])
 async def list_receivables_view(
     request: Request,
     project_id: UUID | None = Query(default=None),
@@ -366,18 +374,19 @@ async def list_receivables_view(
                     include_in_dashboard=bool(getattr(b, "include_in_dashboard", True)),
                 )
             )
-    return out
+    return [redact_for("receivables", m, user) for m in out]
 
 
 @router.post(
     "/receivables/manual",
     response_model=ReceivableManualItemRead,
-    dependencies=[Depends(require_permission(RECEIVABLES_EDIT))],
+    dependencies=[Depends(require_permission(RECEIVABLES_CREATE))],
 )
 async def create_receivable_manual_item(
     payload: ReceivableManualItemCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
     _ws: str = Depends(get_current_workspace),
 ) -> ReceivableManualItemRead:
     svc = ReceivableManualService(db)
@@ -386,19 +395,20 @@ async def create_receivable_manual_item(
         row = await svc.create(workspace_id=request.state.workspace, data=data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return ReceivableManualItemRead.model_validate(row, from_attributes=True)
+    return redact_for("receivables_manual", ReceivableManualItemRead.model_validate(row, from_attributes=True), user)
 
 
 @router.patch(
     "/receivables/manual/{item_id}",
     response_model=ReceivableManualItemRead,
-    dependencies=[Depends(require_permission(RECEIVABLES_EDIT))],
+    dependencies=[Depends(require_permission(RECEIVABLES_UPDATE))],
 )
 async def update_receivable_manual_item(
     item_id: UUID,
     payload: ReceivableManualItemUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
     _ws: str = Depends(get_current_workspace),
 ) -> ReceivableManualItemRead:
     svc = ReceivableManualService(db)
@@ -411,13 +421,13 @@ async def update_receivable_manual_item(
         raise HTTPException(status_code=400, detail=str(e)) from e
     if row.workspace_id != request.state.workspace:
         raise HTTPException(status_code=404, detail="Receita manual não encontrada.")
-    return ReceivableManualItemRead.model_validate(row, from_attributes=True)
+    return redact_for("receivables_manual", ReceivableManualItemRead.model_validate(row, from_attributes=True), user)
 
 
 @router.delete(
     "/receivables/manual/{item_id}",
     status_code=204,
-    dependencies=[Depends(require_permission(RECEIVABLES_EDIT))],
+    dependencies=[Depends(require_permission(RECEIVABLES_DELETE))],
 )
 async def delete_receivable_manual_item(
     item_id: UUID,
@@ -457,10 +467,10 @@ async def list_revenues(
             )
     else:
         rows = await svc.list_revenues(offset=offset, limit=limit, project_id=project_id, scenario=sc)
-    return [RevenueRead.model_validate(r) for r in rows]
+    return [redact_for("billing_revenue", RevenueRead.model_validate(r), user) for r in rows]
 
 
-@router.post("/revenues", response_model=RevenueRead, dependencies=[Depends(require_permission(BILLING_VIEW))])
+@router.post("/revenues", response_model=RevenueRead, dependencies=[Depends(require_permission(BILLING_CREATE))])
 async def create_revenue(
     payload: RevenueCreate,
     request: Request,
@@ -477,10 +487,10 @@ async def create_revenue(
     row = await FinancialCrudService(db).create_revenue(
         actor_user_id=actor.id, data=data, actor=actor, request=request
     )
-    return RevenueRead.model_validate(row)
+    return redact_for("billing_revenue", RevenueRead.model_validate(row), actor)
 
 
-@router.patch("/revenues/{revenue_id}", response_model=RevenueRead, dependencies=[Depends(require_permission(BILLING_VIEW))])
+@router.patch("/revenues/{revenue_id}", response_model=RevenueRead, dependencies=[Depends(require_permission(BILLING_UPDATE))])
 async def update_revenue(
     revenue_id: UUID,
     payload: RevenueUpdate,
@@ -503,10 +513,10 @@ async def update_revenue(
         actor=actor,
         request=request,
     )
-    return RevenueRead.model_validate(row)
+    return redact_for("billing_revenue", RevenueRead.model_validate(row), actor)
 
 
-@router.delete("/revenues/{revenue_id}", status_code=204, dependencies=[Depends(require_permission(BILLING_VIEW))])
+@router.delete("/revenues/{revenue_id}", status_code=204, dependencies=[Depends(require_permission(BILLING_DELETE))])
 async def delete_revenue(
     revenue_id: UUID,
     request: Request,
@@ -524,7 +534,7 @@ async def delete_revenue(
     await svc.delete_revenue(actor_user_id=actor.id, revenue_id=revenue_id, actor=actor, request=request)
 
 
-@router.get("/invoices", response_model=list[InvoiceRead], dependencies=[Depends(require_permission(INVOICES_VIEW))])
+@router.get("/invoices", response_model=list[InvoiceRead], dependencies=[Depends(require_permission(INVOICES_LIST))])
 async def list_invoices(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -543,10 +553,10 @@ async def list_invoices(
             rows = await svc.list_invoices(offset=offset, limit=limit, project_ids=allowed)
     else:
         rows = await svc.list_invoices(offset=offset, limit=limit, project_id=project_id)
-    return [InvoiceRead.model_validate(r) for r in rows]
+    return [redact_for("billing_invoice", InvoiceRead.model_validate(r), user) for r in rows]
 
 
-@router.post("/invoices", response_model=InvoiceRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
+@router.post("/invoices", response_model=InvoiceRead, dependencies=[Depends(require_permission(INVOICES_CREATE))])
 async def create_invoice(
     payload: InvoiceCreate,
     request: Request,
@@ -557,10 +567,10 @@ async def create_invoice(
     row = await FinancialCrudService(db).create_invoice(
         actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
     )
-    return InvoiceRead.model_validate(row)
+    return redact_for("billing_invoice", InvoiceRead.model_validate(row), actor)
 
 
-@router.post("/invoices/anticipations", response_model=InvoiceAnticipationRead, dependencies=[Depends(require_permission(INVOICES_EDIT))])
+@router.post("/invoices/anticipations", response_model=InvoiceAnticipationRead, dependencies=[Depends(require_permission(INVOICES_UPDATE))])
 async def create_anticipation(
     payload: InvoiceAnticipationCreate,
     request: Request,
@@ -575,7 +585,7 @@ async def create_anticipation(
     row = await svc.create_anticipation(
         actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
     )
-    return InvoiceAnticipationRead.model_validate(row)
+    return redact_for("billing_invoice_anticipation", InvoiceAnticipationRead.model_validate(row), actor)
 
 
 def _parse_month(value: str) -> date:
@@ -591,19 +601,21 @@ def _parse_month(value: str) -> date:
 @router.get(
     "/dashboard",
     response_model=FinancialDashboardRead,
-    dependencies=[Depends(require_permission(BILLING_VIEW))],
+    dependencies=[Depends(require_permission(FINANCIAL_DASHBOARD_READ))],
 )
 async def financial_dashboard(
     month: str = Query(..., description="Mês âncora (YYYY-MM)."),
     months: int = Query(default=1, ge=1, le=24, description="Período (em meses)."),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
     workspace: str = Depends(get_current_workspace),
 ) -> FinancialDashboardRead:
     comp = _parse_month(month)
     svc = FinancialDashboardService(db)
     summary, points = await svc.cash_summary_and_series(month=comp, months=months, workspace_id=workspace)
     await db.commit()
-    return FinancialDashboardRead(
+    # Dados sensíveis: sem `financial_dashboard.sensitive`, os valores (faturamento/pago/caixa) saem None.
+    return redact_for("financial_dashboard", FinancialDashboardRead(
         summary=FinancialDashboardSummaryRead(
             month=summary.month,
             period_start=summary.period_start,
@@ -621,18 +633,19 @@ async def financial_dashboard(
             )
             for p in points
         ],
-    )
+    ), user)
 
 
 @router.get(
     "/dashboard/timeseries",
     response_model=list[FinancialDashboardTimeseriesPoint],
-    dependencies=[Depends(require_permission(BILLING_VIEW))],
+    dependencies=[Depends(require_permission(FINANCIAL_DASHBOARD_READ))],
 )
 async def financial_dashboard_timeseries(
     month: str = Query(..., description="Mês âncora (YYYY-MM)."),
     months: int = Query(default=12, ge=1, le=24),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
     workspace: str = Depends(get_current_workspace),
 ) -> list[FinancialDashboardTimeseriesPoint]:
     comp = _parse_month(month)
@@ -640,12 +653,12 @@ async def financial_dashboard_timeseries(
     _, points = await svc.cash_summary_and_series(month=comp, months=months, workspace_id=workspace)
     await db.commit()
     return [
-        FinancialDashboardTimeseriesPoint(
+        redact_for("financial_dashboard_point", FinancialDashboardTimeseriesPoint(
             month=p.month,
             faturamento=p.faturamento,
             pago=p.pago,
             caixa=p.caixa,
-        )
+        ), user)
         for p in points
     ]
 
@@ -653,12 +666,13 @@ async def financial_dashboard_timeseries(
 @router.get(
     "/dashboard/breakdown",
     response_model=FinancialDashboardBreakdownRead,
-    dependencies=[Depends(require_permission(BILLING_VIEW))],
+    dependencies=[Depends(require_permission(FINANCIAL_DASHBOARD_READ))],
 )
 async def financial_dashboard_breakdown(
     type: str = Query(..., pattern="^(faturamento|custos|caixa)$"),
     month: str = Query(..., description="Mês (YYYY-MM)."),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
     workspace: str = Depends(get_current_workspace),
 ) -> FinancialDashboardBreakdownRead:
     comp = _parse_month(month)
@@ -667,7 +681,7 @@ async def financial_dashboard_breakdown(
         type=type, month=comp, workspace_id=workspace
     )
     await db.commit()
-    return FinancialDashboardBreakdownRead(
+    return redact_for("financial_dashboard_breakdown", FinancialDashboardBreakdownRead(
         type=type,  # type: ignore[arg-type]
         month=comp,
         total=total,
@@ -684,7 +698,7 @@ async def financial_dashboard_breakdown(
             if paid_groups is not None
             else None
         ),
-    )
+    ), user)
 
 
 def _snapshot_to_read(
@@ -739,7 +753,7 @@ def _snapshot_to_read(
 
 
 async def _snapshots_to_read(
-    svc, rows: list, *, view_month: date | None = None
+    svc, rows: list, *, view_month: date | None = None, user: User | None = None
 ) -> list[PayableSnapshotRead]:
     if not rows:
         return []
@@ -748,7 +762,7 @@ async def _snapshots_to_read(
     paid_map: dict = {}
     if view_month is not None:
         paid_map = await svc.paid_in_period_by_snapshot_ids(ids, month=view_month)
-    return [
+    reads = [
         _snapshot_to_read(
             r,
             last_payment_date=dates.get(r.id),
@@ -757,9 +771,13 @@ async def _snapshots_to_read(
         )
         for r in rows
     ]
+    # Dados sensíveis: sem `payables.sensitive`, o backend omite os valores (envia None).
+    if user is not None:
+        reads = [redact_for("payables", m, user) for m in reads]
+    return reads
 
 
-@router.get("/payables", response_model=list[PayableSnapshotRead], dependencies=[Depends(require_permission(PAYABLES_VIEW))])
+@router.get("/payables", response_model=list[PayableSnapshotRead], dependencies=[Depends(require_permission(PAYABLES_LIST))])
 async def list_payables_snapshot(
     month: str | None = Query(
         default=None,
@@ -769,10 +787,10 @@ async def list_payables_snapshot(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[PayableSnapshotRead]:
-    if force_regenerate and not is_app_superuser(user):
+    if force_regenerate and not user_has_permission(user, PAYABLE_SNAPSHOT_RECONCILE):
         raise HTTPException(
             status_code=403,
-            detail="Apenas contas super usuário podem regerar o snapshot de contas a pagar.",
+            detail="Sem permissão para regerar o snapshot de contas a pagar (payable_snapshot.reconcile).",
         )
     sees_all = user_sees_all_projects(user)
     allowed = None if sees_all else set(await get_accessible_project_ids(user, db))
@@ -786,7 +804,7 @@ async def list_payables_snapshot(
         svc = FinanceService(db).payable_snapshots
         rows = await svc.list_all()
         await db.commit()
-        return await _snapshots_to_read(svc, rows)
+        return await _snapshots_to_read(svc, rows, user=user)
 
     comp = _parse_month(month)
 
@@ -833,7 +851,7 @@ async def list_payables_snapshot(
             if r.type == PayableSnapshotType.COLLABORATOR and r.project_id in allowed:
                 op_filtered.append(r)
         operational_rows = op_filtered
-    return await _snapshots_to_read(svc, operational_rows, view_month=comp)
+    return await _snapshots_to_read(svc, operational_rows, view_month=comp, user=user)
 
 
 async def _ensure_payable_snapshot_edit_access(*, row, user: User, db: AsyncSession) -> None:
@@ -845,7 +863,7 @@ async def _ensure_payable_snapshot_edit_access(*, row, user: User, db: AsyncSess
             raise HTTPException(status_code=403, detail="Sem permissão.")
 
 
-@router.patch("/payables/{snapshot_id}", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(PAYABLES_EDIT))])
+@router.patch("/payables/{snapshot_id}", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(PAYABLES_UPDATE))])
 async def update_payables_snapshot(
     snapshot_id: UUID,
     payload: PayableSnapshotUpdate,
@@ -868,13 +886,13 @@ async def update_payables_snapshot(
     )
     await db.commit()
     dates = await FinanceService(db).payable_snapshots.last_payment_dates_by_snapshot_ids([updated.id])
-    return _snapshot_to_read(updated, last_payment_date=dates.get(updated.id))
+    return redact_for("payables", _snapshot_to_read(updated, last_payment_date=dates.get(updated.id)), user)
 
 
 @router.post(
     "/payables/{snapshot_id}/register-payment",
     response_model=PayableSnapshotRead,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def register_payables_payment(
     snapshot_id: UUID,
@@ -900,13 +918,13 @@ async def register_payables_payment(
         raise HTTPException(status_code=400, detail=str(e)) from e
     await db.commit()
     dates = await svc.last_payment_dates_by_snapshot_ids([updated.id])
-    return _snapshot_to_read(updated, last_payment_date=dates.get(updated.id))
+    return redact_for("payables", _snapshot_to_read(updated, last_payment_date=dates.get(updated.id)), user)
 
 
 @router.post(
     "/payables/{snapshot_id}/reverse-payment",
     response_model=PayableSnapshotRead,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def reverse_payables_payment(
     snapshot_id: UUID,
@@ -930,7 +948,7 @@ async def reverse_payables_payment(
         raise HTTPException(status_code=400, detail=str(e)) from e
     await db.commit()
     dates = await svc.last_payment_dates_by_snapshot_ids([updated.id])
-    return _snapshot_to_read(updated, last_payment_date=dates.get(updated.id))
+    return redact_for("payables", _snapshot_to_read(updated, last_payment_date=dates.get(updated.id)), user)
 
 
 async def _read_payables_import_file(file: UploadFile) -> tuple[bytes, str]:
@@ -948,7 +966,7 @@ async def _read_payables_import_file(file: UploadFile) -> tuple[bytes, str]:
 @router.post(
     "/payables/import/analyze",
     response_model=PayableImportAnalyzeResult,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def analyze_payables_import(
     file: UploadFile = File(...),
@@ -967,7 +985,7 @@ async def analyze_payables_import(
 @router.post(
     "/payables/import/mapped/scan-cost-centers",
     response_model=PayableImportCostCenterScanResult,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def scan_payables_import_cost_centers(
     file: UploadFile = File(...),
@@ -989,7 +1007,7 @@ async def scan_payables_import_cost_centers(
 @router.post(
     "/payables/import/mapped/preview",
     response_model=PayableImportPreviewResult,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def preview_payables_import_mapped(
     file: UploadFile = File(...),
@@ -1019,7 +1037,7 @@ async def preview_payables_import_mapped(
 @router.post(
     "/payables/import/mapped/confirm",
     response_model=PayableImportConfirmResult,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def confirm_payables_import_mapped(
     file: UploadFile = File(...),
@@ -1051,7 +1069,7 @@ async def confirm_payables_import_mapped(
 @router.get(
     "/cost-center-aliases",
     response_model=list[CostCenterAliasRead],
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def list_cost_center_aliases(
     db: AsyncSession = Depends(get_db),
@@ -1072,7 +1090,7 @@ async def list_cost_center_aliases(
 @router.post(
     "/cost-center-aliases",
     response_model=CostCenterAliasRead,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def create_cost_center_alias(
     payload: CostCenterAliasCreate,
@@ -1100,7 +1118,7 @@ async def create_cost_center_alias(
 @router.delete(
     "/cost-center-aliases/{alias_id}",
     status_code=204,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def delete_cost_center_alias(
     alias_id: UUID,
@@ -1115,7 +1133,7 @@ async def delete_cost_center_alias(
 @router.get(
     "/payables/import/templates",
     response_model=list[PayableImportTemplateRead],
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def list_payables_import_templates(
     db: AsyncSession = Depends(get_db),
@@ -1127,7 +1145,7 @@ async def list_payables_import_templates(
 @router.post(
     "/payables/import/templates",
     response_model=PayableImportTemplateRead,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def create_payables_import_template(
     payload: PayableImportTemplateCreate,
@@ -1145,7 +1163,7 @@ async def create_payables_import_template(
 @router.delete(
     "/payables/import/templates/{template_id}",
     status_code=204,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def delete_payables_import_template(
     template_id: UUID,
@@ -1161,7 +1179,7 @@ async def delete_payables_import_template(
 @router.post(
     "/payables/import/preview",
     response_model=PayableImportPreviewResult,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def preview_payables_import(
     file: UploadFile = File(...),
@@ -1177,7 +1195,7 @@ async def preview_payables_import(
 @router.post(
     "/payables/import/confirm",
     response_model=PayableImportConfirmResult,
-    dependencies=[Depends(require_permission(PAYABLES_EDIT))],
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
 )
 async def confirm_payables_import(
     file: UploadFile = File(...),
@@ -1192,7 +1210,7 @@ async def confirm_payables_import(
     return result
 
 
-@router.post("/payables", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(PAYABLES_EDIT))])
+@router.post("/payables", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(PAYABLES_UPDATE))])
 async def create_manual_payables_snapshot(
     payload: PayableSnapshotManualCreate,
     db: AsyncSession = Depends(get_db),
@@ -1216,10 +1234,10 @@ async def create_manual_payables_snapshot(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     await db.commit()
-    return _snapshot_to_read(row)
+    return redact_for("payables", _snapshot_to_read(row), user)
 
 
-@router.delete("/payables/{snapshot_id}", status_code=204, dependencies=[Depends(require_permission(PAYABLES_EDIT))])
+@router.delete("/payables/{snapshot_id}", status_code=204, dependencies=[Depends(require_permission(PAYABLES_UPDATE))])
 async def delete_payables_snapshot(
     snapshot_id: UUID,
     db: AsyncSession = Depends(get_db),

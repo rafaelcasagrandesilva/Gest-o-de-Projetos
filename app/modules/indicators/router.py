@@ -7,9 +7,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_permission
-from app.core.permission_codes import INDICATORS_DIRECTOR, INDICATORS_VIEW
+from app.api.deps import get_current_user, require_permission
+from app.core.permission_codes import INDICATORS_DIRECTOR, INDICATORS_READ
+from app.api.sensitive import redact_for
 from app.database.session import get_db
+from app.models.user import User
 from app.schemas.indicators import (
     ConsolidatedRoi,
     FinancialEvolution,
@@ -95,7 +97,7 @@ def _parse_cost_centers(raw: str | None) -> list[str] | None:
 @router.get(
     "/roi/operacional",
     response_model=RoiRanking,
-    dependencies=[Depends(require_permission(INDICATORS_VIEW))],
+    dependencies=[Depends(require_permission(INDICATORS_READ))],
 )
 async def roi_operacional_ranking(
     competencia: date | None = Query(default=None, description="1º do mês; omitir = mês atual"),
@@ -105,6 +107,7 @@ async def roi_operacional_ranking(
         default=None, alias="scenario", description="PREVISTO ou REALIZADO; omitir = REALIZADO"
     ),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> RoiRanking:
     svc = IndicatorsService(db)
     if data_inicial is not None or data_final is not None:
@@ -113,13 +116,13 @@ async def roi_operacional_ranking(
     else:
         comp = _resolve_competencia(competencia)
         data = await svc.roi_operacional_ranking(competencia=comp, scenario=scenario_param)
-    return RoiRanking.model_validate(data)
+    return redact_for("roi_ranking", RoiRanking.model_validate(data), actor)
 
 
 @router.get(
     "/roi/projetos/{project_id}",
     response_model=ProjectRoi,
-    dependencies=[Depends(require_permission(INDICATORS_VIEW))],
+    dependencies=[Depends(require_permission(INDICATORS_READ))],
 )
 async def roi_operacional_projeto(
     project_id: UUID,
@@ -128,6 +131,7 @@ async def roi_operacional_projeto(
         default=None, alias="scenario", description="PREVISTO ou REALIZADO; omitir = REALIZADO"
     ),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> ProjectRoi:
     comp = _resolve_competencia(competencia)
     data = await IndicatorsService(db).roi_operacional_projeto(
@@ -135,7 +139,7 @@ async def roi_operacional_projeto(
     )
     if data is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado.")
-    return ProjectRoi.model_validate(data)
+    return redact_for("indicator_roi", ProjectRoi.model_validate(data), actor)
 
 
 @router.get(
@@ -154,6 +158,7 @@ async def roi_consolidado(
         default=None, description="UUIDs separados por vírgula; omitir/vazio = todos os ativos"
     ),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> ConsolidatedRoi:
     svc = IndicatorsService(db)
     ids = _parse_project_ids(project_ids)
@@ -163,13 +168,13 @@ async def roi_consolidado(
     else:
         comp = _resolve_competencia(competencia)
         data = await svc.consolidado(competencia=comp, scenario=scenario_param, project_ids=ids)
-    return ConsolidatedRoi.model_validate(data)
+    return redact_for("indicator_roi", ConsolidatedRoi.model_validate(data), actor)
 
 
 @router.get(
     "/roi/evolucao",
     response_model=RoiEvolution,
-    dependencies=[Depends(require_permission(INDICATORS_VIEW))],
+    dependencies=[Depends(require_permission(INDICATORS_READ))],
 )
 async def roi_evolucao(
     data_inicial: date = Query(..., description="Início do intervalo (1º do mês)"),
@@ -181,6 +186,7 @@ async def roi_evolucao(
         default=None, description="UUIDs separados por vírgula; omitir/vazio = todos os ativos"
     ),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> RoiEvolution:
     start = normalize_competencia(data_inicial)
     end = normalize_competencia(data_final)
@@ -191,13 +197,13 @@ async def roi_evolucao(
         )
     ids = _parse_project_ids(project_ids)
     data = await IndicatorsService(db).evolucao(start=start, end=end, scenario=scenario_param, project_ids=ids)
-    return RoiEvolution.model_validate(data)
+    return redact_for("roi_evolution", RoiEvolution.model_validate(data), actor)
 
 
 @router.get(
     "/evolucao-financeira",
     response_model=FinancialEvolution,
-    dependencies=[Depends(require_permission(INDICATORS_VIEW))],
+    dependencies=[Depends(require_permission(INDICATORS_READ))],
 )
 async def evolucao_financeira(
     data_inicial: date = Query(..., description="Início do intervalo (1º do mês)"),
@@ -212,6 +218,7 @@ async def evolucao_financeira(
         default=None, description="Centros de custo separados por vírgula; omitir = todos"
     ),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> FinancialEvolution:
     """Dashboard Executivo — Evolução Financeira (payload agregado único)."""
     start = normalize_competencia(data_inicial)
@@ -226,13 +233,13 @@ async def evolucao_financeira(
     data = await IndicatorsService(db).evolucao_financeira(
         start=start, end=end, scenario=scenario_param, project_ids=ids, cost_centers=ccs
     )
-    return FinancialEvolution.model_validate(data)
+    return redact_for("financial_evolution", FinancialEvolution.model_validate(data), actor)
 
 
 @router.get(
     "/filtros",
     response_model=IndicatorFilters,
-    dependencies=[Depends(require_permission(INDICATORS_VIEW))],
+    dependencies=[Depends(require_permission(INDICATORS_READ))],
 )
 async def indicator_filters(db: AsyncSession = Depends(get_db)) -> IndicatorFilters:
     """Opções de filtro (projetos + centros de custo) alimentadas pelo cadastro atual."""
@@ -243,7 +250,7 @@ async def indicator_filters(db: AsyncSession = Depends(get_db)) -> IndicatorFilt
 @router.get(
     "/catalog",
     response_model=KpiCatalog,
-    dependencies=[Depends(require_permission(INDICATORS_VIEW))],
+    dependencies=[Depends(require_permission(INDICATORS_READ))],
 )
 async def kpi_catalog() -> KpiCatalog:
     return KpiCatalog.model_validate({"items": _KPI_CATALOG})

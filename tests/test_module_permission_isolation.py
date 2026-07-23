@@ -24,7 +24,7 @@ from app.core.permission_codes import (
     PAYABLES_VIEW,
     RECEIVABLES_EDIT,
 )
-from app.modules.company_finance.router import _assert_edit, _assert_view
+from app.modules.company_finance.router import _assert_verb, _assert_view
 from app.modules.reports.router import _assert_report_type_access
 
 
@@ -60,10 +60,10 @@ class ModulePermissionIsolationTests(unittest.TestCase):
     def test_endividamento_uses_only_debts_permissions(self) -> None:
         user = _user(DEBTS_VIEW, DEBTS_EDIT)
         _assert_view(user, "endividamento")
-        _assert_edit(user, "endividamento")
+        _assert_verb(user, "endividamento", "update")
         # Não deve, por isso, poder editar/visualizar Custos Fixos.
         with self.assertRaises(HTTPException):
-            _assert_edit(user, "custo_fixo")
+            _assert_verb(user, "custo_fixo", "update")
 
     # --- Ativos x Company Finance ---------------------------------------------------------
     def test_assets_without_company_finance(self) -> None:
@@ -87,7 +87,7 @@ class ModulePermissionIsolationTests(unittest.TestCase):
         user = _user(DEBTS_VIEW)  # só leitura de Endividamento
         _assert_view(user, "endividamento")  # consulta OK
         with self.assertRaises(HTTPException):
-            _assert_edit(user, "endividamento")  # não pode alterar
+            _assert_verb(user, "endividamento", "update")  # não pode alterar
 
     # --- CAP desacoplado de Custos --------------------------------------------------------
     def test_cap_edit_requires_payables_edit_not_costs_edit(self) -> None:

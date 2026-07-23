@@ -1,10 +1,7 @@
 import { useEffect, useState } from "react";
 import { isAxiosError } from "axios";
 import { fetchReceivableKpis } from "@/services/receivables";
-
-function formatBRL(n: number): string {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+import { formatCurrencyOrDash } from "@/utils/currency";
 
 export function FinanceDashboard() {
   console.log("FinanceDashboard renderizou");
@@ -51,10 +48,10 @@ export function FinanceDashboard() {
       )}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <Kpi label="Total Líquido a receber" value={kpis ? formatBRL(kpis.total_a_receber) : "—"} />
-        <Kpi label="Total Bruto a receber" value={kpis ? formatBRL(kpis.total_bruto_a_receber) : "—"} />
-        <Kpi label="Recebido no mês" value={kpis ? formatBRL(kpis.recebido_no_mes) : "—"} />
-        <Kpi label="Em atraso" value={kpis ? formatBRL(kpis.em_atraso_valor) : "—"} accent="text-red-800" />
+        <Kpi label="Total Líquido a receber" value={kpis ? formatCurrencyOrDash(kpis.total_a_receber) : "—"} />
+        <Kpi label="Total Bruto a receber" value={kpis ? formatCurrencyOrDash(kpis.total_bruto_a_receber) : "—"} />
+        <Kpi label="Recebido no mês" value={kpis ? formatCurrencyOrDash(kpis.recebido_no_mes) : "—"} />
+        <Kpi label="Em atraso" value={kpis ? formatCurrencyOrDash(kpis.em_atraso_valor) : "—"} accent="text-red-800" />
       </section>
     </div>
   );

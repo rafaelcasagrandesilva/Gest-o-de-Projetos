@@ -60,15 +60,19 @@ export async function listFleetVehicles(options?: {
   active_only?: boolean;
   offset?: number;
   limit?: number;
+  /** Filtra a frota por Centro de Custo (igualdade estrita). Omitido/"" = todos. */
+  cost_center?: string;
 }): Promise<FleetVehicle[]> {
   if (options?.active_only) {
     return await listFleetVehiclesActive({ offset: options?.offset, limit: options?.limit });
   }
+  const cc = (options?.cost_center ?? "").trim();
   const { data } = await api.get<FleetVehicle[]>("/vehicles/", {
     params: {
       include_inactive: options?.include_inactive ?? false,
       offset: options?.offset ?? 0,
       limit: options?.limit ?? 200,
+      ...(cc ? { cost_center: cc } : {}),
     },
   });
   return data;

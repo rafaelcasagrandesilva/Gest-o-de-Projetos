@@ -17,9 +17,9 @@ class ProjectRoi(BaseModel):
     project_name: str
     competencia: date
     scenario: str
-    revenue: float
-    cost: float
-    operational_profit: float
+    revenue: float | None = None
+    cost: float | None = None
+    operational_profit: float | None = None
     roi: float | None
     roi_pct: float | None
 
@@ -48,18 +48,18 @@ class ConsolidatedRoi(BaseModel):
     scenario: str
     project_ids: list[UUID]
     project_count: int
-    revenue: float
-    cost: float
-    operational_profit: float
+    revenue: float | None = None
+    cost: float | None = None
+    operational_profit: float | None = None
     roi: float | None
     roi_pct: float | None
 
 
 class RoiEvolutionPoint(BaseModel):
     competencia: date
-    revenue: float
-    cost: float
-    operational_profit: float
+    revenue: float | None = None
+    cost: float | None = None
+    operational_profit: float | None = None
     roi: float | None
     roi_pct: float | None
 
@@ -87,17 +87,17 @@ class FinancialEvolutionPoint(BaseModel):
     """Ponto mensal do Dashboard Executivo (sem Combustível, conforme escopo)."""
 
     competencia: date
-    faturamento: float
-    custo_mo: float
-    custo_veiculos: float
-    lucro_operacional: float
-    lucro_liquido: float
+    faturamento: float | None = None
+    custo_mo: float | None = None
+    custo_veiculos: float | None = None
+    lucro_operacional: float | None = None
+    lucro_liquido: float | None = None
 
 
 class FinancialKpi(BaseModel):
     """Card de KPI: total acumulado no período + crescimento mês inicial→final."""
 
-    total: float
+    total: float | None = None
     growth_pct: float | None
 
 
@@ -110,13 +110,13 @@ class FinancialKpis(BaseModel):
 
 class MonthlyHighlight(BaseModel):
     competencia: date
-    value: float
+    value: float | None = None
 
 
 class ProjectHighlight(BaseModel):
     project_id: UUID
     project_name: str
-    value: float
+    value: float | None = None
 
 
 class FinancialInsights(BaseModel):

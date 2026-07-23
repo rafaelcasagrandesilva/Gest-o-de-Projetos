@@ -6,7 +6,9 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permission_codes import (
+    ACTIVE_PERMISSION_CODES,
     EXPLICIT_GRANT_ONLY_PERMISSIONS,
+    expand_permissions,
     ALERTS_VIEW,
     BILLING_VIEW,
     COMPANY_FINANCE_EDIT,
@@ -19,6 +21,7 @@ from app.core.permission_codes import (
     DEBTS_VIEW,
     EMPLOYEES_EDIT,
     EMPLOYEES_VIEW,
+    FINANCIAL_DASHBOARD_READ,
     INDICATORS_DIRECTOR,
     INDICATORS_VIEW,
     INVOICES_EDIT,
@@ -84,6 +87,7 @@ PROJECTS_WORKSPACE_PERMISSIONS = frozenset(
 
 FINANCE_WORKSPACE_PERMISSIONS = frozenset(
     {
+        FINANCIAL_DASHBOARD_READ,
         PAYABLES_VIEW,
         RECEIVABLES_VIEW,
         INVOICES_VIEW,
@@ -118,10 +122,6 @@ INDICATORS_WORKSPACE_PERMISSIONS = frozenset(
 
 def role_names(user: User) -> list[str]:
     return [link.role.name for link in (getattr(user, "roles", []) or []) if getattr(link, "role", None)]
-
-
-def role_name_set(user: User) -> set[str]:
-    return set(role_names(user))
 
 
 def primary_role_name(user: User) -> str:
@@ -193,18 +193,13 @@ def _workspace_permission_from_module_permissions(names: frozenset[str], code: s
 
 
 def user_has_permission(user: User, code: str, *, is_superuser: bool = False) -> bool:
+    # Fase 1: sem atalho por perfil (ADMIN), por e-mail (is_superuser) nem por system.admin liberando
+    # negócio. `is_superuser` mantido na assinatura por compat dos chamadores, mas NÃO concede bypass.
     if code in EXPLICIT_GRANT_ONLY_PERMISSIONS:
         return code in permission_names_from_user(user)
-    if is_superuser:
-        return True
-    if "ADMIN" in role_name_set(user):
-        return True
     names = effective_permission_names(user)
-    if SYSTEM_ADMIN in names:
-        return True
-    if code in names:
-        return True
-    if code in (PROJECTS_VIEW_LIST, PROJECTS_VIEW_DETAIL) and PROJECTS_VIEW in names:
+    # Fecho transitivo do modelo de verbos (idêntico ao de app/api/deps.py); workspace logo abaixo.
+    if code in expand_permissions(names):
         return True
     return _workspace_permission_from_module_permissions(names, code)
 
@@ -226,6 +221,9 @@ def session_permission_names(user: User, *, is_superuser: bool = False) -> list[
     names = set(effective_permission_names(user))
     # Garante que permissões explícitas (ex.: invoices.reactivate) apareçam na sessão/frontend.
     names.update(permission_names_from_user(user))
+    # NEUTRALIDADE: expõe ao frontend apenas códigos ATIVOS. Os códigos novos (modelo de verbos)
+    # já podem estar semeados nos perfis, mas não entram na sessão até a etapa que ativa o módulo.
+    names &= ACTIVE_PERMISSION_CODES
     if user_has_permission(user, WORKSPACE_PROJECTS_ACCESS, is_superuser=is_superuser):
         names.add(WORKSPACE_PROJECTS_ACCESS)
     if user_has_permission(user, WORKSPACE_FINANCE_ACCESS, is_superuser=is_superuser):

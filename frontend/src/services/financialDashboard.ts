@@ -1,32 +1,34 @@
 import { api } from "./api";
 
+// Dados Sensíveis: os campos monetários chegam null quando o usuário não tem
+// `financial_dashboard.sensitive` (o backend omite os valores via redact_for).
 export interface FinancialDashboardSummary {
   month: string; // YYYY-MM-01
   period_start: string; // YYYY-MM-01
   period_end: string; // YYYY-MM-01
-  faturamento: number;
-  pago: number;
-  caixa: number;
+  faturamento: number | null;
+  pago: number | null;
+  caixa: number | null;
 }
 
 export interface FinancialDashboardTimeseriesPoint {
   month: string; // YYYY-MM-01
-  faturamento: number;
-  pago: number;
-  caixa: number;
+  faturamento: number | null;
+  pago: number | null;
+  caixa: number | null;
 }
 
 export type FinancialDashboardBreakdownType = "faturamento" | "custos" | "caixa";
 
 export interface FinancialDashboardGroupedItem {
   label: string;
-  value: number;
+  value: number | null;
 }
 
 export interface FinancialDashboardBreakdown {
   type: FinancialDashboardBreakdownType;
   month: string;
-  total: number;
+  total: number | null;
   groups: FinancialDashboardGroupedItem[];
   received_total?: number | null;
   received_groups?: FinancialDashboardGroupedItem[] | null;

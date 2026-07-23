@@ -15,7 +15,8 @@ export function usePermission(code: string): boolean {
  */
 export function useSeesAllProjects(): boolean {
   const { user } = useAuth();
-  if (user?.role_names?.includes("ADMIN")) return true;
+  // Fase 1: sem atalho por perfil. Escopo global vem só de system.admin/system.all_projects
+  // (permissões de sistema) ou do vínculo real com todos os projetos.
   if (
     hasPermission(user?.permission_names, "system.admin") ||
     hasPermission(user?.permission_names, "system.all_projects")

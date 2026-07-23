@@ -4,6 +4,7 @@ import { AssetOperationalAlertCard } from "@/components/assets/AssetOperationalA
 import { AssetsDashboardCharts } from "@/components/assets/AssetsDashboardCharts";
 import { formatBRL, PHYSICAL_CONDITION_LABELS } from "@/components/assets/assetLabels";
 import { useWorkspace } from "@/context/WorkspaceContext";
+import { usePermission } from "@/hooks/usePermission";
 import { DashboardToolbar } from "@/components/dashboard/DashboardToolbar";
 import { KpiStrip } from "@/components/dashboard/KpiStrip";
 import {
@@ -16,16 +17,19 @@ function KpiDual({
   label,
   data,
   accent,
+  showValue = true,
 }: {
   label: string;
   data: AssetDashboardCountValue;
   accent?: string;
+  /** Exibir o valor monetário (assets.sensitive). Sem isso, só a quantidade. */
+  showValue?: boolean;
 }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 shadow-sm">
       <p className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</p>
       <p className={`mt-0.5 text-2xl font-semibold tabular-nums text-slate-900 ${accent ?? ""}`}>{data.count}</p>
-      <p className="text-sm tabular-nums text-slate-600">{formatBRL(data.value)}</p>
+      {showValue ? <p className="text-sm tabular-nums text-slate-600">{formatBRL(data.value)}</p> : null}
     </div>
   );
 }
@@ -41,6 +45,8 @@ function KpiSimple({ label, value, accent }: { label: string; value: string; acc
 
 export function AssetsDashboard() {
   const { setWorkspace } = useWorkspace();
+  // Dados Sensíveis: valores monetários (cards financeiros, valores por card/gráfico) só com assets.sensitive.
+  const showSensitive = usePermission("assets.sensitive");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AssetDashboardRead | null>(null);
@@ -102,13 +108,15 @@ export function AssetsDashboard() {
       {s ? (
         <>
           <KpiStrip cols={5} label="Quantidade">
-              <KpiDual label="Total de ativos" data={s.total} />
-              <KpiDual label="Em uso" data={s.in_use} />
-              <KpiDual label="Disponíveis" data={s.available} />
-              <KpiDual label="Em manutenção" data={s.maintenance} />
-              <KpiDual label="Perdidos / baixados" data={s.lost_or_discarded} accent="text-red-800" />
+              <KpiDual label="Total de ativos" data={s.total} showValue={showSensitive} />
+              <KpiDual label="Em uso" data={s.in_use} showValue={showSensitive} />
+              <KpiDual label="Disponíveis" data={s.available} showValue={showSensitive} />
+              <KpiDual label="Em manutenção" data={s.maintenance} showValue={showSensitive} />
+              <KpiDual label="Perdidos / baixados" data={s.lost_or_discarded} accent="text-red-800" showValue={showSensitive} />
           </KpiStrip>
 
+          {/* Strip financeira: só com assets.sensitive (todos os valores monetários). */}
+          {showSensitive ? (
           <KpiStrip cols={5} label="Financeiro">
               <KpiSimple label="Valor patrimonial total" value={formatBRL(s.total.value)} />
               <KpiSimple label="Valor em uso" value={formatBRL(s.in_use.value)} />
@@ -116,11 +124,13 @@ export function AssetsDashboard() {
               <KpiSimple label="Valor em manutenção" value={formatBRL(s.maintenance.value)} />
               <KpiSimple label="Valor perdido / baixado" value={formatBRL(s.lost_or_discarded.value)} accent="text-red-800" />
           </KpiStrip>
+          ) : null}
 
           <KpiStrip cols={4} label="Estado físico">
               {(data?.physical_condition ?? []).map((row) => (
                 <KpiDual
                   key={row.condition}
+                  showValue={showSensitive}
                   label={
                     row.label ||
                     PHYSICAL_CONDITION_LABELS[row.condition as keyof typeof PHYSICAL_CONDITION_LABELS] ||
@@ -145,6 +155,7 @@ export function AssetsDashboard() {
           byCategory={data.by_category}
           byCostCenter={data.by_cost_center}
           physicalCondition={data.physical_condition}
+          showSensitive={showSensitive}
         />
       ) : null}
 
@@ -156,6 +167,7 @@ export function AssetsDashboard() {
               title="Inspeções vencidas"
               count={alerts.expired_inspections.count}
               amountTotal={alerts.expired_inspections.amount_total}
+              showAmount={showSensitive}
               tone="red"
               viewHref="/assets?expiration=expired"
               emptyLabel="Nenhuma inspeção vencida."
@@ -164,6 +176,7 @@ export function AssetsDashboard() {
               title="Vence em 30 dias"
               count={alerts.expiring_inspections.count}
               amountTotal={alerts.expiring_inspections.amount_total}
+              showAmount={showSensitive}
               tone="amber"
               viewHref="/assets?expiration=30"
               emptyLabel="Nenhuma inspeção a vencer em 30 dias."
@@ -172,6 +185,7 @@ export function AssetsDashboard() {
               title="Sem responsável"
               count={alerts.without_holder.count}
               amountTotal={alerts.without_holder.amount_total}
+              showAmount={showSensitive}
               tone="slate"
               viewHref="/assets?without_holder=true"
               emptyLabel="Todos os ativos possuem responsável."
@@ -181,6 +195,7 @@ export function AssetsDashboard() {
               title="Mau estado"
               count={alerts.fair_condition.count}
               amountTotal={alerts.fair_condition.amount_total}
+              showAmount={showSensitive}
               tone="amber"
               viewHref="/assets?physical_condition=FAIR"
               emptyLabel="Nenhum ativo em mau estado."

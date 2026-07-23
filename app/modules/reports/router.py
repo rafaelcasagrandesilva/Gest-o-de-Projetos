@@ -18,19 +18,22 @@ from app.api.deps import (
     user_sees_all_projects,
 )
 from app.core.permission_codes import (
-    ASSETS_VIEW,
-    BILLING_VIEW,
-    COMPANY_FINANCE_VIEW,
-    DASHBOARD_VIEW,
-    DEBTS_VIEW,
-    EMPLOYEES_VIEW,
-    INVOICES_VIEW,
-    PAYABLES_VIEW,
-    RECEIVABLES_VIEW,
+    ASSETS_READ,
+    ASSETS_SENSITIVE,
+    BILLING_READ,
+    COMPANY_FINANCE_READ,
+    DASHBOARD_READ,
+    DEBTS_READ,
+    EMPLOYEES_EXPORT,
+    EMPLOYEES_SENSITIVE,
+    INVOICES_READ,
+    PAYABLES_READ,
+    RECEIVABLES_READ,
     REPORTS_EXPORT,
-    REPORTS_VIEW,
+    REPORTS_READ,
     USERS_MANAGE,
-    VEHICLES_VIEW,
+    VEHICLES_EXPORT,
+    VEHICLES_SENSITIVE,
 )
 from app.core.scenario import Scenario, coerce_scenario
 from app.database.session import get_db
@@ -66,7 +69,7 @@ def _report_scenario(body: ReportGenerateRequest) -> Scenario:
 
 
 def _assert_report_access(user: User) -> None:
-    if not user_has_any_permission(user, REPORTS_VIEW, REPORTS_EXPORT):
+    if not user_has_any_permission(user, REPORTS_READ, REPORTS_EXPORT):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
 
 
@@ -76,22 +79,23 @@ def _assert_report_access(user: User) -> None:
 # project_summary/company_summary ficam fora do mapa: são consolidações multi-módulo já
 # protegidas por reports.* (+ require_project_access no project_summary).
 _REPORT_TYPE_VIEW_PERMISSION: dict[str, str] = {
-    "payables_detailed": PAYABLES_VIEW,
-    "receivables_detailed": RECEIVABLES_VIEW,
-    "invoices_detailed": INVOICES_VIEW,
-    "invoices": INVOICES_VIEW,
-    "debt": DEBTS_VIEW,
-    "fixed_costs": COMPANY_FINANCE_VIEW,
-    "revenues": BILLING_VIEW,
-    "vehicles": VEHICLES_VIEW,
-    "employees": EMPLOYEES_VIEW,
-    "payroll": EMPLOYEES_VIEW,
+    "payables_detailed": PAYABLES_READ,
+    "receivables_detailed": RECEIVABLES_READ,
+    "invoices_detailed": INVOICES_READ,
+    "invoices": INVOICES_READ,
+    "debt": DEBTS_READ,
+    "fixed_costs": COMPANY_FINANCE_READ,
+    "revenues": BILLING_READ,
+    # Exportações de recurso específico usam <recurso>.export (não reports.export).
+    "vehicles": VEHICLES_EXPORT,
+    "employees": EMPLOYEES_EXPORT,
+    "payroll": EMPLOYEES_EXPORT,
     "users": USERS_MANAGE,
-    "dashboard": DASHBOARD_VIEW,
-    "assets_inventory": ASSETS_VIEW,
-    "assets_in_use": ASSETS_VIEW,
-    "assets_inspections": ASSETS_VIEW,
-    "assets_movements": ASSETS_VIEW,
+    "dashboard": DASHBOARD_READ,
+    "assets_inventory": ASSETS_READ,
+    "assets_in_use": ASSETS_READ,
+    "assets_inspections": ASSETS_READ,
+    "assets_movements": ASSETS_READ,
 }
 
 
@@ -231,34 +235,43 @@ async def generate_report(
 
     if body.type == "employees":
         _assert_report_access(user)
-        if not user_has_any_permission(user, EMPLOYEES_VIEW):
+        if not user_has_any_permission(user, EMPLOYEES_EXPORT):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         comp = _competencia_date(f, "competencia")
-        payload = await svc.generate_employees_report(competencia=comp, scenario=_report_scenario(body))
+        # Sem employees.sensitive, o relatório sai SEM valores financeiros (salários/custos zerados).
+        include_sensitive = user_has_permission(user, EMPLOYEES_SENSITIVE)
+        payload = await svc.generate_employees_report(
+            competencia=comp, scenario=_report_scenario(body), include_sensitive=include_sensitive
+        )
         raw, name, media = render_report_bytes("employees", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "payroll":
         _assert_report_access(user)
-        if not user_has_any_permission(user, EMPLOYEES_VIEW):
+        if not user_has_any_permission(user, EMPLOYEES_EXPORT):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         comp = _competencia_date(f, "competencia")
-        payload = await svc.generate_payroll_report(competencia=comp, scenario=_report_scenario(body))
+        include_sensitive = user_has_permission(user, EMPLOYEES_SENSITIVE)
+        payload = await svc.generate_payroll_report(
+            competencia=comp, scenario=_report_scenario(body), include_sensitive=include_sensitive
+        )
         raw, name, media = render_report_bytes("payroll", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "vehicles":
         _assert_report_access(user)
-        if not user_has_any_permission(user, VEHICLES_VIEW):
+        if not user_has_any_permission(user, VEHICLES_EXPORT):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         active_only = bool(f.get("active_only", False))
-        payload = await svc.generate_vehicles_report(active_only=active_only)
+        # Sem vehicles.sensitive, o relatório sai SEM o custo mensal (valor financeiro omitido).
+        include_sensitive = user_has_permission(user, VEHICLES_SENSITIVE)
+        payload = await svc.generate_vehicles_report(active_only=active_only, include_sensitive=include_sensitive)
         raw, name, media = render_report_bytes("vehicles", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type == "invoices":
         _assert_report_access(user)
-        if not user_has_any_permission(user, INVOICES_VIEW):
+        if not user_has_any_permission(user, INVOICES_READ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         project_id = _uuid(f, "project_id")
         st = f.get("status")
@@ -280,7 +293,7 @@ async def generate_report(
 
     if body.type == "debt":
         _assert_report_access(user)
-        if not user_has_any_permission(user, DEBTS_VIEW):
+        if not user_has_any_permission(user, DEBTS_READ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         comp = f.get("competencia")
         if not comp or not str(comp).strip():
@@ -291,7 +304,7 @@ async def generate_report(
 
     if body.type == "fixed_costs":
         _assert_report_access(user)
-        if not user_has_any_permission(user, COMPANY_FINANCE_VIEW):
+        if not user_has_any_permission(user, COMPANY_FINANCE_READ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         comp = f.get("competencia")
         if not comp or not str(comp).strip():
@@ -310,7 +323,7 @@ async def generate_report(
 
     if body.type == "revenues":
         _assert_report_access(user)
-        if not user_has_any_permission(user, BILLING_VIEW):
+        if not user_has_any_permission(user, BILLING_READ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         project_id = _uuid(f, "project_id")
         payload = await svc.generate_revenues_report(
@@ -350,7 +363,7 @@ async def generate_report(
 
     if body.type == "payables_detailed":
         _assert_report_access(user)
-        if not user_has_any_permission(user, PAYABLES_VIEW):
+        if not user_has_any_permission(user, PAYABLES_READ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         sees_all, allowed = await resolve_project_access(db, user)
         payload = await OperationalReportService(db).generate_payables_detailed(
@@ -364,7 +377,7 @@ async def generate_report(
 
     if body.type == "receivables_detailed":
         _assert_report_access(user)
-        if not user_has_any_permission(user, RECEIVABLES_VIEW):
+        if not user_has_any_permission(user, RECEIVABLES_READ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         sees_all, allowed = await resolve_project_access(db, user)
         payload = await OperationalReportService(db).generate_receivables_detailed(
@@ -378,7 +391,7 @@ async def generate_report(
 
     if body.type == "invoices_detailed":
         _assert_report_access(user)
-        if not user_has_any_permission(user, INVOICES_VIEW):
+        if not user_has_any_permission(user, INVOICES_READ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         sees_all, allowed = await resolve_project_access(db, user)
         payload = await OperationalReportService(db).generate_invoices_detailed(
@@ -396,13 +409,15 @@ async def generate_report(
         "assets_movements",
     ):
         _assert_report_access(user)
-        if not user_has_any_permission(user, ASSETS_VIEW):
+        if not user_has_any_permission(user, ASSETS_READ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         ops = OperationalReportService(db)
+        # Sem assets.sensitive, os valores financeiros do relatório saem omitidos (só quantitativo).
+        include_sensitive = user_has_permission(user, ASSETS_SENSITIVE)
         if body.type == "assets_inventory":
-            payload = await ops.generate_assets_inventory(filters=f)
+            payload = await ops.generate_assets_inventory(filters=f, include_sensitive=include_sensitive)
         elif body.type == "assets_in_use":
-            payload = await ops.generate_assets_in_use(filters=f)
+            payload = await ops.generate_assets_in_use(filters=f, include_sensitive=include_sensitive)
         elif body.type == "assets_inspections":
             payload = await ops.generate_assets_inspections(filters=f)
         else:

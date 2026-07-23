@@ -7,8 +7,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_permission
-from app.core.permission_codes import EMPLOYEES_EDIT, EMPLOYEES_VIEW
+from app.api.deps import get_current_user, require_permission, user_has_permission
+from app.api.sensitive import EMPLOYEE_SENSITIVE_FIELDS, redact
+from app.core.permission_codes import (
+    EMPLOYEES_CREATE,
+    EMPLOYEES_DELETE,
+    EMPLOYEES_LIST,
+    EMPLOYEES_READ,
+    EMPLOYEES_SENSITIVE,
+    EMPLOYEES_UPDATE,
+)
 from app.core.scenario import DEFAULT_SCENARIO, Scenario, coerce_scenario
 from app.database.session import get_db
 from app.models.company_staff_cost import CompanyStaffCost
@@ -37,7 +45,12 @@ from app.services.settings_service import SettingsService
 from app.utils.date_utils import get_business_days, normalize_competencia
 
 
-_read = [Depends(require_permission(EMPLOYEES_VIEW))]
+# Modelo de verbos: listagem → employees.list; leitura do módulo (detalhe/cadastro não-financeiro)
+# → employees.read; mutações → create/update/delete. FINANCEIRO (folha/custos/holerite) exige
+# employees.sensitive — VISUALIZAR sozinho NUNCA expõe salários/custos (spec Colaboradores).
+_list = [Depends(require_permission(EMPLOYEES_LIST))]
+_read = [Depends(require_permission(EMPLOYEES_READ))]
+_sensitive = [Depends(require_permission(EMPLOYEES_SENSITIVE))]
 
 router = APIRouter()
 
@@ -88,7 +101,7 @@ def _staff_row_to_read(row: CompanyStaffCost) -> CompanyStaffCostRead:
     )
 
 
-@router.get("/payroll", response_model=PayrollResponse, dependencies=_read)
+@router.get("/payroll", response_model=PayrollResponse, dependencies=_sensitive)
 async def get_payroll(
     competencia: date = Query(..., description="Primeiro dia do mês"),
     scenario_param: str | None = Query(
@@ -103,7 +116,7 @@ async def get_payroll(
     )
 
 
-@router.get("/staff-costs", response_model=list[CompanyStaffCostRead], dependencies=_read)
+@router.get("/staff-costs", response_model=list[CompanyStaffCostRead], dependencies=_sensitive)
 async def list_staff_costs(
     competencia: date = Query(..., description="Primeiro dia do mês"),
     scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
@@ -116,7 +129,7 @@ async def list_staff_costs(
     return [_staff_row_to_read(r) for r in rows]
 
 
-@router.post("/staff-costs", response_model=CompanyStaffCostRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
+@router.post("/staff-costs", response_model=CompanyStaffCostRead, dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))])
 async def create_staff_cost(
     payload: CompanyStaffCostCreate,
     db: AsyncSession = Depends(get_db),
@@ -148,7 +161,7 @@ async def create_staff_cost(
 @router.patch(
     "/staff-costs/{cost_id}",
     response_model=CompanyStaffCostRead,
-    dependencies=[Depends(require_permission(EMPLOYEES_EDIT))],
+    dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))],
 )
 async def update_staff_cost(
     cost_id: UUID,
@@ -167,7 +180,7 @@ async def update_staff_cost(
     return _staff_row_to_read(loaded)
 
 
-@router.delete("/staff-costs/{cost_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
+@router.delete("/staff-costs/{cost_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))])
 async def delete_staff_cost(
     cost_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -180,7 +193,7 @@ async def delete_staff_cost(
     await db.commit()
 
 
-@router.get("", response_model=list[EmployeeRead], dependencies=_read)
+@router.get("", response_model=list[EmployeeRead], dependencies=_list)
 async def list_employees(
     db: AsyncSession = Depends(get_db),
     search: str | None = Query(default=None, description="Busca por nome (ILIKE em full_name)."),
@@ -194,16 +207,19 @@ async def list_employees(
         default=None,
         description="Primeiro dia do mês de competência para recalcular custo CLT na resposta.",
     ),
+    user: User = Depends(get_current_user),
 ) -> list[EmployeeRead]:
     comp = competencia or default_cost_reference()
     # Filtro de Mão de Obra por Centro de Custo do projeto — lógica ÚNICA no serviço
     # (mesma usada por /hr/employees e /collaborators), sem regra duplicada aqui.
-    return await EmployeesService(db).list_employees_read_for_project(
+    rows = await EmployeesService(db).list_employees_read_for_project(
         offset=offset, limit=limit, competencia=comp, search=search, project_id=project_id
     )
+    include = user_has_permission(user, EMPLOYEES_SENSITIVE)
+    return [redact(r, EMPLOYEE_SENSITIVE_FIELDS, include) for r in rows]
 
 
-@router.post("", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
+@router.post("", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_CREATE))])
 async def create_employee(
     payload: EmployeeCreate,
     request: Request,
@@ -215,10 +231,13 @@ async def create_employee(
         actor_user_id=actor.id, data=payload.model_dump(), actor=actor, request=request
     )
     comp = payload.cost_reference_competencia or default_cost_reference()
-    return await svc.employee_to_read(row, competencia=comp)
+    read = await svc.employee_to_read(row, competencia=comp)
+    # Criar NÃO concede ver: sem employees.sensitive, os valores recém-cadastrados voltam omitidos.
+    include = user_has_permission(actor, EMPLOYEES_SENSITIVE)
+    return redact(read, EMPLOYEE_SENSITIVE_FIELDS, include)
 
 
-@router.patch("/{employee_id}", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
+@router.patch("/{employee_id}", response_model=EmployeeRead, dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))])
 async def update_employee(
     employee_id: UUID,
     payload: EmployeeUpdate,
@@ -239,13 +258,16 @@ async def update_employee(
         comp = raw["cost_reference_competencia"] or default_cost_reference()
     else:
         comp = default_cost_reference()
-    return await svc.employee_to_read(row, competencia=comp)
+    read = await svc.employee_to_read(row, competencia=comp)
+    # Editar NÃO concede ver: sem employees.sensitive, os valores salvos voltam omitidos (spec Caso 4).
+    include = user_has_permission(actor, EMPLOYEES_SENSITIVE)
+    return redact(read, EMPLOYEE_SENSITIVE_FIELDS, include)
 
 
 @router.get(
     "/{employee_id}/monthly-payroll/{competence}",
     response_model=EmployeeMonthlyPayrollRead,
-    dependencies=_read,
+    dependencies=_sensitive,
 )
 async def get_monthly_payroll(
     employee_id: UUID,
@@ -266,7 +288,7 @@ async def get_monthly_payroll(
 @router.post(
     "/{employee_id}/monthly-payroll/{competence}",
     response_model=EmployeeMonthlyPayrollRead,
-    dependencies=[Depends(require_permission(EMPLOYEES_EDIT))],
+    dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))],
 )
 async def upsert_monthly_payroll_post(
     employee_id: UUID,
@@ -282,7 +304,7 @@ async def upsert_monthly_payroll_post(
 @router.put(
     "/{employee_id}/monthly-payroll/{competence}",
     response_model=EmployeeMonthlyPayrollRead,
-    dependencies=[Depends(require_permission(EMPLOYEES_EDIT))],
+    dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))],
 )
 async def upsert_monthly_payroll_put(
     employee_id: UUID,
@@ -295,7 +317,7 @@ async def upsert_monthly_payroll_put(
     )
 
 
-@router.delete("/{employee_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_EDIT))])
+@router.delete("/{employee_id}", status_code=204, dependencies=[Depends(require_permission(EMPLOYEES_DELETE))])
 async def delete_employee(
     employee_id: UUID,
     request: Request,

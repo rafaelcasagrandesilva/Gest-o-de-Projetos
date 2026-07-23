@@ -24,7 +24,7 @@ function emptyForm() {
 }
 
 export function AdvanceInstitutions() {
-  const canEdit = usePermission("invoices.edit");
+  const canEdit = usePermission("invoices.update");
   const [rows, setRows] = useState<AdvanceInstitution[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
