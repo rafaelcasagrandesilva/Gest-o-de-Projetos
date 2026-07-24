@@ -11,6 +11,19 @@ import { PermissionGrid } from "@/components/PermissionGrid";
 
 const ADMIN_NAME = "ADMIN";
 
+/** Permissão que caracteriza um perfil ADMINISTRATIVO (acesso administrativo do sistema).
+ *  A lógica de alto risco na exclusão baseia-se NELA — não no nome do perfil — para
+ *  continuar válida se o ADMIN for renomeado ou se outros perfis administrativos existirem. */
+const SYSTEM_ADMIN_PERM = "system.admin";
+
+/** Frase fixa de confirmação para exclusão de perfil administrativo (NÃO usa o nome do perfil,
+ *  para permanecer válida se o ADMIN for renomeado). Comparação case-insensitive. */
+const DELETE_CONFIRM_PHRASE = "EXCLUIR";
+
+function roleHasSystemAdmin(r: RoleRow): boolean {
+  return r.permission_names.includes(SYSTEM_ADMIN_PERM);
+}
+
 type FormState = {
   id: string | null; // null = criação
   name: string;
@@ -48,6 +61,9 @@ export function RolesManager({ canManage }: { canManage: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
+  // Exclusão de alto risco (perfil com system.admin): perfil-alvo e texto de confirmação digitado.
+  const [dangerDelete, setDangerDelete] = useState<RoleRow | null>(null);
+  const [confirmText, setConfirmText] = useState("");
 
   const isAdminForm = form?.name.trim().toUpperCase() === ADMIN_NAME && form?.is_system;
   const permsReadOnly = !canManage || Boolean(isAdminForm);
@@ -113,12 +129,26 @@ export function RolesManager({ canManage }: { canManage: boolean }) {
     }
   }
 
-  async function handleDelete(r: RoleRow) {
-    if (!canManage || r.is_system || r.user_count > 0) return;
+  function requestDelete(r: RoleRow) {
+    // Trava única de exclusão: só com 0 usuários vinculados (inclusive perfis de sistema).
+    if (!canManage || r.user_count > 0) return;
+    // Perfil ADMINISTRATIVO (tem system.admin): confirmação de alto risco (modal + digitar o nome).
+    if (roleHasSystemAdmin(r)) {
+      setConfirmText("");
+      setDangerDelete(r);
+      return;
+    }
+    // Perfil comum: confirmação padrão.
     if (!window.confirm(`Excluir o perfil "${r.name}"?`)) return;
+    void performDelete(r);
+  }
+
+  async function performDelete(r: RoleRow) {
     setError(null);
     try {
       await deleteRole(r.id);
+      setDangerDelete(null);
+      setConfirmText("");
       await load();
     } catch (err) {
       const d = isAxiosError(err) ? err.response?.data?.detail : null;
@@ -191,9 +221,9 @@ export function RolesManager({ canManage }: { canManage: boolean }) {
                     </button>
                     <button
                       type="button"
-                      disabled={!canManage || r.is_system || r.user_count > 0}
-                      onClick={() => void handleDelete(r)}
-                      title={r.is_system ? "Perfil de sistema" : r.user_count > 0 ? "Possui usuários vinculados" : undefined}
+                      disabled={!canManage || r.user_count > 0}
+                      onClick={() => requestDelete(r)}
+                      title={r.user_count > 0 ? "Possui usuários vinculados" : roleHasSystemAdmin(r) ? "Perfil administrativo — exige confirmação reforçada" : undefined}
                       className="ml-3 text-sm text-red-600 hover:underline disabled:opacity-40"
                     >
                       Excluir
@@ -314,6 +344,74 @@ export function RolesManager({ canManage }: { canManage: boolean }) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {dangerDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-100 text-xl font-bold text-red-700">
+                !
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">
+                  Excluir perfil administrativo — ação de alto risco
+                </h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  O perfil <strong>{dangerDelete.name}</strong> possui a permissão{" "}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">system.admin</code> (acesso administrativo
+                  do sistema). Esta exclusão é <strong>irreversível</strong> e remove o agrupamento de permissões deste
+                  perfil.
+                </p>
+              </div>
+            </div>
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-600">
+              <li>Só é possível excluir com <strong>0 usuários vinculados</strong> (realoque-os antes).</li>
+              <li>
+                Se o sistema for reiniciado e <strong>nenhum</strong> perfil administrativo existir, o bootstrap recria
+                automaticamente um perfil <strong>ADMIN padrão</strong> e um usuário administrador padrão — cuja senha
+                deve ser redefinida imediatamente.
+              </li>
+              <li>A ação fica registrada na auditoria (quem excluiu, quando e qual perfil).</li>
+            </ul>
+            <label htmlFor="danger-confirm" className="mt-4 block text-sm font-medium text-slate-700">
+              Para confirmar, digite{" "}
+              <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">{DELETE_CONFIRM_PHRASE}</code>
+            </label>
+            <input
+              id="danger-confirm"
+              autoFocus
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={DELETE_CONFIRM_PHRASE}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-red-400 focus:outline-none"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDangerDelete(null);
+                  setConfirmText("");
+                }}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={confirmText.trim().toUpperCase() !== DELETE_CONFIRM_PHRASE}
+                onClick={() => void performDelete(dangerDelete)}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-40"
+              >
+                Excluir definitivamente
+              </button>
+            </div>
           </div>
         </div>
       )}

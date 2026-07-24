@@ -3,8 +3,9 @@
 O perfil é apenas um AGRUPADOR de Permission existentes (role_permissions). Toda a autorização
 continua baseada nas mesmas Permission e no mesmo `require_permission` — este serviço só
 administra o agrupamento. Regras: perfis de sistema (ADMIN/GESTOR/CONSULTA) não podem ser
-excluídos nem renomeados; ADMIN é totalmente protegido (permissões somente leitura); perfis
-inativos não são ofertáveis a novos vínculos; exclusão só para perfis não-sistema sem usuários.
+renomeados nem desativados; ADMIN é totalmente protegido (permissões somente leitura); perfis
+inativos não são ofertáveis a novos vínculos; exclusão permitida para QUALQUER perfil (inclusive
+de sistema) desde que não tenha usuários vinculados.
 """
 
 from __future__ import annotations
@@ -160,8 +161,10 @@ class RolesService:
 
     async def delete_role(self, *, role_id: UUID, actor: User | None, request: Request | None) -> None:
         role = await self._get(role_id)
-        if role.is_system:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Perfis de sistema não podem ser excluídos.")
+        # Regra única de exclusão: qualquer perfil (inclusive de sistema — ADMIN/GESTOR/CONSULTA)
+        # pode ser excluído DESDE QUE não tenha usuários vinculados. A contagem de vínculos é a
+        # única trava. Observação operacional: se a role ADMIN ficar sem usuários e for excluída,
+        # o seed de startup (bootstrap.seed_admin) a recria junto de um admin padrão.
         n_users = (await self.session.execute(
             select(func.count(UserRole.user_id)).where(UserRole.role_id == role.id)
         )).scalar_one()

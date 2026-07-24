@@ -25,6 +25,8 @@ class RolesServiceDBTests(unittest.IsolatedAsyncioTestCase):
                     text("DELETE FROM roles WHERE is_system = false AND "
                          "(name LIKE 'ADM-%' OR name LIKE 'INATIVO-%' OR name LIKE 'R1-%' OR name LIKE 'R2-%')")
                 )
+                # Perfis de sistema descartáveis de teste (test_delete_system_role_without_users).
+                await s.execute(text("DELETE FROM roles WHERE name LIKE 'SYS-TMP-%'"))
                 repo = PermissionRepository(s)
                 for name, preset in (("ADMIN", PRESET_ADMIN), ("GESTOR", PRESET_GESTOR), ("CONSULTA", PRESET_CONSULTA)):
                     rid = (await s.execute(text("SELECT id FROM roles WHERE name=:n"), {"n": name})).scalar_one_or_none()
@@ -138,17 +140,49 @@ class RolesServiceDBTests(unittest.IsolatedAsyncioTestCase):
                 await svc.update_role(role_id=admin_id, data={"permission_names": ["projects.view"]}, actor=None, request=None)
             self.assertEqual(c1.exception.status_code, 400)
 
-            # Sistema: não pode renomear nem desativar nem excluir
+            # Sistema: não pode renomear nem desativar (guardas mantidas).
             with self.assertRaises(HTTPException):
                 await svc.update_role(role_id=gestor_id, data={"name": "OUTRO"}, actor=None, request=None)
             with self.assertRaises(HTTPException):
                 await svc.update_role(role_id=gestor_id, data={"is_active": False}, actor=None, request=None)
-            with self.assertRaises(HTTPException):
-                await svc.delete_role(role_id=admin_id, actor=None, request=None)
 
             # GESTOR/CONSULTA: PODEM ter permissões editadas
             await svc.update_role(role_id=gestor_id, data={"permission_names": ["projects.view"]}, actor=None, request=None)
+
+            # NOVA REGRA: exclusão de perfil de SISTEMA com usuário vinculado é bloqueada — a
+            # trava passa a ser o vínculo, não o flag is_system. assertRaises garante que nada é
+            # commitado (levanta antes do commit); o rollback descarta o usuário de teste.
+            await self._mk_user(s, gestor_id)
+            with self.assertRaises(HTTPException) as cdel:
+                await svc.delete_role(role_id=gestor_id, actor=None, request=None)
+            self.assertEqual(cdel.exception.status_code, 400)
             await s.rollback()
+
+    async def test_delete_system_role_without_users(self) -> None:
+        # NOVA REGRA: um perfil de SISTEMA sem usuários vinculados PODE ser excluído.
+        # Usa um perfil de sistema DESCARTÁVEL (nunca toca ADMIN/GESTOR/CONSULTA reais).
+        from sqlalchemy import text
+        from sqlalchemy.exc import ProgrammingError
+
+        from app.database.session import AsyncSessionLocal, engine
+        from app.models.user import Role
+        from app.services.roles_service import RolesService
+
+        await engine.dispose()
+        name = f"SYS-TMP-{uuid4().hex[:6]}"
+        async with AsyncSessionLocal() as s:
+            try:
+                await s.execute(text("SELECT is_system FROM roles LIMIT 1"))
+            except ProgrammingError:
+                self.skipTest("Migration 0091 ausente.")
+            tmp = Role(name=name, description="descartável", is_system=True, is_active=True)
+            s.add(tmp)
+            await s.flush()
+            await s.commit()
+            rid = tmp.id
+            await RolesService(s).delete_role(role_id=rid, actor=None, request=None)  # deve suceder
+            gone = (await s.execute(text("SELECT id FROM roles WHERE name=:n"), {"n": name})).scalar_one_or_none()
+            self.assertIsNone(gone)
 
     async def test_inactive_role_not_assignable(self) -> None:
         from sqlalchemy import text
