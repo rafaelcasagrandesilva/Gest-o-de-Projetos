@@ -20,6 +20,7 @@ import {
   type PayableImportTemplate,
 } from "@/services/payables";
 import { formatApiError } from "@/utils/apiError";
+import { formatCurrencyOrDash } from "@/utils/currency";
 
 type Props = {
   open: boolean;
@@ -51,10 +52,8 @@ const MAPPING_FIELDS: {
   { key: "observation", label: "Observação", required: false },
 ];
 
-function formatBRL(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return "—";
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Fonte única (utils/currency): valor redigido → "—". */
+const formatBRL = formatCurrencyOrDash;
 
 function formatDateBr(iso: string | null | undefined): string {
   if (!iso) return "—";

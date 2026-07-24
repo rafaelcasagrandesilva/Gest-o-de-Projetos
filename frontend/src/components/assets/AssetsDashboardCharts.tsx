@@ -3,6 +3,7 @@ import type {
   AssetDashboardGroupRow,
   AssetDashboardPhysicalRow,
 } from "@/services/assetsDashboard";
+import { formatCurrencyOrDash } from "@/utils/currency";
 import {
   Bar,
   BarChart,
@@ -32,9 +33,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 const CC_COLORS = ["#4F46E5", "#22C55E", "#F59E0B", "#14B8A6"];
 
-function formatBRL(n: number): string {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+const formatBRL = formatCurrencyOrDash;
 
 function formatAxis(n: unknown): string {
   const v = Number(n ?? 0);

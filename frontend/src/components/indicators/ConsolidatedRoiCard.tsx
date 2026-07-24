@@ -1,5 +1,5 @@
 import type { ConsolidatedRoi } from "@/services/indicators";
-import { formatCurrency } from "@/utils/currency";
+import { formatCurrencyOrDash } from "@/utils/currency";
 import { formatRoiPct, roiTone } from "@/utils/roiFormat";
 
 function Metric({ label, value, accent }: { label: string; value: string; accent?: string }) {
@@ -56,11 +56,11 @@ export function ConsolidatedRoiCard({
           <p className={`mt-1 text-5xl font-bold tabular-nums ${roiColor}`}>{formatRoiPct(data.roi_pct)}</p>
         </div>
         <div className="grid w-full grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-4">
-          <Metric label="Receita consolidada" value={formatCurrency(data.revenue)} />
-          <Metric label="Custo consolidado" value={formatCurrency(data.cost)} />
+          <Metric label="Receita consolidada" value={formatCurrencyOrDash(data.revenue)} />
+          <Metric label="Custo consolidado" value={formatCurrencyOrDash(data.cost)} />
           <Metric
             label="Lucro operacional consolidado"
-            value={formatCurrency(data.operational_profit)}
+            value={formatCurrencyOrDash(data.operational_profit)}
             accent={data.operational_profit < 0 ? "text-rose-300" : "text-white"}
           />
           <Metric label="Qtd. de projetos" value={String(data.project_count)} />

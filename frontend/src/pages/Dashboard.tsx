@@ -4,6 +4,7 @@ import { FinancialEvolutionProjectChart } from "@/components/FinancialEvolutionP
 import { DashboardToolbar } from "@/components/dashboard/DashboardToolbar";
 import { useSeesAllProjects } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
+import { formatCurrencyOrDash } from "@/utils/currency";
 import {
   fetchFinancialSummary,
   fetchProjectsBreakdown,
@@ -30,10 +31,8 @@ type PeriodMode = "single" | "range" | "lastN";
 // de formatCurrencyOrDash), evitando exceção (tela branca) ao chamar métodos em null.
 const SENSITIVE_DASH = "—";
 
-function formatMoney(n: number | null | undefined): string {
-  if (n == null) return SENSITIVE_DASH;
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Fonte única (utils/currency): valor redigido → "—". */
+const formatMoney = formatCurrencyOrDash;
 
 function formatPct(n: number | null | undefined): string {
   if (n == null) return SENSITIVE_DASH;

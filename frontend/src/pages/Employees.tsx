@@ -28,7 +28,7 @@ import { usePermission } from "@/hooks/usePermission";
 import { useAuxiliaryResource } from "@/hooks/useAuxiliaryResource";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 import { CollapsiblePanel } from "@/components/ExpandableFormSection";
-import { parseCurrencyInput } from "@/utils/currency";
+import { formatCurrencyOrDash, parseCurrencyInput } from "@/utils/currency";
 
 function monthStartIso(): string {
   const d = new Date();
@@ -231,13 +231,10 @@ function formToUpdatePayload(
   };
 }
 
-function formatMoney(n: number): string {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Null-safe: delega ao util compartilhado (valor redigido → "—"). */
+const formatMoney = formatCurrencyOrDash;
 
-function formatCurrency(n: number): string {
-  return formatMoney(n);
-}
+const formatCurrency = formatMoney;
 
 /** Variação percentual realizado vs previsto no total do colaborador. */
 function formatDeltaPrevReal(prevT: number, realT: number): string {

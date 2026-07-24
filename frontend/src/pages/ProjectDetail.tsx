@@ -34,6 +34,7 @@ import {
   type Employee,
 } from "@/services/employees";
 import { usePermission } from "@/hooks/usePermission";
+import { formatCurrencyOrDash, sumCurrencyOrNull } from "@/utils/currency";
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import {
@@ -70,11 +71,11 @@ function normalizeCompetencia(iso: string): string {
   return `${m[1]}-${m[2]}-01`;
 }
 
-function money(n: number) {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
-
-/** Mesmo formato BRL que `money` (resumos e textos padronizados). */
+/**
+ * Formato BRL null-safe — fonte única (utils/currency). Campos redigidos por "Dados
+ * sensíveis" (`projects.sensitive`) chegam `null` → placeholder "—" (sem exceção).
+ */
+const money = formatCurrencyOrDash;
 const formatCurrency = money;
 
 const LABOR_BAR_BASE = "#3b82f6";
@@ -83,7 +84,7 @@ const LABOR_BAR_MAX = "#1d4ed8";
 type LaborChartRow = {
   key: string;
   name: string;
-  cost: number;
+  cost: number | null;
   pctOfTotal: number;
   isMax: boolean;
 };
@@ -888,14 +889,18 @@ function LaborTab({
   }, [employeeQuery, employeeOpen, loadEmployeeOptions]);
 
   const laborShare = useMemo(() => {
-    const sorted = [...rows].sort((a, b) => b.allocated_cost - a.allocated_cost);
-    const totalMaoDeObra = sorted.reduce((s, r) => s + r.allocated_cost, 0);
-    const maxCost = sorted.length ? sorted[0].allocated_cost : 0;
+    // Ordena tratando custo redigido (null) como 0 — sem lançar exceção.
+    const sorted = [...rows].sort((a, b) => (b.allocated_cost ?? 0) - (a.allocated_cost ?? 0));
+    const totalMaoDeObra = sumCurrencyOrNull(sorted.map((r) => r.allocated_cost));
+    const maxCost = sorted.length ? sorted[0].allocated_cost ?? 0 : 0;
     const chartData: LaborChartRow[] = sorted.map((r) => ({
       key: r.labor_id,
       name: r.name.length > 42 ? `${r.name.slice(0, 39)}…` : r.name,
       cost: r.allocated_cost,
-      pctOfTotal: totalMaoDeObra > 0 ? r.allocated_cost / totalMaoDeObra : 0,
+      pctOfTotal:
+        totalMaoDeObra != null && totalMaoDeObra > 0 && r.allocated_cost != null
+          ? r.allocated_cost / totalMaoDeObra
+          : 0,
       isMax: maxCost > 0 && r.allocated_cost === maxCost,
     }));
     return { totalMaoDeObra, count: rows.length, chartData };
@@ -1375,21 +1380,27 @@ function VehiclesTab({
   }
 
   const projectVehiclesSummary = useMemo(() => {
-    const byKey = {
-      LIGHT: { count: 0, cost: 0 },
-      PICKUP: { count: 0, cost: 0 },
-      SEDAN: { count: 0, cost: 0 },
+    const groups: Record<"LIGHT" | "PICKUP" | "SEDAN", Array<number | null | undefined>> = {
+      LIGHT: [],
+      PICKUP: [],
+      SEDAN: [],
     };
-    let totalCost = 0;
+    const counts = { LIGHT: 0, PICKUP: 0, SEDAN: 0 };
     for (const r of rows) {
-      totalCost += r.monthly_cost;
       const t = r.vehicle_type || "LIGHT";
       if (t === "LIGHT" || t === "PICKUP" || t === "SEDAN") {
-        const k = t as keyof typeof byKey;
-        byKey[k].count += 1;
-        byKey[k].cost += r.monthly_cost;
+        const k = t as keyof typeof groups;
+        counts[k] += 1;
+        groups[k].push(r.monthly_cost);
       }
     }
+    // Custos redigidos (null) → total/subtotal null → resumo exibe "—" (não R$ 0,00).
+    const byKey = {
+      LIGHT: { count: counts.LIGHT, cost: sumCurrencyOrNull(groups.LIGHT) },
+      PICKUP: { count: counts.PICKUP, cost: sumCurrencyOrNull(groups.PICKUP) },
+      SEDAN: { count: counts.SEDAN, cost: sumCurrencyOrNull(groups.SEDAN) },
+    };
+    const totalCost = sumCurrencyOrNull(rows.map((r) => r.monthly_cost));
     return { totalVehicles: rows.length, totalCost, byKey };
   }, [rows]);
 
@@ -1721,7 +1732,7 @@ function SystemsTab({
   const [value, setValue] = useState("");
 
   const systemsSummary = useMemo(() => {
-    const totalCost = rows.reduce((s, r) => s + r.value, 0);
+    const totalCost = sumCurrencyOrNull(rows.map((r) => r.value));
     return { count: rows.length, totalCost };
   }, [rows]);
 
@@ -1851,7 +1862,7 @@ function FixedTab({
   const [value, setValue] = useState("");
 
   const fixedSummary = useMemo(() => {
-    const totalCost = rows.reduce((s, r) => s + r.value, 0);
+    const totalCost = sumCurrencyOrNull(rows.map((r) => r.value));
     return { count: rows.length, totalCost };
   }, [rows]);
 

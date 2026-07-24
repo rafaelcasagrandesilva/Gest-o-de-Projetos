@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { MonthlyPoint } from "@/services/dashboard";
 import type { ScenarioKind } from "@/context/ScenarioContext";
 import { chartCostTotal, chartNetProfit, chartOperationalProfit } from "@/utils/projectDashboardCost";
+import { formatCurrencyOrDash } from "@/utils/currency";
 import {
   Bar,
   BarChart,
@@ -44,10 +45,8 @@ const MONTH_SHORT_PT = [
   "Dez",
 ] as const;
 
-function formatBRL(n: number | null | undefined): string {
-  if (n == null) return "—"; // redigido por "Dados sensíveis"
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Fonte única (utils/currency): valor redigido → "—". */
+const formatBRL = formatCurrencyOrDash;
 
 function formatBRLAxis(value: unknown): string {
   const n = Number(value ?? 0);

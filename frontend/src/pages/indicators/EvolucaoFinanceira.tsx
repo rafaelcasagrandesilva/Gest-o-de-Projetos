@@ -12,7 +12,7 @@ import {
   type ProjectRoi,
 } from "@/services/indicators";
 import { currentMonth, monthMinus, monthToCompetencia } from "@/utils/roiFormat";
-import { formatCurrency, formatCurrencyShort } from "@/utils/currency";
+import { formatCurrencyOrDash, formatCurrencyShortOrDash } from "@/utils/currency";
 import { CHART_COLORS } from "@/utils/chartTheme";
 import { DashboardHeader } from "@/components/dashboard/executive/DashboardHeader";
 import { DashboardFilterBar, FilterField } from "@/components/dashboard/executive/DashboardFilterBar";
@@ -217,17 +217,17 @@ export function EvolucaoFinanceira() {
     if (!ins) return [];
     const items: InsightItem[] = [];
     if (ins.maior_faturamento)
-      items.push({ label: "Maior faturamento", value: formatCurrencyShort(ins.maior_faturamento.value), meta: monthAbbr(ins.maior_faturamento.competencia), color: CHART_COLORS.faturamento });
+      items.push({ label: "Maior faturamento", value: formatCurrencyShortOrDash(ins.maior_faturamento.value), meta: monthAbbr(ins.maior_faturamento.competencia), color: CHART_COLORS.faturamento });
     if (ins.menor_faturamento)
-      items.push({ label: "Menor faturamento", value: formatCurrencyShort(ins.menor_faturamento.value), meta: monthAbbr(ins.menor_faturamento.competencia), color: CHART_COLORS.faturamento });
+      items.push({ label: "Menor faturamento", value: formatCurrencyShortOrDash(ins.menor_faturamento.value), meta: monthAbbr(ins.menor_faturamento.competencia), color: CHART_COLORS.faturamento });
     if (ins.maior_lucro_operacional)
-      items.push({ label: "Maior lucro operacional", value: formatCurrencyShort(ins.maior_lucro_operacional.value), meta: monthAbbr(ins.maior_lucro_operacional.competencia), color: CHART_COLORS.caixaPos });
+      items.push({ label: "Maior lucro operacional", value: formatCurrencyShortOrDash(ins.maior_lucro_operacional.value), meta: monthAbbr(ins.maior_lucro_operacional.competencia), color: CHART_COLORS.caixaPos });
     if (ins.maior_lucro_liquido)
-      items.push({ label: "Maior lucro líquido", value: formatCurrencyShort(ins.maior_lucro_liquido.value), meta: monthAbbr(ins.maior_lucro_liquido.competencia), color: NET_PROFIT_COLOR });
+      items.push({ label: "Maior lucro líquido", value: formatCurrencyShortOrDash(ins.maior_lucro_liquido.value), meta: monthAbbr(ins.maior_lucro_liquido.competencia), color: NET_PROFIT_COLOR });
     if (ins.projeto_maior_faturamento)
-      items.push({ label: "Projeto · maior faturamento", value: ins.projeto_maior_faturamento.project_name, meta: formatCurrencyShort(ins.projeto_maior_faturamento.value), color: CHART_COLORS.faturamento });
+      items.push({ label: "Projeto · maior faturamento", value: ins.projeto_maior_faturamento.project_name, meta: formatCurrencyShortOrDash(ins.projeto_maior_faturamento.value), color: CHART_COLORS.faturamento });
     if (ins.projeto_maior_lucro)
-      items.push({ label: "Projeto · maior lucro", value: ins.projeto_maior_lucro.project_name, meta: formatCurrencyShort(ins.projeto_maior_lucro.value), color: CHART_COLORS.caixaPos });
+      items.push({ label: "Projeto · maior lucro", value: ins.projeto_maior_lucro.project_name, meta: formatCurrencyShortOrDash(ins.projeto_maior_lucro.value), color: CHART_COLORS.caixaPos });
     items.push({ label: "Tendência financeira", value: TENDENCIA_LABEL[ins.tendencia] ?? "—", color: "#6366f1" });
     return items;
   }, [data]);
@@ -395,10 +395,10 @@ export function EvolucaoFinanceira() {
 
           {/* Cards KPI */}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <KpiCard label="Faturamento" value={formatCurrency(data!.kpis.faturamento.total)} deltaPct={data!.kpis.faturamento.growth_pct} color={CHART_COLORS.faturamento} />
-            <KpiCard label="Custos de M.O." value={formatCurrency(data!.kpis.custo_mo.total)} deltaPct={data!.kpis.custo_mo.growth_pct} color={CHART_COLORS.custos} />
-            <KpiCard label="Lucro Operacional" value={formatCurrency(data!.kpis.lucro_operacional.total)} deltaPct={data!.kpis.lucro_operacional.growth_pct} color={CHART_COLORS.caixaPos} />
-            <KpiCard label="Lucro Líquido" value={formatCurrency(data!.kpis.lucro_liquido.total)} deltaPct={data!.kpis.lucro_liquido.growth_pct} color={NET_PROFIT_COLOR} />
+            <KpiCard label="Faturamento" value={formatCurrencyOrDash(data!.kpis.faturamento.total)} deltaPct={data!.kpis.faturamento.growth_pct} color={CHART_COLORS.faturamento} />
+            <KpiCard label="Custos de M.O." value={formatCurrencyOrDash(data!.kpis.custo_mo.total)} deltaPct={data!.kpis.custo_mo.growth_pct} color={CHART_COLORS.custos} />
+            <KpiCard label="Lucro Operacional" value={formatCurrencyOrDash(data!.kpis.lucro_operacional.total)} deltaPct={data!.kpis.lucro_operacional.growth_pct} color={CHART_COLORS.caixaPos} />
+            <KpiCard label="Lucro Líquido" value={formatCurrencyOrDash(data!.kpis.lucro_liquido.total)} deltaPct={data!.kpis.lucro_liquido.growth_pct} color={NET_PROFIT_COLOR} />
           </div>
         </>
       )}

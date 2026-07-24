@@ -30,9 +30,8 @@ import {
   defaultReceivableViewSort,
 } from "@/tableSort/receivables";
 
-function formatBRL(n: number): string {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Null-safe: delega ao util compartilhado (valor redigido → "—"). */
+const formatBRL = formatCurrencyOrDash;
 
 function formatDateBr(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);

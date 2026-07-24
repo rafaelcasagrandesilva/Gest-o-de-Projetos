@@ -18,6 +18,7 @@ import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import { FLEET_VEHICLE_SORT_COLUMNS, defaultFleetVehicleSort } from "@/tableSort/vehicles";
+import { formatCurrencyOrDash, sumCurrencyOrNull } from "@/utils/currency";
 
 function monthStartIso(): string {
   const d = new Date();
@@ -37,9 +38,8 @@ function typeLabel(t: string): string {
   }
 }
 
-function formatCurrency(n: number): string {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Null-safe: delega ao util compartilhado (valor redigido → "—"). */
+const formatCurrency = formatCurrencyOrDash;
 
 /** Custo fixo mensal por tipo (mesma base das configurações / cálculo operacional). */
 function monthlyFixedCostByType(vehicleType: string, s: SystemSettings | null): number {
@@ -174,22 +174,27 @@ export function Vehicles() {
 
   const fleetSummary = useMemo(() => {
     const active = items.filter((v) => v.active);
-    const byKey = {
-      LIGHT: { count: 0, cost: 0 },
-      PICKUP: { count: 0, cost: 0 },
-      SEDAN: { count: 0, cost: 0 },
+    const groups: Record<"LIGHT" | "PICKUP" | "SEDAN", Array<number | null | undefined>> = {
+      LIGHT: [],
+      PICKUP: [],
+      SEDAN: [],
     };
-    let totalCost = 0;
+    const counts = { LIGHT: 0, PICKUP: 0, SEDAN: 0 };
     for (const v of active) {
       const t = (v.type || "LIGHT") as string;
-      const unit = typeof v.monthly_cost === "number" ? v.monthly_cost : 0;
-      totalCost += unit;
       if (t === "LIGHT" || t === "PICKUP" || t === "SEDAN") {
-        const k = t as keyof typeof byKey;
-        byKey[k].count += 1;
-        byKey[k].cost += unit;
+        const k = t as keyof typeof groups;
+        counts[k] += 1;
+        groups[k].push(v.monthly_cost);
       }
     }
+    // Custo redigido (null) → total/subtotal null → resumo exibe "—" (não R$ 0,00).
+    const byKey = {
+      LIGHT: { count: counts.LIGHT, cost: sumCurrencyOrNull(groups.LIGHT) },
+      PICKUP: { count: counts.PICKUP, cost: sumCurrencyOrNull(groups.PICKUP) },
+      SEDAN: { count: counts.SEDAN, cost: sumCurrencyOrNull(groups.SEDAN) },
+    };
+    const totalCost = sumCurrencyOrNull(active.map((v) => v.monthly_cost));
     return { totalVehicles: active.length, totalCost, byKey };
   }, [items]);
 
@@ -610,7 +615,7 @@ export function Vehicles() {
                     <TruncatedCell value={v.cost_center || "—"} maxWidthClass="max-w-[220px]" />
                   </td>
                   {canSeeSensitive && (
-                    <td className="px-4 py-3 font-medium tabular-nums">{formatCurrency(v.monthly_cost ?? 0)}</td>
+                    <td className="px-4 py-3 font-medium tabular-nums">{formatCurrency(v.monthly_cost)}</td>
                   )}
                   <td className="min-w-0 max-w-[260px] px-4 py-3 align-middle">
                     <TruncatedText maxWidthClass="max-w-[260px]">

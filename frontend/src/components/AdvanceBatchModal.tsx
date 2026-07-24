@@ -15,7 +15,7 @@ import {
 import { OperationInvoicesTable } from "@/components/OperationInvoicesTable";
 import { fetchAdvanceInstitutions, type AdvanceInstitution } from "@/services/advanceInstitutions";
 import { formatApiError } from "@/utils/apiError";
-import { formatCurrencyField, normalizeCurrencyForApi } from "@/utils/currency";
+import { formatCurrencyField, formatCurrencyOrDash, normalizeCurrencyForApi } from "@/utils/currency";
 import type { AdvanceBasis } from "@/services/receivableAdvanceBatches";
 
 // Bases de antecipação (Bruto / Líquido / Líquido −10%). Compartilhadas por LEPTA e Daycoval:
@@ -49,9 +49,8 @@ const STATUS_BR: Record<string, string> = {
   CANCELLED: "Cancelada",
 };
 
-function formatBRL(n: number): string {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Null-safe: delega ao util compartilhado (valor redigido → "—"). */
+const formatBRL = formatCurrencyOrDash;
 
 function formatDateBr(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);

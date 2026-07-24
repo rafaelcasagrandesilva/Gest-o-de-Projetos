@@ -48,7 +48,8 @@ export interface CompanyFinancialItem {
   total_pago: number | null;
   pago_mes: number | null;
   restante: number | null;
-  progresso: number;
+  /** Fração 0–1 do progresso de pagamento. Redigido (null) sem a permissão sensível. */
+  progresso: number | null;
   status: string | null;
   progresso_mes: number | null;
   /** Espelho do Contas a Pagar da competência (fonte oficial de pagamento/status). */

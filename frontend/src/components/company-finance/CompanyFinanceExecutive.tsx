@@ -51,7 +51,6 @@ import { CollapsiblePanel, PrimaryAddButton } from "@/components/ExpandableFormS
 import { isAxiosError } from "axios";
 import { usePermission } from "@/hooks/usePermission";
 import {
-  formatCurrency,
   formatCurrencyInputFromApi,
   formatCurrencyOrDash,
   normalizeCurrencyForApi,
@@ -72,9 +71,8 @@ const MONTH_SHORT = [
   "DEZ",
 ];
 
-function formatBRL(n: number): string {
-  return formatCurrency(n);
-}
+/** Null-safe: valor redigido (null) → "—" (não R$ 0,00). */
+const formatBRL = formatCurrencyOrDash;
 
 function parseBRLInput(raw: string): number {
   return normalizeCurrencyForApi(raw);
@@ -1687,8 +1685,9 @@ function FinanceItemCard({
 }) {
   const ref = item.valor_referencia;
   const isActive = item.is_active ?? true;
+  // Progresso redigido (null) por Dados sensíveis → "—" e barra vazia (não 0% enganoso).
   const ratio = item.progresso;
-  const pct = Math.min(100, ratio * 100);
+  const pct = ratio == null ? null : Math.min(100, ratio * 100);
   const hasLegal = Boolean(item.has_legal_process);
   const hasReneg = Boolean(item.has_renegotiation);
   const isMatrixCollaborator = tipo === "custo_fixo" && item.item_type === "COLABORADOR_MATRIZ";
@@ -2067,12 +2066,14 @@ function FinanceItemCard({
           <div className="mt-3">
             <div className="flex justify-between text-xs text-slate-500">
               <span>Progresso</span>
-              <span className="font-medium tabular-nums text-slate-800">{pct.toFixed(1)}%</span>
+              <span className="font-medium tabular-nums text-slate-800">
+                {pct == null ? "—" : `${pct.toFixed(1)}%`}
+              </span>
             </div>
             <div className="mt-1 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
               <div
-                className={`h-full rounded-full transition-all ${progressBarClass(ratio)}`}
-                style={{ width: `${Math.min(100, pct)}%` }}
+                className={`h-full rounded-full transition-all ${progressBarClass(ratio ?? 0)}`}
+                style={{ width: `${pct ?? 0}%` }}
               />
             </div>
           </div>

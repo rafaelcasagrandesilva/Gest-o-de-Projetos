@@ -22,7 +22,7 @@ import {
 import { fetchCostCenters } from "@/services/employees";
 import { CostCenterCombo } from "@/components/CostCenterCombo";
 import { usePermission } from "@/hooks/usePermission";
-import { normalizeCurrencyForApi } from "@/utils/currency";
+import { formatCurrencyField, formatCurrencyOrDash, normalizeCurrencyForApi } from "@/utils/currency";
 
 type DetailTab = "geral" | "contrato" | "documentos" | "historico";
 
@@ -40,15 +40,9 @@ type Props = {
   onSaved?: () => void;
 };
 
-function moneyToInput(n: number | null | undefined): string {
-  if (n == null) return "";
-  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function formatBRL(n: number | null | undefined): string {
-  if (n == null) return "—";
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Valor para input (pt-BR, sem R$) e valor de exibição — fonte única (utils/currency). */
+const moneyToInput = formatCurrencyField;
+const formatBRL = formatCurrencyOrDash;
 
 /** Vigência atual (ISO yyyy-mm-dd) = início + prazo original + Σ prazos dos aditivos (meses). */
 function computeValidityIso(startIso: string, baseMonths: number | null, additiveMonths: number): string {

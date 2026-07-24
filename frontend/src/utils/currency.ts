@@ -87,6 +87,27 @@ export function formatCurrencyOrDash(n: number | null | undefined): string {
   return formatCurrency(n);
 }
 
+/**
+ * Versão compacta (mil/mi) null-safe para KPIs, destaques e rótulos/tooltips de gráficos
+ * que exibem VALORES DE DADOS (que podem vir redigidos). Diferente de `formatCurrencyShort`,
+ * que é para eixos numéricos e nunca recebe null. Redigido → "—" (não "R$ 0").
+ */
+export function formatCurrencyShortOrDash(n: number | null | undefined): string {
+  if (n == null) return SENSITIVE_PLACEHOLDER;
+  return formatCurrencyShort(n);
+}
+
+/**
+ * Soma total null-safe para KPIs/resumos calculados no cliente a partir de valores que
+ * podem ser redigidos por "Dados sensíveis". Se TODOS os itens estão redigidos (null),
+ * devolve `null` → o resumo exibe "—" (via `formatCurrencyOrDash`) em vez de um enganoso
+ * "R$ 0,00". Lista vazia legítima soma 0. Valores presentes são somados normalmente.
+ */
+export function sumCurrencyOrNull(values: Array<number | null | undefined>): number | null {
+  if (values.length > 0 && values.every((v) => v == null)) return null;
+  return values.reduce<number>((s, v) => s + (v ?? 0), 0);
+}
+
 /** Ex.: 365575.21 → "365.575,21" (campos de formulário, sem símbolo R$). */
 export function formatCurrencyField(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "";

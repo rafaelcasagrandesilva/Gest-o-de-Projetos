@@ -16,7 +16,8 @@ export interface ProjectLabor {
   scenario?: string;
   employee_id: string;
   allocation_percentage: number;
-  monthly_cost: number;
+  /** Redigido (null) sem `projects.sensitive`. */
+  monthly_cost: number | null;
   cost_base_source?: string;
   cost_salary_base?: number | null;
   cost_additional_costs?: number | null;
@@ -28,15 +29,16 @@ export interface ProjectLabor {
   cost_total_override?: number | null;
 }
 
+/** Todos os campos são redigidos (null) sem `projects.sensitive`. */
 export interface LaborCostBreakdown {
-  salary_base: number;
-  periculosidade: number;
-  adicional_dirigida: number;
-  vr: number;
-  horas_extras: number;
-  encargos: number;
-  additional_costs: number;
-  ajuda_custo: number;
+  salary_base: number | null;
+  periculosidade: number | null;
+  adicional_dirigida: number | null;
+  vr: number | null;
+  horas_extras: number | null;
+  encargos: number | null;
+  additional_costs: number | null;
+  ajuda_custo: number | null;
 }
 
 export interface ProjectLaborDetail {
@@ -45,9 +47,10 @@ export interface ProjectLaborDetail {
   name: string;
   tipo: string;
   allocation_percentage: number;
-  full_cost: number;
-  allocated_cost: number;
-  total_cost: number;
+  /** Redigidos (null) sem `projects.sensitive`. */
+  full_cost: number | null;
+  allocated_cost: number | null;
+  total_cost: number | null;
   breakdown: LaborCostBreakdown;
   uses_cost_total_override?: boolean;
   cost_base_source?: string;
@@ -86,7 +89,8 @@ export interface ProjectVehicle {
   fuel_type: string | null;
   km_per_month: number | null;
   fuel_cost_realized?: number | null;
-  monthly_cost: number;
+  /** Redigido (null) sem `projects.sensitive`. */
+  monthly_cost: number | null;
   /** Combustível para comparativo (previsto = estimado; realizado = informado). */
   display_fuel_cost?: number | null;
   fuel_cost_per_km_realized?: number | null;
@@ -102,7 +106,8 @@ export interface ProjectSystemCost {
   competencia: string;
   scenario?: string;
   name: string;
-  value: number;
+  /** Redigido (null) sem `projects.sensitive`. */
+  value: number | null;
 }
 
 export interface ProjectOperationalFixed {
@@ -113,7 +118,8 @@ export interface ProjectOperationalFixed {
   competencia: string;
   scenario?: string;
   name: string;
-  value: number;
+  /** Redigido (null) sem `projects.sensitive`. */
+  value: number | null;
 }
 
 export async function listLabors(

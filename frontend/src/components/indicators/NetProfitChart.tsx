@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { EChartsOption } from "echarts";
 import type { FinancialEvolutionPoint } from "@/services/indicators";
 import { EChart } from "@/components/dashboard/executive/EChart";
-import { formatCurrency, formatCurrencyShort } from "@/utils/currency";
+import { formatCurrencyOrDash, formatCurrencyShort } from "@/utils/currency";
 import { CHART_COLORS } from "@/utils/chartTheme";
 import { monthLabel } from "@/utils/roiFormat";
 
@@ -47,7 +47,7 @@ export function NetProfitChart({
             <div style="display:flex;align-items:center;gap:6px;margin-top:3px">
               <span style="width:8px;height:8px;border-radius:2px;background:${s.color}"></span>
               <span style="color:#475569">Lucro Líquido</span>
-              <span style="margin-left:auto;font-weight:600;color:#0f172a">${formatCurrency(s.value)}</span>
+              <span style="margin-left:auto;font-weight:600;color:#0f172a">${formatCurrencyOrDash(s.value == null ? null : Number(s.value))}</span>
             </div>`;
         },
       },
@@ -75,7 +75,7 @@ export function NetProfitChart({
             fontSize: 10,
             fontWeight: "bold",
             color: "#475569",
-            formatter: (p: { value?: unknown }) => formatCurrencyShort(Number(p.value)),
+            formatter: (p: { value?: unknown }) => (p.value == null ? "—" : formatCurrencyShort(Number(p.value))),
           },
           labelLayout: { hideOverlap: true },
           // Linha zero em destaque (referência de equilíbrio do resultado).

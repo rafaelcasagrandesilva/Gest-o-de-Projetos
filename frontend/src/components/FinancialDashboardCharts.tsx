@@ -1,5 +1,6 @@
 import type { ScenarioKind } from "@/context/ScenarioContext";
 import type { ProjectBreakdownRow } from "@/services/dashboard";
+import { formatCurrencyOrDash } from "@/utils/currency";
 import {
   Bar,
   BarChart,
@@ -12,10 +13,8 @@ import {
   YAxis,
 } from "recharts";
 
-function formatCurrency(n: number | null | undefined): string {
-  if (n == null) return "—";
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Fonte única (utils/currency): valor redigido → "—". */
+const formatCurrency = formatCurrencyOrDash;
 
 /** Paleta cíclica para projetos (quantidade dinâmica). */
 const PROJECT_PALETTE = [

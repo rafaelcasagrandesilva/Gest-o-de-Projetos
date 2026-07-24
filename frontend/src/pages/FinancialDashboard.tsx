@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { isAxiosError } from "axios";
+import { formatCurrencyOrDash } from "@/utils/currency";
 import {
   fetchFinancialDashboardBreakdown,
   type FinancialDashboardBreakdown,
@@ -41,13 +42,8 @@ const MONTH_SHORT_PT = [
   "Dez",
 ] as const;
 
-const SENSITIVE_DASH = "—";
-
-// Null-safe: valor monetário omitido (Dados Sensíveis) chega null → "—" (sem crash no render).
-function formatBRL(n: number | null | undefined): string {
-  if (n == null) return SENSITIVE_DASH;
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Fonte única (utils/currency): valor redigido (Dados Sensíveis) → "—". */
+const formatBRL = formatCurrencyOrDash;
 
 function formatPct(n: number): string {
   if (!Number.isFinite(n)) return "—";

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "check:currency": "node scripts/check-currency-helpers.mjs",
+    "build": "npm run check:currency && tsc -b && vite build",
     "start": "node server.js",
     "preview": "node server.js",
     "test:currency": "node scripts/test-currency.mjs",

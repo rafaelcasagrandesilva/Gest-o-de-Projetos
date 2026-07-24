@@ -11,8 +11,8 @@ export interface FleetVehicle {
   description: string | null;
   /** Categoria (LIGHT, PICKUP, SEDAN); JSON da API: `type` */
   type: string;
-  /** Custo fixo mensal (R$) cadastrado no veículo */
-  monthly_cost: number;
+  /** Custo fixo mensal (R$) cadastrado no veículo. Redigido (null) sem `vehicles.sensitive`. */
+  monthly_cost: number | null;
   driver_employee_id: string | null;
   driver_name: string | null;
   /** Cache do Centro de Custo vigente (fonte da verdade é temporal — histórico). */

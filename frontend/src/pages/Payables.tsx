@@ -19,7 +19,7 @@ import { PeriodFilter } from "@/components/PeriodFilter";
 import { TruncatedCell } from "@/components/TruncatedText";
 import { listProjects, type Project } from "@/services/projects";
 import { formatApiError } from "@/utils/apiError";
-import { formatCurrencyOrDash, normalizeCurrencyForApi, parseCurrencyInput } from "@/utils/currency";
+import { formatCurrencyField, formatCurrencyOrDash, normalizeCurrencyForApi, parseCurrencyInput } from "@/utils/currency";
 import { PayablesImportModal } from "@/components/PayablesImportModal";
 import { SortableTh } from "@/components/table";
 import { useTableSort, type TableSortHeaderProps } from "@/hooks/useTableSort";
@@ -40,21 +40,12 @@ type ActionModal =
   | { open: true; mode: "register" | "reverse"; row: PayableSnapshotRow }
   | { open: true; mode: "delete"; row: PayableSnapshotRow };
 
-function formatBRL(n: number): string {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
-
-/** Valor monetário ou "—" quando redigido pelo backend — helper compartilhado (fonte única). */
+/** Valor monetário ou "—" quando redigido pelo backend — fonte única (utils/currency). */
+const formatBRL = formatCurrencyOrDash;
 const money = formatCurrencyOrDash;
 
-/** Valor numérico para input (pt-BR: milhar com ponto, decimal com vírgula), alinhado ao restante da tela. */
-function formatMoneyFieldBr(n: number): string {
-  if (!Number.isFinite(n)) return "";
-  return new Intl.NumberFormat("pt-BR", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(n);
-}
+/** Valor numérico para input (pt-BR, sem R$) — fonte única (utils/currency). */
+const formatMoneyFieldBr = formatCurrencyField;
 
 function formatDateBr(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);

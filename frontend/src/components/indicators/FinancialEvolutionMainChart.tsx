@@ -3,7 +3,7 @@ import type { EChartsOption, EChartsType, LineSeriesOption } from "echarts";
 import type { FinancialEvolutionPoint } from "@/services/indicators";
 import type { SeriesVisibility } from "@/hooks/useFinancialChartViz";
 import { EChart } from "@/components/dashboard/executive/EChart";
-import { formatCurrency, formatCurrencyShort } from "@/utils/currency";
+import { formatCurrencyOrDash, formatCurrencyShort } from "@/utils/currency";
 import { CHART_COLORS } from "@/utils/chartTheme";
 import { monthLabel } from "@/utils/roiFormat";
 import { createSmartLabelLayout } from "@/utils/smartLabelLayout";
@@ -123,7 +123,7 @@ export function FinancialEvolutionMainChart({
           formatter: (p: { dataIndex: number; value?: unknown }) => {
             const i = p.dataIndex;
             const valTag = i === last ? "valLast" : "val";
-            const valStr = `{${valTag}|${formatCurrencyShort(Number(p.value))}}`;
+            const valStr = `{${valTag}|${p.value == null ? "—" : formatCurrencyShort(Number(p.value))}}`;
             const pct = momPct(nums, i);
             const pill = pct === null ? "" : pct >= 0 ? `{up|▲ +${Math.round(pct)}%}` : `{down|▼ ${Math.round(pct)}%}`;
             const showValue = showAllValues || i === last;
@@ -221,7 +221,7 @@ export function FinancialEvolutionMainChart({
               return `<div style="display:flex;align-items:center;gap:6px;margin-top:3px">
                 <span style="width:8px;height:8px;border-radius:2px;background:${s.color}"></span>
                 <span style="color:#475569">${s.seriesName}</span>
-                <span style="margin-left:auto;font-weight:600;color:#0f172a">${formatCurrency(s.value)}</span>${variação}
+                <span style="margin-left:auto;font-weight:600;color:#0f172a">${formatCurrencyOrDash(s.value == null ? null : Number(s.value))}</span>${variação}
               </div>`;
             })
             .join("");

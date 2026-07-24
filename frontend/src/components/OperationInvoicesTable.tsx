@@ -1,10 +1,9 @@
 import { useMemo } from "react";
 import type { AdvanceBatchItem } from "@/services/receivableAdvanceBatches";
+import { formatCurrencyOrDash } from "@/utils/currency";
 
-function formatBRL(n: number | null | undefined): string {
-  if (n == null) return "—";
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Fonte única (utils/currency): valor redigido → "—". */
+const formatBRL = formatCurrencyOrDash;
 
 function formatDateBr(iso: string | null | undefined): string {
   if (!iso) return "—";

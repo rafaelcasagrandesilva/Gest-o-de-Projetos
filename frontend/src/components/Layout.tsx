@@ -1,4 +1,4 @@
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { ScenarioProvider } from "@/context/ScenarioContext";
 import { SidebarProvider } from "@/context/SidebarContext";
 import { Header } from "./Header";
@@ -6,10 +6,12 @@ import { AssetsSidebar } from "./AssetsSidebar";
 import { FinanceSidebar } from "./FinanceSidebar";
 import { IndicatorsSidebar } from "./IndicatorsSidebar";
 import { ProjectsSidebar } from "./ProjectsSidebar";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { useWorkspace } from "@/context/WorkspaceContext";
 
 export function Layout() {
   const { workspace } = useWorkspace();
+  const location = useLocation();
   return (
     <ScenarioProvider>
       <SidebarProvider>
@@ -30,7 +32,11 @@ export function Layout() {
                   Única fonte de verdade do aproveitamento horizontal: as páginas
                   NÃO devem declarar max-width própria — herdam esta largura. */}
               <div className="mx-auto w-full min-w-0 max-w-full">
-                <Outlet />
+                {/* Salvaguarda por-rota: uma tela que lançar exceção mostra fallback
+                    aqui dentro (nav/sidebar seguem funcionando). Reseta ao navegar. */}
+                <ErrorBoundary resetKey={location.pathname} label="route">
+                  <Outlet />
+                </ErrorBoundary>
               </div>
             </main>
           </div>

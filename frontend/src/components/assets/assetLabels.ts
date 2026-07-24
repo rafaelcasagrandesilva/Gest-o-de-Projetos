@@ -1,4 +1,5 @@
 import type { AssetPhysicalCondition, AssetStatus, ExpirationAlertLevel } from "@/services/assets";
+import { formatCurrencyOrDash } from "@/utils/currency";
 
 export const ASSET_STATUS_LABELS: Record<AssetStatus, string> = {
   AVAILABLE: "Disponível",
@@ -38,8 +39,7 @@ export function formatAssignmentDeliveryLine(a: AssignmentListShape): string {
   return `${from} → ${a.employee_name} — entrega ${a.delivery_date}`;
 }
 
-export function formatBRL(n: number): string {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+/** Null-safe: valor redigido (null) por Dados Sensíveis → "—" (não R$ 0,00). */
+export const formatBRL = formatCurrencyOrDash;
 
 export { formatMoneyFieldBr, moneyFieldFromNumber, parseBRLInput } from "@/components/assets/assetMoney";
