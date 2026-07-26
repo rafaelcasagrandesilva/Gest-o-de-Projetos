@@ -7,6 +7,8 @@ export interface PagamentoMes {
   mes: string;
   /** `null` quando redigido por falta de "Dados sensíveis". */
   valor: number | null;
+  /** Quantidade de lançamentos que compõem o valor do mês (>1 → detalhe no modal). */
+  count?: number | null;
 }
 
 export interface CompanyFinancialItem {
@@ -205,6 +207,61 @@ export async function replaceCompanyFinancePayments(
   if (CF_STRUCTURE_DEBUG) {
     console.info("[company-finance] PUT pagamentos ←", data);
   }
+  return data;
+}
+
+/** Um lançamento (entrada) de uma competência. Genérico para qualquer item de Custo Fixo. */
+export interface LancamentoCompetencia {
+  id: string;
+  competencia: string;
+  /** YYYY-MM-DD. */
+  vencimento: string | null;
+  /** `null` quando redigido por falta de "Dados sensíveis". */
+  valor: number | null;
+  descricao: string | null;
+  /** Espelho do CAP (pagamento por lançamento). */
+  cap_amount_paid?: number | null;
+  cap_status?: "ABERTO" | "PARCIAL" | "PAGO" | null;
+  has_payment?: boolean;
+}
+
+export interface LancamentosCompetencia {
+  item_id: string;
+  competencia: string;
+  lancamentos: LancamentoCompetencia[];
+  total: number | null;
+  payable_sync_warning?: string | null;
+}
+
+/** Carga de um lançamento no PUT (id ausente = novo). */
+export interface LancamentoCompetenciaInput {
+  id?: string | null;
+  vencimento?: string | null;
+  valor: number;
+  descricao?: string | null;
+}
+
+export async function fetchCompanyFinanceEntries(
+  itemId: string,
+  competencia: string,
+): Promise<LancamentosCompetencia> {
+  const { data } = await api.get<LancamentosCompetencia>(
+    `/company-finance/items/${itemId}/entries`,
+    { params: { competencia } },
+  );
+  return data;
+}
+
+export async function replaceCompanyFinanceEntries(
+  itemId: string,
+  competencia: string,
+  lancamentos: LancamentoCompetenciaInput[],
+): Promise<LancamentosCompetencia> {
+  const { data } = await api.put<LancamentosCompetencia>(
+    `/company-finance/items/${itemId}/entries`,
+    { lancamentos },
+    { params: { competencia } },
+  );
   return data;
 }
 

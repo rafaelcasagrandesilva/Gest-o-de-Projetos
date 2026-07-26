@@ -258,12 +258,17 @@ def project_labor_full_monthly_cost(
 
 CLT_PAYABLE_LABEL_SALARY = "Salário CLT"
 CLT_PAYABLE_LABEL_BENEFIT = "Benefício CLT"
+CLT_PAYABLE_LABEL_VACATION = "Férias CLT"
 
 
 def clt_payable_components_from_monthly_override(payroll_override: Any | None) -> list[tuple[str, float]] | None:
     """
     Componentes de Contas a Pagar a partir da folha real (holerite).
     Retorna None se não houver override aplicável (comportamento legado).
+
+    Cada componente vira um lançamento independente no Contas a Pagar (não são somados
+    entre si). Férias (adiantamento) segue exatamente o mesmo fluxo de Salário/Benefício:
+    só gera linha quando o valor é positivo; campo vazio → nenhum lançamento.
     """
     if payroll_override is None:
         return None
@@ -278,6 +283,11 @@ def clt_payable_components_from_monthly_override(payroll_override: Any | None) -
         v = float(vr)
         if v > 0:
             lines.append((CLT_PAYABLE_LABEL_BENEFIT, v))
+    vacation = getattr(payroll_override, "vacation_advance_amount", None)
+    if vacation is not None:
+        v = float(vacation)
+        if v > 0:
+            lines.append((CLT_PAYABLE_LABEL_VACATION, v))
     return lines if lines else None
 
 
@@ -322,6 +332,11 @@ def project_labor_payable_snapshot_components(
     if ajuda > 0:
         lines.append(("Ajuda de Custo PJ", ajuda))
     return lines
+
+
+# Rótulo da coluna de folha quando o lançamento do CAP vem sem sufixo de componente
+# (linha única: PJ sem ajuda de custo, CLT sem holerite, custo fixo/colaborador).
+PAYROLL_COMPONENT_FALLBACK_LABEL = "Salário / Contratado"
 
 
 def project_labor_payable_monthly_amount(

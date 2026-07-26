@@ -532,6 +532,15 @@ class ProjectStructureService:
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
         before = model_to_dict(row)
+        # Valores TIPADOS capturados do ORM antes da exclusão. `before` é a serialização
+        # para AUDITORIA (datas viram string ISO, enums viram str) e NÃO serve como entrada
+        # de domínio: passar `before["competencia"]` para `normalize_competencia` quebrava
+        # com AttributeError, engolido pelo except abaixo, deixando o lançamento de Contas
+        # a Pagar do mês seguinte órfão (aparecia depois como "Origem removida").
+        deleted_competencia = row.competencia
+        deleted_project_id = row.project_id
+        deleted_employee_id = row.employee_id
+        deleted_scenario = row.scenario
         await self.labors.delete(row)
         await self.audit.log_action(
             user=actor,
@@ -547,20 +556,24 @@ class ProjectStructureService:
             request=request,
         )
         await self.session.commit()
-        comp = before.get("competencia")
-        pid = before.get("project_id")
-        eid = before.get("employee_id")
-        if comp and pid and eid:
+        if deleted_competencia and deleted_project_id and deleted_employee_id:
             try:
                 await self._sync_collaborator_payables_if_realizado(
-                    project_id=UUID(str(pid)),
-                    employee_id=UUID(str(eid)),
-                    competencia=comp,
-                    scenario=before.get("scenario", DEFAULT_SCENARIO),
+                    project_id=deleted_project_id,
+                    employee_id=deleted_employee_id,
+                    competencia=deleted_competencia,
+                    scenario=deleted_scenario or DEFAULT_SCENARIO,
                 )
                 await self.session.commit()
             except Exception:
-                logger.exception("payables dynamic sync after delete_labor failed")
+                # Continua sem quebrar a exclusão (comportamento preservado), mas o log agora
+                # identifica o vínculo afetado para permitir reconciliação dirigida.
+                logger.exception(
+                    "payables dynamic sync after delete_labor failed project_id=%s employee_id=%s competencia=%s",
+                    deleted_project_id,
+                    deleted_employee_id,
+                    deleted_competencia,
+                )
 
     # --- Vehicle (alocação frota → projeto) ---
 

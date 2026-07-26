@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -13,7 +14,6 @@ from app.schemas.dashboard import DirectorSummary, FinancialDashboardSummary, Mo
 from app.services.company_finance_service import CompanyFinanceService
 from app.services.dashboard_service import DashboardService
 from app.services.employees_service import default_cost_reference
-from app.services.employee_cost_service import pj_cost_breakdown
 from app.services.fleet_service import FleetService, fleet_vehicle_to_read
 from app.services.project_structure_service import ProjectStructureService
 from app.services.projects_service import ProjectsService
@@ -22,7 +22,14 @@ from app.services.payroll_service import PayrollService
 from app.services.receivable_service import ReceivableService
 from app.services.users_service import UsersService
 from app.core.scenario import DEFAULT_SCENARIO, Scenario, coerce_scenario
-from app.utils.date_utils import iter_competencias_inclusive, normalize_competencia, period_last_n_months
+from app.utils.date_utils import (
+    iter_competencias_inclusive,
+    next_competencia,
+    normalize_competencia,
+    period_last_n_months,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _uuid(filters: dict[str, Any], key: str) -> UUID | None:
@@ -48,13 +55,6 @@ def _competencia_date(filters: dict[str, Any], key: str = "competencia") -> date
         y, m = int(s[0:4]), int(s[5:7])
         return date(y, m, 1)
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{key} inválido (use YYYY-MM).")
-
-
-def _month_bounds_local(comp: date) -> tuple[date, date]:
-    from calendar import monthrange
-
-    last = monthrange(comp.year, comp.month)[1]
-    return date(comp.year, comp.month, 1), date(comp.year, comp.month, last)
 
 
 def _debt_monthly_value(item: Any) -> float:
@@ -98,6 +98,43 @@ def _payroll_distribution_label(line: Any) -> str:
     if float(getattr(line, "administrative_cost", 0) or 0) > 0:
         return "Administrativo"
     return "—"
+
+
+def _payroll_component_label_from_name(name: str, *, fallback: str) -> str:
+    """Rótulo da COLUNA de componente a partir do nome do snapshot do CAP.
+
+    A geração grava o nome como "<Colaborador> — <Componente>" (ou só "<Colaborador>"
+    para a linha única). O sufixo após o último " — " é o componente. Isto é apenas
+    ROTULAÇÃO de coluna — a atribuição ao colaborador é 100% estrutural (ref_id); um nome
+    fora do padrão apenas cai na coluna de fallback, sem afetar valor nem total.
+    """
+    raw = (name or "").strip()
+    if " — " in raw:
+        suffix = raw.rsplit(" — ", 1)[1].strip()
+        if suffix:
+            return suffix
+    return fallback
+
+
+def _payroll_distribution_from_snapshots(pairs: list[tuple[str, float]]) -> str:
+    """Distribuição por Centro de Custo derivada dos próprios lançamentos do CAP (por valor).
+
+    Ex.: "Subterrâneo (71%) / Fiscalização AT (29%)". Substitui a antiga derivação via
+    build_payroll — agora reflete exatamente onde o CAP distribui a folha do colaborador.
+    """
+    agg: dict[str, float] = {}
+    total = 0.0
+    for cc, val in pairs:
+        key = (cc or "").strip() or "—"
+        agg[key] = agg.get(key, 0.0) + float(val or 0)
+        total += float(val or 0)
+    if not agg or total <= 0:
+        return "—"
+    parts = [
+        f"{cc} ({round(v / total * 100):.0f}%)"
+        for cc, v in sorted(agg.items(), key=lambda kv: -kv[1])
+    ]
+    return " / ".join(parts)
 
 
 def _payroll_cost_center_distribution(line: Any, proj_cc: dict) -> str:
@@ -177,9 +214,11 @@ class ReportService:
         "pj_custo_adicional", "custo_projetos", "custo_administrativo", "custo",
         "pix_tipo", "pix_chave",
     )
+    # Chaves FIXAS sensíveis do relatório de folha. Os componentes da remuneração NÃO
+    # entram aqui: vivem em `row["componentes"]` (colunas dinâmicas) e são redigidos em
+    # bloco, para que um componente novo nasça protegido em vez de vazar por omissão.
     _PAYROLL_REPORT_SENSITIVE_KEYS = (
-        "salario_base", "salario_liquido", "beneficios", "vr", "vt", "ajuda_custo",
-        "endividamentos", "endividamentos_itens", "outros", "total_folha", "pix_tipo", "pix_chave",
+        "endividamentos", "endividamentos_itens", "total_folha", "pix_tipo", "pix_chave",
     )
 
     async def generate_employees_report(
@@ -264,98 +303,126 @@ class ReportService:
         scenario: str | Scenario = DEFAULT_SCENARIO,
         include_sensitive: bool = True,
     ) -> dict[str, Any]:
-        """Folha de Pagamento (fechamento mensal): 1 linha por colaborador com o valor
-        efetivamente pago na competência (holerite real CLT / contratado PJ + VR +
-        ajuda de custo + endividamentos). Consolida tudo no backend (sem N+1).
+        """Folha de Pagamento (fechamento mensal): consolidação FIEL dos lançamentos do
+        Contas a Pagar referentes ao colaborador — é o documento enviado à consultoria de
+        folha, portanto deve refletir EXATAMENTE o que será pago.
 
-        NÃO altera o relatório de Colaboradores nem qualquer cálculo existente — só lê
-        os dados atuais (payroll, holerite real e endividamentos vinculados).
+        Regra de negócio (definitiva): o relatório NÃO reconstrói valores, NÃO acrescenta
+        folha não-alocada e NÃO usa o cadastro. Ele agrupa os snapshots do Contas a Pagar
+        (`payable_snapshots`) do mês de pagamento, por colaborador. A classificação do que
+        é folha usa a MESMA regra da tela do CAP (`app/services/payable_display.py`), sem
+        heurística de nome:
+          - FOLHA: linhas exibidas como "Colaborador" (type COLLABORATOR ou FIXED_COST com
+            categoria "Colaborador");
+          - Endividamento: linhas exibidas como "Endividamento" (vinculadas ao colaborador).
+        A atribuição da linha ao colaborador é ESTRUTURAL (ref_id → employee, direto para
+        COLLABORATOR e via CompanyFinancialItem.employee_id para os demais). MANUAL e demais
+        categorias ficam de fora — exatamente como na tela.
+
+        Invariante: Σ(relatório) = Σ(CAP referente ao colaborador), por CONSTRUÇÃO. Um novo
+        tipo de folha aparece automaticamente nos dois lugares (regra compartilhada).
+
+        Competência = mês TRABALHADO (rótulo); os pagamentos ocorrem no CAP do mês seguinte
+        (`payment_month`), que é o mês efetivamente lido.
         """
         from sqlalchemy import select as _select
         from app.models.employee import Employee
-        from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
         from app.models.company_finance import CompanyFinancialItem
+        from app.models.payable_snapshot import PayableOrigin, PayableSnapshot, PayableSnapshotType
+        from app.models.payment_component import PaymentVariableComponent
+        from app.services.employee_cost_service import PAYROLL_COMPONENT_FALLBACK_LABEL
+        from app.services.payable_display import is_collaborator_payroll, is_employee_debt
 
         comp = normalize_competencia(competencia or default_cost_reference())
         sc = coerce_scenario(scenario)
         comp_str = f"{comp.year:04d}-{comp.month:02d}"
-        _, month_end = _month_bounds_local(comp)
+        payment_month = next_competencia(comp)
 
-        # 1) Payroll consolidado (distribuição por projeto/administrativo + conjunto base).
-        payroll = await PayrollService(self.session).build_payroll(
-            competencia=comp, scenario=sc, project_id=None
-        )
-        line_by_emp = {line.employee_id: line for line in payroll.lines}
-
-        # 2) Holerite real (líquido + VR) da competência — 1 consulta.
-        overrides = (
-            await self.session.execute(
-                _select(EmployeeMonthlyPayrollOverride).where(
-                    EmployeeMonthlyPayrollOverride.competence_month == comp_str
-                )
-            )
-        ).scalars().all()
-        override_by_emp = {o.employee_id: o for o in overrides}
-
-        # 3) Endividamentos vinculados ao colaborador, vigentes na competência — 1 consulta.
-        endiv_items = (
-            await self.session.execute(
-                _select(CompanyFinancialItem).where(
-                    CompanyFinancialItem.tipo == "endividamento",
-                    CompanyFinancialItem.employee_id.is_not(None),
-                    CompanyFinancialItem.is_active.is_(True),
-                    (CompanyFinancialItem.start_date.is_(None))
-                    | (CompanyFinancialItem.start_date <= month_end),
-                    (CompanyFinancialItem.end_date.is_(None))
-                    | (CompanyFinancialItem.end_date >= comp),
-                )
-            )
-        ).scalars().all()
-        endiv_by_emp: dict[UUID, float] = {}
-        # Detalhe por colaborador: (descrição, valor) de cada endividamento vinculado, para a
-        # coluna "Detalhamento dos Endividamentos". A descrição usa item_description (novo);
-        # cai para o nome legado quando o item antigo não tem descrição própria.
-        endiv_detalhe_by_emp: dict[UUID, list[tuple[str, float]]] = {}
-        for it in endiv_items:
-            val = _debt_monthly_value(it)
-            endiv_by_emp[it.employee_id] = endiv_by_emp.get(it.employee_id, 0.0) + val
-            descr = (getattr(it, "item_description", None) or it.nome or "").strip()
-            endiv_detalhe_by_emp.setdefault(it.employee_id, []).append((descr, val))
-
-        # 3b) Custos fixos vinculados ao colaborador (COLABORADOR_MATRIZ), vigentes — 1 consulta.
-        custofixo_ids = set(
+        # 1) TODOS os lançamentos NÃO obsoletos do mês de pagamento (o que será pago).
+        snaps = list(
             (
                 await self.session.execute(
-                    _select(CompanyFinancialItem.employee_id).where(
-                        CompanyFinancialItem.tipo == "custo_fixo",
-                        CompanyFinancialItem.employee_id.is_not(None),
-                        CompanyFinancialItem.is_active.is_(True),
-                        (CompanyFinancialItem.start_date.is_(None))
-                        | (CompanyFinancialItem.start_date <= month_end),
-                        (CompanyFinancialItem.end_date.is_(None))
-                        | (CompanyFinancialItem.end_date >= comp),
+                    _select(PayableSnapshot).where(
+                        PayableSnapshot.month == payment_month,
+                        PayableSnapshot.is_obsolete.is_(False),
                     )
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
 
-        # 3c) Centros de custo dos projetos alocados (para a coluna opcional "Distribuição").
-        proj_ids = {
-            s.project_id for line in payroll.lines for s in (line.by_project or []) if s.project_id
+        # 2) Resolução ESTRUTURAL do colaborador de cada lançamento (sem heurística de nome):
+        #    - Componente Variável (origin=VARIABLE) → ref_id é payment_variable_components.id
+        #      (vale para projeto E custo fixo); resolve o employee pelo componente;
+        #    - COLLABORATOR → ref_id é o próprio Employee.id;
+        #    - FIXED_COST/ENDIVIDAMENTO/FINANCIAL → ref_id é um CompanyFinancialItem cujo
+        #      employee_id aponta o colaborador (quando vinculado).
+        variable_ref_ids = {
+            s.ref_id for s in snaps if s.ref_id is not None and (s.origin or "") == PayableOrigin.VARIABLE.value
         }
-        proj_cc: dict[UUID, str] = {}
-        if proj_ids:
-            prows = (
-                await self.session.execute(_select(Project).where(Project.id.in_(proj_ids)))
-            ).scalars().all()
-            proj_cc = {p.id: (p.cost_center or "") for p in prows}
+        variable_employee: dict[UUID, UUID] = {}
+        if variable_ref_ids:
+            var_rows = (
+                await self.session.execute(
+                    _select(PaymentVariableComponent.id, PaymentVariableComponent.employee_id).where(
+                        PaymentVariableComponent.id.in_(variable_ref_ids)
+                    )
+                )
+            ).all()
+            variable_employee = {cid: eid for cid, eid in var_rows}
 
-        # 4) SOMENTE colaboradores com MOVIMENTAÇÃO na competência (regra do relatório):
-        #    custo em projeto/administrativo (payroll com total > 0) OU holerite OU
-        #    endividamento OU custo fixo vinculado. Elimina desligados/sem uso/esquecidos.
-        moved_ids = {eid for eid, ln in line_by_emp.items() if float(getattr(ln, "grand_total", 0) or 0) > 0}
-        moved_ids |= set(override_by_emp) | set(endiv_by_emp) | custofixo_ids
-        emp_ids = moved_ids
+        company_ref_ids = {
+            s.ref_id
+            for s in snaps
+            if s.ref_id is not None
+            and s.type != PayableSnapshotType.COLLABORATOR
+            and (s.origin or "") != PayableOrigin.VARIABLE.value
+        }
+        item_employee: dict[UUID, UUID] = {}
+        if company_ref_ids:
+            item_rows = (
+                await self.session.execute(
+                    _select(CompanyFinancialItem.id, CompanyFinancialItem.employee_id).where(
+                        CompanyFinancialItem.id.in_(company_ref_ids),
+                        CompanyFinancialItem.employee_id.is_not(None),
+                    )
+                )
+            ).all()
+            item_employee = {iid: eid for iid, eid in item_rows}
+
+        def _resolve_employee_id(s: PayableSnapshot) -> UUID | None:
+            if (s.origin or "") == PayableOrigin.VARIABLE.value:
+                return variable_employee.get(s.ref_id) if s.ref_id is not None else None
+            if s.type == PayableSnapshotType.COLLABORATOR:
+                return s.ref_id
+            return item_employee.get(s.ref_id) if s.ref_id is not None else None
+
+        # 3) Classificação (regra ÚNICA da tela) + agregação por colaborador.
+        components_by_emp: dict[UUID, dict[str, float]] = {}
+        endiv_by_emp: dict[UUID, float] = {}
+        endiv_detalhe_by_emp: dict[UUID, list[tuple[str, float]]] = {}
+        distrib_pairs_by_emp: dict[UUID, list[tuple[str, float]]] = {}
+        for s in snaps:
+            eid = _resolve_employee_id(s)
+            if eid is None:
+                continue  # lançamento não atribuível a colaborador (não é folha)
+            value = round(float(s.amount_final or 0), 2)
+            if is_collaborator_payroll(type_=s.type, category=s.category):
+                label = _payroll_component_label_from_name(
+                    s.name, fallback=PAYROLL_COMPONENT_FALLBACK_LABEL
+                )
+                bucket = components_by_emp.setdefault(eid, {})
+                bucket[label] = round(bucket.get(label, 0.0) + value, 2)
+                distrib_pairs_by_emp.setdefault(eid, []).append((s.cost_center or "—", value))
+            elif is_employee_debt(type_=s.type, category=s.category):
+                endiv_by_emp[eid] = round(endiv_by_emp.get(eid, 0.0) + value, 2)
+                descr = (getattr(s, "item_description", None) or s.name or "").strip()
+                endiv_detalhe_by_emp.setdefault(eid, []).append((descr, value))
+            # demais grupos (Manual, Custo diverso, Veículos, Antecipação): NÃO são folha.
+
+        # 4) Colaboradores com algo a pagar no mês (folha OU endividamento).
+        emp_ids = set(components_by_emp) | set(endiv_by_emp)
         emp_by_id: dict[UUID, Employee] = {}
         if emp_ids:
             emps = (
@@ -363,8 +430,7 @@ class ReportService:
             ).scalars().all()
             emp_by_id = {e.id: e for e in emps}
 
-        # Centro de Custo TEMPORAL: resolve o centro VIGENTE na competência do relatório
-        # (histórico), em lote (sem N+1). Não usa mais o cache `employees.cost_center`.
+        # Centro de Custo TEMPORAL vigente na competência trabalhada (histórico), em lote.
         from app.services.cost_center_history_service import EmployeeCostCenterService
 
         cc_by_emp = await EmployeeCostCenterService(self.session).resolve_map(emp_ids, comp)
@@ -377,55 +443,41 @@ class ReportService:
             ),
         )
 
+        # Colunas monetárias = união dos componentes presentes no mês (ordem de aparição).
+        # Sem lista fixa: um componente novo no CAP entra sozinho, aqui e na exportação.
+        component_columns: list[str] = []
+        for eid in ordered_ids:
+            for label in components_by_emp.get(eid, {}):
+                if label not in component_columns:
+                    component_columns.append(label)
+
         rows: list[dict[str, Any]] = []
         qtd_clt = qtd_pj = 0
-        t_sal = t_ben = t_vr = t_endiv = t_ajuda = t_geral = 0.0
+        totals_by_component: dict[str, float] = {c: 0.0 for c in component_columns}
+        t_endiv = t_geral = 0.0
         for eid in ordered_ids:
             emp = emp_by_id.get(eid)
             if emp is None:
                 continue
-            line = line_by_emp.get(eid)
             tipo = (emp.employment_type or "CLT").strip().upper()
-            ov = override_by_emp.get(eid)
             endiv = round(float(endiv_by_emp.get(eid, 0.0)), 2)
             endiv_itens = [
                 {"descricao": d or "Endividamento", "valor": round(float(v), 2)}
                 for d, v in endiv_detalhe_by_emp.get(eid, [])
             ]
-
             if tipo == "PJ":
                 qtd_pj += 1
-                pj = pj_cost_breakdown(emp)
-                salario_base = round(float(pj["salary_base"]), 2)
-                salario_pago = salario_base  # PJ: valor contratado é o que se paga
-                vr_real = None
-                ajuda = round(float(pj["ajuda_custo"]), 2)
             else:
                 qtd_clt += 1
-                salario_base = float(emp.salary_base) if emp.salary_base is not None else None
-                # "Real": só quando há holerite lançado (senão em branco).
-                salario_pago = (
-                    round(float(ov.net_salary_amount), 2)
-                    if (ov is not None and ov.net_salary_amount is not None)
-                    else None
-                )
-                vr_real = (
-                    round(float(ov.vr_amount), 2)
-                    if (ov is not None and ov.vr_amount is not None)
-                    else None
-                )
-                ajuda = None
 
-            beneficios = None  # módulo de benefícios futuro (coluna preservada)
-            total = round(
-                (salario_pago or 0.0) + (vr_real or 0.0) + (beneficios or 0.0) + (ajuda or 0.0) + endiv,
-                2,
-            )
+            componentes = components_by_emp.get(eid, {})
+            comp_values: dict[str, float | None] = {}
+            for coluna in component_columns:
+                v = componentes.get(coluna)
+                comp_values[coluna] = round(float(v), 2) if v else None
+                totals_by_component[coluna] += float(v or 0.0)
 
-            t_sal += salario_pago or 0.0
-            t_vr += vr_real or 0.0
-            t_ben += beneficios or 0.0
-            t_ajuda += ajuda or 0.0
+            total = round(sum(float(v or 0.0) for v in comp_values.values()) + endiv, 2)
             t_endiv += endiv
             t_geral += total
 
@@ -436,22 +488,17 @@ class ReportService:
                     "cargo": emp.role_title or "",
                     "tipo": tipo,
                     "status": "Ativo" if emp.is_active else "Inativo",
-                    # Coluna principal: Centro de Custo cadastrado no colaborador (Parte 6).
+                    # Coluna principal: Centro de Custo cadastrado no colaborador.
                     "centro_custo": (cc_by_emp.get(eid) or "—"),
-                    # Coluna auxiliar (opcional): distribuição por Centro de Custo (Parte 7),
-                    # derivada da alocação em projetos — informação preservada.
-                    "distribuicao": _payroll_cost_center_distribution(line, proj_cc),
-                    "salario_base": salario_base,
-                    "salario_liquido": salario_pago,
-                    "beneficios": beneficios,
-                    "vr": vr_real,
-                    "vt": None,  # futuro
-                    "ajuda_custo": ajuda,
+                    # Coluna auxiliar: distribuição por Centro de Custo, derivada dos próprios
+                    # lançamentos do CAP (onde a folha do colaborador foi distribuída).
+                    "distribuicao": _payroll_distribution_from_snapshots(
+                        distrib_pairs_by_emp.get(eid, [])
+                    ),
+                    # Componentes da folha (chaves = rótulos dos lançamentos do CAP).
+                    "componentes": comp_values,
                     "endividamentos": endiv if endiv > 0 else None,
-                    # Itens individuais para a coluna "Detalhamento dos Endividamentos"
-                    # (formatação/summarização feita no render). Vazio quando não há.
                     "endividamentos_itens": endiv_itens,
-                    "outros": None,  # futuro
                     "total_folha": total,
                     "pix_tipo": emp.pix_key_type or "",
                     "pix_chave": emp.pix_key or "",
@@ -463,23 +510,42 @@ class ReportService:
             "scenario": sc.value,
             "qtd_clt": qtd_clt,
             "qtd_pj": qtd_pj,
-            "total_salarios": round(t_sal, 2),
-            "total_beneficios": round(t_ben, 2),
-            "total_vr": round(t_vr, 2),
+            "totais_componentes": {c: round(v, 2) for c, v in totals_by_component.items()},
             "total_endividamentos": round(t_endiv, 2),
-            "total_ajuda_custo": round(t_ajuda, 2),
             "total_geral": round(t_geral, 2),
         }
         if not include_sensitive:
             # Folha sem employees.sensitive: omite valores por linha e zera os totais monetários.
+            # A lista de chaves sensíveis é DERIVADA (inclui os componentes dinâmicos), para
+            # que um componente novo nasça protegido em vez de vazar por omissão.
             rows = [
-                {k: ("" if k in self._PAYROLL_REPORT_SENSITIVE_KEYS else v) for k, v in row.items()}
+                {
+                    k: (
+                        {c: "" for c in component_columns}
+                        if k == "componentes"
+                        else ("" if k in self._PAYROLL_REPORT_SENSITIVE_KEYS else v)
+                    )
+                    for k, v in row.items()
+                }
                 for row in rows
             ]
             summary = {
-                k: (0 if k.startswith("total_") else v) for k, v in summary.items()
+                k: (
+                    {c: 0 for c in component_columns}
+                    if k == "totais_componentes"
+                    else (0 if k.startswith("total_") else v)
+                )
+                for k, v in summary.items()
             }
-        return {"competencia_ref": comp.isoformat(), "scenario": sc.value, "rows": rows, "summary": summary}
+        return {
+            "competencia_ref": comp.isoformat(),
+            "scenario": sc.value,
+            # Colunas monetárias do mês, na ordem de exibição — a exportação monta o
+            # cabeçalho a partir daqui (sem lista fixa).
+            "component_columns": component_columns,
+            "rows": rows,
+            "summary": summary,
+        }
 
     async def generate_vehicles_report(
         self, *, active_only: bool, include_sensitive: bool = True

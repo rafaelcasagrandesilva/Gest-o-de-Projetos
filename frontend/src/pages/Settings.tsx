@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { usePermission } from "@/hooks/usePermission";
+import { PaymentComponentTypesSettings } from "@/components/settings/PaymentComponentTypesSettings";
 import { downloadAuditLogExport } from "@/services/audit";
 import { fetchSettings, updateSettings, type SystemSettings } from "@/services/settings";
 import { isAxiosError } from "axios";
@@ -366,6 +367,8 @@ export function Settings() {
               {saving ? "Salvando…" : "Salvar configurações"}
             </button>
           </form>
+
+          <PaymentComponentTypesSettings canEdit={canEditSettings} />
         </>
       )}
 

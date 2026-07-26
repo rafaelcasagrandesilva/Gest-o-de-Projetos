@@ -6,7 +6,7 @@ import { StatusBadge, type StatusTone } from "@/components/finance/StatusBadge";
 type SortDir = "asc" | "desc";
 
 /** Valores redigidos por "Dados sensíveis": backend envia `valor_referencia = null`. */
-function isRedacted(item: CompanyFinancialItem): boolean {
+export function isRedacted(item: CompanyFinancialItem): boolean {
   return item.valor_referencia == null;
 }
 
@@ -45,8 +45,13 @@ function gridValueForMonth(item: CompanyFinancialItem, mes: string): number | nu
   return p && p.valor != null && p.valor > 0 ? p.valor : null;
 }
 
+/** Quantidade de lançamentos que compõem o valor do mês (>1 → indicador discreto). */
+function entriesCountForMonth(item: CompanyFinancialItem, mes: string): number {
+  return item.pagamentos.find((x) => x.mes === mes)?.count ?? 0;
+}
+
 /** Valor Mensal — regra do CAP: grade (se lançada) senão valor de referência. Null se redigido. */
-function valorMensalOf(item: CompanyFinancialItem, competencia: string): number | null {
+export function valorMensalOf(item: CompanyFinancialItem, competencia: string): number | null {
   const g = gridValueForMonth(item, competencia);
   if (g != null) return g;
   return item.valor_referencia; // number | null
@@ -66,7 +71,7 @@ function valorAnualOf(item: CompanyFinancialItem, competencia: string): number |
 }
 
 /** Pago no mês — espelho do CAP (amount_paid); null quando redigido, 0 quando sem lançamento. */
-function capPaidOf(item: CompanyFinancialItem): number | null {
+export function capPaidOf(item: CompanyFinancialItem): number | null {
   if (isRedacted(item)) return null;
   return item.cap_amount_paid ?? 0;
 }
@@ -79,20 +84,58 @@ function saldoMensalOf(item: CompanyFinancialItem, competencia: string): number 
   return mensal - pago;
 }
 
-/** Status financeiro espelhado do Contas a Pagar; null quando ainda não há lançamento. */
-function capStatusDisplay(item: CompanyFinancialItem): { label: string; tone: StatusTone } | null {
+/**
+ * Status CONSOLIDADO do item (fonte ÚNICA da coluna STATUS e do filtro de Status).
+ * Espelha o Contas a Pagar; `null` quando ainda não há título na competência.
+ * Extensível: novos status entram aqui e propagam para exibição e filtro sem duplicar lógica.
+ */
+export type FixedCostStatusKey = "CANCELADO" | "PAGO" | "PARCIAL" | "ABERTO";
+
+export function fixedCostStatusKey(item: CompanyFinancialItem): FixedCostStatusKey | null {
   if (!item.cap_has_line) return null;
-  if (item.cap_is_obsolete) return { label: "Cancelado", tone: "red" };
+  if (item.cap_is_obsolete) return "CANCELADO";
   switch (item.cap_status) {
     case "PAGO":
-      return { label: "Pago", tone: "green" };
+      return "PAGO";
     case "PARCIAL":
-      return { label: "Parcial", tone: "blue" };
+      return "PARCIAL";
     case "ABERTO":
-      return { label: "Em aberto", tone: "amber" };
+      return "ABERTO";
     default:
       return null;
   }
+}
+
+const FIXED_COST_STATUS_META: Record<FixedCostStatusKey, { label: string; tone: StatusTone }> = {
+  CANCELADO: { label: "Cancelado", tone: "red" },
+  PAGO: { label: "Pago", tone: "green" },
+  PARCIAL: { label: "Parcial", tone: "blue" },
+  ABERTO: { label: "Em aberto", tone: "amber" },
+};
+
+/** Status financeiro espelhado do Contas a Pagar; null quando ainda não há lançamento. */
+function capStatusDisplay(item: CompanyFinancialItem): { label: string; tone: StatusTone } | null {
+  const key = fixedCostStatusKey(item);
+  return key ? FIXED_COST_STATUS_META[key] : null;
+}
+
+/** Filtro de Status (Custos Fixos) — extensível. Reutiliza o status consolidado (sem recálculo). */
+export type FixedCostStatusFilter = "ALL" | FixedCostStatusKey;
+
+export const FIXED_COST_STATUS_FILTER_OPTIONS: { key: FixedCostStatusFilter; label: string }[] = [
+  { key: "ALL", label: "Todos" },
+  { key: "ABERTO", label: "Em aberto" },
+  { key: "PARCIAL", label: "Parcial" },
+  { key: "PAGO", label: "Pago" },
+  // Futuro (extensível): { key: "CANCELADO", label: "Cancelado" }, etc.
+];
+
+export function matchesFixedCostStatus(
+  item: CompanyFinancialItem,
+  filter: FixedCostStatusFilter,
+): boolean {
+  if (filter === "ALL") return true;
+  return fixedCostStatusKey(item) === filter;
 }
 
 /** Nome com ícones discretos de Processo Judicial (⚖️) e Renegociação (🔄) — só no Extrato. */
@@ -132,7 +175,11 @@ type Column = {
   cell: (i: CompanyFinancialItem) => React.ReactNode;
 };
 
-function buildColumns(tipo: TipoFinanceiro, competencia: string): Column[] {
+function buildColumns(
+  tipo: TipoFinanceiro,
+  competencia: string,
+  onOpenEntries?: (item: CompanyFinancialItem) => void,
+): Column[] {
   const categoria: Column = {
     key: "category",
     label: "Categoria",
@@ -248,9 +295,30 @@ function buildColumns(tipo: TipoFinanceiro, competencia: string): Column[] {
       align: "right",
       sortable: true,
       sortValue: (i) => valorMensalOf(i, competencia) ?? -1,
-      cell: (i) => (
-        <span className="tabular-nums text-slate-700">{formatCurrencyOrDash(valorMensalOf(i, competencia))}</span>
-      ),
+      // Caso comum (0/1 lançamento): apenas o valor (clicável para abrir o detalhamento, sem
+      // ícone). Indicador discreto "(N)" só quando há múltiplos lançamentos na competência.
+      cell: (i) => {
+        const value = (
+          <span className="tabular-nums text-slate-700">{formatCurrencyOrDash(valorMensalOf(i, competencia))}</span>
+        );
+        if (!onOpenEntries || isRedacted(i)) return value;
+        const count = entriesCountForMonth(i, competencia);
+        return (
+          <button
+            type="button"
+            onClick={() => onOpenEntries(i)}
+            className="inline-flex items-center justify-end gap-1.5 rounded hover:text-indigo-700 hover:underline"
+            title="Lançamentos da competência"
+          >
+            {value}
+            {count > 1 && (
+              <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200">
+                {count}
+              </span>
+            )}
+          </button>
+        );
+      },
     },
     {
       key: "valor_anual",
@@ -329,6 +397,8 @@ export function CompanyFinanceAnalyticTable({
   readOnly = false,
   readOnlyTitle,
   onToggleRequired,
+  onOpenComponents,
+  onOpenEntries,
 }: {
   items: CompanyFinancialItem[];
   tipo: TipoFinanceiro;
@@ -337,8 +407,15 @@ export function CompanyFinanceAnalyticTable({
   readOnly?: boolean;
   readOnlyTitle?: string;
   onToggleRequired?: (itemId: string, value: boolean) => void | Promise<void>;
+  /** Abre o modal de Componentes Variáveis do colaborador (só custo fixo vinculado). */
+  onOpenComponents?: (item: CompanyFinancialItem) => void;
+  /** Abre o modal de Lançamentos da Competência (genérico). */
+  onOpenEntries?: (item: CompanyFinancialItem) => void;
 }) {
-  const columns = useMemo(() => buildColumns(tipo, competencia), [tipo, competencia]);
+  const columns = useMemo(
+    () => buildColumns(tipo, competencia, onOpenEntries),
+    [tipo, competencia, onOpenEntries],
+  );
   const showRequiredColumn = true;
   const [sortKey, setSortKey] = useState<string>("nome");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -431,6 +508,11 @@ export function CompanyFinanceAnalyticTable({
                     Obrigatório
                   </th>
                 )}
+                {onOpenComponents && (
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Componentes
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -464,6 +546,22 @@ export function CompanyFinanceAnalyticTable({
                           </span>
                         )}
                       </label>
+                    </td>
+                  )}
+                  {onOpenComponents && (
+                    <td className="px-3 py-2 text-left">
+                      {item.employee_id ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenComponents(item)}
+                          className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                          title="Componentes Variáveis de Pagamento deste colaborador na competência"
+                        >
+                          Componentes
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-300">—</span>
+                      )}
                     </td>
                   )}
                 </tr>

@@ -4,8 +4,23 @@ import calendar
 from datetime import date
 
 
-def normalize_competencia(d: date) -> date:
-    """Competência sempre como primeiro dia do mês (evita mismatch em queries e unique)."""
+def normalize_competencia(d: date | str) -> date:
+    """Competência sempre como primeiro dia do mês (evita mismatch em queries e unique).
+
+    Aceita `date`/`datetime` ou string ISO (`YYYY-MM-DD` / `YYYY-MM`). A tolerância a string
+    é deliberada: valores de competência circulam serializados (payloads JSON e dicionários
+    de auditoria via `model_to_dict`, que converte datas com `.isoformat()`). Antes, uma
+    string chegava aqui e quebrava com `AttributeError` — em `delete_labor` esse erro era
+    engolido por um `except Exception`, deixando o lançamento de Contas a Pagar do mês
+    seguinte órfão. Entrada inválida falha ALTO (ValueError/TypeError), nunca em silêncio.
+    """
+    if isinstance(d, str):
+        raw = d.strip()
+        if len(raw) == 7:  # YYYY-MM
+            raw = f"{raw}-01"
+        d = date.fromisoformat(raw)
+    if not isinstance(d, date):
+        raise TypeError(f"Competência deve ser date ou string ISO; recebido {type(d).__name__}.")
     return date(d.year, d.month, 1)
 
 

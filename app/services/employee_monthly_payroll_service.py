@@ -76,6 +76,7 @@ class EmployeeMonthlyPayrollService:
         else:
             row.net_salary_amount = data["net_salary_amount"]
             row.vr_amount = data["vr_amount"]
+            row.vacation_advance_amount = data["vacation_advance_amount"]
             row.notes = data["notes"]
 
         await self.session.flush()

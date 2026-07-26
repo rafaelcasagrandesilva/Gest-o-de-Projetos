@@ -14,7 +14,7 @@ class EmployeeCostCenterDBTests(unittest.IsolatedAsyncioTestCase):
 
         from app.database.session import AsyncSessionLocal, engine
         from app.models.employee import Employee
-        from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
+        from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
         from app.models.project import Project
         from app.services.employees_service import EmployeesService
         from app.services.report_service import ReportService
@@ -84,13 +84,15 @@ class EmployeeCostCenterDBTests(unittest.IsolatedAsyncioTestCase):
             rows_all = await svc.list_employees(search=f"CC {tag}", cost_center=None, limit=50)
             self.assertEqual(len({r.full_name for r in rows_all}), 4)
 
-            # --- Folha: somente colaboradores com MOVIMENTAÇÃO na competência ---
-            comp = date(2099, 7, 1)
-            # e_match: cria holerite → deve aparecer. e_null: sem movimentação → não aparece.
+            # --- Folha: só quem tem lançamento no CAP (mês de pagamento) aparece ---
+            comp = date(2099, 7, 1)  # competência trabalhada; paga no CAP de 2099-08
+            # e_match: tem folha no CAP → aparece. e_null/e_other: sem lançamento → não aparecem.
             s.add(
-                EmployeeMonthlyPayrollOverride(
-                    employee_id=e_match.id, competence_month="2099-07",
-                    net_salary_amount=1234.0, vr_amount=0.0,
+                PayableSnapshot(
+                    month=date(2099, 8, 1), type=PayableSnapshotType.COLLABORATOR,
+                    ref_id=e_match.id, name=e_match.full_name, cost_center="Projeto",
+                    category="Mão de obra", amount_original=1234.0, amount_final=1234.0,
+                    amount_paid=0, due_date=date(2099, 8, 10), paid=False,
                 )
             )
             await s.flush()
@@ -106,7 +108,7 @@ class EmployeeCostCenterDBTests(unittest.IsolatedAsyncioTestCase):
 
             # Limpeza.
             await s.execute(
-                text("DELETE FROM employee_monthly_payroll_overrides WHERE employee_id = :e"),
+                text("DELETE FROM payable_snapshots WHERE ref_id = :e"),
                 {"e": str(e_match.id)},
             )
             for e in (e_match, e_other, e_shared, e_null):

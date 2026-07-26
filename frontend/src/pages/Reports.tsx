@@ -60,6 +60,15 @@ function monthDefault(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/** Mês de PAGAMENTO da folha: a competência trabalhada é paga no Contas a Pagar do mês seguinte. */
+function nextCompetenciaLabel(competencia: string): string {
+  const [y, m] = competencia.split("-").map(Number);
+  if (!y || !m) return "—";
+  const year = m === 12 ? y + 1 : y;
+  const month = m === 12 ? 1 : m + 1;
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
 export function Reports() {
   const { user } = useAuth();
   const { globalScenario } = useScenario();
@@ -348,7 +357,7 @@ export function Reports() {
 
         {(type === "employees" || type === "payroll") && (
           <div className="border-t border-slate-100 pt-4">
-            <Field label={type === "payroll" ? "Competência da folha" : "Competência de referência do custo"}>
+            <Field label={type === "payroll" ? "Competência da folha (mês trabalhado)" : "Competência de referência do custo"}>
               <input
                 type="month"
                 value={competencia}
@@ -356,6 +365,13 @@ export function Reports() {
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
               />
             </Field>
+            {type === "payroll" && (
+              <p className="mt-2 text-xs text-slate-500">
+                A folha da competência <strong>{competencia}</strong> é paga no Contas a Pagar de{" "}
+                <strong>{nextCompetenciaLabel(competencia)}</strong>. Para conferir contra a tela de
+                Contas a Pagar, compare com o mês de pagamento — não com o mesmo mês.
+              </p>
+            )}
           </div>
         )}
 

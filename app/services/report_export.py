@@ -419,6 +419,22 @@ def _format_endividamentos_detalhe(itens: list[dict[str, Any]] | None, *, summar
     return full
 
 
+def _next_competencia_label(competencia: str) -> str:
+    """Mês de PAGAMENTO da folha (competência trabalhada + 1), para o cabeçalho do relatório.
+
+    O Contas a Pagar do mês M quita a folha da competência M-1; explicitar isso evita a
+    leitura equivocada de que o relatório de X deveria bater com o CAP de X.
+    """
+    raw = (competencia or "").strip()
+    try:
+        year, month = int(raw[:4]), int(raw[5:7])
+    except (ValueError, IndexError):
+        return "—"
+    if not 1 <= month <= 12:
+        return "—"
+    return f"{year + 1}-01" if month == 12 else f"{year}-{month + 1:02d}"
+
+
 def render_payroll_bytes(
     data: dict[str, Any], fmt: str, ctx: ReportContext | None = None
 ) -> tuple[bytes, str, str]:
@@ -428,30 +444,27 @@ def render_payroll_bytes(
     """
     s = data.get("summary") or {}
     summarize_detalhe = fmt != "xlsx"  # PDF resume quando faltar espaço; XLSX completo.
+    # Colunas monetárias DINÂMICAS: vêm dos componentes que a folha do mês realmente
+    # gerou. Um componente novo (ex.: Férias CLT) aparece sem alterar este render.
+    component_columns: list[str] = list(data.get("component_columns") or [])
     headers = [
         "Nome", "E-mail", "Cargo", "Tipo", "Status",
         "Centro de Custo", "Distribuição",
-        "Salário Base", "Salário Líquido / Contratado", "Benefícios", "VR",
-        "VT", "Ajuda de custo", "Endividamentos", "Detalhamento dos Endividamentos",
-        "Outros pagamentos",
+        *component_columns,
+        "Endividamentos", "Detalhamento dos Endividamentos",
         "Total da Folha", "PIX Tipo", "PIX Chave",
     ]
     rows: list[list[Any]] = []
     for r in data["rows"]:
+        componentes = r.get("componentes") or {}
         rows.append(
             [
                 r["nome"], r.get("email") or "", r.get("cargo") or "", r["tipo"], r.get("status") or "",
                 r.get("centro_custo") or "—",
                 r.get("distribuicao") or "—",
-                format_brl(r.get("salario_base")),
-                format_brl(r.get("salario_liquido")),
-                format_brl(r.get("beneficios")),
-                format_brl(r.get("vr")),
-                format_brl(r.get("vt")),
-                format_brl(r.get("ajuda_custo")),
+                *[format_brl(componentes.get(c)) for c in component_columns],
                 format_brl(r.get("endividamentos")),
                 _format_endividamentos_detalhe(r.get("endividamentos_itens"), summarize=summarize_detalhe),
-                format_brl(r.get("outros")),
                 format_brl(r.get("total_folha")),
                 r.get("pix_tipo") or "",
                 r.get("pix_chave") or "",
@@ -459,31 +472,26 @@ def render_payroll_bytes(
         )
 
     # Resumo executivo (antes da tabela — igual aos demais relatórios).
+    competencia_lbl = s.get("competencia") or data.get("competencia_ref") or ""
     meta = _ident_meta(ctx, len(rows)) + [
-        f"Competência: {s.get('competencia') or data.get('competencia_ref')}",
+        f"Competência da folha (mês trabalhado): {competencia_lbl}",
+        f"Pagamento no Contas a Pagar de: {_next_competencia_label(competencia_lbl)}",
         f"Cenário: {data.get('scenario') or 'REALIZADO'}",
         f"Colaboradores CLT: {s.get('qtd_clt', 0)}; PJ: {s.get('qtd_pj', 0)}",
-        f"Total Salários: {format_brl(s.get('total_salarios'))}",
-        f"Total Benefícios: {format_brl(s.get('total_beneficios'))}",
-        f"Total VR: {format_brl(s.get('total_vr'))}",
+    ]
+    totais_componentes = s.get("totais_componentes") or {}
+    meta += [f"Total {c}: {format_brl(totais_componentes.get(c))}" for c in component_columns]
+    meta += [
         f"Total Endividamentos: {format_brl(s.get('total_endividamentos'))}",
-        f"Total Ajuda de Custo: {format_brl(s.get('total_ajuda_custo'))}",
         f"TOTAL GERAL DA FOLHA: {format_brl(s.get('total_geral'))}",
     ]
 
-    # Linha de totais (posicional, alinhada às colunas de valor).
-    total_base = sum(float(r.get("salario_base") or 0) for r in data["rows"])
+    # Linha de totais — alinhada posicionalmente ao cabeçalho dinâmico.
     totals_row = [
         "TOTAIS", "", "", "", "", "", "",
-        format_brl(total_base),
-        format_brl(s.get("total_salarios")),
-        format_brl(s.get("total_beneficios")),
-        format_brl(s.get("total_vr")),
-        "",  # VT (futuro)
-        format_brl(s.get("total_ajuda_custo")),
+        *[format_brl(totais_componentes.get(c)) for c in component_columns],
         format_brl(s.get("total_endividamentos")),
         "",  # Detalhamento dos Endividamentos (sem total)
-        "",  # Outros (futuro)
         format_brl(s.get("total_geral")),
         "", "",
     ]

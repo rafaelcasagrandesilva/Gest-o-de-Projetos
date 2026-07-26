@@ -27,6 +27,9 @@ class EmployeeMonthlyPayrollOverride(TimestampUUIDMixin, Base):
     competence_month: Mapped[str] = mapped_column(String(7), nullable=False)
     net_salary_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     vr_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # Adiantamento de férias (opcional). Gera um lançamento independente "Férias CLT" no
+    # Contas a Pagar; NÃO é somado ao salário nem altera o custo gerencial do projeto.
+    vacation_advance_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     employee: Mapped["Employee"] = relationship("Employee")

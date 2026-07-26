@@ -44,6 +44,11 @@ class PayableOrigin(str, enum.Enum):
     MANUAL = "MANUAL"
     PAYROLL = "PAYROLL"
     ANTECIPACAO = "ANTECIPACAO"
+    # Componente Variável de Pagamento (Ajuda de custo, Reembolso, Diária, …).
+    # ref_id = payment_variable_components.id. A sincronização (create/edit/delete do
+    # componente reconstrói o snapshot na mesma transação) é a ÚNICA fonte de verdade —
+    # a reconciliação NÃO decide sobre estes (origin_is_missing retorna None).
+    VARIABLE = "VARIABLE"
 
 
 def default_origin_for_type(t: "PayableSnapshotType") -> str:
@@ -79,6 +84,7 @@ class PayableSnapshot(TimestampUUIDMixin, Base):
             "name",
             "category",
             "cost_center",
+            "entry_id",
             name="uq_payable_snapshot_identity",
         ),
     )
@@ -87,6 +93,18 @@ class PayableSnapshot(TimestampUUIDMixin, Base):
     type: Mapped[PayableSnapshotType] = mapped_column(PAYABLE_SNAPSHOT_TYPE_DB, nullable=False, index=True)
 
     ref_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True, index=True)
+    # Vínculo preciso 1:1 com o LANÇAMENTO de origem (company_financial_payments.id),
+    # para Custos Fixos/Endividamento corporativos com múltiplos lançamentos na mesma
+    # competência. `ref_id` continua apontando para o ITEM (CompanyFinancialItem) — usado
+    # em metadados, centro de custo e exclusão por item; `entry_id` é a chave da geração,
+    # sincronização e reconciliação por lançamento. NULL em linhas não-corporativas
+    # (projeto/colaborador/antecipação/manual) e em legados até o backfill.
+    entry_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("company_financial_payments.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     project_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
     )

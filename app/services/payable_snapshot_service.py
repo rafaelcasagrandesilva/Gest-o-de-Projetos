@@ -18,7 +18,9 @@ from app.models.company_finance import (
     CompanyFinancialItemType,
     CompanyFinancialPayment,
 )
+from app.models.employee import Employee
 from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
+from app.models.payment_component import PaymentVariableComponent
 from app.models.payable_payment import PayablePayment
 from app.models.payable_snapshot import PayableOrigin, PayableSnapshot, PayableSnapshotType
 from app.models.payable_snapshot_generation import PayableSnapshotGeneration
@@ -728,60 +730,207 @@ class PayableSnapshotService:
             return False
         return True
 
-    async def _company_finance_grid_value(self, *, item_id: UUID, comp: date) -> Decimal | None:
-        """Valor informado na grade mensal (`company_financial_payments`) da competência.
 
-        É o "valor oficial da competência": quando presente, o Contas a Pagar passa a usá-lo
-        EXCLUSIVAMENTE (não importa se maior/menor/igual ao valor de referência); NÃO gera
-        saldo/crédito/ajuste — apenas define o valor. Ausente → None (o chamador cai no valor
-        de referência como fallback).
+    async def _company_finance_entries_for_month(
+        self, *, item_id: UUID, comp: date
+    ) -> list[CompanyFinancialPayment]:
+        """Lançamentos (grade) de um item na competência, ordenados por vencimento → criação.
+
+        Ordenação estável e determinística (requisito de UX): `due_date` ascendente (NULLs por
+        último) e, no empate, `created_at`. Não depende da ordem de inserção pelo usuário.
         """
-        val = await self.session.scalar(
-            select(CompanyFinancialPayment.valor).where(
-                CompanyFinancialPayment.item_id == item_id,
-                CompanyFinancialPayment.competencia == normalize_competencia(comp),
-            )
-        )
-        return _money2(val) if val is not None else None
-
-    async def _company_finance_grid_map(
-        self, item_ids: list[UUID], comp: date
-    ) -> dict[UUID, Decimal]:
-        """Mapa item_id → valor da grade na competência (lote; usado pela geração)."""
-        if not item_ids:
-            return {}
         rows = (
             await self.session.execute(
-                select(CompanyFinancialPayment.item_id, CompanyFinancialPayment.valor).where(
-                    CompanyFinancialPayment.item_id.in_(item_ids),
+                select(CompanyFinancialPayment)
+                .where(
+                    CompanyFinancialPayment.item_id == item_id,
                     CompanyFinancialPayment.competencia == normalize_competencia(comp),
                 )
+                .order_by(
+                    CompanyFinancialPayment.due_date.asc().nulls_last(),
+                    CompanyFinancialPayment.created_at.asc(),
+                )
             )
-        ).all()
-        return {iid: _money2(val) for iid, val in rows if val is not None}
+        ).scalars().all()
+        return list(rows)
+
+    async def _reconcile_company_finance_entries_for_month(
+        self,
+        *,
+        item: CompanyFinancialItem,
+        comp: date,
+        settings,
+        cc_svc: CompanyFinanceCostCenterService,
+        is_generating: bool,
+    ) -> dict:
+        """Reconciliador ÚNICO grade→CAP por (item, competência), com N lançamentos.
+
+        Invariante alvo: cada LANÇAMENTO da competência ↔ um título do Contas a Pagar
+        (`entry_id`). Encapsula toda a lógica de múltiplos lançamentos no pipeline do CAP —
+        para quem consome o CAP a mudança é transparente (apenas muda a granularidade).
+
+        Ações (idempotentes, genéricas para qualquer item de Custo Fixo/Endividamento):
+        - materializa 1 lançamento de REFERÊNCIA quando o item é elegível e a competência não
+          tem nenhum lançamento nem título (comportamento idêntico à geração atual);
+        - para cada lançamento: adota um título legado não vinculado (entry_id NULL) equivalente
+          ou cria o título; atualiza valor/vencimento de títulos ABERTOS; preserva títulos com
+          pagamento (reporta em `skipped_paid`);
+        - NÃO remove títulos aqui (exclusão de lançamento é explícita em `replace_entries`, que
+          apaga o título ABERTO antes de apagar o lançamento; títulos pagos permanecem e são
+          tratados pela reconciliação por `entry_id`).
+
+        `is_generating`: True durante a geração do mês (o marcador ainda não existe) — permite
+        criar títulos; fora da geração, só cria se a competência já estiver materializada
+        (`is_generated`), como no fluxo atual. Retorna {"synced", "created", "skipped_paid"}.
+        """
+        comp = normalize_competencia(comp)
+        below_floor = comp < COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE
+        can_create = is_generating or await self.is_generated(month=comp)
+        eligible = self._company_finance_item_eligible_for_comp(item, comp)
+
+        entries = await self._company_finance_entries_for_month(item_id=item.id, comp=comp)
+
+        cap_lines = (
+            await self.session.execute(
+                select(PayableSnapshot).where(
+                    PayableSnapshot.ref_id == item.id,
+                    PayableSnapshot.month == comp,
+                    PayableSnapshot.project_id.is_(None),
+                    PayableSnapshot.type.in_((PayableSnapshotType.FIXED_COST, *PAYABLE_DEBT_TYPES)),
+                )
+            )
+        ).scalars().all()
+        linked: dict[UUID, PayableSnapshot] = {l.entry_id: l for l in cap_lines if l.entry_id is not None}
+        unlinked: list[PayableSnapshot] = [l for l in cap_lines if l.entry_id is None]
+
+        result = {"synced": 0, "created": 0, "skipped_paid": []}
+
+        # Materializa o lançamento de referência quando não há nada (elegível, acima do piso).
+        if not entries and not cap_lines:
+            if below_floor or not eligible or not can_create:
+                return result
+            value = self._company_finance_monthly_value(item, comp=comp, settings=settings)
+            if value <= 0:
+                return result
+            entry = CompanyFinancialPayment(
+                item_id=item.id,
+                competencia=comp,
+                valor=value,
+                due_date=_default_due_date(comp, day=10),
+                descricao=None,
+            )
+            self.session.add(entry)
+            await self.session.flush()
+            entries = [entry]
+
+        if not entries:
+            return result  # sem lançamentos (mas há títulos legados órfãos) → não mexe
+
+        snap_type, category, origin = self._company_finance_payable_labels(item)
+        cost_center = await cc_svc.resolve_label(item)
+        name, item_description = self._company_finance_payable_identity(item)
+
+        for entry in entries:
+            new_amount = _money2(entry.valor)
+            due = entry.due_date or _default_due_date(comp, day=10)
+            # Descrição do LANÇAMENTO vira o subtítulo do título (mesmo padrão do Endividamento
+            # e dos Componentes Variáveis). Vazia → cai no `item_description` do item (descrição
+            # da dívida em Endividamento; None em Custos Fixos). Genérico p/ qualquer fornecedor.
+            line_item_description = (entry.descricao or "").strip() or item_description
+            row = linked.get(entry.id)
+
+            # Adoção de título legado equivalente (entry_id NULL) — vincula em vez de duplicar.
+            if row is None and unlinked:
+                row = unlinked.pop(0)
+                row.entry_id = entry.id
+                linked[entry.id] = row
+
+            if row is None:
+                # Cria o título apenas para item elegível e competência materializável.
+                if not (eligible and can_create) or new_amount <= 0:
+                    continue
+                row = PayableSnapshot(
+                    month=comp,
+                    type=snap_type,
+                    ref_id=item.id,
+                    entry_id=entry.id,
+                    project_id=None,
+                    name=name,
+                    item_description=line_item_description,
+                    cost_center=cost_center,
+                    category=category,
+                    origin=origin,
+                    amount_original=new_amount,
+                    amount_final=new_amount,
+                    amount_paid=Decimal("0"),
+                    due_date=due,
+                    paid=False,
+                    payment_date=None,
+                    observation=None,
+                )
+                self.session.add(row)
+                linked[entry.id] = row
+                result["created"] += 1
+                result["synced"] += 1
+                continue
+
+            # Título existente: metadados sempre coerentes (não alteram valor/pagamento).
+            row.name = name
+            row.item_description = line_item_description
+            row.cost_center = cost_center
+            row.category = category
+            if not row.origin:
+                row.origin = origin
+
+            has_payment = _money2(row.amount_paid) > 0 or await _has_active_payments(
+                self.session, snapshot_id=row.id
+            )
+            if has_payment:
+                # Preserva o histórico: nunca altera valor/vencimento de título com pagamento.
+                if _money2(row.amount_final) != new_amount or row.due_date != due:
+                    result["skipped_paid"].append(comp)
+                _sync_legacy_paid_fields(row)
+                continue
+
+            changed = False
+            if _money2(row.amount_final) != new_amount or _money2(row.amount_original) != new_amount:
+                before_o, before_f, before_p = (
+                    _money2(row.amount_original),
+                    _money2(row.amount_final),
+                    _money2(row.amount_paid),
+                )
+                _apply_dynamic_payable_amounts(row, new_amount=new_amount)
+                _log_payable_dynamic_sync(
+                    action="entry_sync",
+                    row=row,
+                    before_original=before_o,
+                    before_final=before_f,
+                    before_paid=before_p,
+                )
+                changed = True
+            if row.due_date != due:
+                row.due_date = due
+                changed = True
+            if changed:
+                result["synced"] += 1
+
+        await self.session.flush()
+        return result
 
     async def _generate_company_finance_payables(self, *, payment_month: date) -> int:
-        """Gera automaticamente os lançamentos de Custos Fixos e Endividamento.
+        """Gera automaticamente os lançamentos de Custos Fixos e Endividamento (por LANÇAMENTO).
 
-        Regras (o CADASTRO governa a linha de contas a pagar):
+        O CADASTRO governa a linha de contas a pagar. Delega ao reconciliador único por item:
         - Custos Fixos: item ativo e competência dentro da vigência (início/encerramento);
         - Endividamento: além disso, apenas quando `is_monthly_required` (Obrigatório = Sim).
-        Valor oficial da competência: valor informado na grade mensal
-        (`company_financial_payments`) quando existir; senão, o valor de REFERÊNCIA (fallback).
-        Idempotente por (competência, ref_id): se já existir um lançamento daquele item na
-        competência (inclusive de gerações anteriores/legado), NÃO cria de novo. Nunca
-        apaga nada.
+        Cada LANÇAMENTO da competência vira um título independente; quando não há lançamento, um
+        de REFERÊNCIA é materializado (acima do piso JUL/2026). Idempotente (não duplica nem
+        apaga). O piso preserva o histórico: abaixo dele só há título a partir de lançamento
+        explícito (grade), nunca da referência.
         """
         comp = normalize_competencia(payment_month)
-        # Piso de implantação (JUL/2026): abaixo do corte NÃO se gera automaticamente a partir
-        # do valor de REFERÊNCIA (não retroage / preserva o histórico). Porém, se o usuário
-        # informou explicitamente o valor da competência na grade mensal (manutenção deliberada
-        # de uma competência ABERTA — ex.: DEX em Junho), a linha é gerada com esse valor.
-        # JUL/2026 em diante gera normalmente (grade se houver; senão referência).
-        below_floor = comp < COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE
         _, month_end = _month_bounds(comp)
         settings = await SettingsService(self.session).get_or_create()
-        due = _default_due_date(comp, day=10)
         cc_svc = CompanyFinanceCostCenterService(self.session)
 
         # Itens ativos cuja vigência cobre a competência.
@@ -802,68 +951,12 @@ class PayableSnapshotService:
         if not items:
             return 0
 
-        # Idempotência: ref_ids que já possuem lançamento corporativo nesta competência.
-        existing_refs = set(
-            (
-                await self.session.execute(
-                    select(PayableSnapshot.ref_id).where(
-                        PayableSnapshot.month == comp,
-                        PayableSnapshot.type.in_((PayableSnapshotType.FIXED_COST, *PAYABLE_DEBT_TYPES)),
-                        PayableSnapshot.ref_id.is_not(None),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-        # Valores informados na grade mensal desta competência (governam o valor oficial).
-        grid_map = await self._company_finance_grid_map([it.id for it in items], comp)
-
         created = 0
         for item in items:
-            if item.id in existing_refs:
-                continue
-            # Endividamento só gera automaticamente quando obrigatório.
-            if item.tipo == "endividamento" and not bool(getattr(item, "is_monthly_required", False)):
-                continue
-            grid_val = grid_map.get(item.id)
-            # Piso: sem valor explícito na grade, competências anteriores a JUL/2026 não geram.
-            if below_floor and grid_val is None:
-                continue
-            # Valor oficial da competência: grade se informada; senão, valor de referência.
-            value = (
-                grid_val
-                if grid_val is not None
-                else self._company_finance_monthly_value(item, comp=comp, settings=settings)
+            res = await self._reconcile_company_finance_entries_for_month(
+                item=item, comp=comp, settings=settings, cc_svc=cc_svc, is_generating=True
             )
-            if value <= 0:
-                continue
-            snap_type, category, origin = self._company_finance_payable_labels(item)
-            cost_center = await cc_svc.resolve_label(item)
-            name, item_description = self._company_finance_payable_identity(item)
-            self.session.add(
-                PayableSnapshot(
-                    month=comp,
-                    type=snap_type,
-                    ref_id=item.id,
-                    project_id=None,
-                    name=name,
-                    item_description=item_description,
-                    cost_center=cost_center,
-                    category=category,
-                    origin=origin,
-                    amount_original=value,
-                    amount_final=value,
-                    amount_paid=Decimal("0"),
-                    due_date=due,
-                    paid=False,
-                    payment_date=None,
-                    observation=None,
-                )
-            )
-            existing_refs.add(item.id)
-            created += 1
+            created += int(res.get("created", 0))
 
         if created:
             logger.info("payables company_finance auto-generation month=%s created=%d", comp, created)
@@ -983,6 +1076,16 @@ class PayableSnapshotService:
             return 0
         _snap_type, cost_center, category = await self._company_finance_snapshot_meta(item)
         name, item_description = self._company_finance_payable_identity(item)
+        # Descrição por LANÇAMENTO é o subtítulo oficial da linha — preservada aqui (edição de
+        # cadastro atualiza nome/centro/categoria, mas NÃO deve apagar a descrição do lançamento).
+        entry_desc = {
+            e.id: (e.descricao or "").strip() or None
+            for e in (
+                await self.session.execute(
+                    select(CompanyFinancialPayment).where(CompanyFinancialPayment.item_id == item_id)
+                )
+            ).scalars().all()
+        }
         rows = (
             await self.session.execute(
                 select(PayableSnapshot).where(
@@ -993,7 +1096,7 @@ class PayableSnapshotService:
         ).scalars().all()
         for row in rows:
             row.name = name
-            row.item_description = item_description
+            row.item_description = entry_desc.get(row.entry_id) or item_description
             row.cost_center = cost_center
             row.category = category
             _sync_legacy_paid_fields(row)
@@ -1022,6 +1125,10 @@ class PayableSnapshotService:
         O piso só bloqueia ação baseada SOMENTE na referência (sem valor na grade), para
         preservar o histórico e não retroagir. Não altera Dashboard/KPIs paga/consolidada.
 
+        Suporta N LANÇAMENTOS por competência: delega ao reconciliador único
+        (`_reconcile_company_finance_entries_for_month`), que trata materialização,
+        adoção de título legado, criação/atualização por lançamento e guarda de pagamento.
+
         Retorna {"synced": int, "skipped_paid": list[date]}.
         """
         synced = 0
@@ -1037,105 +1144,11 @@ class PayableSnapshotService:
 
         for raw_month in months:
             comp = normalize_competencia(raw_month)
-            below_floor = comp < COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE
-
-            # Valor oficial da competência: grade (se informada) senão valor de referência.
-            grid_val = await self._company_finance_grid_value(item_id=item_id, comp=comp)
-
-            # Piso de implantação: abaixo de JUL/2026 só há manutenção quando o usuário
-            # informou explicitamente o valor na grade (competência aberta). Sem grade →
-            # não age (preserva o histórico; nunca cria/atualiza a partir só da referência).
-            if below_floor and grid_val is None:
-                continue
-
-            new_amount = (
-                grid_val
-                if grid_val is not None
-                else self._company_finance_monthly_value(item, comp=comp, settings=settings)
+            res = await self._reconcile_company_finance_entries_for_month(
+                item=item, comp=comp, settings=settings, cc_svc=cc_svc, is_generating=False
             )
-            if new_amount <= 0:
-                # Sem valor efetivo positivo: não zera/apaga a obrigação (a criação/remoção
-                # é governada pela geração), apenas não sincroniza.
-                continue
-
-            # Localiza a linha automática por (ref_id + competência + tipo corporativo).
-            row = (
-                await self.session.execute(
-                    select(PayableSnapshot).where(
-                        PayableSnapshot.ref_id == item_id,
-                        PayableSnapshot.month == comp,
-                        PayableSnapshot.type.in_((PayableSnapshotType.FIXED_COST, *PAYABLE_DEBT_TYPES)),
-                    )
-                )
-            ).scalars().first()
-
-            if row is None:
-                # A geração cria a linha das competências elegíveis. Aqui só criamos quando o
-                # usuário informou explicitamente o valor da competência (grade) e o mês já foi
-                # materializado — cobre a competência ABERTA anterior ao piso (ex.: DEX/Junho)
-                # sem poluir meses ainda não gerados nem suprimir a geração de custos de projeto.
-                if grid_val is None:
-                    continue
-                if not self._company_finance_item_eligible_for_comp(item, comp):
-                    continue
-                if not await self.is_generated(month=comp):
-                    continue
-                snap_type, category, origin = self._company_finance_payable_labels(item)
-                cost_center = await cc_svc.resolve_label(item)
-                name, item_description = self._company_finance_payable_identity(item)
-                row = PayableSnapshot(
-                    month=comp,
-                    type=snap_type,
-                    ref_id=item_id,
-                    project_id=None,
-                    name=name,
-                    item_description=item_description,
-                    cost_center=cost_center,
-                    category=category,
-                    origin=origin,
-                    amount_original=new_amount,
-                    amount_final=new_amount,
-                    amount_paid=Decimal("0"),
-                    due_date=_default_due_date(comp, day=10),
-                    paid=False,
-                    payment_date=None,
-                    observation=None,
-                )
-                self.session.add(row)
-                synced += 1
-                _log_payable_dynamic_sync(
-                    action="grid_create",
-                    row=row,
-                    before_original=Decimal("0"),
-                    before_final=Decimal("0"),
-                    before_paid=Decimal("0"),
-                )
-                continue
-
-            # Guarda de pagamento: havendo qualquer pagamento (valor pago > 0 ou pagamento
-            # ativo), NÃO altera — preserva o histórico e reporta para aviso ao usuário.
-            has_payment = _money2(row.amount_paid) > 0 or await _has_active_payments(
-                self.session, snapshot_id=row.id
-            )
-            if has_payment:
-                skipped_paid.append(comp)
-                continue
-
-            before_o = _money2(row.amount_original)
-            before_f = _money2(row.amount_final)
-            before_p = _money2(row.amount_paid)
-            if before_f == new_amount and before_o == new_amount:
-                continue  # já sincronizado
-
-            _apply_dynamic_payable_amounts(row, new_amount=new_amount)
-            synced += 1
-            _log_payable_dynamic_sync(
-                action="grid_sync",
-                row=row,
-                before_original=before_o,
-                before_final=before_f,
-                before_paid=before_p,
-            )
+            synced += int(res.get("synced", 0))
+            skipped_paid.extend(res.get("skipped_paid", []))
 
         if synced or skipped_paid:
             await self.session.flush()
@@ -1578,6 +1591,206 @@ class PayableSnapshotService:
             )
         return total
 
+    # ------------------------------------------------------------------ #
+    # Componentes Variáveis de Pagamento (Projeto e Custo Fixo) — pipeline único
+    # ------------------------------------------------------------------ #
+    async def _variable_component_snapshot_fields(
+        self, component: PaymentVariableComponent
+    ) -> dict | None:
+        """Campos do snapshot de um componente variável, ESPELHANDO a origem financeira:
+        Projeto → COLLABORATOR (mês de pagamento = competência + 1); Custo Fixo →
+        FIXED_COST/categoria "Colaborador" (mês = competência). Valor INTEGRAL (sem rateio).
+
+        Retorna None quando não deve existir snapshot (valor <= 0, contexto ausente/apagado).
+        """
+        amount = _money2(component.amount)
+        if amount <= 0:
+            return None
+        emp = await self.session.get(Employee, component.employee_id)
+        if emp is None:
+            return None
+        display = _employee_display_name(emp)
+        type_name = (getattr(component.type, "name", None) or "Componente").strip()
+        name = _collaborator_payable_snapshot_name(display, type_name)
+
+        if component.project_labor_id is not None:
+            labor = await self.session.get(ProjectLabor, component.project_labor_id)
+            if labor is None:
+                return None
+            # CAP reflete apenas REALIZADO: componente em labor PREVISTO é salvo, mas não
+            # materializa lançamento (mesma regra do salário).
+            if coerce_scenario(labor.scenario) != Scenario.REALIZADO:
+                return None
+            proj = await self.session.get(Project, labor.project_id)
+            if proj is None or getattr(proj, "deleted_at", None) is not None:
+                return None
+            return {
+                "month": next_competencia(normalize_competencia(component.competencia)),
+                "type": PayableSnapshotType.COLLABORATOR,
+                "project_id": proj.id,
+                "cost_center": str(proj.name).strip(),
+                "category": "Mão de obra",
+                "name": name,
+                "amount": amount,
+            }
+
+        item = await self._get_company_financial_item(component.company_financial_item_id)
+        if item is None:
+            return None
+        cc = await CompanyFinanceCostCenterService(self.session).resolve_label(item)
+        return {
+            "month": normalize_competencia(component.competencia),
+            "type": PayableSnapshotType.FIXED_COST,
+            "project_id": None,
+            "cost_center": cc,
+            "category": "Colaborador",  # payable_display classifica FIXED_COST+Colaborador como folha
+            "name": name,
+            "amount": amount,
+        }
+
+    async def _find_variable_snapshot(self, component_id: UUID) -> PayableSnapshot | None:
+        return (
+            await self.session.execute(
+                select(PayableSnapshot).where(
+                    PayableSnapshot.origin == PayableOrigin.VARIABLE.value,
+                    PayableSnapshot.ref_id == component_id,
+                )
+            )
+        ).scalars().first()
+
+    async def apply_variable_component(self, *, component: PaymentVariableComponent) -> None:
+        """Upsert IDEMPOTENTE do snapshot do componente (identidade: origin=VARIABLE + ref_id).
+
+        Rodar N vezes converge ao mesmo snapshot. Linha já paga é preservada (histórico).
+        """
+        fields = await self._variable_component_snapshot_fields(component)
+        existing = await self._find_variable_snapshot(component.id)
+
+        if fields is None:
+            if existing is not None and _money2(existing.amount_paid) <= 0 and not await _has_active_payments(
+                self.session, snapshot_id=existing.id
+            ):
+                await self.session.delete(existing)
+            await self.session.flush()
+            return
+
+        if existing is None:
+            self.session.add(
+                PayableSnapshot(
+                    month=fields["month"],
+                    type=fields["type"],
+                    ref_id=component.id,
+                    project_id=fields["project_id"],
+                    name=fields["name"],
+                    item_description=(component.note or None),
+                    cost_center=fields["cost_center"],
+                    category=fields["category"],
+                    origin=PayableOrigin.VARIABLE.value,
+                    amount_original=fields["amount"],
+                    amount_final=fields["amount"],
+                    amount_paid=Decimal("0"),
+                    due_date=_default_due_date(fields["month"], day=10),
+                    paid=False,
+                    payment_date=None,
+                    observation=None,
+                )
+            )
+            await self.session.flush()
+            return
+
+        # Já pago: nunca altera valor/identidade (preserva histórico financeiro).
+        if _money2(existing.amount_paid) > 0 or await _has_active_payments(
+            self.session, snapshot_id=existing.id
+        ):
+            await self.session.flush()
+            return
+
+        existing.month = fields["month"]
+        existing.type = fields["type"]
+        existing.project_id = fields["project_id"]
+        existing.name = fields["name"]
+        existing.item_description = component.note or None
+        existing.cost_center = fields["cost_center"]
+        existing.category = fields["category"]
+        _apply_dynamic_payable_amounts(existing, new_amount=fields["amount"])
+        await self.session.flush()
+
+    async def remove_variable_component_snapshot(self, *, component_id: UUID) -> bool:
+        """Remove o snapshot do componente. Retorna False (bloqueia) se já houver pagamento."""
+        existing = await self._find_variable_snapshot(component_id)
+        if existing is None:
+            return True
+        if _money2(existing.amount_paid) > 0 or await _has_active_payments(
+            self.session, snapshot_id=existing.id
+        ):
+            return False
+        await self.session.delete(existing)
+        await self.session.flush()
+        return True
+
+    async def sync_all_variable_components_for_month(self, *, payment_month: date) -> int:
+        """Materializa (idempotente) todos os componentes variáveis pagos neste mês e remove
+        snapshots VARIABLE órfãos (componente apagado). Chamado na abertura/sync do mês.
+
+        Projeto: componente cujo project_labor REALIZADO está na competência anterior.
+        Custo Fixo: componente cuja competência é o próprio mês de pagamento.
+        """
+        comp = normalize_competencia(payment_month)
+        source = previous_competencia(comp)
+
+        proj_components = list(
+            (
+                await self.session.execute(
+                    select(PaymentVariableComponent)
+                    .join(ProjectLabor, PaymentVariableComponent.project_labor_id == ProjectLabor.id)
+                    .where(
+                        PaymentVariableComponent.project_labor_id.is_not(None),
+                        ProjectLabor.competencia == source,
+                        ProjectLabor.scenario == scenario_pg_rhs(Scenario.REALIZADO),
+                    )
+                )
+            ).scalars().all()
+        )
+        fixed_components = list(
+            (
+                await self.session.execute(
+                    select(PaymentVariableComponent).where(
+                        PaymentVariableComponent.company_financial_item_id.is_not(None),
+                        PaymentVariableComponent.competencia == comp,
+                    )
+                )
+            ).scalars().all()
+        )
+
+        valid_ids: set[UUID] = set()
+        changed = 0
+        for c in [*proj_components, *fixed_components]:
+            await self.apply_variable_component(component=c)
+            valid_ids.add(c.id)
+            changed += 1
+
+        # Remove snapshots VARIABLE do mês cujo componente não existe mais (sem pagamento).
+        existing_var = list(
+            (
+                await self.session.execute(
+                    select(PayableSnapshot).where(
+                        PayableSnapshot.month == comp,
+                        PayableSnapshot.origin == PayableOrigin.VARIABLE.value,
+                    )
+                )
+            ).scalars().all()
+        )
+        for row in existing_var:
+            if row.ref_id in valid_ids:
+                continue
+            if _money2(row.amount_paid) > 0 or await _has_active_payments(self.session, snapshot_id=row.id):
+                continue
+            await self.session.delete(row)
+            changed += 1
+
+        await self.session.flush()
+        return changed
+
     async def preserve_or_remove_deleted_company_finance_item(self, *, item_id: UUID) -> int:
         """
         Remove snapshots corporativos órfãos de um item excluído, mas preserva qualquer linha
@@ -1757,7 +1970,8 @@ class PayableSnapshotService:
                             payment_month=comp,
                             project_ids=None if sees_all_projects else (accessible_project_ids or None),
                         )
-                        if added_fixed or added_ants:
+                        added_var = await self.sync_all_variable_components_for_month(payment_month=comp)
+                        if added_fixed or added_ants or added_var:
                             await self.session.flush()
                             return await self.list_for_month(month=comp)
                         return existing
@@ -1779,7 +1993,8 @@ class PayableSnapshotService:
                             payment_month=comp,
                             project_ids=None if sees_all_projects else (accessible_project_ids or None),
                         )
-                        if added_fixed or added_ants:
+                        added_var = await self.sync_all_variable_components_for_month(payment_month=comp)
+                        if added_fixed or added_ants or added_var:
                             await self.session.flush()
                             return await self.list_for_month(month=comp)
                         return existing
@@ -2011,6 +2226,9 @@ class PayableSnapshotService:
             # vida (ativo + vigência) e, para endividamento, o "Obrigatório = Sim".
             # Idempotente por (competência, ref_id) — ver _generate_company_finance_payables.
             created += await self._generate_company_finance_payables(payment_month=payment_month)
+
+            # --- Componentes Variáveis de Pagamento (Projeto + Custo Fixo) — pipeline único ---
+            created += await self.sync_all_variable_components_for_month(payment_month=payment_month)
 
             # --- Custos diversos (operacional) — um snapshot por item ---
             misc_stmt = (
@@ -2560,6 +2778,10 @@ class PayableSnapshotService:
             return None
         if row.ref_id is None:
             return None
+        # Componentes Variáveis de Pagamento: a sincronização (rebuild na mesma transação
+        # do CRUD) é a fonte de verdade; a reconciliação nunca os marca como órfãos.
+        if (row.origin or "") == PayableOrigin.VARIABLE.value:
+            return None
 
         if row.type == PayableSnapshotType.COLLABORATOR:
             # A origem econômica real é a folha (ProjectLabor) do mês-origem usado
@@ -2582,7 +2804,14 @@ class PayableSnapshotService:
         if row.type == PayableSnapshotType.FIXED_COST:
             if row.project_id is None:
                 src = await self._get_company_financial_item(row.ref_id)
-                return src is None or str(getattr(src, "tipo", "")).strip() != "custo_fixo"
+                if src is None or str(getattr(src, "tipo", "")).strip() != "custo_fixo":
+                    return True
+                # Múltiplos lançamentos: a origem precisa é o LANÇAMENTO (entry_id). Título
+                # cujo lançamento foi removido é resíduo. Legado sem vínculo (entry_id NULL)
+                # segue regido pela existência do ITEM (compatibilidade).
+                if row.entry_id is not None:
+                    return await self.session.get(CompanyFinancialPayment, row.entry_id) is None
+                return False
             obs = row.observation or ""
             if SOURCE_TAG_PROJECT_SYSTEM in obs:
                 return await self.session.get(ProjectSystemCost, row.ref_id) is None
@@ -2593,7 +2822,13 @@ class PayableSnapshotService:
 
         if row.type in PAYABLE_DEBT_TYPES:  # ENDIVIDAMENTO, FINANCIAL
             src = await self._get_company_financial_item(row.ref_id)
-            return src is None
+            if src is None:
+                return True
+            # Endividamento permanece single-lançamento; quando vinculado, órfão = lançamento
+            # removido (mantém coerência com Custos Fixos sem alterar a UI/renegociação).
+            if row.entry_id is not None:
+                return await self.session.get(CompanyFinancialPayment, row.entry_id) is None
+            return False
 
         return None
 
@@ -2619,17 +2854,28 @@ class PayableSnapshotService:
         automáticos cuja origem foi removida; reativa os que voltaram a existir.
 
         Preserva integralmente histórico financeiro: NÃO altera amount_*,
-        pagamentos, estornos nem lançamentos MANUAL, e não toca outros meses.
-        Ao marcar obsoleto, remove a linha do dashboard (include_in_dashboard=False)
-        para não poluir análises; ao reativar, devolve a inclusão.
+        pagamentos, estornos nem lançamentos MANUAL.
+
+        Universo avaliado = EXATAMENTE o que a tela do mês exibe
+        (`list_for_operational_month`): as obrigações da competência MAIS as linhas de
+        outras competências com pagamento no mês. Antes varria só `month == comp`, então
+        uma linha visível na tela vinda de outra competência nunca era avaliada — o
+        usuário clicava em "Reconciliar" e ela permanecia idêntica. Alinhar o escopo ao
+        da tela é o que torna o resultado consistente com o que se vê.
+
+        Ao marcar obsoleto, remove a linha do dashboard (include_in_dashboard=False) para
+        não poluir análises — EXCETO quando há pagamento registrado: despesa efetivamente
+        paga continua no dashboard (marcada como resíduo, mas nunca some das análises
+        financeiras), coerente com "preserva integralmente o histórico financeiro".
         """
         comp = normalize_competencia(month)
-        rows = await self.list_for_month(month=comp)
+        rows = await self.list_for_operational_month(month=comp)
         now = datetime.now(timezone.utc)
         marked = 0
         cleared = 0
         checked = 0
         obsolete_total = 0
+        kept_paid_in_dashboard = 0
 
         for row in rows:
             missing = await self.origin_is_missing(row=row)
@@ -2645,7 +2891,23 @@ class PayableSnapshotService:
                     row.obsolete_reason = self._obsolete_reason_for(row)
                     row.reconciled_at = now
                     row.reconciled_by = user_id
-                    row.include_in_dashboard = False
+                    # Só sai do dashboard se NUNCA houve desembolso: despesa paga é fato
+                    # financeiro consumado e não pode desaparecer das análises.
+                    has_payment = _money2(row.amount_paid) > 0 or await _has_active_payments(
+                        self.session, snapshot_id=row.id
+                    )
+                    if has_payment:
+                        kept_paid_in_dashboard += 1
+                        logger.warning(
+                            "payables reconcile marked obsolete but KEPT in dashboard (has payment) "
+                            "snapshot_id=%s name=%s month=%s amount_paid=%s",
+                            row.id,
+                            row.name,
+                            row.month,
+                            row.amount_paid,
+                        )
+                    else:
+                        row.include_in_dashboard = False
                     marked += 1
                 obsolete_total += 1
             else:
@@ -2660,12 +2922,15 @@ class PayableSnapshotService:
 
         await self.session.flush()
         logger.info(
-            "payables reconcile month=%s checked=%d marked_obsolete=%d cleared=%d obsolete_total=%d by=%s",
+            "payables reconcile month=%s rows_in_scope=%d checked=%d marked_obsolete=%d cleared=%d "
+            "obsolete_total=%d kept_paid_in_dashboard=%d by=%s",
             comp,
+            len(rows),
             checked,
             marked,
             cleared,
             obsolete_total,
+            kept_paid_in_dashboard,
             user_id,
         )
         return {

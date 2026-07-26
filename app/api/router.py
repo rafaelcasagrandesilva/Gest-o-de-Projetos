@@ -23,6 +23,7 @@ from app.modules.reports.router import router as reports_router
 from app.modules.admin.router import router as admin_router
 from app.modules.assets.router import router as assets_router
 from app.modules.indicators.router import router as indicators_router
+from app.modules.payments.router import router as payment_components_router
 
 
 api_router = APIRouter()
@@ -48,6 +49,9 @@ protected.include_router(invoices_router, prefix="/invoices", tags=["accounts-re
 protected.include_router(reports_router, prefix="/reports")
 protected.include_router(assets_router, prefix="/assets", tags=["assets"])
 protected.include_router(indicators_router, prefix="/indicators", tags=["indicators"])
+protected.include_router(
+    payment_components_router, prefix="/payment-variable-components", tags=["payment-variable-components"]
+)
 
 api_router.include_router(protected)
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])

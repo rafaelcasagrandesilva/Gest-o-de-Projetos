@@ -213,9 +213,13 @@ class DebtEmployeeDBTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(s2.name, f"Sigmar {tag}")
             self.assertEqual(s2.item_description, f"Acerto de Mútuos {tag}")
 
-            # (5) Folha de Pagamento: soma os dois endividamentos + detalhamento individual.
+            # (5) Folha de Pagamento: consolida o CAP. Os endividamentos foram gerados no CAP
+            # de `comp`; o relatório da competência trabalhada ANTERIOR é pago nesse mês
+            # (payment_month = comp), então lê exatamente esses lançamentos.
+            from app.utils.date_utils import previous_competencia
+
             payload = await ReportService(session).generate_payroll_report(
-                competencia=comp, scenario="REALIZADO"
+                competencia=previous_competencia(comp), scenario="REALIZADO"
             )
             mine = [r for r in payload["rows"] if r["nome"] == f"Sigmar {tag}"]
             self.assertEqual(len(mine), 1)

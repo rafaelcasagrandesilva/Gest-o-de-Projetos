@@ -38,14 +38,22 @@ import {
 } from "@/components/company-finance/costCenter";
 import { CostCenterSelect } from "@/components/company-finance/CostCenterSelect";
 import {
+  capPaidOf,
   CompanyFinanceAnalyticTable,
+  FIXED_COST_STATUS_FILTER_OPTIONS,
+  isRedacted,
+  matchesFixedCostStatus,
   matchesStatusFilter,
   REQUIRED_FILTER_OPTIONS,
   STATUS_FILTER_OPTIONS,
+  valorMensalOf,
+  type FixedCostStatusFilter,
   type RequiredFilter,
   type StatusFilter,
 } from "@/components/company-finance/CompanyFinanceAnalyticTable";
 import { ViewModeToggle } from "@/components/finance/ViewModeToggle";
+import { VariableComponentsModal } from "@/components/company-finance/VariableComponentsModal";
+import { LancamentosCompetenciaModal } from "@/components/company-finance/LancamentosCompetenciaModal";
 import { itemMatchesSearch } from "@/components/company-finance/itemSearch";
 import { CollapsiblePanel, PrimaryAddButton } from "@/components/ExpandableFormSection";
 import { isAxiosError } from "axios";
@@ -186,11 +194,16 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [componentsFor, setComponentsFor] = useState<CompanyFinancialItem | null>(null);
+  // Modal "Lançamentos da Competência" aberto pelo Extrato Analítico (célula Valor Mensal).
+  const [entriesFor, setEntriesFor] = useState<CompanyFinancialItem | null>(null);
   const [showCharts, setShowCharts] = useState(false);
   const [creditorFilter, setCreditorFilter] = useState<DebtCreditorFilter>("ALL");
   // Filtros globais da tela (Tipo/Status): aplicados à Visão Executiva e ao Extrato Analítico.
   const [requiredFilter, setRequiredFilter] = useState<RequiredFilter>("ALL");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  // Status consolidado (Custos Fixos) — filtro de VISUALIZAÇÃO das listas (não altera os cards).
+  const [fixedStatusFilter, setFixedStatusFilter] = useState<FixedCostStatusFilter>("ALL");
   // Filtro por Centro de Custo (somente Custos Fixos) — escopo da PÁGINA (cards, pendências e listas).
   // Guarda o rótulo do centro (mesmo exibido/cadastrado); "" = Todos (comportamento atual).
   const [costCenterFilter, setCostCenterFilter] = useState<string>("");
@@ -481,44 +494,59 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     return list;
   }, [tipo, items, costCenterFilter, creditorFilter, requiredFilter, statusFilter, pendingItemIds, itemSearch, projectOptions]);
 
-  // Cards de Custos Fixos: refletem exatamente os ITENS EXIBIDOS (filteredItems = Centro + Tipo +
-  // Busca), somando os valores que o backend JÁ calcula por item (valor_referencia = esperado no mês;
-  // pago_mes = pago no mês). Sob "Todos"/sem busca é idêntico ao KPI do backend; com filtro, acompanha
-  // a lista. Preserva "—" quando os valores vêm redigidos por falta de "Dados sensíveis"
-  // (valor_referencia null → não somar como zero).
+  // Filtro de VISUALIZAÇÃO por Status consolidado (Custos Fixos): narra apenas as LISTAS
+  // (Extrato Analítico, Visão Executiva, lista de Pendências). NÃO afeta os cards do topo
+  // (Total esperado/pago, Itens cadastrados, Cobertura), que representam o mês inteiro.
+  // Reutiliza EXATAMENTE o status da coluna STATUS (sem recálculo no frontend).
+  const displayItems = useMemo(() => {
+    if (tipo !== "custo_fixo" || fixedStatusFilter === "ALL") return filteredItems;
+    return filteredItems.filter((it) => matchesFixedCostStatus(it, fixedStatusFilter));
+  }, [tipo, filteredItems, fixedStatusFilter]);
+
+  // Cards de Custos Fixos (Total esperado/pago, Itens, Cobertura): FONTE ÚNICA idêntica ao
+  // Extrato Analítico — consomem as MESMAS funções por item (`valorMensalOf` = coluna Valor
+  // Mensal; `capPaidOf` = coluna Pago no mês = cap_amount_paid). "Pago" é o EFETIVAMENTE PAGO
+  // no CAP (não o valor lançado): item com lançamento aberto conta 0 em pago. Derivam de
+  // `filteredItems` (Centro + Tipo + Busca) — NÃO do `displayItems`: o filtro de Status não
+  // altera os cards (representam o mês inteiro). Preserva "—" sob "Dados sensíveis" (redigido).
   const fixedKpi = useMemo(() => {
     if (tipo !== "custo_fixo") return null;
     const money = filteredItems;
-    const redacted = money.length > 0 && money[0].valor_referencia == null;
+    const redacted = money.length > 0 && isRedacted(money[0]);
     return {
-      total_esperado_mes: redacted ? null : money.reduce((s, it) => s + (it.valor_referencia ?? 0), 0),
-      total_pago_mes: redacted ? null : money.reduce((s, it) => s + (it.pago_mes ?? 0), 0),
+      total_esperado_mes: redacted
+        ? null
+        : money.reduce((s, it) => s + (valorMensalOf(it, competencia) ?? 0), 0),
+      total_pago_mes: redacted ? null : money.reduce((s, it) => s + (capPaidOf(it) ?? 0), 0),
       quantidade_itens: money.length,
     };
-  }, [tipo, filteredItems]);
+  }, [tipo, filteredItems, competencia]);
 
   // Pendências no MESMO universo dos demais componentes (filteredItems = Competência + Tipo + Busca +
   // Centro): a LISTA do backend (com histórico/último valor) é restrita aos itens exibidos, e os TOTAIS
   // das obrigatoriedades são recomputados sobre os itens obrigatórios ATIVOS exibidos — mesma base do
   // backend (valor_referencia previsto, pago_mes pago). Sob "Todos" é idêntico ao backend. Endividamento
   // mantém o backend (lógica de renegociação).
-  const filteredItemIds = useMemo(() => new Set(filteredItems.map((it) => it.id)), [filteredItems]);
+  // Pendências e Extrato/Executiva compartilham o MESMO universo exibido (displayItems =
+  // filteredItems + Status). O filtro de Status atua nas listas; os cards do topo não.
+  const displayItemIds = useMemo(() => new Set(displayItems.map((it) => it.id)), [displayItems]);
 
   const shownPendencias = useMemo(
-    () => (tipo === "custo_fixo" ? pendencias.filter((p) => filteredItemIds.has(p.item_id)) : pendencias),
-    [tipo, pendencias, filteredItemIds],
+    () => (tipo === "custo_fixo" ? pendencias.filter((p) => displayItemIds.has(p.item_id)) : pendencias),
+    [tipo, pendencias, displayItemIds],
   );
 
   const shownPendTotals = useMemo(() => {
     if (tipo !== "custo_fixo") return pendTotals;
-    const required = filteredItems.filter((it) => (it.is_active ?? true) && it.is_monthly_required);
-    const previsto = required.reduce((s, it) => s + (it.valor_referencia ?? 0), 0);
-    const pago = required.reduce((s, it) => s + (it.pago_mes ?? 0), 0);
+    // Mesma fonte do Extrato/cards: previsto = Valor Mensal; pago = cap_amount_paid (efetivo).
+    const required = displayItems.filter((it) => (it.is_active ?? true) && it.is_monthly_required);
+    const previsto = required.reduce((s, it) => s + (valorMensalOf(it, competencia) ?? 0), 0);
+    const pago = required.reduce((s, it) => s + (capPaidOf(it) ?? 0), 0);
     return { previsto, pago };
-  }, [tipo, filteredItems, pendTotals]);
+  }, [tipo, displayItems, competencia, pendTotals]);
 
   const { sortedRows: sortedFilteredItems, headerSort } = useTableSort(
-    filteredItems,
+    displayItems,
     COMPANY_FINANCE_SORT_COLUMNS,
     { defaultCompare: defaultCompanyFinanceSort },
   );
@@ -792,6 +820,22 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               </select>
             </label>
           )}
+          {tipo === "custo_fixo" && (
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-slate-700">Status</span>
+              <select
+                value={fixedStatusFilter}
+                onChange={(e) => setFixedStatusFilter(e.target.value as FixedCostStatusFilter)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm"
+              >
+                {FIXED_COST_STATUS_FILTER_OPTIONS.map((opt) => (
+                  <option key={opt.key} value={opt.key}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {tipo === "endividamento" && (
             <label className="flex flex-col gap-1 text-sm">
               <span className="font-medium text-slate-700">Status</span>
@@ -877,15 +921,45 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       />
 
       {view === "analytic" ? (
-        <CompanyFinanceAnalyticTable
-          items={filteredItems}
-          tipo={tipo}
-          competencia={competencia}
-          search={itemSearch}
-          readOnly={financeReadOnly}
-          readOnlyTitle={financeReadOnlyTitle}
-          onToggleRequired={handleToggleRequired}
-        />
+        <>
+          <CompanyFinanceAnalyticTable
+            items={displayItems}
+            tipo={tipo}
+            competencia={competencia}
+            search={itemSearch}
+            readOnly={financeReadOnly}
+            readOnlyTitle={financeReadOnlyTitle}
+            onToggleRequired={handleToggleRequired}
+            onOpenComponents={tipo === "endividamento" ? undefined : setComponentsFor}
+            onOpenEntries={tipo === "custo_fixo" ? setEntriesFor : undefined}
+          />
+          {entriesFor && (
+            <LancamentosCompetenciaModal
+              itemId={entriesFor.id}
+              itemLabel={entriesFor.employee_name || entriesFor.nome}
+              competencia={competencia}
+              competenciaLabel={competencia}
+              readOnly={financeReadOnly}
+              onClose={() => setEntriesFor(null)}
+              onSaved={async () => {
+                await loadAll();
+              }}
+            />
+          )}
+          {componentsFor && (
+            <VariableComponentsModal
+              itemId={componentsFor.id}
+              itemLabel={componentsFor.employee_name || componentsFor.nome}
+              competencia={`${competencia}-01`}
+              competenciaLabel={competencia}
+              readOnly={financeReadOnly}
+              onClose={() => setComponentsFor(null)}
+              onSaved={async () => {
+                await loadAll(); // atualiza o resumo da competência imediatamente
+              }}
+            />
+          )}
+        </>
       ) : (
         <>
       {/* Gráficos (recolhível) */}
@@ -1453,7 +1527,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         ) : null}
         {loading && items.length === 0 ? (
           <p className="text-sm text-slate-500">Carregando…</p>
-        ) : filteredItems.length === 0 ? (
+        ) : sortedFilteredItems.length === 0 ? (
           <p className="text-sm text-slate-500">
             {items.length === 0
               ? "Nenhum item cadastrado."
@@ -1753,6 +1827,8 @@ function FinanceItemCard({
   );
   const [structureError, setStructureError] = useState<string | null>(null);
   const [structureSuccess, setStructureSuccess] = useState<string | null>(null);
+  // Modal genérico "Lançamentos da Competência" (N por mês). Aberto pela célula do mês.
+  const [entriesModalMes, setEntriesModalMes] = useState<string | null>(null);
 
   const paymentsSyncKey = JSON.stringify(
     item.pagamentos.map((p) => ({ mes: p.mes, valor: p.valor })).sort((a, b) => a.mes.localeCompare(b.mes)),
@@ -2509,23 +2585,67 @@ function FinanceItemCard({
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {monthKeys.map((mes) => {
               const pending = dirtyMonths.has(mes);
+              const pmes = item.pagamentos.find((x) => x.mes === mes);
+              const count = pmes?.count ?? 0;
+              // Lançamentos múltiplos são um recurso de Custos Fixos. Endividamento permanece
+              // single-lançamento (UI/renegociação inalteradas): sem modal, sem badge.
+              const entriesEnabled = tipo === "custo_fixo";
+              // Múltiplos lançamentos: a célula vira somente-leitura (a SOMA) e o detalhamento
+              // fica no modal. Caso comum (0/1): input inline, experiência idêntica à atual.
+              const multi = entriesEnabled && count > 1;
               return (
                 <label key={mes} className="flex flex-col gap-1 text-xs">
-                  <span className="font-medium text-slate-600">
-                    {mesLabel(mes)} <span className="font-normal text-slate-400">({mes})</span>
+                  <span className="flex items-center font-medium text-slate-600">
+                    {/* Custo Fixo: rótulo clicável abre o modal (sem ícone extra no caso comum).
+                        Endividamento: rótulo simples (comportamento original). */}
+                    {entriesEnabled ? (
+                      <button
+                        type="button"
+                        onClick={() => setEntriesModalMes(mes)}
+                        className="rounded text-left hover:text-indigo-700 hover:underline"
+                        title="Lançamentos da competência"
+                      >
+                        {mesLabel(mes)} <span className="font-normal text-slate-400">({mes})</span>
+                      </button>
+                    ) : (
+                      <span>
+                        {mesLabel(mes)} <span className="font-normal text-slate-400">({mes})</span>
+                      </span>
+                    )}
+                    {multi ? (
+                      <button
+                        type="button"
+                        onClick={() => setEntriesModalMes(mes)}
+                        className="ml-1.5 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-100"
+                        title="Múltiplos lançamentos — abrir detalhamento"
+                      >
+                        {count} lançamentos
+                      </button>
+                    ) : null}
                     {pending ? <span className="ml-1 text-blue-600" title="Alteração não salva">●</span> : null}
                   </span>
-                  <input
-                    value={localPayments[mes] ?? ""}
-                    onChange={(e) => updateMonth(mes, e.target.value)}
-                    className={`rounded border px-2 py-1.5 text-sm ${
-                      pending ? "border-blue-500 ring-1 ring-blue-200" : "border-slate-300"
-                    }`}
-                    placeholder="0"
-                    inputMode="decimal"
-                    disabled={readOnly}
-                    title={readOnly ? FINANCE_EDIT_NO_PERM : undefined}
-                  />
+                  {multi ? (
+                    <button
+                      type="button"
+                      onClick={() => setEntriesModalMes(mes)}
+                      className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-left text-sm tabular-nums text-slate-700 hover:border-indigo-300 hover:bg-indigo-50"
+                      title="Soma dos lançamentos — abrir detalhamento"
+                    >
+                      {formatBRL(pmes?.valor ?? null)}
+                    </button>
+                  ) : (
+                    <input
+                      value={localPayments[mes] ?? ""}
+                      onChange={(e) => updateMonth(mes, e.target.value)}
+                      className={`rounded border px-2 py-1.5 text-sm ${
+                        pending ? "border-blue-500 ring-1 ring-blue-200" : "border-slate-300"
+                      }`}
+                      placeholder="0"
+                      inputMode="decimal"
+                      disabled={readOnly}
+                      title={readOnly ? FINANCE_EDIT_NO_PERM : undefined}
+                    />
+                  )}
                 </label>
               );
             })}
@@ -2583,6 +2703,17 @@ function FinanceItemCard({
             </button>
           </div>
         </div>
+      )}
+      {entriesModalMes && (
+        <LancamentosCompetenciaModal
+          itemId={item.id}
+          itemLabel={item.employee_name || item.nome}
+          competencia={entriesModalMes}
+          competenciaLabel={`${mesLabel(entriesModalMes)} / ${entriesModalMes.slice(0, 4)}`}
+          readOnly={readOnly}
+          onClose={() => setEntriesModalMes(null)}
+          onSaved={onSaved}
+        />
       )}
     </article>
   );

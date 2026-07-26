@@ -126,6 +126,7 @@ export interface EmployeeMonthlyPayrollOverride {
   competence_month: string;
   net_salary_amount: number | null;
   vr_amount: number | null;
+  vacation_advance_amount: number | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -134,6 +135,7 @@ export interface EmployeeMonthlyPayrollOverride {
 export interface EmployeeMonthlyPayrollUpsert {
   net_salary_amount?: number | null;
   vr_amount?: number | null;
+  vacation_advance_amount?: number | null;
   notes?: string | null;
 }
 

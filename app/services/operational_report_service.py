@@ -30,15 +30,7 @@ from app.services.receivable_manual_service import ReceivableManualService
 from app.services.receivable_service import ReceivableService
 from app.utils.date_utils import normalize_competencia, previous_competencia
 
-_PAYABLE_TYPE_LABELS: dict[str, str] = {
-    "COLLABORATOR": "Colaborador",
-    "VEHICLE": "Veículos",
-    "FIXED_COST": "Custo diverso",
-    "ENDIVIDAMENTO": "Endividamento",
-    "FINANCIAL": "Endividamento",
-    "MANUAL": "Manual",
-    "ANTECIPACAO": "Antecipação",
-}
+from app.services.payable_display import PAYABLE_TYPE_LABELS as _PAYABLE_TYPE_LABELS
 
 
 def _yyyy_mm(value: Any) -> str:
@@ -270,7 +262,9 @@ class OperationalReportService:
                     "no_dashboard": "Sim" if r.include_in_dashboard else "Não",
                     "obsoleto": "Sim" if getattr(r, "is_obsolete", False) else "Não",
                     "motivo_obsolescencia": getattr(r, "obsolete_reason", "") or "",
-                    "observacoes": r.observation or "",
+                    # Descrição do lançamento (subtítulo) na coluna Observações — mesmo padrão
+                    # do Endividamento; fallback à observação técnica quando não houver descrição.
+                    "observacoes": (getattr(r, "item_description", None) or r.observation or ""),
                 }
             )
         return {

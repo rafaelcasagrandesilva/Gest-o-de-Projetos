@@ -140,16 +140,21 @@ class CostCenterHistoryScenariosTests(unittest.IsolatedAsyncioTestCase):
 
     # 6 — Folha: março usa centro antigo; agosto, o novo
     async def test_payroll_temporal_cost_center(self) -> None:
-        from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
+        from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
         from app.services.cost_center_history_service import EmployeeCostCenterService
         from app.services.report_service import ReportService
         cc_a, cc_b = f"CC-A-{self.tag}", f"CC-B-{self.tag}"
         emp = await self._employee("Folha", cc_a)
         await EmployeeCostCenterService(self.s).change_cost_center(emp, cc_b, date(2026, 8, 1))
-        # movimentação nas duas competências (holerite) p/ entrar no relatório
-        for comp_str in ("2026-03", "2026-08"):
-            self.s.add(EmployeeMonthlyPayrollOverride(
-                employee_id=emp.id, competence_month=comp_str, net_salary_amount=1000.0, vr_amount=0.0,
+        # O relatório consolida o CAP: cria o lançamento de folha no mês de PAGAMENTO
+        # (competência trabalhada + 1). O Centro de Custo exibido é o vigente na competência
+        # trabalhada (março → antigo; agosto → novo).
+        for pay in (date(2026, 4, 1), date(2026, 9, 1)):
+            self.s.add(PayableSnapshot(
+                month=pay, type=PayableSnapshotType.COLLABORATOR, ref_id=emp.id,
+                name=emp.full_name, cost_center="Projeto", category="Mão de obra",
+                amount_original=1000.0, amount_final=1000.0, amount_paid=0,
+                due_date=date(pay.year, pay.month, 10), paid=False,
             ))
         await self.s.flush()
         rpt_mar = await ReportService(self.s).generate_payroll_report(competencia=date(2026, 3, 1), scenario="REALIZADO")

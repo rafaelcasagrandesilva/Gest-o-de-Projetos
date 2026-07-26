@@ -15,6 +15,7 @@ from app.models.payable_snapshot import PayableSnapshot
 from app.models.payable_snapshot_generation import PayableSnapshotGeneration
 from app.models.cost_center_alias import CostCenterAlias
 from app.models.payable_import_template import PayableImportTemplate
+from app.models.payment_component import PaymentComponentType, PaymentVariableComponent
 from app.models.receivable import ReceivableInvoice
 from app.models.advance_institution import AdvanceInstitution
 from app.models.receivable_advance_batch import ReceivableAdvanceBatch, ReceivableAdvanceBatchItem
@@ -68,6 +69,8 @@ __all__ = [
     "PayableSnapshotGeneration",
     "CostCenterAlias",
     "PayableImportTemplate",
+    "PaymentComponentType",
+    "PaymentVariableComponent",
     "Vehicle",
     "VehicleUsage",
     "Project",

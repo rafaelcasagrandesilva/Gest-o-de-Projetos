@@ -4,7 +4,7 @@ from datetime import date
 from enum import Enum
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, Enum as SAEnum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, Enum as SAEnum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -97,13 +97,32 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
 
 
 class CompanyFinancialPayment(TimestampUUIDMixin, Base):
+    """Lançamento de uma competência (grade mensal).
+
+    Historicamente havia EXATAMENTE um lançamento por (item, competência) — o valor
+    esperado do mês. A partir da evolução "múltiplos lançamentos por competência" a
+    restrição de unicidade foi removida: um mesmo item pode ter N lançamentos no mesmo
+    mês (ex.: fornecedor que fatura mais de uma vez). Cada lançamento vira um título
+    independente no Contas a Pagar (PayableSnapshot.entry_id = este id), com pagamento
+    próprio. A tela principal mostra apenas a SOMA dos lançamentos da competência.
+
+    Genérico de propósito — serve qualquer item de Custo Fixo, sem regra por fornecedor.
+    Nota de nomenclatura: a tabela chama-se `..._payments` por herança histórica; cada
+    linha é conceitualmente um LANÇAMENTO (não um pagamento — o pagamento vive no CAP).
+    """
+
     __tablename__ = "company_financial_payments"
-    __table_args__ = (UniqueConstraint("item_id", "competencia", name="uq_company_financial_payment_month"),)
 
     item_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("company_financial_items.id", ondelete="CASCADE"), index=True
     )
     competencia: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     valor: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    # Vencimento do lançamento (governa o due_date do título no CAP). NULL apenas em
+    # registros legados até o backfill; novos lançamentos sempre preenchem.
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Descrição livre do lançamento (ex.: "1ª quinzena", "NF 45872", "Complemento").
+    # Texto totalmente livre — sem enum/hardcode. Opcional.
+    descricao: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     item: Mapped["CompanyFinancialItem"] = relationship(back_populates="payments")

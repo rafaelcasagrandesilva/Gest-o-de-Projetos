@@ -24,6 +24,9 @@ def _money(v: object) -> float:
 class PagamentoMes(BaseModel):
     mes: str = Field(..., description="YYYY-MM")
     valor: float | None = Field(default=None, ge=0)  # Optional para redação (grade mensal)
+    # Quantidade de LANÇAMENTOS que compõem o valor do mês (soma). 1 no caso comum; >1 quando
+    # a competência tem múltiplos lançamentos (detalhe no modal). Somente leitura.
+    count: int | None = None
 
     @field_validator("mes")
     @classmethod
@@ -275,6 +278,45 @@ class CompanyFinancialItemRead(BaseModel):
 
 class PagamentosReplace(BaseModel):
     pagamentos: list[PagamentoMes] = Field(default_factory=list)
+
+
+class LancamentoCompetenciaIn(BaseModel):
+    """Um lançamento (entrada) de uma competência — carga do modal.
+
+    Genérico para qualquer item de Custo Fixo. `id` presente = edição de lançamento existente;
+    ausente = novo. Descrição é texto livre (sem enum/hardcode).
+    """
+
+    id: str | None = None
+    vencimento: date | None = None
+    valor: float = Field(..., ge=0)
+    # Texto livre; limite confortável. A coluna no banco mantém 255 (headroom); a exibição no
+    # CAP trunca com reticências preservando o valor completo persistido.
+    descricao: str | None = Field(default=None, max_length=150)
+
+
+class LancamentosReplace(BaseModel):
+    lancamentos: list[LancamentoCompetenciaIn] = Field(default_factory=list)
+
+
+class LancamentoRead(BaseModel):
+    id: str
+    competencia: str
+    vencimento: date | None = None
+    valor: float | None = None
+    descricao: str | None = None
+    # Espelho do CAP (fonte oficial do pagamento por lançamento).
+    cap_amount_paid: float | None = 0
+    cap_status: str | None = None
+    has_payment: bool = False
+
+
+class LancamentosCompetenciaRead(BaseModel):
+    item_id: str
+    competencia: str
+    lancamentos: list[LancamentoRead] = Field(default_factory=list)
+    total: float | None = 0
+    payable_sync_warning: str | None = None
 
 
 class KpiEndividamentoRead(BaseModel):

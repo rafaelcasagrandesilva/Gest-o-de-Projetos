@@ -24,6 +24,8 @@ from app.schemas.company_finance import (
     CompanyFinancialItemUpdate,
     KpiCustosFixosRead,
     KpiEndividamentoRead,
+    LancamentosCompetenciaRead,
+    LancamentosReplace,
     PagamentosReplace,
     PendenciasCustosFixosRead,
 )
@@ -275,6 +277,71 @@ async def replace_payments(
             item_id,
             competencia,
             pags,
+            e,
+            traceback.format_exc(),
+        )
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/items/{item_id}/entries", response_model=LancamentosCompetenciaRead)
+async def list_entries(
+    item_id: UUID,
+    competencia: str = Query(..., description="YYYY-MM"),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> LancamentosCompetenciaRead:
+    """Lançamentos de uma competência (modal). Somente leitura; espelha pagamento do CAP."""
+    tipo = await _item_tipo(db, item_id)
+    if tipo is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    _assert_verb(actor, tipo, "read")
+    svc = CompanyFinanceService(db)
+    data = await svc.list_entries(item_id=item_id, competencia=competencia)
+    result = LancamentosCompetenciaRead.model_validate(data)
+    return redact_for(_sensitive_resource_for_tipo(tipo), result, actor)
+
+
+@router.put("/items/{item_id}/entries", response_model=LancamentosCompetenciaRead)
+async def replace_entries(
+    item_id: UUID,
+    payload: LancamentosReplace,
+    competencia: str = Query(..., description="YYYY-MM"),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> LancamentosCompetenciaRead:
+    """Substitui os lançamentos de UMA competência (modal). Genérico para qualquer Custo Fixo."""
+    tipo = await _item_tipo(db, item_id)
+    if tipo is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    _assert_verb(actor, tipo, "update")
+    lancs = [l.model_dump() for l in payload.lancamentos]
+    try:
+        svc = CompanyFinanceService(db)
+        row = await svc.replace_entries(item_id=item_id, competencia=competencia, lancamentos=lancs)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Item não encontrado")
+        await db.commit()
+        data = await svc.list_entries(item_id=item_id, competencia=competencia)
+        result = LancamentosCompetenciaRead.model_validate(data)
+        sync = svc.last_payable_sync or {}
+        skipped = sync.get("skipped_paid") or []
+        if skipped:
+            meses = ", ".join(f"{d:%m/%Y}" for d in sorted(set(skipped)))
+            result.payable_sync_warning = (
+                f"Existe pagamento registrado em {meses}: os lançamentos pagos foram "
+                "preservados e não puderam ser alterados/excluídos."
+            )
+        return redact_for(_sensitive_resource_for_tipo(tipo), result, actor)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.error(
+            "company_finance.replace_entries FAILED item_id=%s competencia=%s payload=%s error=%s\n%s",
+            item_id,
+            competencia,
+            lancs,
             e,
             traceback.format_exc(),
         )

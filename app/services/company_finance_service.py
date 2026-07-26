@@ -5,13 +5,14 @@ import traceback
 from datetime import date, datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment, RenegotiationType
 from app.models.company_finance import CompanyFinancialItemType
 from app.models.employee import Employee
+from app.models.payable_payment import PayablePayment
 from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.schemas.company_finance import PagamentoMes
 from app.services.company_finance_cost_center import (
@@ -118,6 +119,15 @@ def first_of_month(d: date) -> date:
     return date(d.year, d.month, 1)
 
 
+def _default_entry_due(comp: date) -> date:
+    """Vencimento padrão de um lançamento (dia 10 da competência, como no CAP)."""
+    import calendar
+
+    c = date(comp.year, comp.month, 1)
+    last = calendar.monthrange(c.year, c.month)[1]
+    return date(c.year, c.month, min(10, last))
+
+
 def add_months(base: date, n: int) -> date:
     """Soma `n` meses a um primeiro-de-mês, retornando outro primeiro-de-mês."""
     total = (base.year * 12 + (base.month - 1)) + n
@@ -163,6 +173,28 @@ class CompanyFinanceService:
         ).scalars().all()
         return set(rows)
 
+    async def _entries_for_month(
+        self, *, item_id: UUID, comp: date
+    ) -> list[CompanyFinancialPayment]:
+        """Lançamentos de um item na competência, ordenados por vencimento → criação.
+
+        Ordenação estável (requisito de UX), independente da ordem de inserção.
+        """
+        rows = (
+            await self.db.execute(
+                select(CompanyFinancialPayment)
+                .where(
+                    CompanyFinancialPayment.item_id == item_id,
+                    CompanyFinancialPayment.competencia == first_of_month(comp),
+                )
+                .order_by(
+                    CompanyFinancialPayment.due_date.asc().nulls_last(),
+                    CompanyFinancialPayment.created_at.asc(),
+                )
+            )
+        ).scalars().all()
+        return list(rows)
+
     async def _sync_payables_metadata_for_company_finance_item(self, *, item_id: UUID) -> None:
         await PayableSnapshotService(self.db).sync_company_finance_item_metadata(item_id=item_id)
 
@@ -191,17 +223,18 @@ class CompanyFinanceService:
         cap_map = await self._cap_rows_for_competence(list(rows), tipo, comp_date)
         out: list[dict] = []
         for it in rows:
-            out.append(await self._item_to_read(it, comp_date, cap_row=cap_map.get(it.id)))
+            out.append(await self._item_to_read(it, comp_date, cap_rows=cap_map.get(it.id)))
         return out
 
     async def _cap_rows_for_competence(
         self, items: list[CompanyFinancialItem], tipo: str, comp_date: date | None
-    ) -> dict[UUID, PayableSnapshot]:
-        """Lançamentos do Contas a Pagar (PayableSnapshot) da competência, por `ref_id`.
+    ) -> dict[UUID, list[PayableSnapshot]]:
+        """Títulos do Contas a Pagar (PayableSnapshot) da competência, agrupados por `ref_id`.
 
-        Somente leitura: NÃO chama a geração automática (não materializa o snapshot) — reflete
-        exatamente o que já existe no CAP. Idempotência por (competência, ref_id) garante no
-        máximo uma linha corporativa por item. Vazio quando não há competência/itens.
+        Somente leitura: NÃO materializa nem gera — reflete o que já existe no CAP. Com
+        múltiplos lançamentos há N títulos por item/mês (um por `entry_id`); a lista por item é
+        agregada na leitura (soma pago/valor, status derivado). Vazio quando não há
+        competência/itens.
         """
         if comp_date is None or not items:
             return {}
@@ -220,7 +253,12 @@ class CompanyFinanceService:
                 )
             )
         ).scalars().all()
-        return {r.ref_id: r for r in rows if r.ref_id is not None}
+        out: dict[UUID, list[PayableSnapshot]] = {}
+        for r in rows:
+            if r.ref_id is None:
+                continue
+            out.setdefault(r.ref_id, []).append(r)
+        return out
 
     async def _employee_full_name(self, employee_id: UUID | None) -> str | None:
         if employee_id is None:
@@ -250,19 +288,24 @@ class CompanyFinanceService:
         self,
         it: CompanyFinancialItem,
         competencia: date | None,
-        cap_row: PayableSnapshot | None = None,
+        cap_rows: list[PayableSnapshot] | None = None,
     ) -> dict:
-        pags = sorted(it.payments, key=lambda p: p.competencia)
-        pagamentos = [PagamentoMes(mes=month_key(p.competencia), valor=_f(p.valor)).model_dump() for p in pags]
+        # Múltiplos lançamentos por competência: a grade exibe SEMPRE a SOMA do mês (a tela
+        # principal permanece limpa). Agrega valor e CONTAGEM por competência; `count` alimenta
+        # o indicador discreto "(N)" no frontend (só relevante quando > 1).
+        by_month: dict[date, float] = {}
+        by_month_count: dict[date, int] = {}
+        for p in it.payments:
+            by_month[p.competencia] = by_month.get(p.competencia, 0.0) + _f(p.valor)
+            by_month_count[p.competencia] = by_month_count.get(p.competencia, 0) + 1
+        pagamentos = [
+            PagamentoMes(mes=month_key(m), valor=v, count=by_month_count.get(m, 0)).model_dump()
+            for m, v in sorted(by_month.items())
+        ]
         total_pago = sum(_f(p.valor) for p in it.payments)
         ref = _f(it.valor_referencia)
         debt_base = _debt_base_amount(it) if it.tipo == "endividamento" else ref
-        pago_mes = 0.0
-        if competencia:
-            for p in it.payments:
-                if p.competencia == competencia:
-                    pago_mes = _f(p.valor)
-                    break
+        pago_mes = round(by_month.get(competencia, 0.0), 2) if competencia else 0.0
 
         item_type = getattr(it, "item_type", None)
         employee_id = getattr(it, "employee_id", None)
@@ -279,18 +322,20 @@ class CompanyFinanceService:
         cc_fields = await self._cost_center_fields(it)
 
         # Espelho do Contas a Pagar da competência (fonte oficial de pagamento/status para o
-        # Extrato Analítico). cap_row é o lançamento corporativo; None quando ainda não existe.
+        # Extrato Analítico). Com N lançamentos há N títulos por item/mês: agrega pago e valor
+        # e deriva o status do conjunto (PAGO só quando TODOS quitados; PARCIAL se há pagamento).
+        rows = cap_rows or []
+        cap_paid = sum(_f(r.amount_paid) for r in rows)
+        cap_final = sum(_f(r.amount_final) for r in rows)
         cap_fields = {
-            "cap_has_line": cap_row is not None,
-            "cap_amount_paid": _f(getattr(cap_row, "amount_paid", None)) if cap_row is not None else 0.0,
+            "cap_has_line": len(rows) > 0,
+            "cap_amount_paid": round(cap_paid, 2),
             "cap_status": (
-                payable_snapshot_payment_status(
-                    amount_paid=cap_row.amount_paid, amount_final=cap_row.amount_final
-                )
-                if cap_row is not None
+                payable_snapshot_payment_status(amount_paid=cap_paid, amount_final=cap_final)
+                if rows
                 else None
             ),
-            "cap_is_obsolete": bool(getattr(cap_row, "is_obsolete", False)) if cap_row is not None else False,
+            "cap_is_obsolete": bool(rows) and all(getattr(r, "is_obsolete", False) for r in rows),
         }
 
         if it.tipo == "endividamento":
@@ -626,30 +671,43 @@ class CompanyFinanceService:
                 {month_key(c): v for c, v in incoming.items()},
             )
 
-            logger.info("company_finance.replace_payments service BEFORE delete item_id=%s", item_id)
-            await self.db.execute(
-                delete(CompanyFinancialPayment).where(
-                    CompanyFinancialPayment.item_id == item_id,
-                    CompanyFinancialPayment.competencia.in_(sorted(incoming)),
-                )
-            )
-            logger.info("company_finance.replace_payments service AFTER delete item_id=%s", item_id)
-
-            logger.info("company_finance.replace_payments service BEFORE insert item_id=%s", item_id)
+            # A grade legada (uma caixa por mês) governa o LANÇAMENTO ÚNICO da competência.
+            # Atualização IN-PLACE (nunca delete+insert) para preservar o vínculo com o título
+            # do CAP (`payable_snapshots.entry_id`) — recriar a linha zeraria o vínculo via
+            # ON DELETE SET NULL e desalinharia pagamento/vencimento/descrição do modal.
+            # Competências com MÚLTIPLOS lançamentos (geridos no modal) NÃO são achatadas aqui:
+            # a caixa da grade passa a ser somente leitura (a soma), e este caminho as ignora.
             inserted = 0
             for comp, val in incoming.items():
-                if val <= 0:
-                    continue
-                self.db.add(
-                    CompanyFinancialPayment(
-                        item_id=item_id,
-                        competencia=comp,
-                        valor=val,
+                existing = await self._entries_for_month(item_id=item_id, comp=comp)
+                if len(existing) > 1:
+                    # Preserva os lançamentos do modal; a grade não edita meses com N > 1.
+                    logger.info(
+                        "company_finance.replace_payments skip multi-entry month item_id=%s comp=%s n=%d",
+                        item_id,
+                        month_key(comp),
+                        len(existing),
                     )
-                )
-                inserted += 1
+                    continue
+                if val > 0:
+                    if existing:
+                        existing[0].valor = val  # in-place: mantém id/vencimento/descrição
+                    else:
+                        self.db.add(
+                            CompanyFinancialPayment(
+                                item_id=item_id,
+                                competencia=comp,
+                                valor=val,
+                                due_date=_default_entry_due(comp),
+                                descricao=None,
+                            )
+                        )
+                        inserted += 1
+                else:
+                    for e in existing:  # limpar a caixa remove o lançamento único da competência
+                        await self.db.delete(e)
             logger.info(
-                "company_finance.replace_payments service AFTER insert item_id=%s inserted=%d",
+                "company_finance.replace_payments service upsert item_id=%s inserted=%d",
                 item_id,
                 inserted,
             )
@@ -689,6 +747,197 @@ class CompanyFinanceService:
                 traceback.format_exc(),
             )
             raise
+
+    # ------------------------------------------------------------------ #
+    # Lançamentos da competência (N por mês) — caminho canônico do modal
+    # ------------------------------------------------------------------ #
+    async def _entry_snapshot(self, entry_id: UUID) -> PayableSnapshot | None:
+        return (
+            await self.db.execute(
+                select(PayableSnapshot).where(PayableSnapshot.entry_id == entry_id)
+            )
+        ).scalars().first()
+
+    async def _entry_is_paid(self, snap: PayableSnapshot | None) -> bool:
+        if snap is None:
+            return False
+        if _f(snap.amount_paid) > 0:
+            return True
+        cnt = await self.db.scalar(
+            select(func.count())
+            .select_from(PayablePayment)
+            .where(
+                PayablePayment.payable_snapshot_id == snap.id,
+                PayablePayment.reversed_at.is_(None),
+            )
+        )
+        return int(cnt or 0) > 0
+
+    @staticmethod
+    def _parse_due(value: object) -> date | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, date):
+            return value
+        return date.fromisoformat(str(value)[:10])
+
+    async def list_entries(self, *, item_id: UUID, competencia: str) -> dict:
+        """Lançamentos de uma competência + status de pagamento (espelho do CAP).
+
+        Fonte de verdade do PAGAMENTO é o Contas a Pagar (por `entry_id`); a grade guarda o
+        valor/vencimento/descrição. Cada lançamento traz seu próprio status independente.
+        """
+        item = await self.db.get(CompanyFinancialItem, item_id)
+        if item is None:
+            return {"item_id": str(item_id), "competencia": competencia, "lancamentos": [], "total": 0.0}
+        comp = parse_month(competencia)
+        entries = await self._entries_for_month(item_id=item_id, comp=comp)
+        out: list[dict] = []
+        total = 0.0
+        for e in entries:
+            snap = await self._entry_snapshot(e.id)
+            paid = await self._entry_is_paid(snap)
+            valor = _f(e.valor)
+            total += valor
+            out.append(
+                {
+                    "id": str(e.id),
+                    "competencia": competencia,
+                    "vencimento": e.due_date,
+                    "valor": valor,
+                    "descricao": e.descricao,
+                    "cap_amount_paid": _f(getattr(snap, "amount_paid", 0)) if snap is not None else 0.0,
+                    "cap_status": (
+                        payable_snapshot_payment_status(
+                            amount_paid=snap.amount_paid, amount_final=snap.amount_final
+                        )
+                        if snap is not None
+                        else None
+                    ),
+                    "has_payment": paid,
+                }
+            )
+        return {
+            "item_id": str(item_id),
+            "competencia": competencia,
+            "lancamentos": out,
+            "total": round(total, 2),
+        }
+
+    async def replace_entries(
+        self, *, item_id: UUID, competencia: str, lancamentos: list[dict]
+    ) -> CompanyFinancialItem | None:
+        """Substitui o conjunto de LANÇAMENTOS de UMA competência (caminho do modal).
+
+        Genérico para qualquer item de Custo Fixo. Cada lançamento gera/atualiza um título
+        independente no CAP (por `entry_id`), com pagamento próprio. Preserva integralmente os
+        fluxos atuais:
+        - lançamento com pagamento é BLOQUEADO para edição/exclusão (histórico intacto),
+          reportado em `skipped_paid`;
+        - exclusão de lançamento ABERTO remove o respectivo título; os demais permanecem;
+        - a soma da competência (título) continua sendo a única fonte para relatórios/dashboard.
+        """
+        item = await self.db.get(CompanyFinancialItem, item_id)
+        if item is None:
+            return None
+        await CompanyFinanceCostCenterService(self.db).migrate_legacy_row(item)
+        comp = parse_month(competencia)
+
+        existing = {e.id: e for e in await self._entries_for_month(item_id=item_id, comp=comp)}
+
+        # Normaliza a carga: separa por id (edição) e novos.
+        incoming_by_id: dict[UUID, dict] = {}
+        incoming_new: list[dict] = []
+        for raw in lancamentos:
+            valor = max(0.0, float(raw.get("valor") or 0))
+            payload = {
+                "valor": valor,
+                "vencimento": self._parse_due(raw.get("vencimento")),
+                "descricao": (str(raw.get("descricao")).strip() or None) if raw.get("descricao") else None,
+            }
+            rid = raw.get("id")
+            if rid:
+                try:
+                    incoming_by_id[UUID(str(rid))] = payload
+                except ValueError:
+                    incoming_new.append(payload)
+            else:
+                incoming_new.append(payload)
+
+        # Cadastro inativo não gera NOVOS lançamentos (preserva o ciclo de vida); correções em
+        # lançamentos já existentes continuam permitidas.
+        if not bool(getattr(item, "is_active", True)):
+            has_new_positive = any(p["valor"] > 0 for p in incoming_new) or any(
+                rid not in existing and p["valor"] > 0 for rid, p in incoming_by_id.items()
+            )
+            if has_new_positive and not existing:
+                raise ValueError(
+                    "Cadastro inativo não gera novos lançamentos. "
+                    f"Reative o cadastro para lançar novas competências ({competencia})."
+                )
+
+        skipped_paid: list[str] = []
+
+        # 1) Exclusões: existentes ausentes na carga. Bloqueia pagos (preserva histórico).
+        keep_ids = set(incoming_by_id.keys())
+        for eid, entry in existing.items():
+            if eid in keep_ids:
+                continue
+            snap = await self._entry_snapshot(eid)
+            if await self._entry_is_paid(snap):
+                skipped_paid.append(competencia)
+                continue
+            if snap is not None:
+                await self.db.delete(snap)  # remove o título ABERTO do CAP
+            await self.db.delete(entry)
+
+        # 2) Edições in-place (bloqueia pagos).
+        for eid, payload in incoming_by_id.items():
+            entry = existing.get(eid)
+            if entry is None:
+                # id desconhecido: tratado como novo, se positivo.
+                if payload["valor"] > 0:
+                    incoming_new.append(payload)
+                continue
+            snap = await self._entry_snapshot(eid)
+            if await self._entry_is_paid(snap):
+                if _f(entry.valor) != payload["valor"] or entry.due_date != payload["vencimento"]:
+                    skipped_paid.append(competencia)
+                continue
+            if payload["valor"] <= 0:
+                # valor não-positivo em edição = exclusão do lançamento aberto.
+                if snap is not None:
+                    await self.db.delete(snap)
+                await self.db.delete(entry)
+                continue
+            entry.valor = payload["valor"]
+            entry.due_date = payload["vencimento"] or _default_entry_due(comp)
+            entry.descricao = payload["descricao"]
+
+        # 3) Novos lançamentos (valor positivo).
+        for payload in incoming_new:
+            if payload["valor"] <= 0:
+                continue
+            self.db.add(
+                CompanyFinancialPayment(
+                    item_id=item_id,
+                    competencia=comp,
+                    valor=payload["valor"],
+                    due_date=payload["vencimento"] or _default_entry_due(comp),
+                    descricao=payload["descricao"],
+                )
+            )
+
+        item.updated_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        await self.db.refresh(item, attribute_names=["payments"])
+
+        # Sincroniza a competência com o CAP (cria/atualiza títulos por lançamento).
+        sync = await self._sync_payables_for_company_finance_item(item_id=item_id, months={comp})
+        # Une avisos de pagamento (exclusão/edição bloqueadas + guarda do reconciliador).
+        merged_skipped = list({*(sync.get("skipped_paid") or []), *[parse_month(m) for m in skipped_paid]})
+        self.last_payable_sync = {"synced": sync.get("synced", 0), "skipped_paid": merged_skipped}
+        return item
 
     async def kpis_endividamento(self, competencia: str) -> dict:
         items = (
@@ -744,12 +993,10 @@ class CompanyFinanceService:
                 total_esperado_mes += round(float(base_val) * (float(it.percentual) / 100.0), 2)
             else:
                 total_esperado_mes += _f(it.valor_referencia)
+        # Múltiplos lançamentos: soma TODOS os lançamentos da competência (não só o primeiro).
         total_pago_mes = 0.0
         for it in items:
-            for p in it.payments:
-                if p.competencia == comp:
-                    total_pago_mes += _f(p.valor)
-                    break
+            total_pago_mes += sum(_f(p.valor) for p in it.payments if p.competencia == comp)
         return {
             "total_esperado_mes": total_esperado_mes,
             "total_pago_mes": total_pago_mes,
@@ -858,7 +1105,8 @@ class CompanyFinanceService:
             else:
                 continue
 
-            pago_mes = next((_f(p.valor) for p in it.payments if p.competencia == comp), 0.0)
+            # Múltiplos lançamentos: soma TODOS os lançamentos da competência.
+            pago_mes = sum(_f(p.valor) for p in it.payments if p.competencia == comp)
             total_previsto += valor_previsto
             total_pago += pago_mes
 
@@ -924,12 +1172,10 @@ class CompanyFinanceService:
         points: list[dict] = []
         for m in months:
             mk = month_key(m)
+            # Múltiplos lançamentos: soma TODOS os lançamentos da competência.
             pagamentos_mes = 0.0
             for it in items:
-                for p in it.payments:
-                    if p.competencia == m:
-                        pagamentos_mes += _f(p.valor)
-                        break
+                pagamentos_mes += sum(_f(p.valor) for p in it.payments if p.competencia == m)
 
             saldo_restante_total = None
             if tipo == "endividamento":

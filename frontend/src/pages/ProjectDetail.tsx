@@ -1,4 +1,8 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  VariablePaymentComponentsEditor,
+  type VariablePaymentComponentsHandle,
+} from "@/components/project/VariablePaymentComponentsEditor";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { listFleetVehiclesActive, type FleetVehicle } from "@/services/vehicles";
 import { Link, useParams } from "react-router-dom";
@@ -202,6 +206,7 @@ function MonthlyPayrollSection({
 }) {
   const [netSalary, setNetSalary] = useState("");
   const [vrAmount, setVrAmount] = useState("");
+  const [vacationAmount, setVacationAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -217,6 +222,9 @@ function MonthlyPayrollSection({
         if (cancelled) return;
         setNetSalary(row?.net_salary_amount != null ? String(row.net_salary_amount) : "");
         setVrAmount(row?.vr_amount != null ? String(row.vr_amount) : "");
+        setVacationAmount(
+          row?.vacation_advance_amount != null ? String(row.vacation_advance_amount) : "",
+        );
         setNotes(row?.notes ?? "");
       } catch {
         if (!cancelled) setErr("Não foi possível carregar a folha real do mês.");
@@ -243,6 +251,7 @@ function MonthlyPayrollSection({
       await saveMonthlyPayroll(employeeId, competenceMonth, {
         net_salary_amount: parseNum(netSalary),
         vr_amount: parseNum(vrAmount),
+        vacation_advance_amount: parseNum(vacationAmount),
         notes: notes.trim() || null,
       });
       await Promise.resolve(onSaved());
@@ -303,6 +312,21 @@ function MonthlyPayrollSection({
                 placeholder="Ex.: 672.00"
               />
             </label>
+            <label className="block text-xs text-slate-600">
+              Férias (adiantamento)
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={vacationAmount}
+                onChange={(e) => setVacationAmount(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+                placeholder="Ex.: 2500.00"
+              />
+              <span className="mt-1 block text-[11px] text-slate-500">
+                Gera lançamento "Férias CLT" no Contas a Pagar. Não é somado ao salário.
+              </span>
+            </label>
             <label className="block text-xs text-slate-600 sm:col-span-2 lg:col-span-3">
               Observações
               <textarea
@@ -357,10 +381,10 @@ function LaborCostEditor({
   const [pjH, setPjH] = useState(() =>
     strOverrideOrCadastro(detail.cost_pj_hours_per_month, cadastroPjHoursPerMonth),
   );
-  const [pjAdd, setPjAdd] = useState(() => strOrEmpty(detail.cost_pj_additional_cost));
   const [totalOv, setTotalOv] = useState(() => strOrEmpty(detail.cost_total_override));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const variableComponentsRef = useRef<VariablePaymentComponentsHandle | null>(null);
 
   useEffect(() => {
     setSalary(strOverrideOrCadastro(detail.cost_salary_base, cadastroSalaryBase));
@@ -369,7 +393,6 @@ function LaborCostEditor({
     setH70(strOrEmpty(detail.cost_extra_hours_70));
     setH100(strOrEmpty(detail.cost_extra_hours_100));
     setPjH(strOverrideOrCadastro(detail.cost_pj_hours_per_month, cadastroPjHoursPerMonth));
-    setPjAdd(strOrEmpty(detail.cost_pj_additional_cost));
     setTotalOv(strOrEmpty(detail.cost_total_override));
     setErr(null);
   }, [detail, cadastroSalaryBase, cadastroPjHoursPerMonth]);
@@ -389,6 +412,22 @@ function LaborCostEditor({
       await Promise.resolve(onSaved());
     } catch {
       setErr("Não foi possível salvar os custos.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** "Salvar custos do mês": overrides + componentes variáveis num único fluxo de gravação. */
+  async function saveAll(patch: LaborCostPatch) {
+    if (readOnly) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      await updateLaborCosts(projectId, detail.labor_id, patch);
+      await variableComponentsRef.current?.persist();
+      await Promise.resolve(onSaved());
+    } catch {
+      setErr("Não foi possível salvar os custos e componentes.");
     } finally {
       setSaving(false);
     }
@@ -507,26 +546,22 @@ function LaborCostEditor({
                 }
               />
             </label>
-            <label className="block text-xs text-slate-600">
-              Ajuda de custo PJ (override)
-              <input
-                type="number"
-                step="0.01"
-                min={0}
-                value={pjAdd}
-                onChange={(e) => setPjAdd(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
-              />
-            </label>
           </>
         )}
       </div>
+
+      <VariablePaymentComponentsEditor
+        ref={variableComponentsRef}
+        laborId={detail.labor_id}
+        readOnly={readOnly}
+      />
+
       <div className="mt-3 flex flex-wrap gap-2">
         <button
           type="button"
           disabled={saving || readOnly}
           onClick={() =>
-            submit({
+            saveAll({
               cost_total_override: parseNum(totalOv),
               cost_salary_base: parseSalaryOrPjHoursOverride(salary, cadastroSalaryBase),
               cost_additional_costs: parseNum(add),
@@ -534,7 +569,6 @@ function LaborCostEditor({
               cost_extra_hours_70: parseNum(h70),
               cost_extra_hours_100: parseNum(h100),
               cost_pj_hours_per_month: parseSalaryOrPjHoursOverride(pjH, cadastroPjHoursPerMonth),
-              cost_pj_additional_cost: parseNum(pjAdd),
             })
           }
           className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
@@ -552,7 +586,6 @@ function LaborCostEditor({
               cost_extra_hours_70: null,
               cost_extra_hours_100: null,
               cost_pj_hours_per_month: null,
-              cost_pj_additional_cost: null,
               cost_total_override: null,
             })
           }

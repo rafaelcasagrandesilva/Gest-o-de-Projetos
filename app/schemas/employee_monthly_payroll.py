@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class EmployeeMonthlyPayrollUpsert(BaseModel):
     net_salary_amount: float | None = Field(default=None, ge=0)
     vr_amount: float | None = Field(default=None, ge=0)
+    vacation_advance_amount: float | None = Field(default=None, ge=0)
     notes: str | None = None
 
 
@@ -18,6 +19,7 @@ class EmployeeMonthlyPayrollRead(BaseModel):
     competence_month: str
     net_salary_amount: float | None
     vr_amount: float | None
+    vacation_advance_amount: float | None
     notes: str | None
     created_at: datetime
     updated_at: datetime
