@@ -155,6 +155,15 @@ class FinancialService:
             full = project_labor_full_monthly_cost(emp, settings, comp, row)
             factor = float(row.allocation_percentage) / 100.0
             total += full * factor
+        # Avulsos (Componentes Variáveis) do colaborador no projeto — custo REAL, somado por
+        # valor de face (sem rateio, igual ao CAP). Mesma fonte do resumo por colaborador;
+        # não duplica com o CAP (a margem deriva do custo de labor, não do CAP).
+        from app.services.payment_variable_component_service import PaymentVariableComponentService
+
+        var_by_labor = await PaymentVariableComponentService(self.session).sum_amount_by_project_labor(
+            [r.id for r in rows]
+        )
+        total += sum(var_by_labor.values())
         return total
 
     async def calcular_operacional_estruturado(

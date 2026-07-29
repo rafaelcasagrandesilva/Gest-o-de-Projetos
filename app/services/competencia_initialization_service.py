@@ -243,7 +243,10 @@ class CompetenciaInitializationService:
                     cost_extra_hours_70=pr.cost_extra_hours_70,
                     cost_extra_hours_100=pr.cost_extra_hours_100,
                     cost_pj_hours_per_month=pr.cost_pj_hours_per_month,
-                    cost_pj_additional_cost=pr.cost_pj_additional_cost,
+                    # Campo LEGADO (antiga "Ajuda de custo PJ"), substituído por Componentes
+                    # Variáveis. NÃO é propagado: copiá-lo criava ajudas de custo "congeladas"
+                    # (sem UI para editar/remover) em cada nova competência. Ver componentes variáveis.
+                    cost_pj_additional_cost=None,
                     cost_total_override=pr.cost_total_override,
                 )
             )

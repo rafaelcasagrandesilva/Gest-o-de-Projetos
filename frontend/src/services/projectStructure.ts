@@ -50,6 +50,9 @@ export interface ProjectLaborDetail {
   /** Redigidos (null) sem `projects.sensitive`. */
   full_cost: number | null;
   allocated_cost: number | null;
+  /** Avulsos (Componentes Variáveis) do colaborador — valor de face, sem rateio. */
+  variable_components_total: number | null;
+  /** allocated_cost + variable_components_total (custo cheio no projeto). */
   total_cost: number | null;
   breakdown: LaborCostBreakdown;
   uses_cost_total_override?: boolean;

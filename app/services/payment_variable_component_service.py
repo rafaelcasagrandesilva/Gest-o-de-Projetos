@@ -4,7 +4,7 @@ from datetime import date
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.company_finance import CompanyFinancialItem
@@ -53,6 +53,27 @@ class PaymentVariableComponentService:
             )
         ).scalars().all()
         return [self._to_read_row(r) for r in rows]
+
+    async def sum_amount_by_project_labor(self, labor_ids: list[UUID]) -> dict[UUID, float]:
+        """Soma dos componentes variáveis (valor de FACE) por vínculo de mão de obra.
+
+        Usado para incluir os avulsos (reembolso, ajuda de custo, diária, …) no custo do
+        colaborador no projeto — mesma base do CAP (sem rateio pelo percentual de alocação).
+        Cada `project_labor_id` já escopa projeto/competência/cenário.
+        """
+        if not labor_ids:
+            return {}
+        rows = (
+            await self.db.execute(
+                select(
+                    PaymentVariableComponent.project_labor_id,
+                    func.coalesce(func.sum(PaymentVariableComponent.amount), 0),
+                )
+                .where(PaymentVariableComponent.project_labor_id.in_(labor_ids))
+                .group_by(PaymentVariableComponent.project_labor_id)
+            )
+        ).all()
+        return {lid: float(total) for lid, total in rows if lid is not None}
 
     async def list_for_company_item(self, item_id: UUID, competencia: date) -> list[dict]:
         comp = normalize_competencia(competencia)

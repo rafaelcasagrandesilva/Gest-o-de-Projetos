@@ -13,7 +13,7 @@ from app.api.deps import (
     require_permission,
     require_project_access,
 )
-from app.core.permission_codes import PROJECTS_EDIT
+from app.core.permission_codes import PROJECTS_UPDATE
 from app.core.scenario import coerce_scenario, parse_scenario
 from app.api.sensitive import redact_for
 from app.database.session import get_db
@@ -47,7 +47,12 @@ from app.services.project_structure_service import ProjectStructureService
 
 
 router = APIRouter()
-_write = [Depends(require_permission(PROJECTS_EDIT))]
+# Escrita da estrutura do projeto pelo VERBO `projects.update` ("Editar" na grade).
+# Migrado do legado `projects.edit` para alinhar com o modelo de verbos: a coluna "Editar"
+# concede `projects.update`, e o grafo mantém retrocompat (`projects.edit ⇒ projects.update`),
+# então ADMIN (e qualquer um com o legado) continua passando. Espelha o módulo de Componentes
+# Variáveis, que já exige `projects.update`.
+_write = [Depends(require_permission(PROJECTS_UPDATE))]
 
 
 def _svc(db: AsyncSession) -> ProjectStructureService:

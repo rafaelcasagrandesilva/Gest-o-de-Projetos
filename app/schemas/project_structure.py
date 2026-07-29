@@ -157,6 +157,9 @@ class ProjectLaborDetailItem(BaseModel):
     allocation_percentage: float
     full_cost: float | None = None
     allocated_cost: float | None = None
+    # Soma dos Componentes Variáveis (avulsos) do colaborador neste projeto/competência — valor
+    # de face (sem rateio). `total_cost` = allocated_cost + variable_components_total.
+    variable_components_total: float | None = None
     total_cost: float | None = None
     breakdown: LaborCostBreakdown
     uses_cost_total_override: bool = False

@@ -212,7 +212,9 @@ class ProjectStructureService:
                     cost_extra_hours_70=pr.cost_extra_hours_70,
                     cost_extra_hours_100=pr.cost_extra_hours_100,
                     cost_pj_hours_per_month=pr.cost_pj_hours_per_month,
-                    cost_pj_additional_cost=pr.cost_pj_additional_cost,
+                    # Campo LEGADO (antiga "Ajuda de custo PJ"), substituído por Componentes
+                    # Variáveis. NÃO é propagado na cópia (evita ajudas de custo "congeladas").
+                    cost_pj_additional_cost=None,
                     cost_total_override=pr.cost_total_override,
                 )
             )
@@ -326,6 +328,13 @@ class ProjectStructureService:
     ) -> list[ProjectLaborDetailItem]:
         settings = await self._settings()
         rows = await self.list_labors(project_id=project_id, competencia=competencia, scenario=scenario)
+        # Avulsos (Componentes Variáveis) por labor — somados ao total do colaborador SEM rateio
+        # (valor de face, igual ao CAP). O `allocated_cost` segue sendo só a mão de obra rateada.
+        from app.services.payment_variable_component_service import PaymentVariableComponentService
+
+        var_by_labor = await PaymentVariableComponentService(self.session).sum_amount_by_project_labor(
+            [r.id for r in rows]
+        )
         out: list[ProjectLaborDetailItem] = []
         for row in rows:
             emp = row.employee
@@ -336,6 +345,7 @@ class ProjectStructureService:
             factor = self._labor_allocation_factor(row)
             pct = float(row.allocation_percentage)
             allocated = round(full_cost * factor, 2)
+            variable_total = round(float(var_by_labor.get(row.id, 0.0)), 2)
             bd_full = {k: float(v) for k, v in br_raw.items() if k != "total"}
             bd_scaled = {k: round(v * factor, 2) for k, v in bd_full.items()}
             snap = self._labor_cost_snapshot_read(row)
@@ -348,7 +358,8 @@ class ProjectStructureService:
                     allocation_percentage=pct,
                     full_cost=full_cost,
                     allocated_cost=allocated,
-                    total_cost=allocated,
+                    variable_components_total=variable_total,
+                    total_cost=round(allocated + variable_total, 2),
                     breakdown=LaborCostBreakdown(**bd_scaled),
                     uses_cost_total_override=row.cost_total_override is not None,
                     cost_base_source=project_labor_cost_base_source(emp, row),

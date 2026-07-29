@@ -922,19 +922,20 @@ function LaborTab({
   }, [employeeQuery, employeeOpen, loadEmployeeOptions]);
 
   const laborShare = useMemo(() => {
-    // Ordena tratando custo redigido (null) como 0 — sem lançar exceção.
-    const sorted = [...rows].sort((a, b) => (b.allocated_cost ?? 0) - (a.allocated_cost ?? 0));
-    const totalMaoDeObra = sumCurrencyOrNull(sorted.map((r) => r.allocated_cost));
-    const maxCost = sorted.length ? sorted[0].allocated_cost ?? 0 : 0;
+    // Custo cheio por colaborador = mão de obra alocada + avulsos (Componentes Variáveis) →
+    // usa `total_cost` para bater com a margem/indicadores. Custo redigido (null) tratado como 0.
+    const sorted = [...rows].sort((a, b) => (b.total_cost ?? 0) - (a.total_cost ?? 0));
+    const totalMaoDeObra = sumCurrencyOrNull(sorted.map((r) => r.total_cost));
+    const maxCost = sorted.length ? sorted[0].total_cost ?? 0 : 0;
     const chartData: LaborChartRow[] = sorted.map((r) => ({
       key: r.labor_id,
       name: r.name.length > 42 ? `${r.name.slice(0, 39)}…` : r.name,
-      cost: r.allocated_cost,
+      cost: r.total_cost,
       pctOfTotal:
-        totalMaoDeObra != null && totalMaoDeObra > 0 && r.allocated_cost != null
-          ? r.allocated_cost / totalMaoDeObra
+        totalMaoDeObra != null && totalMaoDeObra > 0 && r.total_cost != null
+          ? r.total_cost / totalMaoDeObra
           : 0,
-      isMax: maxCost > 0 && r.allocated_cost === maxCost,
+      isMax: maxCost > 0 && r.total_cost === maxCost,
     }));
     return { totalMaoDeObra, count: rows.length, chartData };
   }, [rows]);
@@ -1180,7 +1181,8 @@ function LaborTab({
                       </td>
                       <td className="px-4 py-3 text-slate-600">{r.tipo}</td>
                       <td className="px-4 py-3 text-right tabular-nums">{r.allocation_percentage}%</td>
-                      <td className="px-4 py-3 text-right tabular-nums">{money(r.allocated_cost)}</td>
+                      {/* Custo cheio no projeto = mão de obra alocada + avulsos (Componentes Variáveis). */}
+                      <td className="px-4 py-3 text-right tabular-nums">{money(r.total_cost)}</td>
                       <td className="px-4 py-3 text-right">
                         <button
                           type="button"
@@ -1204,9 +1206,23 @@ function LaborTab({
                               <dd className="font-medium tabular-nums">{money(r.full_cost)}</dd>
                             </div>
                             <div>
-                              <dt className="text-slate-500">Custo alocado ao projeto</dt>
+                              <dt className="text-slate-500">Custo alocado ao projeto (mão de obra)</dt>
                               <dd className="font-medium tabular-nums">{money(r.allocated_cost)}</dd>
                             </div>
+                            {(r.variable_components_total ?? 0) > 0 ? (
+                              <div>
+                                <dt className="text-slate-500">Componentes variáveis (avulsos)</dt>
+                                <dd className="font-medium tabular-nums text-emerald-700">
+                                  + {money(r.variable_components_total)}
+                                </dd>
+                              </div>
+                            ) : null}
+                            {(r.variable_components_total ?? 0) > 0 ? (
+                              <div>
+                                <dt className="text-slate-500">Total no projeto</dt>
+                                <dd className="font-semibold tabular-nums">{money(r.total_cost)}</dd>
+                              </div>
+                            ) : null}
                           </dl>
                           <p className="mb-2 text-slate-500">Detalhamento proporcional ao percentual:</p>
                           <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
