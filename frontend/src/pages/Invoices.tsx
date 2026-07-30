@@ -583,8 +583,8 @@ export function Invoices() {
               className="rounded-lg border border-slate-300 px-3 py-2"
             >
               <option value="all">Todos</option>
-              <option value="official">Oficiais</option>
-              <option value="unofficial">Não Oficiais</option>
+              <option value="official">Faturados</option>
+              <option value="unofficial">Pré-Faturados</option>
             </select>
           </label>
           <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-sm">
@@ -725,7 +725,7 @@ export function Invoices() {
                 onChange={(e) => setForm((f) => ({ ...f, is_official: !e.target.checked }))}
                 className="h-4 w-4 rounded border-slate-300"
               />
-              <span className="text-slate-700">NF Não Oficial</span>
+              <span className="text-slate-700">NF Pré-Faturado</span>
             </label>
           </Field>
           <Field label="Observações">
@@ -901,7 +901,7 @@ export function Invoices() {
                         <span
                           className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${officialBadgeClass(row.is_official)}`}
                         >
-                          {row.is_official ? "OFICIAL" : "NÃO OFICIAL"}
+                          {row.is_official ? "FATURADO" : "PRÉ-FATURADO"}
                         </span>
                       </td>
                       <td className="whitespace-nowrap px-2 py-2">
@@ -1052,7 +1052,7 @@ export function Invoices() {
                                     disabled={!canEditInvoices || row.status === "CANCELADA"}
                                     className="h-4 w-4 rounded border-slate-300"
                                   />
-                                  <span className="text-slate-700">NF Não Oficial</span>
+                                  <span className="text-slate-700">NF Pré-Faturado</span>
                                 </label>
                                 <label className="flex flex-col gap-1 text-xs sm:col-span-2 lg:col-span-4">
                                   <span className="font-medium text-slate-700">Observações</span>
