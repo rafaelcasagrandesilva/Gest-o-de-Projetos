@@ -285,6 +285,15 @@ class DebtCustomScheduleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(any(p["item_id"] == item.id for p in pend_06["pendencias"]))
                 pend_05 = await cf.pendencias("endividamento", "2099-05")
                 self.assertFalse(any(p["item_id"] == item.id for p in pend_05["pendencias"]))
+                # Contrato do ROUTER: a resposta precisa validar no schema (origem="cronograma"
+                # deve ser aceita) — regressão do 500 em produção.
+                from app.schemas.company_finance import PendenciasCustosFixosRead
+
+                self.assertEqual(
+                    "cronograma",
+                    next(p["origem"] for p in pend_06["pendencias"] if p["item_id"] == item.id),
+                )
+                PendenciasCustosFixosRead.model_validate(pend_06)
             finally:
                 await session.rollback()
 

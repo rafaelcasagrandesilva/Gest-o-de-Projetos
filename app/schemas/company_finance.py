@@ -463,7 +463,8 @@ class PendenciaLancamentoRead(BaseModel):
     valor_referencia: float | None = None
     ultimo_valor: float | None = None  # último valor lançado em competência anterior
     ultimo_mes: str | None = None  # YYYY-MM da última competência com valor
-    origem: Literal["manual", "renegociacao"] = "manual"
+    # "cronograma" = pendência derivada de uma parcela do Cronograma Financeiro (Modo 2).
+    origem: Literal["manual", "renegociacao", "cronograma"] = "manual"
 
 
 class PendenciasCustosFixosRead(BaseModel):
