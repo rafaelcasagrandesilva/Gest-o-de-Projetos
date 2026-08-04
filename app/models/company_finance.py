@@ -87,6 +87,17 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     renegotiation_first_payment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     renegotiation_due_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Modo do endividamento renegociado (Cronograma Financeiro Personalizado).
+    # False (todos os legados) → Modo 1 "parcelas iguais": comportamento ATUAL, inalterado.
+    # True  → Modo 2: o conjunto de LANÇAMENTOS (payments) é a fonte oficial da execução da
+    #   dívida; cada linha vira um título no CAP por `entry_id`. Neste modo, pago/saldo/progresso
+    #   derivam EXCLUSIVAMENTE do cronograma + pagamentos reais do CAP (nunca da soma das linhas).
+    # Genérico de propósito: base para reutilizar "cronograma financeiro" em outras obrigações
+    # (acordos judiciais, parcelamentos tributários, financiamentos) no futuro.
+    uses_custom_schedule: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     payments: Mapped[list["CompanyFinancialPayment"]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",
@@ -124,5 +135,10 @@ class CompanyFinancialPayment(TimestampUUIDMixin, Base):
     # Descrição livre do lançamento (ex.: "1ª quinzena", "NF 45872", "Complemento").
     # Texto totalmente livre — sem enum/hardcode. Opcional.
     descricao: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Sequência da PARCELA no Cronograma Financeiro Personalizado (Modo 2). Preenchido apenas
+    # em lançamentos de cronograma; NULL em legados/Custos Fixos. Chave estável que permite
+    # regerar o cronograma por faixas preservando as parcelas já pagas (casamento por seq).
+    schedule_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     item: Mapped["CompanyFinancialItem"] = relationship(back_populates="payments")

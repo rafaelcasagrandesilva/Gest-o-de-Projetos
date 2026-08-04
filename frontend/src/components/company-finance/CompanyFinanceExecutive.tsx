@@ -18,7 +18,10 @@ import {
   fetchKpiEndividamento,
   fetchPendencias,
   listCompanyFinanceItems,
+  fetchSchedule,
+  previewSchedule,
   replaceCompanyFinancePayments,
+  replaceSchedule,
   updateCompanyFinanceItem,
   type ChartPoint,
   type CompanyFinancialItem,
@@ -54,6 +57,7 @@ import {
 import { ViewModeToggle } from "@/components/finance/ViewModeToggle";
 import { VariableComponentsModal } from "@/components/company-finance/VariableComponentsModal";
 import { LancamentosCompetenciaModal } from "@/components/company-finance/LancamentosCompetenciaModal";
+import { FinancialScheduleEditor } from "@/components/financial-schedule/FinancialScheduleEditor";
 import { itemMatchesSearch } from "@/components/company-finance/itemSearch";
 import { CollapsiblePanel, PrimaryAddButton } from "@/components/ExpandableFormSection";
 import { isAxiosError } from "axios";
@@ -1825,6 +1829,8 @@ function FinanceItemCard({
   const [structureRenegDueDay, setStructureRenegDueDay] = useState(
     typeof item.renegotiation_due_day === "number" ? String(item.renegotiation_due_day) : "",
   );
+  const [structureUsesSchedule, setStructureUsesSchedule] = useState(Boolean(item.uses_custom_schedule));
+  const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
   const [structureError, setStructureError] = useState<string | null>(null);
   const [structureSuccess, setStructureSuccess] = useState<string | null>(null);
   // Modal genérico "Lançamentos da Competência" (N por mês). Aberto pela célula do mês.
@@ -1867,6 +1873,7 @@ function FinanceItemCard({
     setStructureInstallmentValue(
       typeof item.installment_value === "number" ? formatCurrencyInputFromApi(item.installment_value) : "",
     );
+    setStructureUsesSchedule(Boolean(item.uses_custom_schedule));
     setStructureRenegAgreementDate(item.renegotiation_agreement_date ?? "");
     setStructureRenegFirstPaymentDate(item.renegotiation_first_payment_date ?? "");
     setStructureRenegDueDay(
@@ -2022,7 +2029,12 @@ function FinanceItemCard({
       payload.has_renegotiation = structureHasReneg;
       payload.renegotiated_amount = structureHasReneg ? parseBRLInput(structureRenegAmount) : null;
       payload.renegotiation_type = structureHasReneg ? structureRenegType : null;
-      if (structureHasReneg && structureRenegType === "INSTALLMENTS") {
+      // Modo 2 (Cronograma personalizado): as parcelas são definidas no Cronograma; não há
+      // parcela fixa. Só válido com renegociação parcelada.
+      const usesSchedule =
+        structureHasReneg && structureRenegType === "INSTALLMENTS" && structureUsesSchedule;
+      payload.uses_custom_schedule = usesSchedule;
+      if (structureHasReneg && structureRenegType === "INSTALLMENTS" && !usesSchedule) {
         payload.installment_count = Number.parseInt(structureInstallments || "0", 10);
         payload.installment_value = parseBRLInput(structureInstallmentValue);
       }
@@ -2465,26 +2477,48 @@ function FinanceItemCard({
                     </label>
                     {structureRenegType === "INSTALLMENTS" && (
                       <>
-                        <label className="flex flex-col gap-1 text-sm">
-                          <span className="text-slate-600">Parcelas</span>
+                        <label className="flex items-center gap-2 text-sm sm:col-span-2 lg:col-span-4">
                           <input
-                            value={structureInstallments}
-                            onChange={(e) => setStructureInstallments(e.target.value)}
-                            className="rounded border border-slate-300 px-2 py-1.5"
-                            inputMode="numeric"
+                            type="checkbox"
+                            checked={structureUsesSchedule}
+                            onChange={(e) => setStructureUsesSchedule(e.target.checked)}
                             disabled={readOnly || structureSaving}
+                            className="h-4 w-4 rounded border-slate-300"
                           />
+                          <span className="text-slate-700">
+                            Cronograma personalizado{" "}
+                            <span className="text-xs text-slate-500">(parcelas com valores diferentes)</span>
+                          </span>
                         </label>
-                        <label className="flex flex-col gap-1 text-sm">
-                          <span className="text-slate-600">Valor parcela</span>
-                          <input
-                            value={structureInstallmentValue}
-                            onChange={(e) => setStructureInstallmentValue(e.target.value)}
-                            className="rounded border border-slate-300 px-2 py-1.5"
-                            inputMode="decimal"
-                            disabled={readOnly || structureSaving}
-                          />
-                        </label>
+                        {structureUsesSchedule ? (
+                          <p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700 ring-1 ring-indigo-200 sm:col-span-2 lg:col-span-4">
+                            As parcelas são definidas no <strong>Cronograma</strong> (gerador por faixas). Salve a
+                            estrutura e use “Gerenciar cronograma”.
+                          </p>
+                        ) : (
+                          <>
+                            <label className="flex flex-col gap-1 text-sm">
+                              <span className="text-slate-600">Parcelas</span>
+                              <input
+                                value={structureInstallments}
+                                onChange={(e) => setStructureInstallments(e.target.value)}
+                                className="rounded border border-slate-300 px-2 py-1.5"
+                                inputMode="numeric"
+                                disabled={readOnly || structureSaving}
+                              />
+                            </label>
+                            <label className="flex flex-col gap-1 text-sm">
+                              <span className="text-slate-600">Valor parcela</span>
+                              <input
+                                value={structureInstallmentValue}
+                                onChange={(e) => setStructureInstallmentValue(e.target.value)}
+                                className="rounded border border-slate-300 px-2 py-1.5"
+                                inputMode="decimal"
+                                disabled={readOnly || structureSaving}
+                              />
+                            </label>
+                          </>
+                        )}
                       </>
                     )}
                   </>
@@ -2555,7 +2589,7 @@ function FinanceItemCard({
                       <dt className="text-xs text-slate-500">Tipo</dt>
                       <dd className="font-medium text-slate-900">{item.renegotiation_type ?? "—"}</dd>
                     </div>
-                    {item.renegotiation_type === "INSTALLMENTS" && (
+                    {item.renegotiation_type === "INSTALLMENTS" && !item.uses_custom_schedule && (
                       <>
                         <div>
                           <dt className="text-xs text-slate-500">Parcelas</dt>
@@ -2569,11 +2603,78 @@ function FinanceItemCard({
                         </div>
                       </>
                     )}
+                    {item.uses_custom_schedule && (
+                      <div>
+                        <dt className="text-xs text-slate-500">Modo</dt>
+                        <dd className="font-medium text-indigo-700">📅 Cronograma personalizado</dd>
+                      </div>
+                    )}
                   </>
                 )}
               </dl>
             </div>
           )}
+
+          {/* Modo 2: execução da dívida (fonte única — só EXIBE o contrato do backend). */}
+          {item.uses_custom_schedule && (
+            <div className="rounded-lg border border-indigo-100 bg-indigo-50/30 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-indigo-800">Cronograma financeiro</p>
+                <button
+                  type="button"
+                  onClick={() => setScheduleEditorOpen(true)}
+                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
+                >
+                  Gerenciar cronograma
+                </button>
+              </div>
+              {item.schedule ? (
+                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
+                  <div>
+                    <dt className="text-[10px] uppercase tracking-wide text-slate-500">Saldo restante</dt>
+                    <dd className="tabular-nums text-sm font-semibold text-slate-800">{formatBRL(item.schedule.saldo_restante)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] uppercase tracking-wide text-slate-500">Total pago</dt>
+                    <dd className="tabular-nums text-sm font-semibold text-slate-800">{formatBRL(item.schedule.total_pago)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] uppercase tracking-wide text-slate-500">Progresso</dt>
+                    <dd className="tabular-nums text-sm font-semibold text-slate-800">{Math.round((item.schedule.progresso ?? 0) * 100)}%</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] uppercase tracking-wide text-slate-500">Parcelas</dt>
+                    <dd className="tabular-nums text-sm font-semibold text-slate-800">
+                      {item.schedule.parcelas_pagas}/{item.schedule.parcelas_total} pagas
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] uppercase tracking-wide text-slate-500">Próxima parcela</dt>
+                    <dd className="text-sm font-medium text-slate-800">
+                      {item.schedule.proxima_vencimento
+                        ? `${item.schedule.proxima_vencimento.slice(8, 10)}/${item.schedule.proxima_vencimento.slice(5, 7)}/${item.schedule.proxima_vencimento.slice(0, 4)}`
+                        : "—"}
+                      {typeof item.schedule.proxima_valor === "number" ? ` · ${formatBRL(item.schedule.proxima_valor)}` : ""}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] uppercase tracking-wide text-slate-500">Encerramento</dt>
+                    <dd className="text-sm font-medium text-slate-800">
+                      {item.schedule.data_encerramento
+                        ? `${item.schedule.data_encerramento.slice(8, 10)}/${item.schedule.data_encerramento.slice(5, 7)}/${item.schedule.data_encerramento.slice(0, 4)}`
+                        : "—"}
+                    </dd>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-slate-500">
+                  Nenhuma parcela ainda. Clique em “Gerenciar cronograma” para montar o acordo.
+                </p>
+              )}
+            </div>
+          )}
+          {!item.uses_custom_schedule && (
+          <>
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Pagamentos por mês (12 meses)</p>
             {hasPending ? (
@@ -2656,7 +2757,10 @@ function FinanceItemCard({
               {paymentsSuccess ? <p className="text-emerald-700">{paymentsSuccess}</p> : null}
             </div>
           )}
+          </>
+          )}
           <div className="mt-4 flex flex-wrap gap-2">
+            {!item.uses_custom_schedule && (
             <button
               type="button"
               onClick={() => {
@@ -2683,6 +2787,7 @@ function FinanceItemCard({
                   ? `Salvar agora (${dirtyMonths.size})`
                   : "Salvar agora"}
             </button>
+            )}
             <button
               type="button"
               onClick={onToggleActive}
@@ -2712,6 +2817,19 @@ function FinanceItemCard({
           competenciaLabel={`${mesLabel(entriesModalMes)} / ${entriesModalMes.slice(0, 4)}`}
           readOnly={readOnly}
           onClose={() => setEntriesModalMes(null)}
+          onSaved={onSaved}
+        />
+      )}
+      {scheduleEditorOpen && (
+        <FinancialScheduleEditor
+          title="Cronograma financeiro"
+          subtitle={`${item.employee_name || item.nome} · renegociado ${formatBRL(item.renegotiated_amount ?? 0)}`}
+          renegotiatedAmount={item.renegotiated_amount ?? 0}
+          canEdit={!readOnly}
+          load={() => fetchSchedule(item.id)}
+          preview={(ranges) => previewSchedule(item.id, ranges)}
+          save={(lines) => replaceSchedule(item.id, lines)}
+          onClose={() => setScheduleEditorOpen(false)}
           onSaved={onSaved}
         />
       )}

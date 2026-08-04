@@ -76,6 +76,10 @@ class CompanyFinancialItemCreate(BaseModel):
     renegotiation_agreement_date: date | None = None
     renegotiation_first_payment_date: date | None = None
     renegotiation_due_day: int | None = Field(None, ge=1, le=31)
+    # Modo 2: Cronograma Financeiro Personalizado. Quando true, o cronograma (lançamentos) é a
+    # fonte oficial da dívida; NÃO exige parcelas iguais (installment_count/value). O fechamento
+    # (Σ cronograma == renegociado) é validado ao gravar o cronograma, não aqui.
+    uses_custom_schedule: bool = False
 
     @model_validator(mode="after")
     def validate_renegotiation(self) -> "CompanyFinancialItemCreate":
@@ -87,7 +91,9 @@ class CompanyFinancialItemCreate(BaseModel):
                 raise ValueError("renegotiated_amount deve ser maior que zero quando has_renegotiation=true")
             if self.renegotiation_type is None:
                 raise ValueError("renegotiation_type é obrigatório quando has_renegotiation=true")
-            if self.renegotiation_type == "INSTALLMENTS":
+            # Modo 2 (cronograma): relaxa a igualdade de parcelas fixas — o cronograma pode ter
+            # valores distintos por parcela; o fechamento é validado ao gravar o cronograma.
+            if self.renegotiation_type == "INSTALLMENTS" and not self.uses_custom_schedule:
                 if self.installment_count is None:
                     raise ValueError("installment_count é obrigatório quando renegotiation_type=INSTALLMENTS")
                 if self.installment_value is None:
@@ -95,6 +101,8 @@ class CompanyFinancialItemCreate(BaseModel):
                 total_calc = round(float(self.installment_count) * float(self.installment_value), 2)
                 if round(float(self.renegotiated_amount), 2) != total_calc:
                     raise ValueError("renegotiated_amount deve ser igual a installment_count * installment_value")
+        elif self.uses_custom_schedule:
+            raise ValueError("uses_custom_schedule exige has_renegotiation=true")
         return self
 
     @model_validator(mode="after")
@@ -161,6 +169,8 @@ class CompanyFinancialItemUpdate(BaseModel):
     renegotiation_agreement_date: date | None = None
     renegotiation_first_payment_date: date | None = None
     renegotiation_due_day: int | None = Field(None, ge=1, le=31)
+    # Modo 2: Cronograma Financeiro Personalizado (ver Create). None = não altera o modo.
+    uses_custom_schedule: bool | None = None
 
     @model_validator(mode="after")
     def validate_renegotiation(self) -> "CompanyFinancialItemUpdate":
@@ -172,6 +182,7 @@ class CompanyFinancialItemUpdate(BaseModel):
                 self.renegotiation_type,
                 self.installment_count,
                 self.installment_value,
+                self.uses_custom_schedule,
             )
         )
         if not touch:
@@ -197,7 +208,8 @@ class CompanyFinancialItemUpdate(BaseModel):
                 raise ValueError("renegotiated_amount deve ser maior que zero quando has_renegotiation=true")
             if self.renegotiation_type is None:
                 raise ValueError("renegotiation_type é obrigatório quando has_renegotiation=true")
-            if self.renegotiation_type == "INSTALLMENTS":
+            # Modo 2 (cronograma): relaxa a igualdade de parcelas fixas (ver Create).
+            if self.renegotiation_type == "INSTALLMENTS" and not self.uses_custom_schedule:
                 if self.installment_count is None:
                     raise ValueError("installment_count é obrigatório quando renegotiation_type=INSTALLMENTS")
                 if self.installment_value is None:
@@ -205,6 +217,8 @@ class CompanyFinancialItemUpdate(BaseModel):
                 total_calc = round(float(self.installment_count) * float(self.installment_value), 2)
                 if round(float(self.renegotiated_amount), 2) != total_calc:
                     raise ValueError("renegotiated_amount deve ser igual a installment_count * installment_value")
+        elif self.uses_custom_schedule:
+            raise ValueError("uses_custom_schedule exige has_renegotiation=true")
         return self
 
     @model_validator(mode="after")
@@ -218,6 +232,25 @@ class CompanyFinancialItemUpdate(BaseModel):
             if self.percentual is None:
                 raise ValueError("percentual é obrigatório para item COLABORADOR_MATRIZ.")
         return self
+
+
+class ScheduleExecutionRead(BaseModel):
+    """Execução oficial da dívida em Modo 2 (fonte ÚNICA). Produzida pelo backend; o frontend
+    apenas exibe — nunca recalcula. Pago/saldo/progresso derivam dos pagamentos REAIS do CAP.
+    """
+
+    total_negociado: float = 0
+    total_cronograma: float = 0
+    total_pago: float = 0
+    saldo_restante: float = 0
+    progresso: float = 0  # 0..1
+    parcelas_total: int = 0
+    parcelas_pagas: int = 0
+    parcelas_restantes: int = 0
+    proxima_vencimento: date | None = None
+    proxima_valor: float | None = None
+    ultima_vencimento: date | None = None
+    data_encerramento: date | None = None
 
 
 class CompanyFinancialItemRead(BaseModel):
@@ -255,6 +288,10 @@ class CompanyFinancialItemRead(BaseModel):
     renegotiation_agreement_date: date | None = None
     renegotiation_first_payment_date: date | None = None
     renegotiation_due_day: int | None = None
+    # Modo do endividamento: false = parcelas iguais (atual); true = cronograma personalizado.
+    uses_custom_schedule: bool = False
+    # Execução oficial da dívida no Modo 2 (fonte única). None no Modo 1 (contrato inalterado).
+    schedule: ScheduleExecutionRead | None = None
     pagamentos: list[PagamentoMes]
     total_pago: float | None = None
     pago_mes: float | None = 0
@@ -316,6 +353,85 @@ class LancamentosCompetenciaRead(BaseModel):
     competencia: str
     lancamentos: list[LancamentoRead] = Field(default_factory=list)
     total: float | None = 0
+    payable_sync_warning: str | None = None
+
+
+# --------------------------------------------------------------------- #
+# Cronograma Financeiro Personalizado (Endividamento — Modo 2)
+# --------------------------------------------------------------------- #
+class ScheduleRangeIn(BaseModel):
+    """Faixa do gerador: parcelas [seq_start..seq_end] com o mesmo valor (expansão sem persistir)."""
+
+    seq_start: int = Field(..., ge=1)
+    seq_end: int = Field(..., ge=1)
+    valor: float = Field(..., gt=0)
+    dia: int = Field(..., ge=1, le=31)
+    primeiro_vencimento: date
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ScheduleRangeIn":
+        if self.seq_end < self.seq_start:
+            raise ValueError("seq_end deve ser >= seq_start.")
+        return self
+
+
+class SchedulePreviewIn(BaseModel):
+    ranges: list[ScheduleRangeIn] = Field(default_factory=list)
+
+
+class SchedulePreviewLine(BaseModel):
+    seq: int
+    vencimento: date
+    valor: float
+    descricao: str | None = None
+
+
+class SchedulePreviewRead(BaseModel):
+    lines: list[SchedulePreviewLine] = Field(default_factory=list)
+    count: int = 0
+    total: float = 0
+
+
+class ScheduleLineIn(BaseModel):
+    """Uma parcela do cronograma. `id` presente = parcela existente; ausente = nova.
+
+    `seq` é a posição da parcela (1..N) — chave estável que preserva parcelas pagas ao regerar.
+    """
+
+    id: str | None = None
+    seq: int = Field(..., ge=1)
+    vencimento: date
+    valor: float = Field(..., gt=0)
+    descricao: str | None = Field(default=None, max_length=150)
+
+
+class ScheduleReplaceIn(BaseModel):
+    lines: list[ScheduleLineIn] = Field(default_factory=list)
+    # Exceção explícita: permite salvar mesmo com diferença de fechamento (uso controlado).
+    allow_unbalanced: bool = False
+
+
+class ScheduleLineRead(BaseModel):
+    id: str
+    seq: int | None = None
+    vencimento: date | None = None
+    valor: float | None = None
+    descricao: str | None = None
+    # Espelho do CAP (fonte oficial do pagamento por parcela, via entry_id).
+    cap_amount_paid: float | None = 0
+    cap_status: str | None = None
+    has_payment: bool = False
+
+
+class ScheduleRead(BaseModel):
+    item_id: str
+    uses_custom_schedule: bool = False
+    renegotiated_amount: float | None = None
+    total_cronograma: float | None = 0
+    diferenca: float | None = 0
+    is_valid: bool = True
+    data_encerramento: date | None = None
+    lines: list[ScheduleLineRead] = Field(default_factory=list)
     payable_sync_warning: str | None = None
 
 

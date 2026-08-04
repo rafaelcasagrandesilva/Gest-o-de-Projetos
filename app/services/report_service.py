@@ -57,25 +57,6 @@ def _competencia_date(filters: dict[str, Any], key: str = "competencia") -> date
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{key} inválido (use YYYY-MM).")
 
 
-def _debt_monthly_value(item: Any) -> float:
-    """Valor mensal de um endividamento vinculado ao colaborador (parcela ou referência).
-
-    Mesma base já usada pelas pendências/CAP: parcela (installment_value) quando há
-    renegociação parcelada; senão saldo renegociado / valor de referência.
-    """
-    rt = getattr(item, "renegotiation_type", None)
-    rt_val = getattr(rt, "value", rt)
-    if (
-        getattr(item, "has_renegotiation", False)
-        and rt_val == "INSTALLMENTS"
-        and getattr(item, "installment_value", None) is not None
-    ):
-        return float(item.installment_value)
-    if getattr(item, "has_renegotiation", False) and getattr(item, "renegotiated_amount", None) is not None:
-        return float(item.renegotiated_amount)
-    return float(getattr(item, "valor_referencia", 0) or 0)
-
-
 def _payroll_distribution_label(line: Any) -> str:
     """Coluna "Projetos / Administrativo": como o colaborador está distribuído.
 

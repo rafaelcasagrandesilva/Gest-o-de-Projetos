@@ -10,7 +10,7 @@ import unittest
 from datetime import date
 from uuid import uuid4
 
-from app.services.report_service import _debt_monthly_value, _payroll_distribution_label
+from app.services.report_service import _payroll_distribution_label
 
 
 class _Slice:
@@ -35,25 +35,6 @@ class PayrollHelperTests(unittest.TestCase):
         )
         self.assertEqual(_payroll_distribution_label(_Line([], admin=1200.0)), "Administrativo")
         self.assertEqual(_payroll_distribution_label(_Line([], admin=0.0)), "—")
-
-    def test_debt_monthly_value(self) -> None:
-        class D:
-            has_renegotiation = True
-            renegotiation_type = "INSTALLMENTS"
-            installment_value = 500.0
-            renegotiated_amount = 6000.0
-            valor_referencia = 12000.0
-
-        self.assertEqual(_debt_monthly_value(D()), 500.0)
-
-        class R:
-            has_renegotiation = False
-            renegotiation_type = None
-            installment_value = None
-            renegotiated_amount = None
-            valor_referencia = 900.0
-
-        self.assertEqual(_debt_monthly_value(R()), 900.0)
 
 
 class PayrollReportDBTests(unittest.IsolatedAsyncioTestCase):

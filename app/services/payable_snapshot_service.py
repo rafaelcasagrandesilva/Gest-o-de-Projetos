@@ -726,7 +726,14 @@ class PayableSnapshotService:
             return False
         if end is not None and end < comp:
             return False
-        if item.tipo == "endividamento" and not bool(getattr(item, "is_monthly_required", False)):
+        # Modo 2 (Cronograma Financeiro Personalizado): elegível pela vigência apenas — cada
+        # competência que possui parcela do cronograma gera seu título; "Obrigatório mensal" é
+        # conceito do Modo 1 e não se aplica. Legado/Modo 1 permanece exigindo o obrigatório.
+        if (
+            item.tipo == "endividamento"
+            and not bool(getattr(item, "uses_custom_schedule", False))
+            and not bool(getattr(item, "is_monthly_required", False))
+        ):
             return False
         return True
 
@@ -807,6 +814,11 @@ class PayableSnapshotService:
 
         # Materializa o lançamento de referência quando não há nada (elegível, acima do piso).
         if not entries and not cap_lines:
+            # Modo 2 (Cronograma Financeiro Personalizado): NUNCA inventa lançamento de
+            # referência. O cronograma é a única fonte — competência sem parcela não gera
+            # título (ex.: cronograma encerra em jan/2029 ⇒ fev/2029 em diante não gera nada).
+            if bool(getattr(item, "uses_custom_schedule", False)):
+                return result
             if below_floor or not eligible or not can_create:
                 return result
             value = self._company_finance_monthly_value(item, comp=comp, settings=settings)

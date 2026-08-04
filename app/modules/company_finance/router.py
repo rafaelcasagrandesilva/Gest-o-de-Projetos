@@ -28,6 +28,10 @@ from app.schemas.company_finance import (
     LancamentosReplace,
     PagamentosReplace,
     PendenciasCustosFixosRead,
+    ScheduleRead,
+    ScheduleReplaceIn,
+    SchedulePreviewIn,
+    SchedulePreviewRead,
 )
 from app.services.company_finance_service import CompanyFinanceService, parse_month
 
@@ -342,6 +346,88 @@ async def replace_entries(
             item_id,
             competencia,
             lancs,
+            e,
+            traceback.format_exc(),
+        )
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/items/{item_id}/schedule/preview", response_model=SchedulePreviewRead)
+async def preview_schedule(
+    item_id: UUID,
+    payload: SchedulePreviewIn,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> SchedulePreviewRead:
+    """Expande faixas em um cronograma completo (gerador de faixas), sem persistir nem tocar o CAP."""
+    tipo = await _item_tipo(db, item_id)
+    if tipo is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    _assert_verb(actor, tipo, "update")
+    try:
+        data = CompanyFinanceService(db).preview_ranges([r.model_dump() for r in payload.ranges])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return SchedulePreviewRead.model_validate(data)
+
+
+@router.get("/items/{item_id}/schedule", response_model=ScheduleRead)
+async def get_schedule(
+    item_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> ScheduleRead:
+    """Cronograma completo do item (todas as parcelas) + fechamento + espelho de pagamento do CAP."""
+    tipo = await _item_tipo(db, item_id)
+    if tipo is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    _assert_verb(actor, tipo, "read")
+    data = await CompanyFinanceService(db).list_schedule(item_id=item_id)
+    result = ScheduleRead.model_validate(data)
+    return redact_for(_sensitive_resource_for_tipo(tipo), result, actor)
+
+
+@router.put("/items/{item_id}/schedule", response_model=ScheduleRead)
+async def replace_schedule(
+    item_id: UUID,
+    payload: ScheduleReplaceIn,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> ScheduleRead:
+    """Substitui o CRONOGRAMA completo do item (Modo 2). Fonte única da execução da dívida."""
+    tipo = await _item_tipo(db, item_id)
+    if tipo is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    _assert_verb(actor, tipo, "update")
+    try:
+        svc = CompanyFinanceService(db)
+        row = await svc.replace_schedule(
+            item_id=item_id,
+            lines=[l.model_dump() for l in payload.lines],
+            allow_unbalanced=payload.allow_unbalanced,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Item não encontrado")
+        await db.commit()
+        data = await svc.list_schedule(item_id=item_id)
+        result = ScheduleRead.model_validate(data)
+        sync = svc.last_payable_sync or {}
+        skipped = sync.get("skipped_paid") or []
+        if skipped:
+            meses = ", ".join(f"{d:%m/%Y}" for d in sorted(set(skipped)))
+            result.payable_sync_warning = (
+                f"Existe pagamento registrado em {meses}: as parcelas pagas foram preservadas e "
+                "não puderam ser alteradas/excluídas."
+            )
+        return redact_for(_sensitive_resource_for_tipo(tipo), result, actor)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.error(
+            "company_finance.replace_schedule FAILED item_id=%s error=%s\n%s",
+            item_id,
             e,
             traceback.format_exc(),
         )

@@ -42,6 +42,10 @@ export interface CompanyFinancialItem {
   renegotiation_agreement_date?: string | null;
   renegotiation_first_payment_date?: string | null;
   renegotiation_due_day?: number | null;
+  /** Modo do endividamento: false = parcelas iguais (atual); true = cronograma personalizado. */
+  uses_custom_schedule?: boolean;
+  /** Execução oficial da dívida no Modo 2 (fonte única). `null` no Modo 1. Só EXIBIR. */
+  schedule?: ScheduleExecution | null;
   /** Ciclo de vida do cadastro (distinto de `status`, que é o progresso do endividamento). */
   is_active?: boolean;
   start_date?: string | null;
@@ -169,6 +173,7 @@ export async function updateCompanyFinanceItem(
     renegotiation_agreement_date?: string | null;
     renegotiation_first_payment_date?: string | null;
     renegotiation_due_day?: number | null;
+    uses_custom_schedule?: boolean;
     is_active?: boolean;
     start_date?: string | null;
     end_date?: string | null;
@@ -306,6 +311,112 @@ export async function fetchChartSeries(
 ): Promise<{ points: ChartPoint[] }> {
   const { data } = await api.get<{ points: ChartPoint[] }>("/company-finance/chart-series/", {
     params: { tipo, mes_inicio, mes_fim },
+  });
+  return data;
+}
+
+/* ------------------------------------------------------------------ *
+ * Cronograma Financeiro Personalizado (Endividamento — Modo 2)
+ * Contrato de LEITURA: o backend é a fonte única. O frontend só exibe.
+ * ------------------------------------------------------------------ */
+
+/** Execução oficial da dívida (aninhada no item). Todos os números vêm do backend. */
+export interface ScheduleExecution {
+  total_negociado: number;
+  total_cronograma: number;
+  total_pago: number;
+  saldo_restante: number;
+  /** Fração 0–1. */
+  progresso: number;
+  parcelas_total: number;
+  parcelas_pagas: number;
+  parcelas_restantes: number;
+  proxima_vencimento: string | null;
+  proxima_valor: number | null;
+  ultima_vencimento: string | null;
+  data_encerramento: string | null;
+}
+
+/** Uma parcela do cronograma (com espelho de pagamento do CAP). */
+export interface ScheduleLineRead {
+  id: string;
+  seq: number | null;
+  vencimento: string | null; // YYYY-MM-DD
+  valor: number | null;
+  descricao: string | null;
+  cap_amount_paid?: number | null;
+  cap_status?: "ABERTO" | "PARCIAL" | "PAGO" | null;
+  has_payment?: boolean;
+}
+
+/** Cronograma completo + fechamento (GET /schedule). */
+export interface ScheduleRead {
+  item_id: string;
+  uses_custom_schedule: boolean;
+  renegotiated_amount: number | null;
+  total_cronograma: number | null;
+  diferenca: number | null;
+  is_valid: boolean;
+  data_encerramento: string | null;
+  lines: ScheduleLineRead[];
+  payable_sync_warning?: string | null;
+}
+
+/** Faixa do gerador (expansão pelo backend). */
+export interface ScheduleRangeInput {
+  seq_start: number;
+  seq_end: number;
+  valor: number;
+  dia: number;
+  primeiro_vencimento: string; // YYYY-MM-DD
+}
+
+export interface SchedulePreviewLine {
+  seq: number;
+  vencimento: string; // YYYY-MM-DD
+  valor: number;
+  descricao: string | null;
+}
+
+export interface SchedulePreview {
+  lines: SchedulePreviewLine[];
+  count: number;
+  total: number;
+}
+
+/** Carga de uma parcela no PUT (id ausente = nova). `seq` preserva parcelas pagas ao regerar. */
+export interface ScheduleLineInput {
+  id?: string | null;
+  seq: number;
+  vencimento: string; // YYYY-MM-DD
+  valor: number;
+  descricao?: string | null;
+}
+
+export async function fetchSchedule(itemId: string): Promise<ScheduleRead> {
+  const { data } = await api.get<ScheduleRead>(`/company-finance/items/${itemId}/schedule`);
+  return data;
+}
+
+export async function previewSchedule(
+  itemId: string,
+  ranges: ScheduleRangeInput[],
+): Promise<SchedulePreview> {
+  const { data } = await api.post<SchedulePreview>(
+    `/company-finance/items/${itemId}/schedule/preview`,
+    { ranges },
+  );
+  return data;
+}
+
+export async function replaceSchedule(
+  itemId: string,
+  lines: ScheduleLineInput[],
+  allowUnbalanced = false,
+): Promise<ScheduleRead> {
+  const { data } = await api.put<ScheduleRead>(`/company-finance/items/${itemId}/schedule`, {
+    lines,
+    allow_unbalanced: allowUnbalanced,
   });
   return data;
 }

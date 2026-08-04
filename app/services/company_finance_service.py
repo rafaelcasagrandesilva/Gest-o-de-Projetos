@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import traceback
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -21,6 +22,13 @@ from app.services.company_finance_cost_center import (
     default_system_for_tipo,
 )
 from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_total_cost
+from app.services.financial_schedule import (
+    RangeSpec,
+    ScheduleLine,
+    build_schedule,
+    compute_indicators,
+    validate_closure,
+)
 from app.services.payable_snapshot_service import PayableSnapshotService, payable_snapshot_payment_status
 from app.services.settings_service import SettingsService
 from app.utils.lifecycle import DELETE_WITH_MOVEMENT_MSG, normalize_lifecycle
@@ -221,9 +229,19 @@ class CompanyFinanceService:
         # Fonte única da verdade: consulta (somente leitura) o Contas a Pagar da competência
         # para espelhar pago/status no Extrato Analítico. NÃO gera snapshot nem altera nada.
         cap_map = await self._cap_rows_for_competence(list(rows), tipo, comp_date)
+        # Modo 2: pago REAL do CAP carregado em lote (fonte única) e repassado ao cálculo oficial.
+        sched_ids = [it.id for it in rows if self._uses_schedule(it)]
+        pbe_all = await self._cap_paid_by_entry(sched_ids)
+        pbm_all = await self._cap_paid_by_month(sched_ids)
         out: list[dict] = []
         for it in rows:
-            out.append(await self._item_to_read(it, comp_date, cap_rows=cap_map.get(it.id)))
+            kw = {}
+            if self._uses_schedule(it):
+                kw = {
+                    "schedule_paid_by_entry": pbe_all,
+                    "schedule_paid_by_month": pbm_all.get(it.id, {}),
+                }
+            out.append(await self._item_to_read(it, comp_date, cap_rows=cap_map.get(it.id), **kw))
         return out
 
     async def _cap_rows_for_competence(
@@ -289,6 +307,9 @@ class CompanyFinanceService:
         it: CompanyFinancialItem,
         competencia: date | None,
         cap_rows: list[PayableSnapshot] | None = None,
+        *,
+        schedule_paid_by_entry: dict[UUID, float] | None = None,
+        schedule_paid_by_month: dict[date, float] | None = None,
     ) -> dict:
         # Múltiplos lançamentos por competência: a grade exibe SEMPRE a SOMA do mês (a tela
         # principal permanece limpa). Agrega valor e CONTAGEM por competência; `count` alimenta
@@ -339,9 +360,30 @@ class CompanyFinanceService:
         }
 
         if it.tipo == "endividamento":
-            restante = max(0.0, debt_base - total_pago)
-            progresso = (total_pago / debt_base) if debt_base > 0 else 0.0
-            status = "quitado" if progresso >= 1.0 else "ativo"
+            schedule_dict = None
+            if self._uses_schedule(it):
+                # Modo 2: fonte ÚNICA — pago/saldo/progresso/status vêm do CAP (pagamentos reais),
+                # nunca da soma das parcelas planejadas. Um só cálculo oficial (_schedule_execution).
+                pbe = schedule_paid_by_entry
+                if pbe is None:
+                    pbe = await self._cap_paid_by_entry([it.id])
+                ind = self._schedule_execution(it, pbe)
+                total_pago = float(ind.total_pago)
+                restante = float(ind.saldo_restante)
+                progresso = ind.progresso
+                status = "quitado" if progresso >= 1.0 else "ativo"
+                schedule_dict = self._schedule_execution_dict(ind)
+                if competencia is not None:
+                    pbm = schedule_paid_by_month
+                    if pbm is None:
+                        pbm = (await self._cap_paid_by_month([it.id])).get(it.id, {})
+                    pago_mes = round(pbm.get(competencia, 0.0), 2)
+                else:
+                    pago_mes = 0.0
+            else:
+                restante = max(0.0, debt_base - total_pago)
+                progresso = (total_pago / debt_base) if debt_base > 0 else 0.0
+                status = "quitado" if progresso >= 1.0 else "ativo"
             return {
                 "id": it.id,
                 "tipo": it.tipo,
@@ -374,6 +416,7 @@ class CompanyFinanceService:
                 "renegotiation_agreement_date": getattr(it, "renegotiation_agreement_date", None),
                 "renegotiation_first_payment_date": getattr(it, "renegotiation_first_payment_date", None),
                 "renegotiation_due_day": getattr(it, "renegotiation_due_day", None),
+                "uses_custom_schedule": bool(getattr(it, "uses_custom_schedule", False)),
                 "pagamentos": pagamentos,
                 "total_pago": total_pago,
                 "restante": restante,
@@ -381,6 +424,8 @@ class CompanyFinanceService:
                 "status": status,
                 "progresso_mes": None,
                 "pago_mes": pago_mes,
+                # Contrato de leitura do Modo 2 (fonte única). None no Modo 1 (inalterado).
+                "schedule": schedule_dict,
             }
 
         progresso_mes = (pago_mes / ref) if ref > 0 else 0.0
@@ -416,6 +461,7 @@ class CompanyFinanceService:
             "renegotiation_agreement_date": getattr(it, "renegotiation_agreement_date", None),
             "renegotiation_first_payment_date": getattr(it, "renegotiation_first_payment_date", None),
             "renegotiation_due_day": getattr(it, "renegotiation_due_day", None),
+            "uses_custom_schedule": bool(getattr(it, "uses_custom_schedule", False)),
             "pagamentos": pagamentos,
             "total_pago": total_pago,
             "restante": None,
@@ -479,6 +525,7 @@ class CompanyFinanceService:
             renegotiation_agreement_date=data.get("renegotiation_agreement_date"),
             renegotiation_first_payment_date=data.get("renegotiation_first_payment_date"),
             renegotiation_due_day=data.get("renegotiation_due_day"),
+            uses_custom_schedule=bool(data.get("uses_custom_schedule") or False),
             cost_center=default_label_for_tipo(data["tipo"]),
             cost_center_system=default_system_for_tipo(data["tipo"]),
         )
@@ -555,6 +602,8 @@ class CompanyFinanceService:
             row.renegotiation_first_payment_date = data.get("renegotiation_first_payment_date")
         if "renegotiation_due_day" in data:
             row.renegotiation_due_day = data.get("renegotiation_due_day")
+        if data.get("uses_custom_schedule") is not None:
+            row.uses_custom_schedule = bool(data["uses_custom_schedule"])
 
         if row.tipo != "endividamento":
             row.has_legal_process = False
@@ -566,6 +615,7 @@ class CompanyFinanceService:
             row.renegotiation_agreement_date = None
             row.renegotiation_first_payment_date = None
             row.renegotiation_due_day = None
+            row.uses_custom_schedule = False
 
         # Custo Fixo: colaborador/percentual só existem em COLABORADOR_MATRIZ. Endividamento
         # mantém o colaborador (só identificação), mas nunca usa matriz/percentual.
@@ -592,6 +642,8 @@ class CompanyFinanceService:
             row.renegotiation_agreement_date = None
             row.renegotiation_first_payment_date = None
             row.renegotiation_due_day = None
+            # Sem renegociação não há cronograma: volta ao Modo 1 (parcelas iguais).
+            row.uses_custom_schedule = False
         row.updated_at = datetime.now(timezone.utc)
         await self.db.flush()
         await self.db.refresh(row)
@@ -632,6 +684,10 @@ class CompanyFinanceService:
             if item is None:
                 logger.warning("company_finance.replace_payments service item_id=%s not found", item_id)
                 return None
+            if self._uses_schedule(item):
+                # Modo 2: a execução da dívida é o Cronograma (fonte única). A grade mensal é
+                # somente leitura — toda alteração passa por replace_schedule.
+                raise ValueError("Item em modo Cronograma: edite as parcelas pelo Cronograma, não pela grade mensal.")
 
             logger.info("company_finance.replace_payments service BEFORE migrate_legacy_row item_id=%s", item_id)
             await CompanyFinanceCostCenterService(self.db).migrate_legacy_row(item)
@@ -840,6 +896,10 @@ class CompanyFinanceService:
         item = await self.db.get(CompanyFinancialItem, item_id)
         if item is None:
             return None
+        if self._uses_schedule(item):
+            # Modo 2: os lançamentos são governados pelo Cronograma (fonte única). O modal de
+            # competência é somente leitura — toda alteração passa por replace_schedule.
+            raise ValueError("Item em modo Cronograma: edite as parcelas pelo Cronograma, não pelo lançamento da competência.")
         await CompanyFinanceCostCenterService(self.db).migrate_legacy_row(item)
         comp = parse_month(competencia)
 
@@ -939,6 +999,323 @@ class CompanyFinanceService:
         self.last_payable_sync = {"synced": sync.get("synced", 0), "skipped_paid": merged_skipped}
         return item
 
+    # ------------------------------------------------------------------ #
+    # Cronograma Financeiro Personalizado (Endividamento — Modo 2)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def preview_ranges(ranges: list[dict]) -> dict:
+        """Expande faixas em um cronograma completo (gerador de faixas), sem persistir.
+
+        Cada faixa: {seq_start, seq_end, valor, dia, primeiro_vencimento (date|YYYY-MM-DD)}.
+        Delega ao núcleo genérico (`financial_schedule`) — mesma lógica reutilizável por
+        qualquer obrigação parcelada no futuro. Não toca banco nem CAP.
+        """
+        specs: list[RangeSpec] = []
+        for r in ranges:
+            fdm = r.get("primeiro_vencimento")
+            fdm = fdm if isinstance(fdm, date) else date.fromisoformat(str(fdm))
+            specs.append(
+                RangeSpec(
+                    seq_start=int(r["seq_start"]),
+                    seq_end=int(r["seq_end"]),
+                    amount=Decimal(str(r["valor"])),
+                    day=int(r["dia"]),
+                    first_due_month=fdm,
+                )
+            )
+        lines = build_schedule(specs)
+        return {
+            "lines": [
+                {"seq": ln.seq, "vencimento": ln.due_date, "valor": float(ln.amount), "descricao": ln.description}
+                for ln in lines
+            ],
+            "count": len(lines),
+            "total": float(sum((ln.amount for ln in lines), Decimal("0"))),
+        }
+
+    async def list_schedule(self, *, item_id: UUID) -> dict:
+        """Cronograma completo do item (todas as parcelas) + espelho de pagamento do CAP.
+
+        Fonte de verdade do PAGAMENTO é o Contas a Pagar (por `entry_id`); o cronograma guarda
+        a agenda planejada (data/valor/descrição/seq). Inclui o fechamento vs. valor renegociado.
+        """
+        item = await self.db.get(CompanyFinancialItem, item_id)
+        if item is None:
+            return {"item_id": str(item_id), "lines": [], "total_cronograma": 0.0}
+        rows = (
+            await self.db.execute(
+                select(CompanyFinancialPayment)
+                .where(CompanyFinancialPayment.item_id == item_id)
+                .order_by(
+                    CompanyFinancialPayment.schedule_seq.asc().nulls_last(),
+                    CompanyFinancialPayment.due_date.asc().nulls_last(),
+                    CompanyFinancialPayment.created_at.asc(),
+                )
+            )
+        ).scalars().all()
+        lines: list[dict] = []
+        core: list[ScheduleLine] = []
+        for e in rows:
+            snap = await self._entry_snapshot(e.id)
+            paid = await self._entry_is_paid(snap)
+            lines.append(
+                {
+                    "id": str(e.id),
+                    "seq": e.schedule_seq,
+                    "vencimento": e.due_date,
+                    "valor": _f(e.valor),
+                    "descricao": e.descricao,
+                    "cap_amount_paid": _f(getattr(snap, "amount_paid", 0)) if snap is not None else 0.0,
+                    "cap_status": (
+                        payable_snapshot_payment_status(amount_paid=snap.amount_paid, amount_final=snap.amount_final)
+                        if snap is not None
+                        else None
+                    ),
+                    "has_payment": paid,
+                }
+            )
+            core.append(ScheduleLine(seq=e.schedule_seq or 0, due_date=e.due_date or item.start_date, amount=Decimal(str(e.valor))))
+        negociado = item.renegotiated_amount if item.renegotiated_amount is not None else 0
+        closure = validate_closure(negociado, core)
+        return {
+            "item_id": str(item_id),
+            "uses_custom_schedule": bool(getattr(item, "uses_custom_schedule", False)),
+            "renegotiated_amount": _f(item.renegotiated_amount) if item.renegotiated_amount is not None else None,
+            "total_cronograma": float(closure.total_cronograma),
+            "diferenca": float(closure.diferenca),
+            "is_valid": closure.is_valid,
+            "data_encerramento": max((e.due_date for e in rows if e.due_date), default=None),
+            "lines": lines,
+        }
+
+    async def replace_schedule(
+        self, *, item_id: UUID, lines: list[dict], allow_unbalanced: bool = False
+    ) -> CompanyFinancialItem | None:
+        """Substitui o CRONOGRAMA completo do item (Modo 2). Fonte única da execução da dívida.
+
+        Cada linha (parcela) é um lançamento `company_financial_payments` que gera um título no
+        CAP por `entry_id` (pipeline existente dos múltiplos lançamentos). Regras:
+        - fechamento: Σ cronograma deve igualar o valor renegociado (bloqueia salvar, salvo
+          `allow_unbalanced`);
+        - parcela PAGA é imutável e nunca é excluída (histórico preservado); tentativa de alterar/
+          remover é reportada em `skipped_paid` e a parcela permanece intacta;
+        - casamento por `id` (edição) e, na ausência, por `seq` (regeração por faixas preserva as
+          pagas); parcela aberta é atualizada in-place (preserva o vínculo do título);
+        - toda alteração passa pelo cronograma; o CAP é sincronizado automaticamente (nunca editado
+          manualmente para representar parcelas).
+        """
+        item = await self.db.get(CompanyFinancialItem, item_id)
+        if item is None:
+            return None
+        if item.tipo != "endividamento" or not bool(getattr(item, "uses_custom_schedule", False)):
+            raise ValueError("Cronograma disponível apenas para endividamento em modo cronograma.")
+        if not bool(item.has_renegotiation) or item.renegotiated_amount is None:
+            raise ValueError("Defina a renegociação (valor renegociado) antes de montar o cronograma.")
+        await CompanyFinanceCostCenterService(self.db).migrate_legacy_row(item)
+
+        # Normaliza a carga.
+        incoming: list[dict] = []
+        seen_seq: set[int] = set()
+        for raw in lines:
+            seq = int(raw["seq"])
+            if seq in seen_seq:
+                raise ValueError(f"Sequência de parcela duplicada no cronograma: {seq}.")
+            seen_seq.add(seq)
+            venc = self._parse_due(raw.get("vencimento"))
+            if venc is None:
+                raise ValueError(f"Parcela {seq}: vencimento é obrigatório.")
+            valor = round(max(0.0, float(raw.get("valor") or 0)), 2)
+            if valor <= 0:
+                raise ValueError(f"Parcela {seq}: valor deve ser maior que zero.")
+            desc = (str(raw.get("descricao")).strip() or None) if raw.get("descricao") else None
+            rid_raw = raw.get("id")
+            try:
+                rid = UUID(str(rid_raw)) if rid_raw else None
+            except ValueError:
+                rid = None
+            incoming.append({"id": rid, "seq": seq, "vencimento": venc, "valor": valor, "descricao": desc})
+
+        # Fechamento (Σ cronograma == renegociado).
+        core = [ScheduleLine(seq=i["seq"], due_date=i["vencimento"], amount=Decimal(str(i["valor"]))) for i in incoming]
+        closure = validate_closure(item.renegotiated_amount, core)
+        if not closure.is_valid and not allow_unbalanced:
+            raise ValueError(
+                "O cronograma não fecha o valor renegociado. "
+                f"Diferença: R$ {closure.diferenca}. Ajuste as parcelas para fechar o total."
+            )
+
+        existing_rows = (
+            await self.db.execute(
+                select(CompanyFinancialPayment).where(CompanyFinancialPayment.item_id == item_id)
+            )
+        ).scalars().all()
+        by_id = {e.id: e for e in existing_rows}
+        by_seq = {e.schedule_seq: e for e in existing_rows if e.schedule_seq is not None}
+        paid_map: dict[UUID, bool] = {}
+        for e in existing_rows:
+            paid_map[e.id] = await self._entry_is_paid(await self._entry_snapshot(e.id))
+
+        affected_months: set[date] = {e.competencia for e in existing_rows}
+        skipped_paid: list[date] = []
+        matched_ids: set[UUID] = set()
+
+        for line in incoming:
+            comp = first_of_month(line["vencimento"])
+            affected_months.add(comp)
+            entry = by_id.get(line["id"]) if line["id"] else by_seq.get(line["seq"])
+            if entry is not None:
+                matched_ids.add(entry.id)
+                if paid_map.get(entry.id):
+                    # Parcela paga é imutável: preserva intacta; reporta se houve tentativa de mudar.
+                    if _f(entry.valor) != line["valor"] or entry.due_date != line["vencimento"]:
+                        skipped_paid.append(entry.competencia)
+                    if entry.schedule_seq is None:
+                        entry.schedule_seq = line["seq"]
+                    continue
+                old_comp = entry.competencia
+                if old_comp != comp:
+                    # Parcela aberta mudou de competência: remove o título antigo (o novo é
+                    # recriado pela sincronização no mês de destino). Preserva o entry_id do
+                    # lançamento (movido, não recriado).
+                    affected_months.add(old_comp)
+                    old_snap = await self._entry_snapshot(entry.id)
+                    if old_snap is not None:
+                        await self.db.delete(old_snap)
+                entry.competencia = comp
+                entry.valor = line["valor"]
+                entry.due_date = line["vencimento"]
+                entry.descricao = line["descricao"]
+                entry.schedule_seq = line["seq"]
+            else:
+                self.db.add(
+                    CompanyFinancialPayment(
+                        item_id=item_id,
+                        competencia=comp,
+                        valor=line["valor"],
+                        due_date=line["vencimento"],
+                        descricao=line["descricao"],
+                        schedule_seq=line["seq"],
+                    )
+                )
+
+        # Parcelas existentes não representadas na carga.
+        for e in existing_rows:
+            if e.id in matched_ids:
+                continue
+            if paid_map.get(e.id):
+                # Nunca perde histórico: parcela paga é preservada mesmo se ausente na carga.
+                skipped_paid.append(e.competencia)
+                continue
+            snap = await self._entry_snapshot(e.id)
+            if snap is not None:
+                await self.db.delete(snap)  # remove o título ABERTO do CAP
+            await self.db.delete(e)
+
+        item.updated_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        await self.db.refresh(item, attribute_names=["payments"])
+
+        sync = await self._sync_payables_for_company_finance_item(item_id=item_id, months=affected_months)
+        merged_skipped = list({*(sync.get("skipped_paid") or []), *skipped_paid})
+        self.last_payable_sync = {
+            "synced": sync.get("synced", 0),
+            "skipped_paid": merged_skipped,
+            "closure": {
+                "renegotiated_amount": float(closure.total_negociado),
+                "total_cronograma": float(closure.total_cronograma),
+                "diferenca": float(closure.diferenca),
+                "is_valid": closure.is_valid,
+            },
+        }
+        return item
+
+    # ------------------------------------------------------------------ #
+    # LEITURA — Fonte ÚNICA da execução da dívida (Modo 2). Todo indicador
+    # (saldo/progresso/pago/restante/parcelas/pendências/KPIs/gráficos) deriva
+    # de UM cálculo oficial: núcleo genérico `compute_indicators` alimentado por
+    # cronograma (planejado) + pagamentos REAIS do CAP (via entry_id). Nunca
+    # infere pagamento a partir da existência da parcela.
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _uses_schedule(it: CompanyFinancialItem) -> bool:
+        return getattr(it, "tipo", None) == "endividamento" and bool(getattr(it, "uses_custom_schedule", False))
+
+    async def _cap_paid_by_entry(self, item_ids: list[UUID]) -> dict[UUID, float]:
+        """Pago REAL por PARCELA: `payable_snapshots.amount_paid` do título vinculado (entry_id)."""
+        if not item_ids:
+            return {}
+        rows = (
+            await self.db.execute(
+                select(PayableSnapshot.entry_id, PayableSnapshot.amount_paid).where(
+                    PayableSnapshot.ref_id.in_(item_ids),
+                    PayableSnapshot.type == PayableSnapshotType.ENDIVIDAMENTO,
+                    PayableSnapshot.entry_id.is_not(None),
+                )
+            )
+        ).all()
+        out: dict[UUID, float] = {}
+        for entry_id, amount_paid in rows:
+            out[entry_id] = out.get(entry_id, 0.0) + _f(amount_paid)
+        return out
+
+    async def _cap_paid_by_month(self, item_ids: list[UUID]) -> dict[UUID, dict[date, float]]:
+        """Pagamentos REAIS do CAP por (item, mês do pagamento) — fluxo de caixa (KPIs/gráfico)."""
+        if not item_ids:
+            return {}
+        rows = (
+            await self.db.execute(
+                select(PayableSnapshot.ref_id, PayablePayment.payment_date, PayablePayment.amount)
+                .join(PayablePayment, PayablePayment.payable_snapshot_id == PayableSnapshot.id)
+                .where(
+                    PayableSnapshot.ref_id.in_(item_ids),
+                    PayableSnapshot.type == PayableSnapshotType.ENDIVIDAMENTO,
+                    PayablePayment.reversed_at.is_(None),
+                )
+            )
+        ).all()
+        out: dict[UUID, dict[date, float]] = {}
+        for ref_id, pdate, amount in rows:
+            m = first_of_month(pdate)
+            bucket = out.setdefault(ref_id, {})
+            bucket[m] = bucket.get(m, 0.0) + _f(amount)
+        return out
+
+    def _schedule_execution(self, it: CompanyFinancialItem, paid_by_entry: dict[UUID, float]):
+        """CÁLCULO OFICIAL ÚNICO da execução da dívida em Modo 2.
+
+        Monta as parcelas (planejadas) e o pago real por parcela (CAP via entry_id) e delega ao
+        núcleo genérico `compute_indicators`. É a ÚNICA fonte de saldo/progresso/pago/restante/
+        parcelas/próxima/última/encerramento — reutilizável por qualquer obrigação parcelada.
+        """
+        lines: list[ScheduleLine] = []
+        paid_by_seq: dict[int, float] = {}
+        for p in it.payments:
+            seq = p.schedule_seq if p.schedule_seq is not None else 0
+            lines.append(
+                ScheduleLine(seq=seq, due_date=p.due_date or it.start_date, amount=Decimal(str(p.valor)))
+            )
+            paid_by_seq[seq] = paid_by_seq.get(seq, 0.0) + paid_by_entry.get(p.id, 0.0)
+        negociado = it.renegotiated_amount if it.renegotiated_amount is not None else 0
+        return compute_indicators(total_negociado=negociado, lines=lines, paid_by_seq=paid_by_seq)
+
+    @staticmethod
+    def _schedule_execution_dict(ind) -> dict:
+        """Serializa os indicadores oficiais para o contrato de leitura (frontend só exibe)."""
+        return {
+            "total_negociado": float(ind.total_negociado),
+            "total_cronograma": float(ind.total_cronograma),
+            "total_pago": float(ind.total_pago),
+            "saldo_restante": float(ind.saldo_restante),
+            "progresso": round(float(ind.progresso), 6),
+            "parcelas_total": ind.parcelas_total,
+            "parcelas_pagas": ind.parcelas_pagas,
+            "parcelas_restantes": ind.parcelas_restantes,
+            "proxima_vencimento": ind.proxima_parcela.due_date if ind.proxima_parcela else None,
+            "proxima_valor": float(ind.proxima_parcela.amount) if ind.proxima_parcela else None,
+            "ultima_vencimento": ind.ultima_parcela.due_date if ind.ultima_parcela else None,
+            "data_encerramento": ind.data_encerramento,
+        }
+
     async def kpis_endividamento(self, competencia: str) -> dict:
         items = (
             (
@@ -954,13 +1331,22 @@ class CompanyFinanceService:
         )
         comp = parse_month(competencia)
         total_endividamento = sum(_debt_base_amount(i) for i in items)
+        sched_ids = [it.id for it in items if self._uses_schedule(it)]
+        pbe_all = await self._cap_paid_by_entry(sched_ids)
+        pbm_all = await self._cap_paid_by_month(sched_ids)
         total_pago_mes = 0.0
         saldo_restante = 0.0
         for it in items:
-            ref = _debt_base_amount(it)
-            total_pago = sum(_f(p.valor) for p in it.payments)
-            total_pago_mes += sum(_f(p.valor) for p in it.payments if p.competencia == comp)
-            saldo_restante += max(0.0, ref - total_pago)
+            if self._uses_schedule(it):
+                # Fonte única: saldo do cálculo oficial; pago do mês = pagamento REAL do CAP.
+                ind = self._schedule_execution(it, pbe_all)
+                saldo_restante += float(ind.saldo_restante)
+                total_pago_mes += round(pbm_all.get(it.id, {}).get(comp, 0.0), 2)
+            else:
+                ref = _debt_base_amount(it)
+                total_pago = sum(_f(p.valor) for p in it.payments)
+                total_pago_mes += sum(_f(p.valor) for p in it.payments if p.competencia == comp)
+                saldo_restante += max(0.0, ref - total_pago)
         return {
             "total_endividamento": total_endividamento,
             "total_pago_mes": total_pago_mes,
@@ -1074,7 +1460,40 @@ class CompanyFinanceService:
         pendencias: list[dict] = []
         total_previsto = 0.0
         total_pago = 0.0
+        # Modo 2: pago REAL do CAP (fonte única) para decidir a quitação das parcelas do mês.
+        sched_ids = [it.id for it in items if self._uses_schedule(it)]
+        pbe_all = await self._cap_paid_by_entry(sched_ids)
+        pbm_all = await self._cap_paid_by_month(sched_ids)
         for it in items:
+            # Modo 2 (Cronograma): pendência = parcela vencendo no mês cujo título do CAP não
+            # está quitado. "Pago" vem SEMPRE do CAP (nunca da existência da parcela planejada).
+            if self._uses_schedule(it):
+                parcels = [p for p in it.payments if p.competencia == comp]
+                if not parcels:
+                    continue  # sem parcela do cronograma neste mês → sem obrigatoriedade
+                valor_previsto = round(sum(_f(p.valor) for p in parcels), 2)
+                paid_real = round(sum(pbe_all.get(p.id, 0.0) for p in parcels), 2)
+                total_previsto += valor_previsto
+                total_pago += paid_real
+                if paid_real >= valor_previsto:
+                    continue  # parcela(s) do mês já quitada(s) no CAP → não é pendência
+                read = await self._item_to_read(
+                    it, comp, schedule_paid_by_entry=pbe_all, schedule_paid_by_month=pbm_all.get(it.id, {})
+                )
+                pendencias.append(
+                    {
+                        "item_id": it.id,
+                        "nome": it.nome,
+                        "competencia": competencia,
+                        "category": read.get("category"),
+                        "cost_center": read.get("cost_center"),
+                        "valor_referencia": valor_previsto,
+                        "ultimo_valor": None,
+                        "ultimo_mes": None,
+                        "origem": "cronograma",
+                    }
+                )
+                continue
             # Define se o item é obrigatoriedade nesta competência e o valor previsto.
             is_auto = False
             valor_previsto: float
@@ -1169,20 +1588,31 @@ class CompanyFinanceService:
             else:
                 cur = date(cur.year, cur.month + 1, 1)
 
+        # Modo 2: pagamentos REAIS do CAP por mês (fonte única) para timeline/saldo.
+        sched_ids = [it.id for it in items if self._uses_schedule(it)]
+        pbm_all = await self._cap_paid_by_month(sched_ids)
+
         points: list[dict] = []
         for m in months:
             mk = month_key(m)
-            # Múltiplos lançamentos: soma TODOS os lançamentos da competência.
+            # Múltiplos lançamentos: soma TODOS os lançamentos da competência (Modo 1);
+            # Modo 2: pagamento REAL do CAP no mês (nunca a parcela planejada).
             pagamentos_mes = 0.0
             for it in items:
-                pagamentos_mes += sum(_f(p.valor) for p in it.payments if p.competencia == m)
+                if self._uses_schedule(it):
+                    pagamentos_mes += round(pbm_all.get(it.id, {}).get(m, 0.0), 2)
+                else:
+                    pagamentos_mes += sum(_f(p.valor) for p in it.payments if p.competencia == m)
 
             saldo_restante_total = None
             if tipo == "endividamento":
                 saldo_restante_total = 0.0
                 for it in items:
                     ref = _debt_base_amount(it)
-                    cum = sum(_f(p.valor) for p in it.payments if p.competencia <= m)
+                    if self._uses_schedule(it):
+                        cum = sum(v for mm, v in pbm_all.get(it.id, {}).items() if mm <= m)
+                    else:
+                        cum = sum(_f(p.valor) for p in it.payments if p.competencia <= m)
                     saldo_restante_total += max(0.0, ref - cum)
 
             points.append(
