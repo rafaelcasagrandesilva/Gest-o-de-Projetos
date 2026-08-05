@@ -52,19 +52,17 @@ class DebtCustomScheduleTests(unittest.IsolatedAsyncioTestCase):
         except ProgrammingError:
             self.skipTest("Colunas do cronograma ausentes (rode alembic upgrade head).")
 
-    async def _title(self, session, item_id, comp):
+    async def _title(self, session, item_id, comp=None):
         from sqlalchemy import select
         from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 
-        return (
-            await session.execute(
-                select(PayableSnapshot).where(
-                    PayableSnapshot.ref_id == item_id,
-                    PayableSnapshot.month == comp,
-                    PayableSnapshot.type == PayableSnapshotType.ENDIVIDAMENTO,
-                )
-            )
-        ).scalars().all()
+        q = select(PayableSnapshot).where(
+            PayableSnapshot.ref_id == item_id,
+            PayableSnapshot.type == PayableSnapshotType.ENDIVIDAMENTO,
+        )
+        if comp is not None:
+            q = q.where(PayableSnapshot.month == comp)
+        return (await session.execute(q)).scalars().all()
 
     async def test_schedule_generates_exact_titles_and_stops_after_end(self) -> None:
         from app.database.session import AsyncSessionLocal, engine
@@ -350,6 +348,50 @@ class DebtCustomScheduleTests(unittest.IsolatedAsyncioTestCase):
                     await cf.replace_entries(
                         item_id=item.id, competencia="2099-05", lancamentos=[{"valor": 100.0}]
                     )
+            finally:
+                await session.rollback()
+
+    async def test_switching_to_schedule_clears_legacy_orphan_cap_titles(self) -> None:
+        """Resíduos do modo legado (replicação por 'obrigatório mensal', órfãos entry_id NULL)
+        são removidos ao salvar o cronograma; títulos pagos são preservados (histórico)."""
+        from app.database.session import AsyncSessionLocal, engine
+        from app.models.payable_snapshot import PayableOrigin, PayableSnapshot, PayableSnapshotType
+        from app.services.company_finance_service import CompanyFinanceService
+
+        await engine.dispose()
+        tag = uuid4().hex[:6]
+        async with AsyncSessionLocal() as session:
+            await self._prelude(session)
+            try:
+                item = _debt_item(tag, uses_schedule=True, renegotiated=2000.0)
+                session.add(item)
+                await session.flush()
+
+                def _orphan(month, paid):
+                    return PayableSnapshot(
+                        month=month, type=PayableSnapshotType.ENDIVIDAMENTO, ref_id=item.id,
+                        entry_id=None, project_id=None, name=item.nome, cost_center="Financeiro",
+                        category="Endividamento", origin=PayableOrigin.DEBT.value,
+                        amount_original=Decimal("1734.14"), amount_final=Decimal("1734.14"),
+                        amount_paid=Decimal("1734.14") if paid else Decimal("0"),
+                        due_date=date(month.year, month.month, 10), paid=paid,
+                    )
+
+                # Resíduo ABERTO (deve ser removido) e resíduo PAGO (deve ser preservado).
+                session.add_all([_orphan(date(2099, 12, 1), False), _orphan(date(2099, 11, 1), True)])
+                await session.flush()
+
+                cf = CompanyFinanceService(session)
+                await cf.replace_schedule(
+                    item_id=item.id,
+                    lines=[
+                        {"seq": 1, "vencimento": "2099-05-20", "valor": 1000.0},
+                        {"seq": 2, "vencimento": "2099-06-20", "valor": 1000.0},
+                    ],
+                )
+                months = sorted(t.month for t in await self._title(session, item.id))
+                self.assertNotIn(date(2099, 12, 1), months)  # órfão ABERTO removido
+                self.assertIn(date(2099, 11, 1), months)  # órfão PAGO preservado (histórico)
             finally:
                 await session.rollback()
 

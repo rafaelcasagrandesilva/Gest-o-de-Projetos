@@ -1216,6 +1216,39 @@ class CompanyFinanceService:
         await self.db.refresh(item, attribute_names=["payments"])
 
         sync = await self._sync_payables_for_company_finance_item(item_id=item_id, months=affected_months)
+
+        # Limpeza de RESÍDUOS do modo legado (obrigatório mensal): no Modo cronograma o
+        # cronograma é a ÚNICA fonte de títulos. Remove títulos de dívida ABERTOS do item que
+        # NÃO pertencem ao cronograma atual — inclusive órfãos com entry_id NULL, gerados pela
+        # replicação automática antiga em meses fora do cronograma. Preserva pagos (histórico).
+        current_entry_ids = {
+            row[0]
+            for row in (
+                await self.db.execute(
+                    select(CompanyFinancialPayment.id).where(CompanyFinancialPayment.item_id == item_id)
+                )
+            ).all()
+        }
+        stray_titles = (
+            await self.db.execute(
+                select(PayableSnapshot).where(
+                    PayableSnapshot.ref_id == item_id,
+                    PayableSnapshot.type == PayableSnapshotType.ENDIVIDAMENTO,
+                    PayableSnapshot.project_id.is_(None),
+                )
+            )
+        ).scalars().all()
+        removed_stray = 0
+        for snap in stray_titles:
+            if snap.entry_id is not None and snap.entry_id in current_entry_ids:
+                continue  # título válido de uma parcela do cronograma
+            if await self._entry_is_paid(snap):
+                continue  # histórico: nunca remove título com pagamento
+            await self.db.delete(snap)
+            removed_stray += 1
+        if removed_stray:
+            await self.db.flush()
+
         merged_skipped = list({*(sync.get("skipped_paid") or []), *skipped_paid})
         self.last_payable_sync = {
             "synced": sync.get("synced", 0),
