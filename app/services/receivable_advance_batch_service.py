@@ -22,6 +22,7 @@ from app.models.receivable_advance_batch import (
 from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.schemas.receivable import CENT_TOL, derive_invoice_status
 from app.services.advance_operations import AdvanceOperationService
+from app.services.advance_repasse_ledger_service import AdvanceRepasseLedgerService
 from app.services.payable_snapshot_service import PayableSnapshotService
 from app.services.receivable_service import ReceivableService, get_affected_months
 from app.utils.dashboard_inclusion import apply_dashboard_inclusion_change, append_observation_line
@@ -513,6 +514,21 @@ class ReceivableAdvanceBatchService:
             candidates.append(row)
         for row in candidates:
             await payables.delete_row(row=row)
+
+        # Ledger de Repasse (Fase 1B): estorna o crédito da operação (simetria criar→crédito /
+        # cancelar→estorno). BLOQUEIA se o repasse já foi consumido em liquidação — nesse caso o
+        # saldo ficaria negativo (guarda análoga à de pagamento do CAP). Nunca apaga histórico.
+        ledger = AdvanceRepasseLedgerService(self.db)
+        credit_sum = await ledger.active_credit_total(source_batch_id=batch.id)
+        if credit_sum > 0:
+            if batch.institution_id is not None:
+                saldo = await ledger.balance(batch.institution_id)
+                if saldo < credit_sum - Decimal("0.005"):
+                    raise ValueError(
+                        f"Não é possível {action}: o repasse desta operação já foi utilizado "
+                        f"em liquidação de NF."
+                    )
+            await ledger.reverse_source(source_batch_id=batch.id, reason=f"{action} operação")
 
         recv_svc = ReceivableService(self.db)
         affected_months: set[date] = {

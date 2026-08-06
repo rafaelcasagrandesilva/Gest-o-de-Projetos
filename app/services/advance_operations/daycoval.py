@@ -26,6 +26,9 @@ class DaycovalOperationHandler(BaseOperationHandler):
     """
 
     profile = "DAYCOVAL"
+    # Antecipação terminal (liquida a NF como RECEBIDA); não gera obrigação nem repasse.
+    creates_settlement_obligation = False
+    has_repasse = False
 
     def compute_item_advanced_amount(
         self, *, invoice: ReceivableInvoice, basis: str | None, manual_amount: float | None

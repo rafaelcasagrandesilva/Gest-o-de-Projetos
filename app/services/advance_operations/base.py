@@ -33,6 +33,14 @@ class BaseOperationHandler:
 
     profile: str = "DEFAULT"
 
+    # Capacidades declarativas (dirigem o fluxo sem `if instituição == X` espalhado).
+    # `creates_settlement_obligation`: a operação cria obrigação de liquidação perante a
+    # instituição (aba Liquidação). `has_repasse`: a operação retém repasse (credita o Ledger).
+    # Qualquer instituição nova habilita o fluxo apenas ligando estes flags no seu handler —
+    # sem tocar no serviço de Liquidação (substitui a constante SETTLEMENT_OBLIGATION_PROFILES).
+    creates_settlement_obligation: bool = False
+    has_repasse: bool = False
+
     def __init__(self, service: "ReceivableAdvanceBatchService") -> None:
         self.service = service
 

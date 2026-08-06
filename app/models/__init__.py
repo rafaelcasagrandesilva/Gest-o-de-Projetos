@@ -19,6 +19,8 @@ from app.models.payment_component import PaymentComponentType, PaymentVariableCo
 from app.models.receivable import ReceivableInvoice
 from app.models.advance_institution import AdvanceInstitution
 from app.models.receivable_advance_batch import ReceivableAdvanceBatch, ReceivableAdvanceBatchItem
+from app.models.advance_settlement_movement import AdvanceSettlementMovement
+from app.models.advance_repasse_ledger import AdvanceRepasseLedgerEntry
 from app.models.receivable_manual import ReceivableManualItem
 from app.models.fleet import Vehicle, VehicleUsage
 from app.models.project import Project
@@ -58,6 +60,8 @@ __all__ = [
     "AdvanceInstitution",
     "ReceivableAdvanceBatch",
     "ReceivableAdvanceBatchItem",
+    "AdvanceSettlementMovement",
+    "AdvanceRepasseLedgerEntry",
     "ReceivableManualItem",
     "Invoice",
     "InvoiceAnticipation",

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.models.advance_repasse_ledger import RepasseLedgerSource
 from app.models.receivable import ReceivableInvoice
 from app.services.advance_operations.base import BaseOperationHandler, ItemInput
+from app.services.advance_repasse_ledger_service import AdvanceRepasseLedgerService
 from app.services.payable_snapshot_service import PayableSnapshotService
 from app.utils.date_utils import normalize_competencia
 
@@ -25,15 +27,16 @@ class LeptaOperationHandler(BaseOperationHandler):
     Toda a lógica da Lepta vive aqui (regra 1):
     - valor antecipado por NF conforme a base escolhida (Bruto / Líquido / Líquido−10%);
     - valor líquido creditado = soma dos antecipados − deságio − tarifas;
-    - na confirmação a operação gera até três obrigações no Contas a Pagar, todas com
-      competência/vencimento na DATA DE RECEBIMENTO e vinculadas via ref_id=batch.id:
-        • Deságio (discount_amount);
-        • Tarifas bancárias (fee_amount);
-        • Repasse não apropriado = 7% do BRUTO da operação — obrigação ÚNICA da operação
-          (não das NFs; independente de quantidade/vencimentos/competências).
+    - na confirmação a operação gera as despesas de **Deságio** e **Tarifas** no Contas a Pagar
+      (competência/vencimento na DATA DE RECEBIMENTO, ref_id=batch.id);
+    - o **Repasse** (7% do ANTECIPADO) NÃO vai mais para o Contas a Pagar (Fase 1B): credita o
+      **Ledger de Repasse** (append-only, por instituição). O estorno é feito no
+      `_revert_batch_effects` ao cancelar/editar (simetria criar→crédito / cancelar→estorno).
     """
 
     profile = "LEPTA"
+    creates_settlement_obligation = True
+    has_repasse = True
 
     def compute_item_advanced_amount(
         self, *, invoice: ReceivableInvoice, basis: str | None, manual_amount: float | None
@@ -131,14 +134,20 @@ class LeptaOperationHandler(BaseOperationHandler):
                 amount=fee,
                 due_date=batch.receive_date,
             )
-        if batch.repasse_enabled and batch.repasse_amount and batch.repasse_amount > 0.005:
-            await svc.add_operation_payable_line(
-                batch=batch,
-                month=batch.receive_date,
-                name=f"Repasse não apropriado • SGC {display}",
-                full_name=f"Repasse não apropriado - Operação SGC {display}",
+        # Repasse (Fase 1B): NÃO gera mais Contas a Pagar — credita o Ledger de Repasse
+        # (append-only, por instituição). O estorno acontece no `_revert_batch_effects`
+        # (cancelar/editar), mantendo a simetria criar→crédito / cancelar→estorno.
+        if self.has_repasse and batch.repasse_enabled and batch.repasse_amount and batch.repasse_amount > 0.005:
+            if batch.institution_id is None:
+                raise ValueError("Operação com repasse exige instituição cadastrada.")
+            await AdvanceRepasseLedgerService(svc.db).credit(
+                institution_id=batch.institution_id,
                 amount=round(float(batch.repasse_amount), 2),
-                due_date=batch.receive_date,
+                source_type=RepasseLedgerSource.OPERATION,
+                occurred_at=batch.receive_date,
+                source_batch_id=batch.id,
+                description=f"Repasse retido — Operação SGC {display}",
+                created_by_id=getattr(batch, "created_by_id", None),
             )
         affected.add(comp)
 

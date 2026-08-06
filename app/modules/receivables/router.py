@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -18,9 +19,7 @@ from app.api.deps import (
 from app.core.config import settings
 from app.core.permission_codes import (
     INVOICES_CREATE,
-    INVOICES_DELETE,
     INVOICES_LIST,
-    INVOICES_READ,
     INVOICES_REACTIVATE,
     INVOICES_UPDATE,
 )
@@ -45,7 +44,20 @@ from app.schemas.advance_institution import (
     AdvanceInstitutionRead,
     AdvanceInstitutionUpdate,
 )
+from app.schemas.advance_settlement import (
+    ManagementSummaryRead,
+    ObligationRead,
+    SettlementCreate,
+    SettlementKpisRead,
+    TimelineRead,
+)
+from app.schemas.advance_repasse_ledger import (
+    RepasseLedgerEntryRead,
+    RepasseLedgerStatementRead,
+)
 from app.services.advance_institution_service import AdvanceInstitutionService
+from app.services.advance_repasse_ledger_service import AdvanceRepasseLedgerService
+from app.services.advance_settlement_service import AdvanceSettlementService
 from app.services.receivable_advance_batch_service import ReceivableAdvanceBatchService
 from app.services.receivable_service import ReceivableService
 from app.models.receivable import ReceivableInvoiceFile
@@ -580,6 +592,164 @@ async def delete_advance_batch_hard(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.commit()
+
+
+# ============================================================================
+# Liquidação de NFs antecipadas + Ledger de Repasse (Fase 1A — infraestrutura).
+# DORMENTE: novos endpoints, sem qualquer integração com o fluxo atual da LEPTA.
+# ============================================================================
+
+
+@invoices_router.get(
+    "/advance-settlements/kpis",
+    response_model=SettlementKpisRead,
+    dependencies=_read_view,
+)
+async def advance_settlements_kpis(
+    institution_id: UUID | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> SettlementKpisRead:
+    svc = AdvanceSettlementService(db)
+    return SettlementKpisRead.model_validate(await svc.kpis(institution_id=institution_id))
+
+
+@invoices_router.get(
+    "/advance-settlements/management-summary",
+    response_model=ManagementSummaryRead,
+    dependencies=_read_view,
+)
+async def advance_settlements_management_summary(
+    institution_id: UUID | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> ManagementSummaryRead:
+    svc = AdvanceSettlementService(db)
+    return ManagementSummaryRead.model_validate(await svc.management_summary(institution_id=institution_id))
+
+
+@invoices_router.get(
+    "/advance-settlements/{batch_item_id}/timeline",
+    response_model=TimelineRead,
+    dependencies=_read_view,
+)
+async def advance_settlement_timeline(
+    batch_item_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> TimelineRead:
+    svc = AdvanceSettlementService(db)
+    try:
+        return TimelineRead.model_validate(await svc.obligation_timeline(batch_item_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@invoices_router.get(
+    "/advance-settlements",
+    response_model=list[ObligationRead],
+    dependencies=_read_view,
+)
+async def list_advance_settlements(
+    institution_id: UUID | None = Query(default=None),
+    invoice_number: str | None = Query(default=None),
+    sgc_number: int | None = Query(default=None),
+    situacao: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> list[ObligationRead]:
+    svc = AdvanceSettlementService(db)
+    rows = await svc.list_obligations(
+        institution_id=institution_id,
+        invoice_number=invoice_number,
+        sgc_number=sgc_number,
+        situacao=situacao,
+    )
+    return [ObligationRead.model_validate(r) for r in rows]
+
+
+@invoices_router.post(
+    "/advance-settlements",
+    response_model=ObligationRead,
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
+)
+async def create_advance_settlement(
+    payload: SettlementCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> ObligationRead:
+    svc = AdvanceSettlementService(db)
+    try:
+        obligation = await svc.add_movements(
+            batch_item_id=payload.batch_item_id,
+            movements=[m.model_dump() for m in payload.movements],
+            created_by_id=actor.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return ObligationRead.model_validate(obligation)
+
+
+@invoices_router.delete(
+    "/advance-settlement-movements/{movement_id}",
+    response_model=ObligationRead,
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
+)
+async def reverse_advance_settlement_movement(
+    movement_id: UUID,
+    reason: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> ObligationRead:
+    """Estorna (soft) uma movimentação de liquidação — nunca exclui. Reabre o residual."""
+    svc = AdvanceSettlementService(db)
+    try:
+        obligation = await svc.reverse_movement(movement_id=movement_id, reason=reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return ObligationRead.model_validate(obligation)
+
+
+@invoices_router.get("/advance-settlements/history/invoice/{invoice_id}", dependencies=_read_view)
+async def advance_settlement_invoice_history(
+    invoice_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Auditoria: histórico completo de liquidações de uma NF (todas as participações)."""
+    return await AdvanceSettlementService(db).invoice_history(invoice_id)
+
+
+@invoices_router.get("/advance-settlements/history/batch/{batch_id}", dependencies=_read_view)
+async def advance_settlement_batch_history(
+    batch_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Auditoria: histórico completo de um borderô (obrigações + repasse do lote)."""
+    return await AdvanceSettlementService(db).batch_history(batch_id)
+
+
+@invoices_router.get(
+    "/advance-repasse-ledger",
+    response_model=RepasseLedgerStatementRead,
+    dependencies=_read_view,
+)
+async def advance_repasse_ledger_statement(
+    institution_id: UUID | None = Query(default=None),
+    include_reversed: bool = Query(default=True),
+    db: AsyncSession = Depends(get_db),
+) -> RepasseLedgerStatementRead:
+    ledger = AdvanceRepasseLedgerService(db)
+    entries = await ledger.statement(institution_id=institution_id, include_reversed=include_reversed)
+    if institution_id is not None:
+        balance = float(await ledger.balance(institution_id))
+    else:
+        inst_ids = {e.institution_id for e in entries}
+        total = Decimal("0.00")
+        for i in inst_ids:
+            total += await ledger.balance(i)
+        balance = float(total)
+    return RepasseLedgerStatementRead(
+        institution_id=institution_id,
+        balance=balance,
+        entries=[RepasseLedgerEntryRead.model_validate(e) for e in entries],
+    )
 
 
 @invoices_router.post("", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_CREATE))])

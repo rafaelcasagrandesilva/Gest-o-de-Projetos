@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { isAxiosError } from "axios";
 import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
+import { AdvanceSettlementsTab } from "@/components/AdvanceSettlementsTab";
 import {
   cancelAdvanceBatch,
   deleteAdvanceBatchHard,
@@ -39,6 +40,7 @@ export function AdvanceBatches() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [viewBatchId, setViewBatchId] = useState<string | null>(null);
+  const [tab, setTab] = useState<"operacoes" | "liquidacao">("operacoes");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -114,31 +116,50 @@ export function AdvanceBatches() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Operações de antecipação</h1>
-          <p className="mt-1 text-sm text-slate-600">Operações financeiras (evento real de recebimento).</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-900">Antecipações</h1>
+        <p className="mt-1 text-sm text-slate-600">Operações de antecipação e liquidação das NFs perante a instituição.</p>
+      </div>
+
+      {/* Abas: Operações (borderôs) | Liquidação de NFs. */}
+      <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+        {(["operacoes", "liquidacao"] as const).map((t) => (
           <button
+            key={t}
             type="button"
-            onClick={() => void load()}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+            onClick={() => setTab(t)}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+              tab === t ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
+            }`}
           >
-            Atualizar
+            {t === "operacoes" ? "Operações" : "Liquidação de NFs"}
           </button>
-          <button
-            type="button"
-            disabled={!canEditInvoices}
-            onClick={() => {
-              setViewBatchId(null);
-              setModalOpen(true);
-            }}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Nova antecipação
-          </button>
-        </div>
+        ))}
+      </div>
+
+      {tab === "liquidacao" ? (
+        <AdvanceSettlementsTab canEdit={canEditInvoices} />
+      ) : (
+        <>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+        >
+          Atualizar
+        </button>
+        <button
+          type="button"
+          disabled={!canEditInvoices}
+          onClick={() => {
+            setViewBatchId(null);
+            setModalOpen(true);
+          }}
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Nova antecipação
+        </button>
       </div>
 
       {error && (
@@ -153,7 +174,7 @@ export function AdvanceBatches() {
               <th className="px-2 py-2">Nº instituição</th>
               <th className="px-2 py-2">Instituição</th>
               <th className="px-2 py-2 text-right">Qtd NFs</th>
-              <th className="px-2 py-2 text-right">Bruto</th>
+              <th className="px-2 py-2 text-right">Repasse Retido</th>
               <th className="px-2 py-2 text-right">Líquido</th>
               <th className="px-2 py-2 text-right">Deságio</th>
               <th className="px-2 py-2 text-right">Tarifas</th>
@@ -187,7 +208,9 @@ export function AdvanceBatches() {
                     {b.institution}
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{b.invoice_count}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(b.gross_amount)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums text-indigo-700" title="Repasse retido (7% do antecipado)">
+                    {b.repasse_enabled ? formatBRL(b.repasse_amount) : "—"}
+                  </td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(b.received_amount)}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(b.discount_amount)}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(b.fee_amount)}</td>
@@ -250,6 +273,8 @@ export function AdvanceBatches() {
         }}
         onOpenOperation={(batchId) => setViewBatchId(batchId)}
       />
+        </>
+      )}
     </div>
   );
 }
