@@ -40,7 +40,7 @@ class _Base(unittest.IsolatedAsyncioTestCase):
         await s.flush()
         return inst
 
-    async def _make_obligations(self, s, *, gross=100_000.0, repayment=FUTURE, n=1, inst=None):
+    async def _make_obligations(self, s, *, gross=100_000.0, repayment=FUTURE, n=1, inst=None, due_date=FUTURE):
         """Cria uma operação LEPTA confirmada com N NFs → N obrigações (participações)."""
         from app.models.project import Project
         from app.models.receivable import ReceivableInvoice
@@ -54,7 +54,7 @@ class _Base(unittest.IsolatedAsyncioTestCase):
         for i in range(n):
             inv = ReceivableInvoice(
                 nf_number=f"L-{uuid4().hex[:6]}-{i}", project_id=project.id,
-                issue_date=date(2026, 5, 1), due_days=30, due_date=date(2026, 6, 1),
+                issue_date=date(2026, 5, 1), due_days=30, due_date=due_date,
                 gross_amount=gross, net_amount=gross, received_amount=0.0,
                 client_name=f"Cliente {i}", invoice_status="EMITIDA",
             )
@@ -271,7 +271,7 @@ class SettlementServiceTests(_Base):
         async with AsyncSessionLocal() as s:
             await self._prelude(s)
             try:
-                _inst, _batch, items, _ = await self._make_obligations(s, gross=100_000.0, repayment=PAST)
+                _inst, _batch, items, _ = await self._make_obligations(s, gross=100_000.0, due_date=PAST)
                 svc = AdvanceSettlementService(s)
                 obs = await svc.list_obligations(today=TODAY)
                 mine = [o for o in obs if o["batch_item_id"] == items[0].id][0]

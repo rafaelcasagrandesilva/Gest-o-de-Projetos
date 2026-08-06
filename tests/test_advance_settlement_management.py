@@ -35,7 +35,7 @@ class _Base(unittest.IsolatedAsyncioTestCase):
         await s.flush()
         return inst
 
-    async def _confirm(self, s, *, inst, gross=100_000.0, repayment=FUTURE, repasse=True, daycoval=False):
+    async def _confirm(self, s, *, inst, gross=100_000.0, repayment=FUTURE, repasse=True, daycoval=False, due_date=FUTURE):
         from app.models.project import Project
         from app.models.receivable import ReceivableInvoice
         from app.services.receivable_advance_batch_service import ReceivableAdvanceBatchService
@@ -45,7 +45,7 @@ class _Base(unittest.IsolatedAsyncioTestCase):
         await s.flush()
         inv = ReceivableInvoice(
             nf_number=f"F3-{uuid4().hex[:6]}", project_id=project.id,
-            issue_date=date(2026, 5, 1), due_days=30, due_date=date(2026, 6, 1),
+            issue_date=date(2026, 5, 1), due_days=30, due_date=due_date,
             gross_amount=gross, net_amount=gross, received_amount=0.0, invoice_status="EMITIDA",
         )
         s.add(inv)
@@ -109,8 +109,8 @@ class ManagementTests(_Base):
             try:
                 inst = await self._lepta(s)
                 # Uma a vencer em 20/08 (dentro de 30d) e uma já vencida (venc. no passado).
-                await self._confirm(s, inst=inst, gross=100_000.0, repayment=SOON)
-                await self._confirm(s, inst=inst, gross=50_000.0, repayment=date(2026, 7, 1))
+                await self._confirm(s, inst=inst, gross=100_000.0, due_date=SOON)
+                await self._confirm(s, inst=inst, gross=50_000.0, due_date=date(2026, 7, 1))
                 sset = AdvanceSettlementService(s)
                 ms = await sset.management_summary(today=TODAY, institution_id=inst.id)
                 self.assertEqual(ms["valor_a_vencer_30d"], 100_000.0)
@@ -128,7 +128,7 @@ class ManagementTests(_Base):
             await self._prelude(s)
             try:
                 inst = await self._lepta(s)
-                _svc, _batch, item, _inv = await self._confirm(s, inst=inst, gross=100_000.0, repayment=date(2026, 7, 1))
+                _svc, _batch, item, _inv = await self._confirm(s, inst=inst, gross=100_000.0, due_date=date(2026, 7, 1))
                 sset = AdvanceSettlementService(s)
                 await sset.add_movements(
                     batch_item_id=item.id, today=TODAY,

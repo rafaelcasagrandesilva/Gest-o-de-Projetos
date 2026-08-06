@@ -120,7 +120,6 @@ export function AdvanceBatchModal({
   const [operationCode, setOperationCode] = useState("");
   const [operationType, setOperationType] = useState<"BORDERO" | "FACTORING" | "FIDC" | "OUTROS">("BORDERO");
   const [receiveDate, setReceiveDate] = useState(todayIso());
-  const [repaymentDate, setRepaymentDate] = useState("");
   const [receivedAmount, setReceivedAmount] = useState("");
   const [discountAmount, setDiscountAmount] = useState("");
   const [feeAmount, setFeeAmount] = useState("");
@@ -178,7 +177,6 @@ export function AdvanceBatchModal({
     setOperationCode("");
     setOperationType("BORDERO");
     setReceiveDate(todayIso());
-    setRepaymentDate("");
     setReceivedAmount("");
     setDiscountAmount("");
     setFeeAmount("");
@@ -384,7 +382,6 @@ export function AdvanceBatchModal({
     setOperationType((detail.operation_type ?? "BORDERO") as "BORDERO" | "FACTORING" | "FIDC" | "OUTROS");
     setOperationCode(detail.operation_code ?? "");
     setReceiveDate(detail.receive_date);
-    setRepaymentDate(detail.repayment_date ?? "");
     setDiscountAmount(detail.discount_amount ? formatCurrencyField(detail.discount_amount) : "");
     setFeeAmount(detail.fee_amount ? formatCurrencyField(detail.fee_amount) : "");
     setReceivedAmount(detail.received_amount ? formatCurrencyField(detail.received_amount) : "");
@@ -438,11 +435,6 @@ export function AdvanceBatchModal({
       setError("Informe a data de recebimento.");
       return;
     }
-    // Daycoval não possui devolução — nenhuma validação de devolução para esse perfil.
-    if (!isDaycoval && !repaymentDate) {
-      setError("Informe a data de devolução.");
-      return;
-    }
     setSaving(true);
     setError(null);
     try {
@@ -456,8 +448,10 @@ export function AdvanceBatchModal({
         operation_code: operationCode.trim() || null,
         institution_id: institutionId,
         receive_date: receiveDate,
-        // Daycoval: sem devolução (o backend usa a data de recebimento internamente).
-        repayment_date: isDaycoval ? null : repaymentDate,
+        // Devolução no nível da operação foi removida: o vencimento perante a instituição é
+        // o de cada NF (invoice.due_date), controlado na aba Liquidação. O backend usa a data
+        // de recebimento internamente para a coluna repayment_date (compat).
+        repayment_date: null,
         observation: observation.trim() || null,
       };
       if (isLepta) {
@@ -684,11 +678,6 @@ export function AdvanceBatchModal({
               <p>
                 <span className="text-slate-500">Recebimento:</span> {formatDateBr(detail.receive_date)}
               </p>
-              {detail.institution_profile !== "DAYCOVAL" ? (
-                <p>
-                  <span className="text-slate-500">Devolução:</span> {formatDateBr(detail.repayment_date)}
-                </p>
-              ) : null}
               <p>
                 <span className="text-slate-500">Bruto:</span> {formatBRL(detail.gross_amount)}
               </p>
@@ -895,20 +884,8 @@ export function AdvanceBatchModal({
                   className="rounded-lg border border-slate-300 px-3 py-2"
                 />
               </label>
-              {/* Objetivo 2: Daycoval não possui devolução (ENEL paga o banco direto) — o campo
-                  desaparece completamente e não há validação de devolução para esse perfil. */}
-              {!isDaycoval ? (
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="font-medium text-slate-700">Data devolução *</span>
-                  <input
-                    type="date"
-                    required
-                    value={repaymentDate}
-                    onChange={(e) => setRepaymentDate(e.target.value)}
-                    className="rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-              ) : null}
+              {/* Devolução no nível da operação REMOVIDA: o vencimento perante a instituição é
+                  o de cada NF (controlado na aba Liquidação de NFs). */}
               {isDaycoval ? (
                 <p className="text-[11px] text-slate-500 sm:col-span-2 lg:col-span-3">
                   Informe o valor antecipado de cada NF na tabela abaixo. Ao confirmar, as NFs são

@@ -74,6 +74,13 @@ export function formatCurrency(n: number): string {
   return BRL_CURRENCY.format(n);
 }
 
+/** Parte NUMÉRICA (sem "R$"), pt-BR, 2 casas. Ex.: 365575.21 → "365.575,21".
+ * Usado no componente <Money> para alinhar R$ à esquerda e o número à direita (estilo Excel). */
+export function formatNumberBR(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "0,00";
+  return BRL_FIELD.format(n);
+}
+
 /**
  * Placeholder padrão de valor ocultado por "Dados sensíveis" (backend envia `null`).
  * Fonte ÚNICA para toda a renderização de valores monetários que podem ser redigidos —

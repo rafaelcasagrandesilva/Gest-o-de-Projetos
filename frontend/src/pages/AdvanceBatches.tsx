@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { isAxiosError } from "axios";
 import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
 import { AdvanceSettlementsTab } from "@/components/AdvanceSettlementsTab";
+import { Money } from "@/components/Money";
+import { SortableTh } from "@/components/table";
+import { useTableSort } from "@/hooks/useTableSort";
+import { ADVANCE_BATCH_SORT_COLUMNS, defaultAdvanceBatchSort } from "@/tableSort/advanceBatches";
 import {
   cancelAdvanceBatch,
   deleteAdvanceBatchHard,
@@ -11,11 +15,7 @@ import {
   type AdvanceBatchStatus,
 } from "@/services/receivableAdvanceBatches";
 import { formatApiError } from "@/utils/apiError";
-import { formatCurrencyOrDash } from "@/utils/currency";
 import { usePermission } from "@/hooks/usePermission";
-
-/** Null-safe: delega ao util compartilhado (valor redigido → "—"). */
-const formatBRL = formatCurrencyOrDash;
 
 function formatDateBr(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
@@ -41,6 +41,10 @@ export function AdvanceBatches() {
   const [modalOpen, setModalOpen] = useState(false);
   const [viewBatchId, setViewBatchId] = useState<string | null>(null);
   const [tab, setTab] = useState<"operacoes" | "liquidacao">("operacoes");
+  // Ações da aba Liquidação, elevadas ao pai para ficarem na mesma linha das abas.
+  const [mgmtOpen, setMgmtOpen] = useState(false);
+  const [ledgerOpen, setLedgerOpen] = useState(false);
+  const [settlementsRefresh, setSettlementsRefresh] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -59,9 +63,9 @@ export function AdvanceBatches() {
     void load();
   }, [load]);
 
-  const sorted = useMemo(() => {
-    return [...rows].sort((a, b) => (b.receive_date || "").localeCompare(a.receive_date || ""));
-  }, [rows]);
+  const { sortedRows: sorted, headerSort } = useTableSort(rows, ADVANCE_BATCH_SORT_COLUMNS, {
+    defaultCompare: defaultAdvanceBatchSort,
+  });
 
   const operationLabel = (b: AdvanceBatch) => {
     // Identificador operacional oficial = número interno do SGC.
@@ -121,47 +125,85 @@ export function AdvanceBatches() {
         <p className="mt-1 text-sm text-slate-600">Operações de antecipação e liquidação das NFs perante a instituição.</p>
       </div>
 
-      {/* Abas: Operações (borderôs) | Liquidação de NFs. */}
-      <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-        {(["operacoes", "liquidacao"] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-              tab === t ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
-            }`}
-          >
-            {t === "operacoes" ? "Operações" : "Liquidação de NFs"}
-          </button>
-        ))}
+      {/* Abas + ações na MESMA linha (aproveita o espaço do topo). */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+          {(["operacoes", "liquidacao"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                tab === t ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              {t === "operacoes" ? "Operações" : "Liquidação de NFs"}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {tab === "liquidacao" ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setMgmtOpen((v) => !v)}
+                className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
+                  mgmtOpen ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
+                }`}
+              >
+                Visão gerencial
+              </button>
+              <button
+                type="button"
+                onClick={() => setSettlementsRefresh((n) => n + 1)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
+              >
+                Atualizar
+              </button>
+              <button
+                type="button"
+                onClick={() => setLedgerOpen(true)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
+              >
+                Extrato do Repasse
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
+              >
+                Atualizar
+              </button>
+              <button
+                type="button"
+                disabled={!canEditInvoices}
+                onClick={() => {
+                  setViewBatchId(null);
+                  setModalOpen(true);
+                }}
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Nova antecipação
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {tab === "liquidacao" ? (
-        <AdvanceSettlementsTab canEdit={canEditInvoices} />
+        <AdvanceSettlementsTab
+          canEdit={canEditInvoices}
+          showMgmt={mgmtOpen}
+          ledgerOpen={ledgerOpen}
+          onCloseLedger={() => setLedgerOpen(false)}
+          refreshSignal={settlementsRefresh}
+        />
       ) : (
         <>
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
-        >
-          Atualizar
-        </button>
-        <button
-          type="button"
-          disabled={!canEditInvoices}
-          onClick={() => {
-            setViewBatchId(null);
-            setModalOpen(true);
-          }}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Nova antecipação
-        </button>
-      </div>
-
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
@@ -170,30 +212,29 @@ export function AdvanceBatches() {
         <table className="min-w-[1200px] w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
             <tr>
-              <th className="px-2 py-2">Operação SGC</th>
-              <th className="px-2 py-2">Nº instituição</th>
-              <th className="px-2 py-2">Instituição</th>
-              <th className="px-2 py-2 text-right">Qtd NFs</th>
-              <th className="px-2 py-2 text-right">Repasse Retido</th>
-              <th className="px-2 py-2 text-right">Líquido</th>
-              <th className="px-2 py-2 text-right">Deságio</th>
-              <th className="px-2 py-2 text-right">Tarifas</th>
-              <th className="px-2 py-2">Recebimento</th>
-              <th className="px-2 py-2">Devolução</th>
-              <th className="px-2 py-2">Status</th>
+              <SortableTh label="Operação SGC" column="sgc" {...headerSort} />
+              <SortableTh label="Nº instituição" column="operation_code" {...headerSort} />
+              <SortableTh label="Instituição" column="institution" {...headerSort} />
+              <SortableTh label="Qtd NFs" column="invoice_count" align="right" {...headerSort} />
+              <SortableTh label="Repasse Retido" column="repasse" align="right" {...headerSort} />
+              <SortableTh label="Líquido" column="received" align="right" {...headerSort} />
+              <SortableTh label="Deságio" column="discount" align="right" {...headerSort} />
+              <SortableTh label="Tarifas" column="fee" align="right" {...headerSort} />
+              <SortableTh label="Recebimento" column="receive_date" {...headerSort} />
+              <SortableTh label="Status" column="status" {...headerSort} />
               <th className="px-2 py-2 text-right">Ações</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
               <tr>
-                <td colSpan={12} className="px-3 py-10 text-center text-slate-500">
+                <td colSpan={11} className="px-3 py-10 text-center text-slate-500">
                   Carregando…
                 </td>
               </tr>
             ) : sorted.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={11} className="px-3 py-8 text-center text-slate-500">
                   Nenhum borderô criado ainda.
                 </td>
               </tr>
@@ -208,14 +249,13 @@ export function AdvanceBatches() {
                     {b.institution}
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{b.invoice_count}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums text-indigo-700" title="Repasse retido (7% do antecipado)">
-                    {b.repasse_enabled ? formatBRL(b.repasse_amount) : "—"}
+                  <td className="px-2 py-1.5 text-indigo-700" title="Repasse retido (7% do antecipado)">
+                    <Money value={b.repasse_enabled ? b.repasse_amount : null} />
                   </td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(b.received_amount)}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(b.discount_amount)}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(b.fee_amount)}</td>
+                  <td className="px-2 py-1.5"><Money value={b.received_amount} /></td>
+                  <td className="px-2 py-1.5"><Money value={b.discount_amount} /></td>
+                  <td className="px-2 py-1.5"><Money value={b.fee_amount} /></td>
                   <td className="whitespace-nowrap px-2 py-1.5">{formatDateBr(b.receive_date)}</td>
-                  <td className="whitespace-nowrap px-2 py-1.5">{formatDateBr(b.repayment_date)}</td>
                   <td className="px-2 py-1.5">
                     <span
                       className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${STATUS_META[b.status].cls}`}

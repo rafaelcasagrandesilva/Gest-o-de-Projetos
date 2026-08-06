@@ -60,12 +60,14 @@ def _money(v: float | Decimal | None) -> Decimal:
     return Decimal(str(v or 0)).quantize(_CENT)
 
 
-def derive_situacao(*, valor_total: Decimal, valor_liquidado: Decimal, repayment_date: date, today: date) -> str:
-    """Situação da obrigação. Precedência: LIQUIDADA > VENCIDA > PARCIALMENTE_LIQUIDADA > EM_ABERTO."""
+def derive_situacao(*, valor_total: Decimal, valor_liquidado: Decimal, vencimento: date, today: date) -> str:
+    """Situação da obrigação. Precedência: LIQUIDADA > VENCIDA > PARCIALMENTE_LIQUIDADA > EM_ABERTO.
+
+    `vencimento` = vencimento da NF (invoice.due_date) — a devolução à instituição é por nota."""
     residual = valor_total - valor_liquidado
     if residual <= _TOL:
         return LIQUIDADA
-    if repayment_date is not None and repayment_date < today:
+    if vencimento is not None and vencimento < today:
         return VENCIDA
     if valor_liquidado > _TOL:
         return PARCIALMENTE_LIQUIDADA
@@ -195,19 +197,27 @@ class AdvanceSettlementService:
 
         out: list[dict] = []
         for item, batch, inv, proj, profile, inst_id in selected:
-            movements = mv_map.get(item.id, [])
             valor_total = _money(item.advanced_amount)
+            # Participações com valor antecipado ZERO (ex.: borderôs legados sem o valor por NF
+            # registrado) não representam dívida real perante a instituição — ficam fora da lista.
+            if valor_total <= _TOL:
+                continue
+            movements = mv_map.get(item.id, [])
             valor_liquidado = self._liquidado(movements)
             valor_residual = (valor_total - valor_liquidado).quantize(_CENT)
+            # O vencimento da obrigação perante a instituição é o vencimento de CADA NF
+            # (invoice.due_date) — não a data da operação/borderô. A devolução à instituição
+            # acontece no vencimento da nota, controlada aqui na Liquidação.
+            vencimento = inv.due_date
             sit = derive_situacao(
                 valor_total=valor_total,
                 valor_liquidado=valor_liquidado,
-                repayment_date=batch.repayment_date,
+                vencimento=vencimento,
                 today=today,
             )
             dias_em_atraso = (
-                (today - batch.repayment_date).days
-                if (sit == VENCIDA and batch.repayment_date is not None and batch.repayment_date < today)
+                (today - vencimento).days
+                if (sit == VENCIDA and vencimento is not None and vencimento < today)
                 else 0
             )
             # Filtros pós-derivação.
@@ -234,7 +244,7 @@ class AdvanceSettlementService:
                     "valor_residual": float(valor_residual),
                     "situacao": sit,
                     "receive_date": batch.receive_date,
-                    "vencimento": batch.repayment_date,
+                    "vencimento": vencimento,
                     "dias_em_atraso": dias_em_atraso,
                     "origens_resumo": origens_resumo(movements),
                     "movimentacoes": [self._movement_dict(m) for m in movements],

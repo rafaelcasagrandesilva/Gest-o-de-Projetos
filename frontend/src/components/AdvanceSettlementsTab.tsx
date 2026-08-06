@@ -18,7 +18,11 @@ import {
   type SituacaoLiquidacao,
   type Timeline,
 } from "@/services/advanceSettlements";
+import { Money } from "@/components/Money";
 import { RepasseLedgerModal } from "@/components/RepasseLedgerModal";
+import { SortableTh } from "@/components/table";
+import { useTableSort } from "@/hooks/useTableSort";
+import { OBLIGATION_SORT_COLUMNS, defaultObligationSort } from "@/tableSort/advanceSettlements";
 import { formatApiError } from "@/utils/apiError";
 import {
   formatCurrency,
@@ -40,9 +44,9 @@ function todayIso(): string {
 
 function Kpi({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className={`mt-2 text-lg font-semibold tabular-nums text-slate-900 ${accent ?? ""}`}>{value}</p>
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</p>
+      <p className={`mt-0.5 text-base font-semibold tabular-nums text-slate-900 ${accent ?? ""}`}>{value}</p>
     </div>
   );
 }
@@ -51,9 +55,8 @@ function ManagementPanel({ m }: { m: ManagementSummary }) {
   const dist = m.distribuicao_origens;
   const barColors = ["bg-indigo-500", "bg-emerald-500", "bg-amber-500", "bg-sky-500", "bg-slate-400"];
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="mb-3 text-sm font-semibold text-slate-800">Visão gerencial</p>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
         <Kpi label="Ainda antecipado (a devolver)" value={formatCurrency(m.valor_ainda_antecipado)} />
         <Kpi label="A vencer (30 dias)" value={formatCurrency(m.valor_a_vencer_30d)} accent="text-amber-700" />
         <Kpi
@@ -106,11 +109,22 @@ function SituacaoBadge({ s }: { s: SituacaoLiquidacao }) {
   );
 }
 
-export function AdvanceSettlementsTab({ canEdit }: { canEdit: boolean }) {
+export function AdvanceSettlementsTab({
+  canEdit,
+  showMgmt,
+  ledgerOpen,
+  onCloseLedger,
+  refreshSignal,
+}: {
+  canEdit: boolean;
+  showMgmt: boolean;
+  ledgerOpen: boolean;
+  onCloseLedger: () => void;
+  refreshSignal: number;
+}) {
   const [obligations, setObligations] = useState<Obligation[]>([]);
   const [kpis, setKpis] = useState<SettlementKpis | null>(null);
   const [mgmt, setMgmt] = useState<ManagementSummary | null>(null);
-  const [showMgmt, setShowMgmt] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -122,7 +136,6 @@ export function AdvanceSettlementsTab({ canEdit }: { canEdit: boolean }) {
   const [fSgc, setFSgc] = useState("");
 
   const [settleTarget, setSettleTarget] = useState<Obligation | null>(null);
-  const [ledgerOpen, setLedgerOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -143,9 +156,10 @@ export function AdvanceSettlementsTab({ canEdit }: { canEdit: boolean }) {
     }
   }, []);
 
+  // Carrega na montagem e sempre que o pai pedir "Atualizar" (refreshSignal muda).
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, refreshSignal]);
 
   const institutions = useMemo(() => {
     const map = new Map<string, string>();
@@ -166,6 +180,11 @@ export function AdvanceSettlementsTab({ canEdit }: { canEdit: boolean }) {
     });
   }, [obligations, fSituacao, fInstitution, fClient, fNf, fSgc]);
 
+  // Ordenação por coluna (mesmo padrão do CAP): aplicada sobre o conjunto já filtrado.
+  const { sortedRows, headerSort } = useTableSort(filtered, OBLIGATION_SORT_COLUMNS, {
+    defaultCompare: defaultObligationSort,
+  });
+
   // Reflete a obrigação atualizada devolvida pelo backend (após liquidar/estornar) e atualiza KPIs.
   const applyUpdated = useCallback(async (updated: Obligation) => {
     setObligations((prev) => prev.map((o) => (o.batch_item_id === updated.batch_item_id ? updated : o)));
@@ -180,39 +199,13 @@ export function AdvanceSettlementsTab({ canEdit }: { canEdit: boolean }) {
   }, []);
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => setShowMgmt((v) => !v)}
-          className={`rounded-lg border px-4 py-2 text-sm font-medium ${
-            showMgmt ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
-          }`}
-        >
-          Visão gerencial
-        </button>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
-        >
-          Atualizar
-        </button>
-        <button
-          type="button"
-          onClick={() => setLedgerOpen(true)}
-          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
-        >
-          Extrato do Repasse
-        </button>
-      </div>
-
+    <div className="space-y-4">
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
 
       {/* Cards: consomem EXCLUSIVAMENTE os KPIs do backend (sem somatório em React). */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
         <Kpi label="NFs pendentes" value={kpis ? String(kpis.nfs_pendentes) : "—"} />
         <Kpi label="NFs vencidas" value={kpis ? String(kpis.nfs_vencidas) : "—"} accent="text-red-700" />
         <Kpi label="Valor total vencido" value={kpis ? formatCurrency(kpis.valor_total_vencido) : "—"} accent="text-red-700" />
@@ -289,17 +282,17 @@ export function AdvanceSettlementsTab({ canEdit }: { canEdit: boolean }) {
         <table className="min-w-[1100px] w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
             <tr>
-              <th className="px-2 py-2">Situação</th>
-              <th className="px-2 py-2">Nº NF</th>
-              <th className="px-2 py-2">Cliente</th>
-              <th className="px-2 py-2 text-right">Borderô</th>
-              <th className="px-2 py-2">Instituição</th>
-              <th className="px-2 py-2 text-right">Valor</th>
-              <th className="px-2 py-2 text-right">Liquidado</th>
-              <th className="px-2 py-2 text-right">Residual</th>
-              <th className="px-2 py-2">Origens</th>
-              <th className="px-2 py-2">Vencimento</th>
-              <th className="px-2 py-2 text-right">Atraso</th>
+              <SortableTh label="Situação" column="situacao" {...headerSort} />
+              <SortableTh label="Nº NF" column="invoice_number" {...headerSort} />
+              <SortableTh label="Cliente" column="client" {...headerSort} />
+              <SortableTh label="Borderô" column="sgc" align="right" {...headerSort} />
+              <SortableTh label="Instituição" column="institution" {...headerSort} />
+              <SortableTh label="Valor" column="valor" align="right" {...headerSort} />
+              <SortableTh label="Liquidado" column="liquidado" align="right" {...headerSort} />
+              <SortableTh label="Residual" column="residual" align="right" {...headerSort} />
+              <SortableTh label="Origens" column="origens" {...headerSort} />
+              <SortableTh label="Vencimento" column="vencimento" {...headerSort} />
+              <SortableTh label="Atraso" column="atraso" align="right" {...headerSort} />
               <th className="px-2 py-2 text-right">Ações</th>
             </tr>
           </thead>
@@ -310,14 +303,14 @@ export function AdvanceSettlementsTab({ canEdit }: { canEdit: boolean }) {
                   Carregando…
                 </td>
               </tr>
-            ) : filtered.length === 0 ? (
+            ) : sortedRows.length === 0 ? (
               <tr>
                 <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
                   Nenhuma NF antecipada com obrigação de liquidação.
                 </td>
               </tr>
             ) : (
-              filtered.map((o) => (
+              sortedRows.map((o) => (
                 <tr key={o.batch_item_id} className="hover:bg-slate-50/80">
                   <td className="px-2 py-1.5">
                     <SituacaoBadge s={o.situacao} />
@@ -330,9 +323,9 @@ export function AdvanceSettlementsTab({ canEdit }: { canEdit: boolean }) {
                   <td className="max-w-[180px] truncate px-2 py-1.5 text-slate-700" title={o.institution || undefined}>
                     {o.institution || "—"}
                   </td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{formatCurrencyOrDash(o.valor_total)}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums text-emerald-700">{formatCurrencyOrDash(o.valor_liquidado)}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums font-medium">{formatCurrencyOrDash(o.valor_residual)}</td>
+                  <td className="px-2 py-1.5"><Money value={o.valor_total} /></td>
+                  <td className="px-2 py-1.5 text-emerald-700"><Money value={o.valor_liquidado} /></td>
+                  <td className="px-2 py-1.5 font-medium"><Money value={o.valor_residual} /></td>
                   <td className="max-w-[160px] truncate px-2 py-1.5 text-slate-600" title={o.origens_resumo || undefined}>
                     {o.origens_resumo || "—"}
                   </td>
@@ -364,7 +357,7 @@ export function AdvanceSettlementsTab({ canEdit }: { canEdit: boolean }) {
           onChanged={applyUpdated}
         />
       )}
-      {ledgerOpen && <RepasseLedgerModal institutions={institutions} onClose={() => setLedgerOpen(false)} />}
+      {ledgerOpen && <RepasseLedgerModal institutions={institutions} onClose={onCloseLedger} />}
     </div>
   );
 }
