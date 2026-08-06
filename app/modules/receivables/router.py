@@ -423,12 +423,66 @@ async def create_advance_batch(
             created_by_id=actor.id,
             log_user=_actor_email(actor),
         )
+        # A operação já nasce ATIVA: create + confirm numa única transação (elimina o passo
+        # de "Confirmar"). Os estados internos DRAFT/OPEN continuam sendo o motor de
+        # reverter/reaplicar (usado por editar/cancelar).
+        await batch_svc.confirm_batch(batch_id=batch.id, log_user=_actor_email(actor))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.commit()
     loaded = await batch_svc.get_batch(batch.id)
     if loaded is None:
         raise HTTPException(status_code=500, detail="Falha ao carregar borderô.")
+    return AdvanceBatchRead.model_validate(await batch_svc.batch_read_dict(loaded))
+
+
+@invoices_router.put(
+    "/advance-batches/{batch_id}",
+    response_model=AdvanceBatchRead,
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
+)
+async def edit_advance_batch(
+    batch_id: UUID,
+    payload: AdvanceBatchCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> AdvanceBatchRead:
+    """Edita uma operação ATIVA (reverte → aplica novos dados → reaplica). Bloqueado quando há
+    pagamento nas despesas do borderô (só resta cancelar)."""
+    effective_ids = list(payload.invoice_ids) or [it.invoice_id for it in payload.items]
+    if not user_sees_all_projects(actor):
+        allowed = await get_accessible_project_ids(actor, db)
+        for iid in effective_ids:
+            inv = await ReceivableService(db).get_invoice(iid)
+            if inv is None:
+                raise HTTPException(status_code=404, detail="NF não encontrada.")
+            if inv.project_id not in allowed:
+                raise HTTPException(status_code=403, detail="Sem permissão para uma ou mais NFs.")
+
+    batch_svc = ReceivableAdvanceBatchService(db)
+    try:
+        await batch_svc.edit_batch(
+            batch_id=batch_id,
+            operation_type=getattr(payload, "operation_type", "BORDERO"),
+            operation_code=getattr(payload, "operation_code", None),
+            institution_id=payload.institution_id,
+            received_amount=payload.received_amount,
+            discount_amount=payload.discount_amount,
+            fee_amount=payload.fee_amount,
+            repasse_enabled=payload.repasse_enabled,
+            receive_date=payload.receive_date,
+            repayment_date=payload.repayment_date,
+            observation=payload.observation,
+            invoice_ids=payload.invoice_ids,
+            items_config=[it.model_dump() for it in payload.items] or None,
+            log_user=_actor_email(actor),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    loaded = await batch_svc.get_batch(batch_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Operação não encontrada.")
     return AdvanceBatchRead.model_validate(await batch_svc.batch_read_dict(loaded))
 
 

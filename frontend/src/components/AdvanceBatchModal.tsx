@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAxiosError } from "axios";
 import {
   createAdvanceBatch,
+  editAdvanceBatch,
   fetchAdvanceBatch,
   fetchEligibleInvoicesForBatch,
   cancelAdvanceBatch,
@@ -100,7 +101,12 @@ export function AdvanceBatchModal({
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Espelho de `selected` para o merge da busca preservar NFs já escolhidas (ex.: na edição).
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const [detail, setDetail] = useState<AdvanceBatch | null>(null);
+  // Edição de uma operação ATIVA: reusa o form de criação pré-preenchido a partir do detalhe.
+  const [editing, setEditing] = useState(false);
   const [includeInDashboard, setIncludeInDashboard] = useState(true);
   const [dashboardSaving, setDashboardSaving] = useState(false);
   const [actualReceivedInput, setActualReceivedInput] = useState("");
@@ -127,7 +133,12 @@ export function AdvanceBatchModal({
       const rows = await fetchEligibleInvoicesForBatch({
         search: searchQuery.trim() || undefined,
       });
-      setInvoices(rows);
+      // Preserva NFs já selecionadas que não vieram na busca (ex.: NFs da operação em edição).
+      setInvoices((prev) => {
+        const byId = new Map(rows.map((r) => [r.id, r]));
+        for (const p of prev) if (selectedRef.current.has(p.id) && !byId.has(p.id)) byId.set(p.id, p);
+        return [...byId.values()];
+      });
     } catch (e) {
       setError(isAxiosError(e) ? formatApiError(e) : "Não foi possível carregar NFs elegíveis.");
     } finally {
@@ -150,17 +161,42 @@ export function AdvanceBatchModal({
     }
   }, [viewBatchId]);
 
+  // Reset ao FECHAR: o modal é reutilizado (mesma instância), então sem limpar o estado a
+  // próxima abertura (nova antecipação / outra operação / edição) vazaria os dados da operação
+  // anterior. Limpar no fechamento garante que a próxima abertura comece do zero.
+  useEffect(() => {
+    if (open) return;
+    setEditing(false);
+    setDetail(null);
+    setError(null);
+    setSelected(new Set());
+    setBases({});
+    setManualAmounts({});
+    setSearchInput("");
+    setSearchQuery("");
+    setInstitutionId("");
+    setOperationCode("");
+    setOperationType("BORDERO");
+    setReceiveDate(todayIso());
+    setRepaymentDate("");
+    setReceivedAmount("");
+    setDiscountAmount("");
+    setFeeAmount("");
+    setObservation("");
+    setRepasseEnabled(false);
+    setActualReceivedInput("");
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
-    if (isView) {
-      void loadDetail();
-    } else {
-      void loadEligible();
-      void fetchAdvanceInstitutions({ only_active: true })
-        .then(setInstitutions)
-        .catch(() => setInstitutions([]));
-    }
-  }, [open, isView, loadDetail, loadEligible]);
+    if (isView && !editing) void loadDetail();
+    if (!isView || editing) void loadEligible();
+    // Instituições são necessárias tanto para criar quanto para EDITAR (resolvem o perfil
+    // LEPTA/Daycoval que define o payload) — sempre carregadas.
+    void fetchAdvanceInstitutions({ only_active: true })
+      .then(setInstitutions)
+      .catch(() => setInstitutions([]));
+  }, [open, isView, editing, loadDetail, loadEligible]);
 
   const selectedInstitution = useMemo(
     () => institutions.find((i) => i.id === institutionId) ?? null,
@@ -342,6 +378,52 @@ export function AdvanceBatchModal({
     }
   }
 
+  function startEdit() {
+    if (!detail) return;
+    setInstitutionId(detail.institution_id ?? "");
+    setOperationType((detail.operation_type ?? "BORDERO") as "BORDERO" | "FACTORING" | "FIDC" | "OUTROS");
+    setOperationCode(detail.operation_code ?? "");
+    setReceiveDate(detail.receive_date);
+    setRepaymentDate(detail.repayment_date ?? "");
+    setDiscountAmount(detail.discount_amount ? formatCurrencyField(detail.discount_amount) : "");
+    setFeeAmount(detail.fee_amount ? formatCurrencyField(detail.fee_amount) : "");
+    setReceivedAmount(detail.received_amount ? formatCurrencyField(detail.received_amount) : "");
+    setRepasseEnabled(Boolean(detail.repasse_enabled));
+    setObservation(detail.observation ?? "");
+    const sel = new Set<string>();
+    const nextBases: Record<string, AdvanceBasis> = {};
+    const nextManual: Record<string, string> = {};
+    const seeded: AdvanceBatchEligibleInvoice[] = [];
+    for (const it of detail.items) {
+      sel.add(it.invoice_id);
+      if (it.advance_basis) nextBases[it.invoice_id] = it.advance_basis as AdvanceBasis;
+      if (it.advanced_amount != null) nextManual[it.invoice_id] = formatCurrencyField(it.advanced_amount);
+      seeded.push({
+        id: it.invoice_id,
+        project_id: "",
+        project_name: it.project_name,
+        number: it.invoice_number ?? "",
+        client_name: it.client_name,
+        issue_date: it.issue_date ?? "",
+        due_date: it.due_date ?? "",
+        gross_amount: it.gross_amount ?? it.invoice_amount ?? 0,
+        net_amount: it.net_amount ?? 0,
+        status: it.invoice_status ?? "ANTECIPADA",
+      });
+    }
+    setSelected(sel);
+    setBases(nextBases);
+    setManualAmounts(nextManual);
+    // Garante que as NFs da operação apareçam na lista (mesmo que já antecipadas).
+    setInvoices((prev) => {
+      const byId = new Map(prev.map((r) => [r.id, r]));
+      for (const s of seeded) if (!byId.has(s.id)) byId.set(s.id, s);
+      return [...byId.values()];
+    });
+    setError(null);
+    setEditing(true);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (selected.size < 1) {
@@ -364,6 +446,11 @@ export function AdvanceBatchModal({
     setSaving(true);
     setError(null);
     try {
+      // Editar reusa o MESMO payload da criação; o backend reverte → aplica → reaplica.
+      const submitBatch =
+        editing && detail
+          ? (p: Parameters<typeof createAdvanceBatch>[0]) => editAdvanceBatch(detail.id, p)
+          : createAdvanceBatch;
       const common = {
         operation_type: operationType,
         operation_code: operationCode.trim() || null,
@@ -376,7 +463,7 @@ export function AdvanceBatchModal({
       if (isLepta) {
         // Fluxo Lepta: base por NF + deságio + tarifas + repasse. O líquido recebido é
         // calculado no backend (antecipados − deságio − tarifas) — o front apenas coleta.
-        await createAdvanceBatch({
+        await submitBatch({
           ...common,
           discount_amount: discountNum,
           fee_amount: feeNum,
@@ -395,9 +482,9 @@ export function AdvanceBatchModal({
           setSaving(false);
           return;
         }
-        await createAdvanceBatch({ ...common, items });
+        await submitBatch({ ...common, items });
       } else {
-        await createAdvanceBatch({
+        await submitBatch({
           ...common,
           received_amount: receivedNum,
           discount_amount: discountNum,
@@ -408,7 +495,13 @@ export function AdvanceBatchModal({
       onCreated();
       onClose();
     } catch (err) {
-      setError(isAxiosError(err) ? formatApiError(err) : "Não foi possível criar o borderô.");
+      setError(
+        isAxiosError(err)
+          ? formatApiError(err)
+          : editing
+            ? "Não foi possível salvar a edição."
+            : "Não foi possível criar o borderô.",
+      );
     } finally {
       setSaving(false);
     }
@@ -514,7 +607,11 @@ export function AdvanceBatchModal({
       >
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <h2 className="text-lg font-semibold text-slate-900">
-            {isView ? `Operação SGC ${detail?.sgc_number ?? ""}` : "Nova antecipação"}
+            {editing
+              ? `Editar operação SGC ${detail?.sgc_number ?? ""}`
+              : isView
+                ? `Operação SGC ${detail?.sgc_number ?? ""}`
+                : "Nova antecipação"}
           </h2>
           <button type="button" onClick={onClose} className="text-sm text-slate-600 hover:text-slate-900">
             Fechar
@@ -527,9 +624,18 @@ export function AdvanceBatchModal({
           </div>
         ) : null}
 
-        {isView && detail ? (
+        {isView && detail && !editing ? (
           <div className="space-y-4 p-5 text-sm">
             <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={saving || detail.status !== "OPEN"}
+                onClick={startEdit}
+                className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Reabre a operação para edição (reverte, aplica as mudanças e reaplica). Bloqueado se houver pagamento nas despesas."
+              >
+                Editar
+              </button>
               <button
                 type="button"
                 disabled={saving || detail.status !== "OPEN"}
@@ -1039,7 +1145,7 @@ export function AdvanceBatchModal({
                 disabled={saving || selected.size < 1}
                 className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
               >
-                {saving ? "Salvando…" : "Criar borderô"}
+                {saving ? "Salvando…" : editing ? "Salvar edição" : "Criar borderô"}
               </button>
             </div>
           </form>

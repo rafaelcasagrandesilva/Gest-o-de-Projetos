@@ -16,7 +16,7 @@ BASIS_NET = "LIQUIDO"
 BASIS_NET_MINUS_10 = "LIQUIDO_MENOS_10"
 LEPTA_BASES = (BASIS_GROSS, BASIS_NET, BASIS_NET_MINUS_10)
 
-REPASSE_RATE = 0.07  # 7% do valor bruto da operação
+REPASSE_RATE = 0.07  # 7% do ANTECIPADO da operação (= "Nominal"/"Total Bruto" do borderô)
 
 
 class LeptaOperationHandler(BaseOperationHandler):
@@ -90,12 +90,16 @@ class LeptaOperationHandler(BaseOperationHandler):
             )
             item.advanced_amount = adv
             advanced.append(adv)
+        advanced_total = round(sum(advanced), 2)
         # Líquido creditado = soma dos antecipados − deságio − tarifas (congelado).
-        batch.received_amount = self._net_received(round(sum(advanced), 2), batch)
+        batch.received_amount = self._net_received(advanced_total, batch)
 
-        # 2. Repasse = 7% do BRUTO da operação (obrigação da operação, não das NFs).
-        gross_operation = float(batch.gross_amount or 0)
-        batch.repasse_amount = round(gross_operation * REPASSE_RATE, 2) if batch.repasse_enabled else None
+        # 2. Repasse = 7% do ANTECIPADO da operação (soma dos valores antecipados das NFs), que é
+        #    exatamente o "Nominal"/"Total Bruto" do borderô da LEPTA — validado nos borderôs reais.
+        #    O antecipado já reflete a BASE escolhida por NF (Bruto/Líquido/Líquido-10%), que é o
+        #    valor que a LEPTA usou como Nominal; assim a regra vale para operações com bases
+        #    diferentes (ex.: #11417 base Bruto → 30.100; #11554 base Líquido → 12.323,99).
+        batch.repasse_amount = round(advanced_total * REPASSE_RATE, 2) if batch.repasse_enabled else None
 
         # 3. Marca as NFs como ANTECIPADA (comportamento comum).
         affected = await svc._mark_invoices_anticipated(batch, log_user=log_user)

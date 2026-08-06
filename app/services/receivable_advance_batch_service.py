@@ -476,30 +476,26 @@ class ReceivableAdvanceBatchService:
                     ref_id=batch_id,
                 )
 
-    async def cancel_batch(
+    async def _revert_batch_effects(
         self,
+        batch: ReceivableAdvanceBatch,
         *,
-        batch_id: UUID,
+        new_status: ReceivableAdvanceBatchStatus,
+        action: str,
         log_user: str | None = None,
-    ) -> ReceivableAdvanceBatch:
-        """
-        Cancela um borderô (soft delete via status=CANCELLED), sem apagar histórico.
+    ) -> set[date]:
+        """Reverte os efeitos financeiros de uma operação e move o lote para `new_status`.
 
-        - Desassocia NFs do lote
-        - Remove despesas MANUAL do borderô somente se não houver pagamento nelas
-        - Mantém compatibilidade com antecipação individual
+        Núcleo ÚNICO compartilhado por Cancelar (→CANCELLED) e Editar (→DRAFT):
+        - reversão específica da instituição (`on_cancel`);
+        - apaga as despesas automáticas do lote no CAP (BLOQUEIA se houver pagamento);
+        - recompõe o estado das NFs a partir das operações confirmadas remanescentes (N:N);
+        - invalida os meses afetados. NUNCA apaga histórico.
+        `action` ("cancelar"/"editar") compõe apenas a mensagem de erro e o log.
         """
-        batch = await self.get_batch(batch_id)
-        if batch is None:
-            raise ValueError("Borderô não encontrado.")
-        if batch.status not in (ReceivableAdvanceBatchStatus.OPEN, ReceivableAdvanceBatchStatus.DRAFT):
-            raise ValueError("Apenas operações em aberto ou rascunho podem ser canceladas.")
-
-        # Reversão específica da instituição (ex.: Daycoval desfaz marcação de recebida).
         handler = AdvanceOperationService(self).resolve(await self._profile_for_batch(batch))
         handler_extra_months = await handler.on_cancel(batch, log_user=log_user)
 
-        # Apaga despesas automáticas da operação (se não houver pagamentos registrados).
         payables = PayableSnapshotService(self.db)
         tag = _op_display_code(
             batch_number=batch.batch_number,
@@ -512,10 +508,9 @@ class ReceivableAdvanceBatchService:
                 continue
             if float(getattr(row, "amount_paid", 0) or 0) > 0.005:
                 raise ValueError(
-                    "Não é possível cancelar: despesas do borderô já possuem pagamento registrado."
+                    f"Não é possível {action}: despesas do borderô já possuem pagamento registrado."
                 )
             candidates.append(row)
-
         for row in candidates:
             await payables.delete_row(row=row)
 
@@ -526,10 +521,9 @@ class ReceivableAdvanceBatchService:
         }
         affected_months |= handler_extra_months
 
-        # Marca como CANCELADA antes de recomputar para que a operação sob cancelamento
-        # não conte no estado agregado das NFs (arquitetura N:N). O flush persiste o novo
-        # status: a sessão usa autoflush=False, e o recompute consulta o banco.
-        batch.status = ReceivableAdvanceBatchStatus.CANCELLED
+        # Muda o status ANTES de recomputar para que a operação sob reversão não conte no
+        # estado agregado das NFs (N:N). autoflush=False → o recompute consulta o banco.
+        batch.status = new_status
         await self.db.flush()
 
         for item in batch.items or []:
@@ -538,16 +532,38 @@ class ReceivableAdvanceBatchService:
             except MissingGreenlet:
                 inv = None
             if inv is None:
+                inv = await self.db.get(ReceivableInvoice, item.invoice_id)
+            if inv is None:
                 continue
             # Recompõe o estado da NF a partir das operações confirmadas remanescentes:
             # se ainda houver outra operação válida (ex.: LEPTA), a NF continua ANTECIPADA
             # e apontando para ela; só volta a EMITIDA se não sobrar nenhuma.
             await self._recompute_invoice_advance_state(inv)
             if log_user:
-                recv_svc.append_log(inv, f"Borderô {batch.batch_number}: cancelado by={log_user}")
+                recv_svc.append_log(inv, f"Borderô {batch.batch_number}: {action} by={log_user}")
             affected_months |= get_affected_months(inv)
         await PayableSnapshotService(self.db).invalidate_months(months=affected_months)
         await self.db.flush()
+        return affected_months
+
+    async def cancel_batch(
+        self,
+        *,
+        batch_id: UUID,
+        log_user: str | None = None,
+    ) -> ReceivableAdvanceBatch:
+        """Cancela um borderô (soft delete via status=CANCELLED), sem apagar histórico."""
+        batch = await self.get_batch(batch_id)
+        if batch is None:
+            raise ValueError("Borderô não encontrado.")
+        if batch.status not in (ReceivableAdvanceBatchStatus.OPEN, ReceivableAdvanceBatchStatus.DRAFT):
+            raise ValueError("Apenas operações em aberto ou rascunho podem ser canceladas.")
+        await self._revert_batch_effects(
+            batch,
+            new_status=ReceivableAdvanceBatchStatus.CANCELLED,
+            action="cancelar",
+            log_user=log_user,
+        )
         await self.db.refresh(batch)
         return batch
 
@@ -627,8 +643,9 @@ class ReceivableAdvanceBatchService:
             raise ValueError("Informe a instituição.")
         return text, None
 
-    async def create_batch(
+    async def _populate_batch(
         self,
+        batch: ReceivableAdvanceBatch,
         *,
         operation_type: str = "BORDERO",
         operation_code: str | None = None,
@@ -639,17 +656,18 @@ class ReceivableAdvanceBatchService:
         fee_amount: float = 0,
         receive_date: date,
         repayment_date: date | None = None,
-        observation: str | None,
+        observation: str | None = None,
         invoice_ids: list[UUID] | None = None,
         items_config: list[dict] | None = None,
         repasse_enabled: bool = False,
-        created_by_id: UUID | None,
-        log_user: str | None = None,
-    ) -> ReceivableAdvanceBatch:
+    ) -> None:
+        """Aplica os DADOS da operação (instituição, valores, datas, NFs) a um lote em rascunho e
+        (re)monta os itens via handler da instituição. Compartilhado por `create_batch` e
+        `edit_batch`. NÃO aplica efeitos financeiros (isso é do `confirm_batch`/`on_confirm`).
+        """
         inst_name, inst_id = await self._resolve_institution(
             institution_id=institution_id, institution=institution
         )
-
         # Normaliza a entrada: ou itens estruturados (com base por NF) ou apenas ids.
         if items_config:
             raw_pairs = [
@@ -658,7 +676,6 @@ class ReceivableAdvanceBatchService:
             ]
         else:
             raw_pairs = [(iid, None, None) for iid in (invoice_ids or [])]
-
         # Deduplica por invoice_id preservando ordem.
         seen: set[UUID] = set()
         pairs: list[tuple[UUID, str | None, float | None]] = []
@@ -681,51 +698,151 @@ class ReceivableAdvanceBatchService:
         gross = round(sum(float(inv.gross_amount or 0) for inv, _b, _m in items_input), 2)
         if gross <= 0:
             raise ValueError("O valor bruto total das NFs deve ser positivo.")
-
         recv = round(float(received_amount or 0), 2)
-        disc = round(float(discount_amount or 0), 2)
-        fee = round(float(fee_amount or 0), 2)
         if recv < 0:
             raise ValueError("Valor líquido recebido inválido.")
 
-        # Data de devolução é opcional: perfis sem devolução (ex.: Daycoval, onde a
-        # ENEL paga o banco diretamente) não a informam. Persiste = recebimento para
-        # não afetar a coluna NOT NULL nem a lógica de meses afetados (colapsa no mês
-        # do recebimento — nenhum efeito financeiro adicional).
-        effective_repayment_date = repayment_date or receive_date
+        # Data de devolução é opcional (perfis sem devolução, ex.: Daycoval). Persiste =
+        # recebimento para não afetar a coluna NOT NULL nem os meses afetados.
+        batch.operation_type = str(operation_type or "BORDERO").strip() or "BORDERO"
+        batch.operation_code = (operation_code or "").strip() or None
+        batch.institution = inst_name
+        batch.institution_id = inst_id
+        batch.gross_amount = gross
+        batch.received_amount = recv
+        batch.discount_amount = round(float(discount_amount or 0), 2)
+        batch.fee_amount = round(float(fee_amount or 0), 2)
+        batch.repasse_enabled = bool(repasse_enabled)
+        batch.receive_date = receive_date
+        batch.repayment_date = repayment_date or receive_date
+        batch.observation = (observation or "").strip() or None
+        await self.db.flush()
 
+        # (Re)monta os itens: remove os antigos (edição) e delega ao Operation Handler da
+        # instituição (base/valor antecipado por NF). Query explícita evita lazy-load da
+        # relação `batch.items` em lote recém-criado (MissingGreenlet no async).
+        existing_items = (
+            await self.db.execute(
+                select(ReceivableAdvanceBatchItem).where(
+                    ReceivableAdvanceBatchItem.batch_id == batch.id
+                )
+            )
+        ).scalars().all()
+        for old in existing_items:
+            await self.db.delete(old)
+        if existing_items:
+            await self.db.flush()
+        handler = AdvanceOperationService(self).resolve(await self._profile_for_batch(batch))
+        await handler.prepare_draft(batch=batch, items_input=items_input)
+        await self.db.flush()
+        # Recarrega a coleção `items` para não deixar itens antigos (removidos na edição) na
+        # relação em memória — senão o confirm/_mark_invoices_anticipated re-antecipa NFs que
+        # saíram da operação.
+        await self.db.refresh(batch, attribute_names=["items"])
+
+    async def create_batch(
+        self,
+        *,
+        operation_type: str = "BORDERO",
+        operation_code: str | None = None,
+        institution: str | None = None,
+        institution_id: UUID | None = None,
+        received_amount: float = 0,
+        discount_amount: float = 0,
+        fee_amount: float = 0,
+        receive_date: date,
+        repayment_date: date | None = None,
+        observation: str | None,
+        invoice_ids: list[UUID] | None = None,
+        items_config: list[dict] | None = None,
+        repasse_enabled: bool = False,
+        created_by_id: UUID | None,
+        log_user: str | None = None,
+    ) -> ReceivableAdvanceBatch:
         batch_number = await self._allocate_batch_number(receive_date)
         sgc_number = await self._allocate_sgc_number()
         batch = ReceivableAdvanceBatch(
             sgc_number=sgc_number,
             batch_number=batch_number,
-            operation_type=str(operation_type or "BORDERO").strip() or "BORDERO",
-            operation_code=(operation_code or "").strip() or None,
-            institution=inst_name,
-            institution_id=inst_id,
-            gross_amount=gross,
-            received_amount=recv,
-            discount_amount=disc,
-            fee_amount=fee,
-            repasse_enabled=bool(repasse_enabled),
-            receive_date=receive_date,
-            repayment_date=effective_repayment_date,
-            observation=(observation or "").strip() or None,
             status=ReceivableAdvanceBatchStatus.DRAFT,
             created_by_id=created_by_id,
         )
         self.db.add(batch)
-        await self.db.flush()
-
-        # Rascunho: monta os itens e os totais delegando ao Operation Handler da
-        # instituição (base/valor antecipado por NF). Os efeitos financeiros
-        # (marcar NFs, gerar CAP, invalidar snapshots) só ocorrem em confirm_batch.
-        handler = AdvanceOperationService(self).resolve(await self._profile_for_batch(batch))
-        await handler.prepare_draft(batch=batch, items_input=items_input)
-
-        await self.db.flush()
+        # Rascunho: aplica os dados e monta os itens. Efeitos financeiros só em confirm_batch.
+        await self._populate_batch(
+            batch,
+            operation_type=operation_type,
+            operation_code=operation_code,
+            institution=institution,
+            institution_id=institution_id,
+            received_amount=received_amount,
+            discount_amount=discount_amount,
+            fee_amount=fee_amount,
+            receive_date=receive_date,
+            repayment_date=repayment_date,
+            observation=observation,
+            invoice_ids=invoice_ids,
+            items_config=items_config,
+            repasse_enabled=repasse_enabled,
+        )
         await self.db.refresh(batch)
         return batch
+
+    async def edit_batch(
+        self,
+        *,
+        batch_id: UUID,
+        operation_type: str = "BORDERO",
+        operation_code: str | None = None,
+        institution: str | None = None,
+        institution_id: UUID | None = None,
+        received_amount: float = 0,
+        discount_amount: float = 0,
+        fee_amount: float = 0,
+        receive_date: date,
+        repayment_date: date | None = None,
+        observation: str | None = None,
+        invoice_ids: list[UUID] | None = None,
+        items_config: list[dict] | None = None,
+        repasse_enabled: bool = False,
+        log_user: str | None = None,
+    ) -> ReceivableAdvanceBatch:
+        """Edita uma operação ATIVA: reverte os efeitos → aplica os novos dados → reaplica.
+
+        Bloqueado quando há pagamento nas despesas do borderô (preserva histórico financeiro)
+        ou quando a operação está liquidada/cancelada. Tudo numa única transação: se qualquer
+        passo falhar, a operação permanece exatamente como estava.
+        """
+        batch = await self.get_batch(batch_id)
+        if batch is None:
+            raise ValueError("Operação não encontrada.")
+        if batch.status not in (ReceivableAdvanceBatchStatus.OPEN, ReceivableAdvanceBatchStatus.DRAFT):
+            raise ValueError("Apenas operações em aberto podem ser editadas.")
+        # 1) Reverte os efeitos e volta para rascunho (guarda de pagamento embutida).
+        await self._revert_batch_effects(
+            batch, new_status=ReceivableAdvanceBatchStatus.DRAFT, action="editar", log_user=log_user
+        )
+        # 2) Aplica os novos dados (rebuild dos itens/totais).
+        await self._populate_batch(
+            batch,
+            operation_type=operation_type,
+            operation_code=operation_code,
+            institution=institution,
+            institution_id=institution_id,
+            received_amount=received_amount,
+            discount_amount=discount_amount,
+            fee_amount=fee_amount,
+            receive_date=receive_date,
+            repayment_date=repayment_date,
+            observation=observation,
+            invoice_ids=invoice_ids,
+            items_config=items_config,
+            repasse_enabled=repasse_enabled,
+        )
+        # 3) Reaplica os efeitos (DRAFT → OPEN) reusando o confirm.
+        await self.confirm_batch(batch_id=batch.id, log_user=log_user)
+        loaded = await self.get_batch(batch.id)
+        return loaded if loaded is not None else batch
 
     @staticmethod
     def _safe_institution_ref(batch: ReceivableAdvanceBatch):

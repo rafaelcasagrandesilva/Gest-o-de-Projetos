@@ -4,7 +4,6 @@ import { isAxiosError } from "axios";
 import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
 import {
   cancelAdvanceBatch,
-  confirmAdvanceBatch,
   deleteAdvanceBatchHard,
   fetchAdvanceBatches,
   type AdvanceBatch,
@@ -68,26 +67,6 @@ export function AdvanceBatches() {
     if (b.batch_number) return b.batch_number;
     return `ANTECIPACAO-${String(b.id).slice(0, 8)}`;
   };
-
-  async function handleConfirm(b: AdvanceBatch) {
-    if (!canEditInvoices || b.status !== "DRAFT") return;
-    const ok = window.confirm(
-      `Confirmar a operação ${operationLabel(b)}?\n\n` +
-        `Isso efetiva a antecipação: marca as NFs, gera os lançamentos em Contas a Pagar/Receber e ` +
-        `passa a contar no fluxo financeiro.`,
-    );
-    if (!ok) return;
-    setBusyId(b.id);
-    setError(null);
-    try {
-      await confirmAdvanceBatch(b.id);
-      await load();
-    } catch (e) {
-      setError(isAxiosError(e) ? formatApiError(e) : "Não foi possível confirmar a operação.");
-    } finally {
-      setBusyId(null);
-    }
-  }
 
   async function handleCancel(b: AdvanceBatch) {
     if (!canEditInvoices) return;
@@ -222,16 +201,6 @@ export function AdvanceBatches() {
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right">
-                    {b.status === "DRAFT" ? (
-                      <button
-                        type="button"
-                        disabled={!canEditInvoices || busyId === b.id}
-                        onClick={() => void handleConfirm(b)}
-                        className="rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {busyId === b.id ? "Confirmando…" : "Confirmar"}
-                      </button>
-                    ) : null}
                     <button
                       type="button"
                       onClick={() => {

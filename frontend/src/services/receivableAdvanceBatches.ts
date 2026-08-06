@@ -126,6 +126,29 @@ export async function createAdvanceBatch(payload: {
   return data;
 }
 
+/** Edita uma operação ATIVA (reverte → aplica novos dados → reaplica). Mesmo payload da criação.
+ * Bloqueado no backend quando há pagamento nas despesas do borderô (só resta cancelar). */
+export async function editAdvanceBatch(
+  batchId: string,
+  payload: {
+    operation_type?: "BORDERO" | "FACTORING" | "FIDC" | "OUTROS";
+    operation_code?: string | null;
+    institution_id: string;
+    received_amount?: number;
+    discount_amount?: number;
+    fee_amount?: number;
+    repasse_enabled?: boolean;
+    receive_date: string;
+    repayment_date?: string | null;
+    observation?: string | null;
+    invoice_ids?: string[];
+    items?: AdvanceItemInput[];
+  },
+): Promise<AdvanceBatch> {
+  const { data } = await api.put<AdvanceBatch>(`/invoices/advance-batches/${batchId}`, payload);
+  return data;
+}
+
 export async function updateAdvanceBatchDashboardInclusion(
   batchId: string,
   include_in_dashboard: boolean,
