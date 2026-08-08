@@ -39,6 +39,7 @@ export const SITUACAO_META: Record<SituacaoLiquidacao, { label: string; cls: str
 export interface SettlementMovement {
   id: string;
   batch_item_id: string;
+  event_id: string | null;
   amount: number;
   funding_source: FundingSource;
   settled_at: string;
@@ -146,6 +147,7 @@ export interface TimelineEvent {
   amount: number | null;
   origem: string | null;
   estornada: boolean;
+  evento_number: number | null;
 }
 
 export interface Timeline {
@@ -169,5 +171,77 @@ export async function reverseMovement(movementId: string, reason?: string): Prom
   const { data } = await api.delete<Obligation>(`/invoices/advance-settlement-movements/${movementId}`, {
     params: reason ? { reason } : undefined,
   });
+  return data;
+}
+
+// --- Eventos de Liquidação (pagamentos) — Liquidação em Massa + Extrato de Liquidações ---
+
+export type SettlementEventStatus = "ACTIVE" | "PARTIALLY_REVERSED" | "FULLY_REVERSED";
+export type SettlementCreationSource = "MANUAL" | "MASS";
+
+/** Evento de Liquidação — dados estruturados; o código/descrição vêm do presenter TS. */
+export interface SettlementEvent {
+  id: string;
+  number: number;
+  code: string;
+  creation_source: SettlementCreationSource;
+  status: SettlementEventStatus;
+  institution_id: string | null;
+  institution: string | null;
+  payment_date: string;
+  funding_source: FundingSource | null;
+  funding_source_label: string | null;
+  total_amount: number;
+  invoice_count: number;
+  nf_numbers: string[];
+  created_by_name: string | null;
+  created_at: string;
+}
+
+export interface SettlementEventMovement {
+  id: string;
+  nf_number: string | null;
+  client_name: string | null;
+  amount: number;
+  funding_source: FundingSource;
+  funding_source_label: string;
+  observation: string | null;
+  reversed_at: string | null;
+}
+
+export interface SettlementEventDetail extends SettlementEvent {
+  movimentacoes: SettlementEventMovement[];
+}
+
+export interface MassSettlementLineInput {
+  batch_item_id: string;
+  amount: number;
+}
+
+export interface MassSettlementInput {
+  funding_source: FundingSource;
+  payment_date?: string | null;
+  observation?: string | null;
+  lines: MassSettlementLineInput[];
+}
+
+export interface MassSettlementResult {
+  event: SettlementEvent;
+  obligations: Obligation[];
+}
+
+export async function createMassSettlement(input: MassSettlementInput): Promise<MassSettlementResult> {
+  const { data } = await api.post<MassSettlementResult>("/invoices/advance-settlement-events", input);
+  return data;
+}
+
+export async function fetchSettlementEvents(institutionId?: string | null): Promise<SettlementEvent[]> {
+  const params = institutionId ? { institution_id: institutionId } : undefined;
+  const { data } = await api.get<SettlementEvent[]>("/invoices/advance-settlement-events", { params });
+  return data;
+}
+
+export async function fetchSettlementEventDetail(eventId: string): Promise<SettlementEventDetail> {
+  const { data } = await api.get<SettlementEventDetail>(`/invoices/advance-settlement-events/${eventId}`);
   return data;
 }

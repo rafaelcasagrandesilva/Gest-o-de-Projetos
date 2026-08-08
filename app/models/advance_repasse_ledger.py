@@ -20,19 +20,34 @@ class RepasseLedgerDirection(str, enum.Enum):
 class RepasseLedgerSource(str, enum.Enum):
     """De onde veio um lançamento — metadado GENÉRICO de rastreio.
 
-    O Ledger não interpreta essas origens (não conhece LEPTA/borderô); são apenas rótulos
+    O Ledger não interpreta essas origens (não conhece instituição/borderô); são apenas rótulos
     para auditoria/estorno. `OPERATION` = crédito nascido de uma operação de antecipação;
-    `SETTLEMENT` = débito nascido de uma movimentação de liquidação; `ADJUSTMENT` = ajuste
-    manual/migração.
+    `SETTLEMENT` = débito nascido de uma movimentação de liquidação; `WITHDRAWAL` = débito de uma
+    **retirada** do saldo de Repasse (não é liquidação de NF — apenas reduz o saldo disponível);
+    `ADJUSTMENT` = ajuste manual/migração.
     """
 
     OPERATION = "OPERATION"
     SETTLEMENT = "SETTLEMENT"
+    WITHDRAWAL = "WITHDRAWAL"
     ADJUSTMENT = "ADJUSTMENT"
+
+
+class RepasseWithdrawalPurpose(str, enum.Enum):
+    """Destino de uma retirada de Repasse — metadado ESTRUTURADO (só em lançamentos WITHDRAWAL).
+
+    Mantido como campo próprio (não dentro da descrição) para permitir, no futuro, localizar as
+    retiradas de `DEBT_REDUCTION` e integrá-las ao módulo de Endividamento sem parsing de texto.
+    Nesta fase é apenas rótulo: nenhuma integração/acoplamento existe.
+    """
+
+    DEBT_REDUCTION = "DEBT_REDUCTION"
+    OTHER = "OTHER"
 
 
 REPASSE_LEDGER_DIRECTION_DB = Enum(RepasseLedgerDirection, name="repasse_ledger_direction")
 REPASSE_LEDGER_SOURCE_DB = Enum(RepasseLedgerSource, name="repasse_ledger_source")
+REPASSE_WITHDRAWAL_PURPOSE_DB = Enum(RepasseWithdrawalPurpose, name="repasse_withdrawal_purpose")
 
 
 class AdvanceRepasseLedgerEntry(TimestampUUIDMixin, Base):
@@ -62,6 +77,11 @@ class AdvanceRepasseLedgerEntry(TimestampUUIDMixin, Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     source_type: Mapped[RepasseLedgerSource] = mapped_column(
         REPASSE_LEDGER_SOURCE_DB, nullable=False, index=True
+    )
+    # Destino ESTRUTURADO da retirada — preenchido SÓ quando source_type == WITHDRAWAL. Nulo nos
+    # demais lançamentos. Preparado para futura integração (Endividamento) sem acoplar nada agora.
+    withdrawal_purpose: Mapped[RepasseWithdrawalPurpose | None] = mapped_column(
+        REPASSE_WITHDRAWAL_PURPOSE_DB, nullable=True, index=True
     )
     # Origem rastreável (opcional): operação (CREDIT) ou movimentação de liquidação (DEBIT).
     source_batch_id: Mapped[UUID | None] = mapped_column(

@@ -12,10 +12,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models.advance_institution import AdvanceInstitution
 from app.models.asset import Asset, AssetAssignment, AssetInspection, AssetStatus
 from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.models.project import Project
 from app.models.user import User
+from app.services import advance_settlement_presenter as settlement_presenter
+from app.services.advance_repasse_ledger_service import AdvanceRepasseLedgerService
+from app.services.advance_settlement_service import AdvanceSettlementService
+from app.services.export.builders import format_brl
 from app.repositories.projects import ProjectRepository
 from app.services.assets_service import AssetsService, expiration_alert_level
 from app.services.asset_categories import normalize_tags
@@ -675,6 +680,256 @@ class OperationalReportService:
                 }
             )
         return {"title": "Movimentações patrimoniais", "filters": filters, "rows": rows}
+
+    # -- Antecipações (relatório consolidado multi-aba; espelho das telas) ---------
+    # Rótulos espelham exatamente a interface; nenhum valor é recalculado aqui.
+    _ANTEC_STATUS_LABELS = {
+        "DRAFT": "Rascunho", "OPEN": "Em aberto", "SETTLED": "Liquidada", "CANCELLED": "Cancelada",
+    }
+    _ANTEC_SITUACAO_LABELS = {
+        "EM_ABERTO": "Em aberto", "PARCIALMENTE_LIQUIDADA": "Parcialmente liquidada",
+        "VENCIDA": "Vencida", "LIQUIDADA": "Liquidada",
+    }
+    _ANTEC_FUNDING_LABELS = {
+        "SALDO_REPASSE": "Saldo do Repasse", "RECEBIMENTO_CLIENTE": "Recebimento do Cliente",
+        "ANTECIPACAO_DAYCOVAL": "Antecipação Daycoval", "CAIXA_EMPRESA": "Caixa da Empresa",
+        "OUTRA": "Outra",
+    }
+    _ANTEC_DIRECTION_LABELS = {"CREDIT": "Entrada", "DEBIT": "Saída"}
+    _ANTEC_SOURCE_LABELS = {
+        "OPERATION": "Operação de antecipação", "SETTLEMENT": "Liquidação de NF",
+        "WITHDRAWAL": "Retirada de Repasse", "ADJUSTMENT": "Ajuste",
+    }
+    _ANTEC_PURPOSE_LABELS = {"DEBT_REDUCTION": "Abatimento de dívida", "OTHER": "Outros"}
+
+    async def generate_antecipacoes(self, *, filters: dict[str, Any]) -> dict[str, Any]:
+        """Espelho consolidado das telas de Antecipações. Reutiliza os MESMOS services das telas;
+        nenhum indicador novo, nenhum recálculo — apenas monta as 6 visões para exportação."""
+        f = filters or {}
+        op_month = str(f.get("op_month") or "").strip()[:7] or None
+        op_institution_id = str(f.get("op_institution_id") or "").strip() or None
+        op_status = str(f.get("op_status") or "").strip() or None
+        liq_month = str(f.get("liq_month") or "").strip()[:7] or None
+        liq_institution_id = str(f.get("liq_institution_id") or "").strip() or None
+        liq_situacao = str(f.get("liq_situacao") or "").strip() or None
+        liq_client = str(f.get("liq_client") or "").strip() or None
+        liq_nf = str(f.get("liq_nf") or "").strip() or None
+        liq_sgc = str(f.get("liq_sgc") or "").strip() or None
+
+        batch_svc = ReceivableAdvanceBatchService(self.session)
+        settle_svc = AdvanceSettlementService(self.session)
+        ledger_svc = AdvanceRepasseLedgerService(self.session)
+
+        def _ym(v: Any) -> str:
+            return str(v)[:7] if v else ""
+
+        # === Abas 1 e 2 — Operações + NFs por Borderô (reuso: list_batches → batch_to_read) =====
+        batches = await batch_svc.list_batches(limit=100_000)
+        batch_dicts = [batch_svc.batch_to_read(b) for b in batches]
+        # Filtros da tela Operações (pós-filtro sobre dados já produzidos).
+        if op_month:
+            batch_dicts = [b for b in batch_dicts if _ym(b.get("receive_date")) == op_month]
+        if op_institution_id:
+            batch_dicts = [b for b in batch_dicts if str(b.get("institution_id") or "") == op_institution_id]
+        if op_status:
+            batch_dicts = [b for b in batch_dicts if b.get("status") == op_status]
+
+        # Nome do usuário criador (join de exibição — o modelo só devolve created_by_id).
+        creator_ids = {b["created_by_id"] for b in batch_dicts if b.get("created_by_id")}
+        creator_names: dict[UUID, str] = {}
+        if creator_ids:
+            urows = (
+                await self.session.execute(
+                    select(User.id, User.full_name, User.email).where(User.id.in_(creator_ids))
+                )
+            ).all()
+            creator_names = {uid: (full or email or "") for uid, full, email in urows}
+
+        def _op_label(b: dict) -> str:
+            if b.get("sgc_number") is not None:
+                return str(b["sgc_number"])
+            return b.get("batch_number") or f"ANTECIPACAO-{str(b['id'])[:8]}"
+
+        operacoes: list[dict] = []
+        nfs_bordero: list[dict] = []
+        for b in batch_dicts:
+            op_sgc = _op_label(b)
+            operacoes.append(
+                {
+                    "operacao_sgc": op_sgc,
+                    "operation_code": b.get("operation_code") or "",
+                    "instituicao": b.get("institution") or "",
+                    "qtd_nfs": b.get("invoice_count"),
+                    "repasse_retido": b.get("repasse_amount") if b.get("repasse_enabled") else None,
+                    "liquido": b.get("received_amount"),
+                    "desagio": b.get("discount_amount"),
+                    "tarifas": b.get("fee_amount"),
+                    "recebimento": b.get("receive_date"),
+                    "repagamento": b.get("repayment_date"),
+                    "status": self._ANTEC_STATUS_LABELS.get(b.get("status"), b.get("status") or ""),
+                    "criado_em": b.get("created_at"),
+                    "criado_por": creator_names.get(b.get("created_by_id"), ""),
+                }
+            )
+            for it in b.get("items") or []:
+                nfs_bordero.append(
+                    {
+                        "operacao_sgc": op_sgc,
+                        "bordero": b.get("operation_code") or "",
+                        "instituicao": b.get("institution") or "",
+                        "cliente": it.get("client_name") or "",
+                        "numero_nf": it.get("invoice_number") or "",
+                        "valor": it.get("net_amount"),
+                        "vencimento": it.get("due_date"),
+                        "situacao": it.get("invoice_status") or "",
+                    }
+                )
+
+        # === Abas 3 e 4 — Liquidação + Movimentações (reuso: list_obligations) ==================
+        obligations = await settle_svc.list_obligations(
+            institution_id=(UUID(liq_institution_id) if liq_institution_id else None),
+            invoice_number=liq_nf,
+            sgc_number=(int(liq_sgc) if (liq_sgc and liq_sgc.isdigit()) else None),
+            situacao=liq_situacao,
+        )
+        if liq_month:
+            obligations = [o for o in obligations if _ym(o.get("vencimento")) == liq_month]
+        if liq_client:
+            lc = liq_client.lower()
+            obligations = [o for o in obligations if lc in (o.get("client_name") or "").lower()]
+
+        liquidacao: list[dict] = []
+        movimentacoes: list[dict] = []
+        for o in obligations:
+            movs = o.get("movimentacoes") or []
+            # Data da liquidação total = settled_at do último movimento ATIVO quando já liquidada
+            # (mesma condição do evento "Liquidada" da timeline; nenhum cálculo novo).
+            data_liq_total = None
+            if o.get("situacao") == "LIQUIDADA":
+                ativos = [m["settled_at"] for m in movs if m.get("reversed_at") is None and m.get("settled_at")]
+                data_liq_total = max(ativos) if ativos else None
+            liquidacao.append(
+                {
+                    "situacao": self._ANTEC_SITUACAO_LABELS.get(o.get("situacao"), o.get("situacao") or ""),
+                    "numero_nf": o.get("invoice_number") or "",
+                    "cliente": o.get("client_name") or "",
+                    "bordero": o.get("sgc_number"),
+                    "instituicao": o.get("institution") or "",
+                    "valor": o.get("valor_total"),
+                    "liquidado": o.get("valor_liquidado"),
+                    "residual": o.get("valor_residual"),
+                    "origens": o.get("origens_resumo") or "",
+                    "vencimento": o.get("vencimento"),
+                    "dias_em_atraso": o.get("dias_em_atraso"),
+                    "data_antecipacao": o.get("receive_date"),
+                    "data_liquidacao_total": data_liq_total,
+                }
+            )
+            for m in movs:
+                movimentacoes.append(
+                    {
+                        "data": m.get("settled_at"),
+                        "numero_nf": o.get("invoice_number") or "",
+                        "cliente": o.get("client_name") or "",
+                        "bordero": o.get("sgc_number"),
+                        "instituicao": o.get("institution") or "",
+                        "origem": self._ANTEC_FUNDING_LABELS.get(m.get("funding_source"), m.get("funding_source") or ""),
+                        "valor": m.get("amount"),
+                        "observacao": m.get("observation") or "",
+                        "estornada": "Sim" if m.get("reversed_at") else "Não",
+                        "data_estorno": m.get("reversed_at"),
+                    }
+                )
+
+        # === Aba 5 — Extrato do Repasse (reuso: statement + saldo pela regra do Ledger) =========
+        entries = await ledger_svc.statement(
+            institution_id=(UUID(liq_institution_id) if liq_institution_id else None),
+            include_reversed=True,
+        )
+        inst_rows = (await self.session.execute(select(AdvanceInstitution.id, AdvanceInstitution.name))).all()
+        inst_names = {iid: name for iid, name in inst_rows}
+        # Ordena por instituição e cronologia p/ o saldo acumulado (por instituição) fazer sentido.
+        entries_sorted = sorted(
+            entries,
+            key=lambda e: (inst_names.get(e.institution_id, ""), str(e.occurred_at), str(e.created_at)),
+        )
+        # Descrição de negócio das liquidações (nunca UUID) — resolvida na leitura (espelha a tela).
+        desc_map = await settle_svc.resolve_settlement_descriptions(entries)
+        running: dict[UUID, float] = {}
+        extrato: list[dict] = []
+        for e in entries_sorted:
+            is_credit = e.direction.value == "CREDIT"
+            signed = float(e.amount) if is_credit else -float(e.amount)
+            reversed_ = e.reversed_at is not None
+            # Estornado não altera o saldo (idêntico a balance(): só conta lançamentos ativos).
+            if not reversed_:
+                running[e.institution_id] = round(running.get(e.institution_id, 0.0) + signed, 2)
+            extrato.append(
+                {
+                    "data": e.occurred_at,
+                    "instituicao": inst_names.get(e.institution_id, ""),
+                    "tipo": self._ANTEC_DIRECTION_LABELS.get(e.direction.value, e.direction.value),
+                    "origem": self._ANTEC_SOURCE_LABELS.get(e.source_type.value, e.source_type.value),
+                    "valor": signed,
+                    "saldo_apos": running.get(e.institution_id, 0.0),
+                    "destino_retirada": (
+                        self._ANTEC_PURPOSE_LABELS.get(e.withdrawal_purpose.value, "")
+                        if e.withdrawal_purpose is not None
+                        else ""
+                    ),
+                    "observacao": desc_map.get(e.id, e.description or ""),
+                    "estornado": "Sim" if reversed_ else "Não",
+                }
+            )
+
+        # === Aba — Extrato das Liquidações (reuso: list_settlement_events + presenter) ===========
+        events = await settle_svc.list_settlement_events(
+            institution_id=(UUID(liq_institution_id) if liq_institution_id else None)
+        )
+        liquidacoes_eventos: list[dict] = [
+            {
+                "evento": ev.get("code") or "",
+                "instituicao": ev.get("institution") or "",
+                "data": ev.get("payment_date"),
+                "origem": ev.get("funding_source_label") or "Múltiplas origens",
+                "valor_total": ev.get("total_amount"),
+                "qtd_nfs": ev.get("invoice_count"),
+                "descricao": settlement_presenter.nf_summary(ev.get("nf_numbers") or []),
+                "usuario": ev.get("created_by_name") or "",
+            }
+            for ev in events
+        ]
+
+        # === Aba 6 — Visão Gerencial (reuso: management_summary; espelha os rótulos da tela) =====
+        mgmt = await settle_svc.management_summary(
+            institution_id=(UUID(liq_institution_id) if liq_institution_id else None)
+        )
+        tempo = mgmt.get("tempo_medio_liquidacao_dias")
+        gerencial: list[dict] = [
+            {"indicador": "Ainda antecipado", "valor": format_brl(mgmt.get("valor_ainda_antecipado"))},
+            {"indicador": "A vencer (30 dias)", "valor": format_brl(mgmt.get("valor_a_vencer_30d"))},
+            {"indicador": "Valor vencido", "valor": format_brl(mgmt.get("valor_vencido"))},
+            {"indicador": "Tempo médio de liquidação", "valor": (f"{tempo} dias" if tempo is not None else "—")},
+            {"indicador": "Liquidado com Repasse", "valor": format_brl(mgmt.get("liquidado_repasse"))},
+            {"indicador": "Liquidado por outras origens", "valor": format_brl(mgmt.get("liquidado_outras_origens"))},
+            {"indicador": "", "valor": ""},
+            {"indicador": "Distribuição das origens", "valor": ""},
+        ]
+        for d in mgmt.get("distribuicao_origens") or []:
+            gerencial.append(
+                {"indicador": d.get("label") or d.get("funding_source") or "",
+                 "valor": f"{format_brl(d.get('total'))} ({d.get('pct')}%)"}
+            )
+
+        return {
+            "operacoes": operacoes,
+            "nfs_bordero": nfs_bordero,
+            "liquidacao": liquidacao,
+            "movimentacoes": movimentacoes,
+            "extrato": extrato,
+            "liquidacoes_eventos": liquidacoes_eventos,
+            "gerencial": gerencial,
+        }
 
 
 async def resolve_project_access(

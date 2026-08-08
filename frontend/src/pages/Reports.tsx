@@ -1,6 +1,7 @@
 import { useAuth } from "@/context/AuthContext";
 import { useScenario } from "@/context/ScenarioContext";
 import { hasPermission } from "@/permissions";
+import { fetchAdvanceInstitutions, type AdvanceInstitution } from "@/services/advanceInstitutions";
 import { listProjects, type Project } from "@/services/projects";
 import {
   generateReport,
@@ -22,6 +23,7 @@ const REPORT_GROUPS: { label: string; reports: ReportDef[] }[] = [
       { id: "receivables_detailed", label: "Contas a receber — detalhado", perm: "receivables.view" },
       { id: "invoices_detailed", label: "Notas fiscais — detalhado", perm: "invoices.view" },
       { id: "invoices", label: "Notas fiscais — resumo (legado)", perm: "invoices.view" },
+      { id: "antecipacoes", label: "Antecipações — Operações e Liquidações", perm: "invoices.view" },
       { id: "debt", label: "Endividamento — matriz mensal", perm: "debts.view" },
       { id: "fixed_costs", label: "Custos fixos (empresa) — matriz mensal", perm: "company_finance.view" },
       { id: "revenues", label: "Receitas lançadas (faturamento)", perm: "billing.view" },
@@ -113,6 +115,18 @@ export function Reports() {
   const [dashMonths, setDashMonths] = useState(6);
   const [reportScenario, setReportScenario] = useState<ReportScenario>(globalScenario);
 
+  // Antecipações — filtros espelhando as duas telas (Operações e Liquidação).
+  const [antecInstitutions, setAntecInstitutions] = useState<AdvanceInstitution[]>([]);
+  const [antOpMonth, setAntOpMonth] = useState("");
+  const [antOpInstitution, setAntOpInstitution] = useState("");
+  const [antOpStatus, setAntOpStatus] = useState("");
+  const [antLiqMonth, setAntLiqMonth] = useState("");
+  const [antLiqSituacao, setAntLiqSituacao] = useState("");
+  const [antLiqInstitution, setAntLiqInstitution] = useState("");
+  const [antLiqClient, setAntLiqClient] = useState("");
+  const [antLiqNf, setAntLiqNf] = useState("");
+  const [antLiqSgc, setAntLiqSgc] = useState("");
+
   // Fase 1: dashboard consolidado (sem projeto) depende da permissão dashboard.director, não do perfil.
   const canGlobalDashboard = hasPermission(permissionNames, "dashboard.director");
 
@@ -131,6 +145,18 @@ export function Reports() {
   useEffect(() => {
     void loadProjects();
   }, [loadProjects]);
+
+  // Instituições p/ os filtros de Antecipações (carrega só quando o relatório é selecionado).
+  useEffect(() => {
+    if (type !== "antecipacoes" || antecInstitutions.length > 0) return;
+    let alive = true;
+    fetchAdvanceInstitutions()
+      .then((rows) => alive && setAntecInstitutions(rows))
+      .catch(() => alive && setAntecInstitutions([]));
+    return () => {
+      alive = false;
+    };
+  }, [type, antecInstitutions.length]);
 
   useEffect(() => {
     if (visible.length && !type) setType(visible[0].id);
@@ -207,6 +233,19 @@ export function Reports() {
         if (dashProjectId) f.project_id = dashProjectId;
         return f;
       }
+      case "antecipacoes": {
+        const f: Record<string, string | number | boolean> = {};
+        if (antOpMonth) f.op_month = antOpMonth;
+        if (antOpInstitution) f.op_institution_id = antOpInstitution;
+        if (antOpStatus) f.op_status = antOpStatus;
+        if (antLiqMonth) f.liq_month = antLiqMonth;
+        if (antLiqSituacao) f.liq_situacao = antLiqSituacao;
+        if (antLiqInstitution) f.liq_institution_id = antLiqInstitution;
+        if (antLiqClient.trim()) f.liq_client = antLiqClient.trim();
+        if (antLiqNf.trim()) f.liq_nf = antLiqNf.trim();
+        if (antLiqSgc.trim()) f.liq_sgc = antLiqSgc.trim();
+        return f;
+      }
       case "users":
         return {};
       case "revenues": {
@@ -250,6 +289,7 @@ export function Reports() {
     "assets_in_use",
     "assets_inspections",
     "assets_movements",
+    "antecipacoes",
   ].includes(type);
 
   if (visible.length === 0) {
@@ -593,6 +633,126 @@ export function Reports() {
           </div>
         )}
 
+        {type === "antecipacoes" && (
+          <div className="space-y-4 border-t border-slate-100 pt-4">
+            <p className="text-xs text-slate-500">
+              Excel com 6 abas espelhando as telas de Antecipações. Os filtros refletem exatamente o
+              que a tela mostraria; em branco = tudo.
+            </p>
+
+            <fieldset className="space-y-3 rounded-lg border border-slate-200 p-3">
+              <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Operações
+              </legend>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label="Período (Recebimento)">
+                  <input
+                    type="month"
+                    value={antOpMonth}
+                    onChange={(e) => setAntOpMonth(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </Field>
+                <Field label="Instituição">
+                  <select
+                    value={antOpInstitution}
+                    onChange={(e) => setAntOpInstitution(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">Todas</option>
+                    {antecInstitutions.map((i) => (
+                      <option key={i.id} value={i.id}>
+                        {i.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Status">
+                  <select
+                    value={antOpStatus}
+                    onChange={(e) => setAntOpStatus(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">Todos</option>
+                    <option value="DRAFT">Rascunho</option>
+                    <option value="OPEN">Em aberto</option>
+                    <option value="SETTLED">Liquidada</option>
+                    <option value="CANCELLED">Cancelada</option>
+                  </select>
+                </Field>
+              </div>
+            </fieldset>
+
+            <fieldset className="space-y-3 rounded-lg border border-slate-200 p-3">
+              <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Liquidação
+              </legend>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label="Período (Vencimento)">
+                  <input
+                    type="month"
+                    value={antLiqMonth}
+                    onChange={(e) => setAntLiqMonth(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </Field>
+                <Field label="Situação">
+                  <select
+                    value={antLiqSituacao}
+                    onChange={(e) => setAntLiqSituacao(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">Todas</option>
+                    <option value="EM_ABERTO">Em aberto</option>
+                    <option value="PARCIALMENTE_LIQUIDADA">Parcialmente liquidada</option>
+                    <option value="VENCIDA">Vencida</option>
+                    <option value="LIQUIDADA">Liquidada</option>
+                  </select>
+                </Field>
+                <Field label="Instituição">
+                  <select
+                    value={antLiqInstitution}
+                    onChange={(e) => setAntLiqInstitution(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">Todas</option>
+                    {antecInstitutions.map((i) => (
+                      <option key={i.id} value={i.id}>
+                        {i.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Cliente (busca)">
+                  <input
+                    type="text"
+                    value={antLiqClient}
+                    onChange={(e) => setAntLiqClient(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </Field>
+                <Field label="Nº NF">
+                  <input
+                    type="text"
+                    value={antLiqNf}
+                    onChange={(e) => setAntLiqNf(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </Field>
+                <Field label="Borderô (SGC)">
+                  <input
+                    type="text"
+                    value={antLiqSgc}
+                    onChange={(e) => setAntLiqSgc(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    placeholder="Nº SGC"
+                  />
+                </Field>
+              </div>
+            </fieldset>
+          </div>
+        )}
+
         {type === "dashboard" && (
           <div className="space-y-3 border-t border-slate-100 pt-4">
             <Field label={canGlobalDashboard ? "Projeto (opcional)" : "Projeto"}>
@@ -635,14 +795,16 @@ export function Reports() {
           >
             {busy ? "Gerando…" : "Gerar Excel"}
           </button>
-          <button
-            type="button"
-            disabled={busy || !type}
-            onClick={() => void run("pdf")}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Gerar PDF
-          </button>
+          {type !== "antecipacoes" && (
+            <button
+              type="button"
+              disabled={busy || !type}
+              onClick={() => void run("pdf")}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Gerar PDF
+            </button>
+          )}
         </div>
       </div>
     </div>

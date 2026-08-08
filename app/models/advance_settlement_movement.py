@@ -89,6 +89,15 @@ class AdvanceSettlementMovement(TimestampUUIDMixin, Base):
         ADVANCE_FUNDING_SOURCE_DB, nullable=False, index=True
     )
     settled_at: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # Evento de Liquidação (agrupador append-only) ao qual esta movimentação pertence. Nullable:
+    # movimentações antigas (anteriores ao recurso) não têm evento. Só agrupamento — a integração
+    # financeira (Ledger) continua sendo responsabilidade da própria movimentação.
+    event_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("advance_settlement_events.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     observation: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Estorno soft: nunca hard-delete (preserva histórico).
     reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)

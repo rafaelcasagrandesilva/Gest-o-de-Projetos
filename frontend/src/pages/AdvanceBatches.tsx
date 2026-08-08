@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { isAxiosError } from "axios";
 import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
 import { AdvanceSettlementsTab } from "@/components/AdvanceSettlementsTab";
 import { Money } from "@/components/Money";
+import { PeriodFilter, type PeriodMode } from "@/components/PeriodFilter";
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import { ADVANCE_BATCH_SORT_COLUMNS, defaultAdvanceBatchSort } from "@/tableSort/advanceBatches";
@@ -44,7 +45,12 @@ export function AdvanceBatches() {
   // Ações da aba Liquidação, elevadas ao pai para ficarem na mesma linha das abas.
   const [mgmtOpen, setMgmtOpen] = useState(false);
   const [ledgerOpen, setLedgerOpen] = useState(false);
+  const [massOpen, setMassOpen] = useState(false);
+  const [eventsOpen, setEventsOpen] = useState(false);
   const [settlementsRefresh, setSettlementsRefresh] = useState(0);
+  // Período por Data da Operação (receive_date). Default "ALL" preserva a lista completa.
+  const [periodMode, setPeriodMode] = useState<PeriodMode>("ALL");
+  const [period, setPeriod] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,7 +69,13 @@ export function AdvanceBatches() {
     void load();
   }, [load]);
 
-  const { sortedRows: sorted, headerSort } = useTableSort(rows, ADVANCE_BATCH_SORT_COLUMNS, {
+  // Filtro por período (mês) sobre a Data da Operação. Modo "Todos" mantém tudo.
+  const filteredRows = useMemo(() => {
+    if (periodMode !== "MONTH" || !period) return rows;
+    return rows.filter((b) => (b.receive_date || "").slice(0, 7) === period);
+  }, [rows, periodMode, period]);
+
+  const { sortedRows: sorted, headerSort } = useTableSort(filteredRows, ADVANCE_BATCH_SORT_COLUMNS, {
     defaultCompare: defaultAdvanceBatchSort,
   });
 
@@ -163,6 +175,21 @@ export function AdvanceBatches() {
               </button>
               <button
                 type="button"
+                disabled={!canEditInvoices}
+                onClick={() => setMassOpen(true)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Liquidação em massa
+              </button>
+              <button
+                type="button"
+                onClick={() => setEventsOpen(true)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
+              >
+                Extrato de Liquidações
+              </button>
+              <button
+                type="button"
                 onClick={() => setLedgerOpen(true)}
                 className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
               >
@@ -200,6 +227,10 @@ export function AdvanceBatches() {
           showMgmt={mgmtOpen}
           ledgerOpen={ledgerOpen}
           onCloseLedger={() => setLedgerOpen(false)}
+          massOpen={massOpen}
+          onCloseMass={() => setMassOpen(false)}
+          eventsOpen={eventsOpen}
+          onCloseEvents={() => setEventsOpen(false)}
           refreshSignal={settlementsRefresh}
         />
       ) : (
@@ -207,6 +238,16 @@ export function AdvanceBatches() {
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <PeriodFilter
+          label="Período (Operação)"
+          mode={periodMode}
+          value={period}
+          onModeChange={setPeriodMode}
+          onChange={setPeriod}
+        />
+      </section>
 
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="min-w-[1200px] w-full divide-y divide-slate-200 text-sm">

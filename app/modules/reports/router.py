@@ -45,7 +45,10 @@ from app.services.export.report_meta import (
     month_year_label,
     month_year_token,
 )
-from app.services.operational_report_export import render_operational_report_bytes
+from app.services.operational_report_export import (
+    render_antecipacoes_bytes,
+    render_operational_report_bytes,
+)
 from app.services.operational_report_service import OperationalReportService, resolve_project_access
 from app.services.report_export import render_report_bytes
 from app.services.report_service import (
@@ -96,6 +99,7 @@ _REPORT_TYPE_VIEW_PERMISSION: dict[str, str] = {
     "assets_in_use": ASSETS_READ,
     "assets_inspections": ASSETS_READ,
     "assets_movements": ASSETS_READ,
+    "antecipacoes": INVOICES_READ,
 }
 
 
@@ -400,6 +404,16 @@ async def generate_report(
             sees_all_projects=sees_all,
         )
         raw, name, media = render_operational_report_bytes("invoices_detailed", payload, fmt, ctx)
+        return _stream(raw, name, media)
+
+    if body.type == "antecipacoes":
+        _assert_report_access(user)
+        if not user_has_any_permission(user, INVOICES_READ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
+        if fmt != "xlsx":
+            raise HTTPException(status_code=400, detail="Relatório de Antecipações disponível apenas em Excel.")
+        payload = await OperationalReportService(db).generate_antecipacoes(filters=f)
+        raw, name, media = render_antecipacoes_bytes("antecipacoes", payload, fmt, ctx)
         return _stream(raw, name, media)
 
     if body.type in (

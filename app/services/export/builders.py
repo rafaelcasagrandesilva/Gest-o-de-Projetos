@@ -74,18 +74,18 @@ def build_xlsx_bytes(
     return buf.getvalue()
 
 
-def build_operational_xlsx_bytes(
+def _write_operational_sheet(
+    ws,
     *,
     headers: Sequence[str],
     rows: Sequence[Sequence[Any]],
-    sheet_title: str = "Relatório",
     money_columns: frozenset[int] | None = None,
     date_columns: frozenset[int] | None = None,
-) -> bytes:
-    """Planilha operacional: cabeçalho, autofiltro, largura automática e formatos básicos."""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = sheet_title[:31]
+) -> None:
+    """Escreve UMA planilha operacional (cabeçalho, autofiltro, largura auto, formatos) em `ws`.
+
+    Corpo compartilhado por `build_operational_xlsx_bytes` (aba única) e
+    `build_multisheet_operational_xlsx_bytes` (várias abas) — mesma aparência/formatação."""
     header_fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
     ncols = len(headers)
     for col, h in enumerate(headers, start=1):
@@ -111,6 +111,46 @@ def build_operational_xlsx_bytes(
             if v is not None:
                 max_len = max(max_len, min(len(str(v)), 48))
         ws.column_dimensions[get_column_letter(col)].width = min(max(max_len + 2, 12), 42)
+
+
+def build_operational_xlsx_bytes(
+    *,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+    sheet_title: str = "Relatório",
+    money_columns: frozenset[int] | None = None,
+    date_columns: frozenset[int] | None = None,
+) -> bytes:
+    """Planilha operacional: cabeçalho, autofiltro, largura automática e formatos básicos."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_title[:31]
+    _write_operational_sheet(
+        ws, headers=headers, rows=rows, money_columns=money_columns, date_columns=date_columns
+    )
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def build_multisheet_operational_xlsx_bytes(sheets: Sequence[dict[str, Any]]) -> bytes:
+    """Workbook operacional com VÁRIAS abas (mesma formatação por aba do builder de aba única).
+
+    Cada `sheet` = {"title": str, "headers": [...], "rows": [[...]],
+    "money_columns": frozenset[int]?, "date_columns": frozenset[int]?}. A ordem da lista é a
+    ordem das abas. Títulos são truncados em 31 chars (limite do openpyxl)."""
+    wb = Workbook()
+    for i, spec in enumerate(sheets):
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = str(spec.get("title") or f"Aba {i + 1}")[:31]
+        _write_operational_sheet(
+            ws,
+            headers=spec.get("headers") or [],
+            rows=spec.get("rows") or [],
+            money_columns=spec.get("money_columns"),
+            date_columns=spec.get("date_columns"),
+        )
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)

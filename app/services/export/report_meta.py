@@ -31,6 +31,7 @@ REPORT_TITLES: dict[str, str] = {
     "assets_in_use": "Ativos em Uso",
     "assets_inspections": "Inspeções e Vencimentos",
     "assets_movements": "Movimentações Patrimoniais",
+    "antecipacoes": "Antecipações - Operações e Liquidações",
 }
 
 _MONTHS_PT = [

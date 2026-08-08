@@ -46,14 +46,19 @@ from app.schemas.advance_institution import (
 )
 from app.schemas.advance_settlement import (
     ManagementSummaryRead,
+    MassSettlementCreate,
     ObligationRead,
     SettlementCreate,
+    SettlementEventCreatedRead,
+    SettlementEventDetailRead,
+    SettlementEventRead,
     SettlementKpisRead,
     TimelineRead,
 )
 from app.schemas.advance_repasse_ledger import (
     RepasseLedgerEntryRead,
     RepasseLedgerStatementRead,
+    RepasseWithdrawalCreate,
 )
 from app.services.advance_institution_service import AdvanceInstitutionService
 from app.services.advance_repasse_ledger_service import AdvanceRepasseLedgerService
@@ -725,6 +730,75 @@ async def advance_settlement_batch_history(
     return await AdvanceSettlementService(db).batch_history(batch_id)
 
 
+# --- Eventos de Liquidação (pagamentos) -----------------------------------------
+
+
+@invoices_router.post(
+    "/advance-settlement-events",
+    response_model=SettlementEventCreatedRead,
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
+)
+async def create_advance_settlement_event(
+    payload: MassSettlementCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> SettlementEventCreatedRead:
+    """Liquidação em Massa: cria UM Evento (pagamento) que quita N NFs com origem única."""
+    from app.models.advance_settlement_event import SettlementEventCreationSource
+
+    svc = AdvanceSettlementService(db)
+    movements = [
+        {
+            "batch_item_id": ln.batch_item_id,
+            "funding_source": payload.funding_source,
+            "amount": ln.amount,
+            "observation": (payload.observation or None),
+        }
+        for ln in payload.lines
+    ]
+    try:
+        result = await svc.create_settlement_event(
+            movements=movements,
+            creation_source=SettlementEventCreationSource.MASS,
+            payment_date=payload.payment_date or date.today(),
+            event_observation=(payload.observation or None),
+            created_by_id=actor.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return SettlementEventCreatedRead.model_validate(result)
+
+
+@invoices_router.get(
+    "/advance-settlement-events",
+    response_model=list[SettlementEventRead],
+    dependencies=_read_view,
+)
+async def list_advance_settlement_events(
+    institution_id: UUID | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> list[SettlementEventRead]:
+    rows = await AdvanceSettlementService(db).list_settlement_events(institution_id=institution_id)
+    return [SettlementEventRead.model_validate(r) for r in rows]
+
+
+@invoices_router.get(
+    "/advance-settlement-events/{event_id}",
+    response_model=SettlementEventDetailRead,
+    dependencies=_read_view,
+)
+async def advance_settlement_event_detail(
+    event_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> SettlementEventDetailRead:
+    try:
+        detail = await AdvanceSettlementService(db).settlement_event_detail(event_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return SettlementEventDetailRead.model_validate(detail)
+
+
 @invoices_router.get(
     "/advance-repasse-ledger",
     response_model=RepasseLedgerStatementRead,
@@ -745,11 +819,49 @@ async def advance_repasse_ledger_statement(
         for i in inst_ids:
             total += await ledger.balance(i)
         balance = float(total)
+    # Descrição de negócio nas liquidações (nunca UUID) — resolvida na LEITURA (Ledger não é editado).
+    desc_map = await AdvanceSettlementService(db).resolve_settlement_descriptions(entries)
+    out_entries: list[RepasseLedgerEntryRead] = []
+    for e in entries:
+        read = RepasseLedgerEntryRead.model_validate(e)
+        if e.id in desc_map:
+            read.description = desc_map[e.id]
+        out_entries.append(read)
     return RepasseLedgerStatementRead(
         institution_id=institution_id,
         balance=balance,
-        entries=[RepasseLedgerEntryRead.model_validate(e) for e in entries],
+        entries=out_entries,
     )
+
+
+@invoices_router.post(
+    "/advance-repasse-ledger/withdrawals",
+    response_model=RepasseLedgerEntryRead,
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
+)
+async def create_advance_repasse_withdrawal(
+    payload: RepasseWithdrawalCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> RepasseLedgerEntryRead:
+    """Registra uma Retirada de Repasse (DÉBITO append-only). Não é liquidação de NF; apenas reduz
+    o saldo do Repasse. Totalmente desacoplada (sem integração com Endividamento nesta fase)."""
+    from app.models.advance_repasse_ledger import RepasseWithdrawalPurpose
+
+    ledger = AdvanceRepasseLedgerService(db)
+    try:
+        entry = await ledger.withdraw(
+            institution_id=payload.institution_id,
+            amount=payload.amount,
+            purpose=RepasseWithdrawalPurpose(payload.purpose),
+            occurred_at=payload.occurred_at,
+            description=(payload.description or None),
+            created_by_id=actor.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return RepasseLedgerEntryRead.model_validate(entry)
 
 
 @invoices_router.post("", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_CREATE))])

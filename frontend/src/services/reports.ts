@@ -19,7 +19,8 @@ export type ReportType =
   | "assets_inventory"
   | "assets_in_use"
   | "assets_inspections"
-  | "assets_movements";
+  | "assets_movements"
+  | "antecipacoes";
 
 export type ReportFormat = "xlsx" | "pdf";
 

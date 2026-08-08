@@ -24,6 +24,7 @@ ReportType = Literal[
     "assets_in_use",
     "assets_inspections",
     "assets_movements",
+    "antecipacoes",
 ]
 
 

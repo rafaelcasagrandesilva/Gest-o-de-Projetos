@@ -5,6 +5,7 @@ from typing import Any
 
 from app.services.export.builders import (
     build_executive_pdf_bytes,
+    build_multisheet_operational_xlsx_bytes,
     build_operational_xlsx_bytes,
     format_brl,
     format_date_br,
@@ -221,3 +222,143 @@ def render_operational_report_bytes(
     meta = header_lines(ctx, record_count=len(raw_rows), include_title=False, include_gen=False)
     raw = build_executive_pdf_bytes(title=title, headers=headers, rows=pdf_rows, meta_lines=meta)
     return raw, friendly_filename(report_type, "pdf", periodo_token=periodo_token), MIME_PDF
+
+
+# ---------------------------------------------------------------------------
+# Antecipações — relatório consolidado multi-aba (espelho das telas). Só Excel.
+# Cada aba = uma visão da interface; colunas na MESMA ordem das telas.
+# ---------------------------------------------------------------------------
+
+# (título da aba, chave no payload, colunas) — a ordem da lista é a ordem das abas.
+_ANTECIPACOES_SHEETS: list[tuple[str, str, list[Col]]] = [
+    (
+        "Operações",
+        "operacoes",
+        [
+            Col("Operação SGC", "operacao_sgc"),
+            Col("Nº Instituição", "operation_code"),
+            Col("Instituição", "instituicao"),
+            Col("Qtd NFs", "qtd_nfs"),
+            Col("Repasse Retido", "repasse_retido", money=True),
+            Col("Líquido", "liquido", money=True),
+            Col("Deságio", "desagio", money=True),
+            Col("Tarifas", "tarifas", money=True),
+            Col("Recebimento", "recebimento", is_date=True),
+            Col("Repagamento", "repagamento", is_date=True),
+            Col("Status", "status"),
+            Col("Data de criação", "criado_em", is_date=True),
+            Col("Usuário criador", "criado_por"),
+        ],
+    ),
+    (
+        "NFs por Borderô",
+        "nfs_bordero",
+        [
+            Col("Operação SGC", "operacao_sgc"),
+            Col("Borderô", "bordero"),
+            Col("Instituição", "instituicao"),
+            Col("Cliente", "cliente"),
+            Col("Número da NF", "numero_nf"),
+            Col("Valor", "valor", money=True),
+            Col("Vencimento", "vencimento", is_date=True),
+            Col("Situação", "situacao"),
+        ],
+    ),
+    (
+        "Liquidação de NFs",
+        "liquidacao",
+        [
+            Col("Situação", "situacao"),
+            Col("Número da NF", "numero_nf"),
+            Col("Cliente", "cliente"),
+            Col("Borderô", "bordero"),
+            Col("Instituição", "instituicao"),
+            Col("Valor", "valor", money=True),
+            Col("Liquidado", "liquidado", money=True),
+            Col("Residual", "residual", money=True),
+            Col("Origens", "origens"),
+            Col("Vencimento", "vencimento", is_date=True),
+            Col("Dias em atraso", "dias_em_atraso"),
+            Col("Data da antecipação", "data_antecipacao", is_date=True),
+            Col("Data da liquidação total", "data_liquidacao_total", is_date=True),
+        ],
+    ),
+    (
+        "Movimentações",
+        "movimentacoes",
+        [
+            Col("Data", "data", is_date=True),
+            Col("NF", "numero_nf"),
+            Col("Cliente", "cliente"),
+            Col("Borderô", "bordero"),
+            Col("Instituição", "instituicao"),
+            Col("Origem", "origem"),
+            Col("Valor", "valor", money=True),
+            Col("Observação", "observacao"),
+            Col("Estornada", "estornada"),
+            Col("Data do estorno", "data_estorno", is_date=True),
+        ],
+    ),
+    (
+        "Extrato do Repasse",
+        "extrato",
+        [
+            Col("Data", "data", is_date=True),
+            Col("Instituição", "instituicao"),
+            Col("Tipo", "tipo"),
+            Col("Origem", "origem"),
+            Col("Valor", "valor", money=True),
+            Col("Saldo após a movimentação", "saldo_apos", money=True),
+            Col("Destino da retirada", "destino_retirada"),
+            Col("Observação", "observacao"),
+            Col("Estornado", "estornado"),
+        ],
+    ),
+    (
+        "Extrato das Liquidações",
+        "liquidacoes_eventos",
+        [
+            Col("Evento", "evento"),
+            Col("Instituição", "instituicao"),
+            Col("Data", "data", is_date=True),
+            Col("Origem", "origem"),
+            Col("Valor Total", "valor_total", money=True),
+            Col("Qtd NFs", "qtd_nfs"),
+            Col("Descrição", "descricao"),
+            Col("Usuário", "usuario"),
+        ],
+    ),
+    (
+        "Visão Gerencial",
+        "gerencial",
+        [
+            Col("Indicador", "indicador"),
+            Col("Valor", "valor"),
+        ],
+    ),
+]
+
+
+def render_antecipacoes_bytes(
+    report_type: str,
+    payload: dict[str, Any],
+    fmt: str,
+    ctx: ReportContext | None = None,
+) -> tuple[bytes, str, str]:
+    """Excel multi-aba consolidado das Antecipações. PDF não é oferecido para este relatório."""
+    if fmt != "xlsx":
+        raise ValueError("Relatório de Antecipações disponível apenas em Excel.")
+    sheets: list[dict[str, Any]] = []
+    for title, key, cols in _ANTECIPACOES_SHEETS:
+        raw_rows = payload.get(key) or []
+        sheets.append(
+            {
+                "title": title,
+                "headers": [c.header for c in cols],
+                "rows": [[_cell_xlsx(r, c) for c in cols] for r in raw_rows],
+                "money_columns": frozenset(i for i, c in enumerate(cols, start=1) if c.money),
+            }
+        )
+    raw = build_multisheet_operational_xlsx_bytes(sheets)
+    periodo_token = ctx.periodo_token if ctx else None
+    return raw, friendly_filename(report_type, "xlsx", periodo_token=periodo_token), MIME_XLSX

@@ -20,6 +20,7 @@ from app.models.receivable import ReceivableInvoice
 from app.models.advance_institution import AdvanceInstitution
 from app.models.receivable_advance_batch import ReceivableAdvanceBatch, ReceivableAdvanceBatchItem
 from app.models.advance_settlement_movement import AdvanceSettlementMovement
+from app.models.advance_settlement_event import AdvanceSettlementEvent
 from app.models.advance_repasse_ledger import AdvanceRepasseLedgerEntry
 from app.models.receivable_manual import ReceivableManualItem
 from app.models.fleet import Vehicle, VehicleUsage
@@ -61,6 +62,7 @@ __all__ = [
     "ReceivableAdvanceBatch",
     "ReceivableAdvanceBatchItem",
     "AdvanceSettlementMovement",
+    "AdvanceSettlementEvent",
     "AdvanceRepasseLedgerEntry",
     "ReceivableManualItem",
     "Invoice",

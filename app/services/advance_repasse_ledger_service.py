@@ -24,6 +24,7 @@ from app.models.advance_repasse_ledger import (
     AdvanceRepasseLedgerEntry,
     RepasseLedgerDirection,
     RepasseLedgerSource,
+    RepasseWithdrawalPurpose,
 )
 
 _CENT = Decimal("0.01")
@@ -98,6 +99,7 @@ class AdvanceRepasseLedgerService:
         source_batch_id: UUID | None,
         source_movement_id: UUID | None,
         created_by_id: UUID | None,
+        withdrawal_purpose: RepasseWithdrawalPurpose | None = None,
     ) -> AdvanceRepasseLedgerEntry:
         val = _money(amount)
         if val <= 0:
@@ -111,6 +113,7 @@ class AdvanceRepasseLedgerService:
             source_movement_id=source_movement_id,
             occurred_at=occurred_at,
             description=(description or None),
+            withdrawal_purpose=withdrawal_purpose,
             created_by_id=created_by_id,
         )
         self.db.add(entry)
@@ -163,6 +166,44 @@ class AdvanceRepasseLedgerService:
             source_batch_id=source_batch_id,
             source_movement_id=source_movement_id,
             created_by_id=created_by_id,
+        )
+
+    async def withdraw(
+        self,
+        *,
+        institution_id: UUID,
+        amount: float | Decimal,
+        purpose: RepasseWithdrawalPurpose,
+        occurred_at: date,
+        description: str | None = None,
+        created_by_id: UUID | None = None,
+    ) -> AdvanceRepasseLedgerEntry:
+        """Registra uma **Retirada de Repasse** — DÉBITO que apenas reduz o saldo disponível.
+
+        Não é liquidação de NF (por isso `source_type=WITHDRAWAL`). Fica com o destino ESTRUTURADO
+        (`purpose`), não no texto. Guarda de saldo único: a retirada não pode exceder o
+        `Saldo do Repasse = Entradas − Liquidações − Retiradas` = `balance()` (Σ CREDIT − Σ DEBIT
+        dos ativos, já incluindo retiradas anteriores) — assim o Repasse nunca fica negativo.
+        """
+        val = _money(amount)
+        if val <= 0:
+            raise ValueError("O valor da retirada deve ser positivo.")
+        saldo = await self.balance(institution_id)
+        if val > saldo + _CENT:
+            raise ValueError(
+                f"Retirada excede o Saldo do Repasse. Disponível: {saldo:.2f}; solicitado: {val:.2f}."
+            )
+        return await self._post(
+            direction=RepasseLedgerDirection.DEBIT,
+            institution_id=institution_id,
+            amount=val,
+            source_type=RepasseLedgerSource.WITHDRAWAL,
+            occurred_at=occurred_at,
+            description=description,
+            source_batch_id=None,
+            source_movement_id=None,
+            created_by_id=created_by_id,
+            withdrawal_purpose=purpose,
         )
 
     # --- leitura --------------------------------------------------------------
