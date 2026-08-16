@@ -46,3 +46,10 @@ backup_sgp.sql
 # Dumps/backups do banco (NUNCA versionar dados de produção)
 backups/
 *.backup
+
+# Dados pessoais reais NUNCA são versionados.
+# `legal_seed.json` é gerado LOCALMENTE por scripts/build_legal_seed.py a partir da planilha
+# oficial e carrega CPF, nome, rescisão e FGTS de ex-colaboradores. Em produção a carga é feita
+# pela importação da planilha na tela (Jurídico → Administração → Importações); este arquivo
+# serve apenas para levantar um ambiente de desenvolvimento.
+app/scripts/data/

@@ -100,8 +100,20 @@ class ProjectLaborRepository(Repository[ProjectLabor]):
         return rows
 
     async def sum_allocation_percentage_for_employee_competencia(
-        self, *, employee_id: UUID, competencia: date, scenario: str | None = None
+        self,
+        *,
+        employee_id: UUID,
+        competencia: date,
+        scenario: str | None = None,
+        exclude_project_ids: set[UUID] | None = None,
     ) -> float:
+        """Soma os percentuais do colaborador na competência (teto de 100% do RATEIO).
+
+        `exclude_project_ids` deixa de fora os projetos em que ele tem **remuneração
+        independente**: ali cada contrato paga o seu valor e vale 100% por definição, então somá-los
+        estouraria o teto e bloquearia justamente o multi-contrato. Sem o parâmetro, o
+        comportamento é exatamente o histórico.
+        """
         eff = coerce_scenario(scenario)
         comp = normalize_competencia(competencia)
         stmt = select(func.coalesce(func.sum(ProjectLabor.allocation_percentage), 0)).where(
@@ -109,6 +121,8 @@ class ProjectLaborRepository(Repository[ProjectLabor]):
             ProjectLabor.competencia == comp,
             ProjectLabor.scenario == scenario_pg_rhs(eff),
         )
+        if exclude_project_ids:
+            stmt = stmt.where(ProjectLabor.project_id.notin_(list(exclude_project_ids)))
         v = (await self.session.execute(stmt)).scalar_one()
         return float(v)
 

@@ -27,6 +27,10 @@ from app.core.permission_codes import (
     EMPLOYEES_EXPORT,
     EMPLOYEES_SENSITIVE,
     INVOICES_READ,
+    LEGAL_CASES_SENSITIVE,
+    LEGAL_PERSONS_SENSITIVE,
+    LEGAL_REPORTS_EXPORT,
+    LEGAL_REPORTS_READ,
     PAYABLES_READ,
     RECEIVABLES_READ,
     REPORTS_EXPORT,
@@ -50,6 +54,9 @@ from app.services.operational_report_export import (
     render_operational_report_bytes,
 )
 from app.services.operational_report_service import OperationalReportService, resolve_project_access
+from app.services.legal_report_export import render_legal_report_bytes
+from app.services.legal_report_service import LegalReportService
+from app.services.legal_service import CaseFilters
 from app.services.report_export import render_report_bytes
 from app.services.report_service import (
     ReportService,
@@ -62,6 +69,27 @@ from app.utils.date_utils import normalize_competencia
 router = APIRouter(tags=["reports"])
 
 _INVOICE_REPORT_STATUSES = frozenset({"EMITIDA", "ANTECIPADA", "FINALIZADA", "CANCELADA"})
+
+
+def _legal_filters(f: dict) -> CaseFilters:
+    """Filtros do relatório do Jurídico = os MESMOS das telas (mesmo objeto de domínio)."""
+
+    def as_list(key: str) -> list[str]:
+        raw = f.get(key)
+        if raw in (None, ""):
+            return []
+        return [str(x) for x in raw] if isinstance(raw, list) else [str(raw)]
+
+    return CaseFilters(
+        statuses=as_list("status"),
+        types=as_list("type"),
+        ufs=as_list("uf"),
+        companies=as_list("company"),
+        projects=as_list("project"),
+        clients=as_list("client"),
+        q=(str(f["q"]).strip() or None) if f.get("q") else None,
+        include_inactive=bool(f.get("include_inactive", False)),
+    )
 
 
 def _report_scenario(body: ReportGenerateRequest) -> Scenario:
@@ -100,11 +128,31 @@ _REPORT_TYPE_VIEW_PERMISSION: dict[str, str] = {
     "assets_inspections": ASSETS_READ,
     "assets_movements": ASSETS_READ,
     "antecipacoes": INVOICES_READ,
+    "legal": LEGAL_REPORTS_READ,
+}
+
+# Relatórios que se autorizam pelo PRÓPRIO módulo, sem exigir `reports.view/export` global.
+# O Jurídico é um workspace fechado: quem administra o contencioso não precisa (nem deve precisar)
+# de acesso ao módulo de Relatórios corporativo para exportar os próprios dados.
+_SELF_AUTHORIZED_REPORTS: dict[str, tuple[str, ...]] = {
+    "legal": (LEGAL_REPORTS_READ, LEGAL_REPORTS_EXPORT),
 }
 
 
 def _assert_report_type_access(user: User, report_type: str) -> None:
-    """Autoriza a geração de um relatório: reports.view/export E a permissão do módulo do tipo."""
+    """Autoriza a geração de um relatório: reports.view/export E a permissão do módulo do tipo.
+
+    Exceção: tipos em `_SELF_AUTHORIZED_REPORTS` dispensam o `reports.*` global e valem-se apenas
+    da permissão do próprio módulo (nada muda para os tipos já existentes).
+    """
+    own = _SELF_AUTHORIZED_REPORTS.get(report_type)
+    if own is not None:
+        if not user_has_any_permission(user, *own):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Sem permissão para o relatório deste módulo.",
+            )
+        return
     _assert_report_access(user)
     needed = _REPORT_TYPE_VIEW_PERMISSION.get(report_type)
     if needed is not None and not user_has_permission(user, needed):
@@ -203,6 +251,23 @@ async def generate_report(
     fmt = body.format
     svc = ReportService(db)
     ctx = await _build_ctx(db, body.type, user, f, _report_scenario(body))
+
+    if body.type == "legal":
+        # Exportar exige o verbo de exportação do módulo (ver só a tela é `legal_reports.read`).
+        if not user_has_permission(user, LEGAL_REPORTS_EXPORT):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Sem permissão para exportar o relatório do Jurídico.",
+            )
+        legal_filters = _legal_filters(f)
+        payload = await LegalReportService(db).generate(
+            filters=legal_filters,
+            # Sem o `sensitive` do recurso, o arquivo sai SEM aqueles valores (igual à tela).
+            include_cases_sensitive=user_has_permission(user, LEGAL_CASES_SENSITIVE),
+            include_persons_sensitive=user_has_permission(user, LEGAL_PERSONS_SENSITIVE),
+        )
+        raw, name, media = render_legal_report_bytes("legal", payload, fmt, ctx)
+        return _stream(raw, name, media)
 
     if body.type == "project_summary":
         _assert_report_access(user)

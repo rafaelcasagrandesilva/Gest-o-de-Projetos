@@ -32,6 +32,7 @@ WORKSPACE_PROJECTS_ACCESS = "workspace.projects.access"
 WORKSPACE_FINANCE_ACCESS = "workspace.finance.access"
 WORKSPACE_ASSETS_ACCESS = "workspace.assets.access"
 WORKSPACE_INDICATORS_ACCESS = "workspace.indicators.access"
+WORKSPACE_LEGAL_ACCESS = "workspace.legal.access"
 
 DASHBOARD_VIEW = "dashboard.view"
 DASHBOARD_DIRECTOR = "dashboard.director"
@@ -219,6 +220,99 @@ VEHICLES_EXPORT = "vehicles.export"
 # Centro de Custo (apenas referência nesta etapa — é vocabulário, não CRUD)
 COST_CENTER_REFERENCE = "cost_center.reference"
 
+# ---------------------------------------------------------------------------
+# Workspace JURÍDICO — um recurso PRÓPRIO por menu.
+#
+# Segue o isolamento por módulo do resto do sistema (cada menu tem seus verbos; ver
+# `module-permission-isolation`): quem pode editar Processos não ganha, por tabela, o direito de
+# editar o cadastro de Desligados ou o catálogo de Empresas. O gate do workspace continua sendo
+# `workspace.legal.access`, derivado de qualquer permissão de menu (como nos demais workspaces).
+#
+# `sensitive` existe onde há DINHEIRO: processos (causa/considerado/acordo/pago/pendente) e
+# desligados (rescisão/FGTS + totais). Dashboard e Relatórios NÃO têm `sensitive` próprio de
+# propósito — exibem os mesmos valores dos processos, e duplicar o gate criaria dois códigos
+# governando o mesmo número (fonte garantida de divergência). Lá a redação usa
+# `legal_cases.sensitive`/`legal_persons.sensitive`.
+# ---------------------------------------------------------------------------
+
+# Menu Dashboard (visão executiva; só leitura — não há edição nesta tela).
+LEGAL_DASHBOARD_READ = "legal_dashboard.read"
+
+# `legal_cases.export` e `legal_persons.export` foram REMOVIDOS na limpeza da RC: as telas de
+# Processos e Desligados não têm exportação própria, e o arquivo do módulo sai pelo relatório
+# (`legal_reports.export`). Voltam quando existir um botão de exportar por tela.
+
+# Menu Processos.
+LEGAL_CASES_REFERENCE = "legal_cases.reference"
+LEGAL_CASES_LIST = "legal_cases.list"
+LEGAL_CASES_READ = "legal_cases.read"
+LEGAL_CASES_CREATE = "legal_cases.create"
+LEGAL_CASES_UPDATE = "legal_cases.update"
+LEGAL_CASES_DELETE = "legal_cases.delete"  # baixa LÓGICA (desativar) — nunca exclusão física
+LEGAL_CASES_SENSITIVE = "legal_cases.sensitive"
+
+# Menu Desligados (pessoas vinculadas aos processos).
+LEGAL_PERSONS_REFERENCE = "legal_persons.reference"
+LEGAL_PERSONS_LIST = "legal_persons.list"
+LEGAL_PERSONS_READ = "legal_persons.read"
+LEGAL_PERSONS_CREATE = "legal_persons.create"
+LEGAL_PERSONS_UPDATE = "legal_persons.update"
+LEGAL_PERSONS_DELETE = "legal_persons.delete"
+LEGAL_PERSONS_SENSITIVE = "legal_persons.sensitive"
+
+# Administração → Empresas (catálogo/vocabulário dos filtros; sem valores monetários).
+LEGAL_COMPANIES_LIST = "legal_companies.list"
+LEGAL_COMPANIES_READ = "legal_companies.read"
+LEGAL_COMPANIES_CREATE = "legal_companies.create"
+LEGAL_COMPANIES_UPDATE = "legal_companies.update"
+LEGAL_COMPANIES_DELETE = "legal_companies.delete"
+
+# Administração → Projetos (idem).
+LEGAL_PROJECTS_LIST = "legal_projects.list"
+LEGAL_PROJECTS_READ = "legal_projects.read"
+LEGAL_PROJECTS_CREATE = "legal_projects.create"
+LEGAL_PROJECTS_UPDATE = "legal_projects.update"
+LEGAL_PROJECTS_DELETE = "legal_projects.delete"
+
+# Administração → Importações. `list` = abrir a aba e conferir; `create` = pré-visualizar e
+# EXECUTAR a carga da planilha. Recurso próprio porque a importação escreve em Processos E em
+# Desligados de uma vez: quem pode importar tem um poder distinto de quem edita um registro.
+LEGAL_IMPORTS_LIST = "legal_imports.list"
+LEGAL_IMPORTS_CREATE = "legal_imports.create"
+
+# Menu Relatórios do Jurídico. `read` = ver/abrir o menu; `export` = gerar o arquivo.
+# Recurso próprio (não `reports.export`), na mesma regra de employees.export/vehicles.export.
+LEGAL_REPORTS_READ = "legal_reports.read"
+LEGAL_REPORTS_EXPORT = "legal_reports.export"
+
+# Conjuntos auxiliares (evitam listas repetidas em deps/session_context/migrations).
+LEGAL_MODULE_CODES: tuple[str, ...] = (
+    LEGAL_DASHBOARD_READ,
+    LEGAL_CASES_REFERENCE, LEGAL_CASES_LIST, LEGAL_CASES_READ, LEGAL_CASES_CREATE,
+    LEGAL_CASES_UPDATE, LEGAL_CASES_DELETE, LEGAL_CASES_SENSITIVE,
+    LEGAL_PERSONS_REFERENCE, LEGAL_PERSONS_LIST, LEGAL_PERSONS_READ, LEGAL_PERSONS_CREATE,
+    LEGAL_PERSONS_UPDATE, LEGAL_PERSONS_DELETE, LEGAL_PERSONS_SENSITIVE,
+    LEGAL_COMPANIES_LIST, LEGAL_COMPANIES_READ, LEGAL_COMPANIES_CREATE,
+    LEGAL_COMPANIES_UPDATE, LEGAL_COMPANIES_DELETE,
+    LEGAL_PROJECTS_LIST, LEGAL_PROJECTS_READ, LEGAL_PROJECTS_CREATE,
+    LEGAL_PROJECTS_UPDATE, LEGAL_PROJECTS_DELETE,
+    LEGAL_IMPORTS_LIST, LEGAL_IMPORTS_CREATE,
+    LEGAL_REPORTS_READ, LEGAL_REPORTS_EXPORT,
+)
+
+# Qualquer uma destas concede o acesso ao Workspace Jurídico (derivação, como nos demais).
+LEGAL_WORKSPACE_GRANTING: frozenset[str] = frozenset(
+    {
+        LEGAL_DASHBOARD_READ,
+        LEGAL_CASES_LIST, LEGAL_CASES_READ, LEGAL_CASES_CREATE, LEGAL_CASES_UPDATE, LEGAL_CASES_DELETE,
+        LEGAL_PERSONS_LIST, LEGAL_PERSONS_READ, LEGAL_PERSONS_CREATE, LEGAL_PERSONS_UPDATE, LEGAL_PERSONS_DELETE,
+        LEGAL_COMPANIES_LIST, LEGAL_COMPANIES_CREATE, LEGAL_COMPANIES_UPDATE, LEGAL_COMPANIES_DELETE,
+        LEGAL_PROJECTS_LIST, LEGAL_PROJECTS_CREATE, LEGAL_PROJECTS_UPDATE, LEGAL_PROJECTS_DELETE,
+        LEGAL_IMPORTS_LIST, LEGAL_IMPORTS_CREATE,
+        LEGAL_REPORTS_READ, LEGAL_REPORTS_EXPORT,
+    }
+)
+
 # Tupla dos códigos introduzidos no modelo de verbos (declarados/atribuíveis; inativos por padrão).
 NEW_PERMISSION_CODES: tuple[str, ...] = (
     EMPLOYEES_REFERENCE,
@@ -262,6 +356,7 @@ NEW_PERMISSION_CODES: tuple[str, ...] = (
     ALERTS_READ, REPORTS_READ,
     SETTINGS_READ, SETTINGS_UPDATE,
     COST_CENTER_REFERENCE,
+    *LEGAL_MODULE_CODES,
 )
 
 ALL_PERMISSION_CODES: tuple[str, ...] = (
@@ -271,6 +366,7 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     WORKSPACE_FINANCE_ACCESS,
     WORKSPACE_ASSETS_ACCESS,
     WORKSPACE_INDICATORS_ACCESS,
+    WORKSPACE_LEGAL_ACCESS,
     DASHBOARD_VIEW,
     DASHBOARD_DIRECTOR,
     INDICATORS_VIEW,
@@ -354,6 +450,7 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     ALERTS_READ, REPORTS_READ,
     SETTINGS_READ, SETTINGS_UPDATE,
     COST_CENTER_REFERENCE,
+    *LEGAL_MODULE_CODES,
 )
 
 # Permissões que só valem se estiverem em user_permissions (checkbox na gestão de usuários).
@@ -438,6 +535,9 @@ PRESET_GESTOR = frozenset(
         PROJECTS_UPDATE,
         PROJECTS_SENSITIVE,
         COST_CENTER_REFERENCE,
+        # Jurídico — GESTOR administra o módulo inteiro (todos os menus, CRUD + valores).
+        WORKSPACE_LEGAL_ACCESS,
+        *LEGAL_MODULE_CODES,
     }
 )
 
@@ -484,6 +584,14 @@ PRESET_CONSULTA = frozenset(
         PROJECTS_READ,
         PROJECTS_SENSITIVE,
         COST_CENTER_REFERENCE,
+        # Jurídico — CONSULTA lê todos os menus, SEM os valores e SEM CRUD.
+        WORKSPACE_LEGAL_ACCESS,
+        LEGAL_DASHBOARD_READ,
+        LEGAL_CASES_REFERENCE, LEGAL_CASES_LIST, LEGAL_CASES_READ,
+        LEGAL_PERSONS_REFERENCE, LEGAL_PERSONS_LIST, LEGAL_PERSONS_READ,
+        LEGAL_COMPANIES_LIST, LEGAL_COMPANIES_READ,
+        LEGAL_PROJECTS_LIST, LEGAL_PROJECTS_READ,
+        LEGAL_REPORTS_READ,
     }
 )
 
@@ -582,6 +690,30 @@ PERMISSION_IMPLIES: dict[str, frozenset[str]] = {
     REPORTS_VIEW: frozenset({REPORTS_READ}),
     SETTINGS_VIEW: frozenset({SETTINGS_READ}),
     SETTINGS_EDIT: frozenset({SETTINGS_UPDATE, SETTINGS_READ}),
+    # Jurídico — cadeia padrão de verbos POR MENU (sem aliases legados; módulo nasce no modelo novo).
+    # Nenhuma aresta cruza recursos: poder editar Processos não concede nada sobre Desligados.
+    LEGAL_CASES_UPDATE: frozenset({LEGAL_CASES_READ}),
+    LEGAL_CASES_DELETE: frozenset({LEGAL_CASES_READ}),
+    LEGAL_CASES_CREATE: frozenset({LEGAL_CASES_REFERENCE}),
+    LEGAL_CASES_READ: frozenset({LEGAL_CASES_LIST}),
+    LEGAL_CASES_LIST: frozenset({LEGAL_CASES_REFERENCE}),
+    LEGAL_PERSONS_UPDATE: frozenset({LEGAL_PERSONS_READ}),
+    LEGAL_PERSONS_DELETE: frozenset({LEGAL_PERSONS_READ}),
+    LEGAL_PERSONS_CREATE: frozenset({LEGAL_PERSONS_REFERENCE}),
+    LEGAL_PERSONS_READ: frozenset({LEGAL_PERSONS_LIST}),
+    LEGAL_PERSONS_LIST: frozenset({LEGAL_PERSONS_REFERENCE}),
+    LEGAL_COMPANIES_UPDATE: frozenset({LEGAL_COMPANIES_READ}),
+    LEGAL_COMPANIES_DELETE: frozenset({LEGAL_COMPANIES_READ}),
+    LEGAL_COMPANIES_CREATE: frozenset({LEGAL_COMPANIES_READ}),
+    LEGAL_COMPANIES_READ: frozenset({LEGAL_COMPANIES_LIST}),
+    LEGAL_PROJECTS_UPDATE: frozenset({LEGAL_PROJECTS_READ}),
+    LEGAL_PROJECTS_DELETE: frozenset({LEGAL_PROJECTS_READ}),
+    LEGAL_PROJECTS_CREATE: frozenset({LEGAL_PROJECTS_READ}),
+    LEGAL_PROJECTS_READ: frozenset({LEGAL_PROJECTS_LIST}),
+    # Quem importa precisa enxergar a aba (e o resultado da carga que executou).
+    LEGAL_IMPORTS_CREATE: frozenset({LEGAL_IMPORTS_LIST}),
+    # Exportar pressupõe poder ver o que se exporta.
+    LEGAL_REPORTS_EXPORT: frozenset({LEGAL_REPORTS_READ}),
 }
 
 
@@ -633,6 +765,8 @@ _ACTIVATED_NEW_CODES: frozenset[str] = frozenset(
         # Dados Sensíveis — Dashboard Financeiro: recurso próprio ATIVADO (gate de acesso + redação).
         FINANCIAL_DASHBOARD_READ, FINANCIAL_DASHBOARD_SENSITIVE,
         SETTINGS_READ, SETTINGS_UPDATE,
+        # Workspace Jurídico — módulo novo, já nasce ATIVO no modelo de verbos (um recurso por menu).
+        *LEGAL_MODULE_CODES,
     }
 )
 
@@ -662,6 +796,13 @@ RESOURCE_LABELS: dict[str, str] = {
     "vehicles": "Veículos",
     "projects": "Projetos",
     "cost_center": "Centro de Custo",
+    "legal_dashboard": "Jurídico · Dashboard",
+    "legal_cases": "Jurídico · Processos",
+    "legal_persons": "Jurídico · Desligados",
+    "legal_companies": "Jurídico · Empresas",
+    "legal_projects": "Jurídico · Projetos",
+    "legal_imports": "Jurídico · Importações",
+    "legal_reports": "Jurídico · Relatórios",
 }
 
 # Rótulo pt-BR de cada verbo (coluna da grade).
@@ -722,5 +863,38 @@ PERMISSION_SPECS: tuple[PermissionSpec, ...] = (
     _spec("projects", "update", "Editar um projeto existente."),
     _spec("projects", "sensitive", "Receber valores do projeto (contrato, margem) e dados do comprador."),
     _spec("cost_center", "reference", "Escolher um Centro de Custo em seletores, sem acesso à gestão financeira."),
+    _spec("legal_dashboard", "read", "Abrir o Dashboard executivo do Jurídico (os valores dependem de Processos · Dados sensíveis)."),
+    _spec("legal_cases", "reference", "Usar um processo em seletor/vínculo, sem abrir a tela de Processos."),
+    _spec("legal_cases", "list", "Ver a relação de processos SEM os valores."),
+    _spec("legal_cases", "read", "Ver o detalhe de um processo SEM os valores."),
+    _spec("legal_cases", "create", "Inserir um novo processo."),
+    _spec("legal_cases", "update", "Editar um processo existente (inclui restaurar um desativado)."),
+    _spec("legal_cases", "delete", "Desativar um processo (baixa lógica — não há exclusão física)."),
+    _spec("legal_cases", "sensitive", "Receber os valores do processo: causa, considerado, acordo, pago e pendente."),
+    _spec("legal_persons", "reference", "Usar um desligado em seletor, sem abrir a tela de Desligados."),
+    _spec("legal_persons", "list", "Ver a relação de desligados SEM os valores."),
+    _spec("legal_persons", "read", "Ver a ficha de um desligado SEM os valores."),
+    _spec("legal_persons", "create", "Inserir um novo desligado."),
+    _spec("legal_persons", "update", "Editar um desligado existente (inclui restaurar um desativado)."),
+    _spec("legal_persons", "delete", "Desativar um desligado (baixa lógica — não há exclusão física)."),
+    _spec("legal_persons", "sensitive", "Receber os valores do desligado: rescisão, FGTS e totais dos processos."),
+    _spec("legal_companies", "list", "Ver o cadastro de Empresas do Jurídico."),
+    _spec("legal_companies", "read", "Ver o detalhe de uma empresa."),
+    _spec("legal_companies", "create", "Cadastrar uma nova empresa."),
+    _spec("legal_companies", "update", "Editar uma empresa existente."),
+    _spec("legal_companies", "delete", "Desativar uma empresa (baixa lógica)."),
+    _spec("legal_projects", "list", "Ver o cadastro de Projetos do Jurídico."),
+    _spec("legal_projects", "read", "Ver o detalhe de um projeto."),
+    _spec("legal_projects", "create", "Cadastrar um novo projeto."),
+    _spec("legal_projects", "update", "Editar um projeto existente."),
+    _spec("legal_projects", "delete", "Desativar um projeto (baixa lógica)."),
+    _spec("legal_imports", "list", "Abrir a aba Importações e conferir o resultado das cargas."),
+    _spec(
+        "legal_imports",
+        "create",
+        "Importar a planilha oficial do Jurídico (cria e atualiza Processos e Desligados de uma vez).",
+    ),
+    _spec("legal_reports", "read", "Abrir o menu Relatórios do Jurídico."),
+    _spec("legal_reports", "export", "Gerar o arquivo do relatório do Jurídico."),
 )
 

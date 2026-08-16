@@ -8,8 +8,6 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    assert_may_write_scenario,
-    default_scenario_for_create,
     get_current_user,
     require_permission,
     require_project_access,
@@ -17,8 +15,6 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.core.permission_codes import (
-    EMPLOYEES_LIST,
-    EMPLOYEES_UPDATE,
     PROJECTS_CREATE,
     PROJECTS_DELETE,
     PROJECTS_DOCUMENTS_DELETE,
@@ -30,11 +26,9 @@ from app.core.permission_codes import (
     USERS_MANAGE,
 )
 from app.models.project_document import ProjectDocument, ProjectDocumentCategory
-from app.core.scenario import coerce_scenario, parse_scenario
 from app.api.sensitive import redact_for
 from app.database.session import get_db
 from app.models.user import ProjectUser, User
-from app.schemas.employees import EmployeeAllocationCreate, EmployeeAllocationRead
 from app.schemas.projects import (
     ProjectContractAdditiveCreate,
     ProjectContractAdditiveRead,
@@ -45,7 +39,6 @@ from app.schemas.projects import (
     ProjectRead,
     ProjectUpdate,
 )
-from app.services.employees_service import EmployeesService
 from app.services.projects_service import ProjectsService
 
 
@@ -74,51 +67,10 @@ async def list_projects(
     return [redact_for("project", _m, user) for _m in out]
 
 
-@router.get(
-    "/{project_id}/allocations",
-    response_model=list[EmployeeAllocationRead],
-    dependencies=[Depends(require_permission(EMPLOYEES_LIST))],
-)
-async def list_project_allocations(
-    project_id: UUID,
-    scenario_param: str | None = Query(default=None, alias="scenario", description="Omitir = REALIZADO"),
-    competencia: date | None = Query(
-        default=None,
-        description="Primeiro dia do mês: retorna apenas alocações ativas nesta competência.",
-    ),
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_project_access),
-) -> list[EmployeeAllocationRead]:
-    scenario = coerce_scenario(scenario_param)
-    rows = await EmployeesService(db).list_allocations_by_project(
-        project_id=project_id, scenario=scenario, competencia=competencia
-    )
-    return [redact_for("employee_allocation", EmployeeAllocationRead.model_validate(r), user) for r in rows]
-
-
-@router.post(
-    "/{project_id}/allocations",
-    response_model=EmployeeAllocationRead,
-    dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))],
-)
-async def create_project_allocation(
-    project_id: UUID,
-    payload: EmployeeAllocationCreate,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    actor: User = Depends(get_current_user),
-    _: User = Depends(require_project_access),
-) -> EmployeeAllocationRead:
-    if payload.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="project_id do corpo deve coincidir com a URL.")
-    data = payload.model_dump()
-    sc = parse_scenario(data.get("scenario"), default=default_scenario_for_create(actor))
-    await assert_may_write_scenario(user=actor, scenario=sc, db=db, project_id=project_id)
-    data["scenario"] = sc
-    row = await EmployeesService(db).create_allocation(
-        actor_user_id=actor.id, data=data, actor=actor, request=request
-    )
-    return redact_for("employee_allocation", EmployeeAllocationRead.model_validate(row), actor)
+# Os endpoints `/{project_id}/allocations` (GET/POST) do vínculo percentual legado
+# (`EmployeeAllocation`) foram REMOVIDOS na limpeza da RC: 0 linhas na tabela, nenhum consumidor
+# no frontend. Quem faz colaborador × projeto hoje é `ProjectLabor` (aba Mão de Obra) e, na camada
+# contratual, `EmployeeAssignment` (`/employees/{id}/assignments`). A tabela permanece no banco.
 
 
 @router.get("/{project_id}", response_model=ProjectDetailRead, dependencies=[Depends(require_permission(PROJECTS_READ))])

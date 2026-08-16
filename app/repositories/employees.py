@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import calendar
 from datetime import date
-from uuid import UUID
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.scenario import coerce_scenario, scenario_pg_rhs
 from app.models.employee import Employee, EmployeeAllocation
 from app.repositories.base import Repository
-from app.utils.date_utils import normalize_competencia
 
 
 class EmployeeRepository(Repository[Employee]):
@@ -49,9 +45,25 @@ class EmployeeRepository(Repository[Employee]):
                 if competence is not None
                 else Employee.cost_center
             )
+            # A ALOCAÇÃO passa a determinar onde o colaborador atua: quem tem alocação ATIVA
+            # naquele Centro de Custo aparece, mesmo que o seu centro PRINCIPAL seja outro. Sem
+            # isto, o multi-contrato ficaria bloqueado no próprio seletor. O flag legado
+            # `can_allocate_other_cost_centers` continua valendo para quem já o tinha marcado.
+            from app.models.employee_assignment import AssignmentStatus, EmployeeAssignment
+
+            tem_alocacao_no_centro = (
+                select(EmployeeAssignment.id)
+                .where(
+                    EmployeeAssignment.employee_id == Employee.id,
+                    EmployeeAssignment.status == AssignmentStatus.ATIVA,
+                    func.lower(EmployeeAssignment.cost_center) == cc.lower(),
+                )
+                .exists()
+            )
             stmt = stmt.where(
                 or_(
                     func.lower(eff_cc) == cc.lower(),
+                    tem_alocacao_no_centro,
                     Employee.can_allocate_other_cost_centers.is_(True),
                     eff_cc.is_(None),
                 )
@@ -69,34 +81,5 @@ class EmployeeRepository(Repository[Employee]):
         return list((await self.session.execute(stmt)).scalars().all())
 
 
-class EmployeeAllocationRepository(Repository[EmployeeAllocation]):
-    def __init__(self, session: AsyncSession):
-        super().__init__(session, EmployeeAllocation)
-
-    async def list_by_project(
-        self,
-        *,
-        project_id: UUID,
-        scenario: str | None = None,
-        competencia: date | None = None,
-    ) -> list[EmployeeAllocation]:
-        eff = coerce_scenario(scenario)
-        stmt = (
-            select(EmployeeAllocation)
-            .where(
-                EmployeeAllocation.project_id == project_id,
-                EmployeeAllocation.scenario == scenario_pg_rhs(eff),
-            )
-            .order_by(EmployeeAllocation.start_date.desc())
-        )
-        if competencia is not None:
-            comp = normalize_competencia(competencia)
-            _, last = calendar.monthrange(comp.year, comp.month)
-            month_end = date(comp.year, comp.month, last)
-            stmt = stmt.where(
-                EmployeeAllocation.start_date <= month_end,
-                or_(EmployeeAllocation.end_date.is_(None), EmployeeAllocation.end_date >= comp),
-            )
-        res = await self.session.execute(stmt)
-        return list(res.scalars().all())
-
+# `EmployeeAllocationRepository` foi removido na limpeza da RC (endpoints legados retirados,
+# 0 linhas na tabela). A tabela `employee_allocations` permanece no banco.

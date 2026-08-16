@@ -5,6 +5,7 @@ import { Header } from "./Header";
 import { AssetsSidebar } from "./AssetsSidebar";
 import { FinanceSidebar } from "./FinanceSidebar";
 import { IndicatorsSidebar } from "./IndicatorsSidebar";
+import { LegalSidebar } from "./LegalSidebar";
 import { ProjectsSidebar } from "./ProjectsSidebar";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useWorkspace } from "@/context/WorkspaceContext";
@@ -22,6 +23,8 @@ export function Layout() {
             <AssetsSidebar />
           ) : workspace === "indicators" ? (
             <IndicatorsSidebar />
+          ) : workspace === "legal" ? (
+            <LegalSidebar />
           ) : (
             <FinanceSidebar />
           )}

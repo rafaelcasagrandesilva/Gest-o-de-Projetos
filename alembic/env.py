@@ -41,7 +41,18 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+    # Uma TRANSAÇÃO POR MIGRATION (e não uma única para toda a subida). Sem isso, um banco novo
+    # não consegue chegar ao head: o PostgreSQL recusa usar um valor de enum criado por
+    # `ALTER TYPE ... ADD VALUE` na mesma transação em que ele foi criado, e há migrations que
+    # criam o valor (0079) e outras, adiante, que o utilizam (0106). Com o commit por revisão,
+    # cada uma enxerga o que a anterior criou — e uma falha no meio deixa o banco na última
+    # migration bem-sucedida, em vez de desfazer tudo.
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        transaction_per_migration=True,
+    )
     with context.begin_transaction():
         context.run_migrations()
 

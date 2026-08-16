@@ -55,9 +55,11 @@ from app.core.permission_codes import (
     VEHICLES_VIEW,
     INDICATORS_DIRECTOR,
     INDICATORS_VIEW,
+    LEGAL_WORKSPACE_GRANTING,
     WORKSPACE_ASSETS_ACCESS,
     WORKSPACE_FINANCE_ACCESS,
     WORKSPACE_INDICATORS_ACCESS,
+    WORKSPACE_LEGAL_ACCESS,
     WORKSPACE_PROJECTS_ACCESS,
 )
 from app.core.scenario import Scenario
@@ -267,6 +269,8 @@ def user_has_permission(user: User, code: str) -> bool:
         }
     ):
         return True
+    if code == WORKSPACE_LEGAL_ACCESS and names.intersection(LEGAL_WORKSPACE_GRANTING):
+        return True
     return False
 
 
@@ -391,13 +395,14 @@ async def get_current_user(
     return user
 
 
-WorkspaceName = Literal["projects", "finance", "assets", "indicators"]
+WorkspaceName = Literal["projects", "finance", "assets", "indicators", "legal"]
 
 _WORKSPACE_ACCESS_PERMISSION: dict[str, str] = {
     "projects": WORKSPACE_PROJECTS_ACCESS,
     "finance": WORKSPACE_FINANCE_ACCESS,
     "assets": WORKSPACE_ASSETS_ACCESS,
     "indicators": WORKSPACE_INDICATORS_ACCESS,
+    "legal": WORKSPACE_LEGAL_ACCESS,
 }
 
 

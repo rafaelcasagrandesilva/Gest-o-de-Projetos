@@ -56,6 +56,13 @@ class Employee(TimestampUUIDMixin, Base):
     allocations: Mapped[list["EmployeeAllocation"]] = relationship(
         back_populates="employee", cascade="all, delete-orphan"
     )
+    # Alocações CONTRATUAIS (a evolução: 1 colaborador → N contratos com remuneração própria).
+    # Sem cascade delete-orphan: histórico não se apaga (encerrar = status + end_date).
+    assignments: Mapped[list["EmployeeAssignment"]] = relationship(  # noqa: F821
+        back_populates="employee",
+        cascade="all, delete",
+        order_by="EmployeeAssignment.created_at",
+    )
     # Histórico temporal do Centro de Custo (fonte da verdade).
     cost_center_history: Mapped[list["EmployeeCostCenterHistory"]] = relationship(  # noqa: F821
         back_populates="employee", cascade="all, delete-orphan"

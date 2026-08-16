@@ -26,6 +26,7 @@ from app.core.permission_codes import (
     INDICATORS_VIEW,
     INVOICES_EDIT,
     INVOICES_VIEW,
+    LEGAL_WORKSPACE_GRANTING,
     PAYABLES_VIEW,
     PRESET_CONSULTA,
     PROJECTS_CREATE,
@@ -50,6 +51,7 @@ from app.core.permission_codes import (
     WORKSPACE_ASSETS_ACCESS,
     WORKSPACE_FINANCE_ACCESS,
     WORKSPACE_INDICATORS_ACCESS,
+    WORKSPACE_LEGAL_ACCESS,
     WORKSPACE_PROJECTS_ACCESS,
 )
 from app.models.user import User
@@ -57,7 +59,7 @@ from app.repositories.projects import ProjectRepository
 
 
 SESSION_VERSION = 2
-WorkspaceName = Literal["projects", "finance", "assets", "indicators"]
+WorkspaceName = Literal["projects", "finance", "assets", "indicators", "legal"]
 
 PROJECTS_WORKSPACE_PERMISSIONS = frozenset(
     {
@@ -118,6 +120,10 @@ INDICATORS_WORKSPACE_PERMISSIONS = frozenset(
         INDICATORS_DIRECTOR,
     }
 )
+
+# Espelha `permission_codes.LEGAL_WORKSPACE_GRANTING` (fonte única): qualquer permissão de
+# qualquer menu do Jurídico concede o acesso ao workspace.
+LEGAL_WORKSPACE_PERMISSIONS = LEGAL_WORKSPACE_GRANTING
 
 
 def role_names(user: User) -> list[str]:
@@ -189,6 +195,8 @@ def _workspace_permission_from_module_permissions(names: frozenset[str], code: s
         return bool(names.intersection(ASSETS_WORKSPACE_PERMISSIONS))
     if code == WORKSPACE_INDICATORS_ACCESS:
         return bool(names.intersection(INDICATORS_WORKSPACE_PERMISSIONS))
+    if code == WORKSPACE_LEGAL_ACCESS:
+        return bool(names.intersection(LEGAL_WORKSPACE_PERMISSIONS))
     return False
 
 
@@ -214,6 +222,8 @@ def accessible_workspaces(user: User, *, is_superuser: bool = False) -> list[Wor
         out.append("assets")
     if user_has_permission(user, WORKSPACE_INDICATORS_ACCESS, is_superuser=is_superuser):
         out.append("indicators")
+    if user_has_permission(user, WORKSPACE_LEGAL_ACCESS, is_superuser=is_superuser):
+        out.append("legal")
     return out
 
 
@@ -232,6 +242,8 @@ def session_permission_names(user: User, *, is_superuser: bool = False) -> list[
         names.add(WORKSPACE_ASSETS_ACCESS)
     if user_has_permission(user, WORKSPACE_INDICATORS_ACCESS, is_superuser=is_superuser):
         names.add(WORKSPACE_INDICATORS_ACCESS)
+    if user_has_permission(user, WORKSPACE_LEGAL_ACCESS, is_superuser=is_superuser):
+        names.add(WORKSPACE_LEGAL_ACCESS)
     return sorted(names)
 
 

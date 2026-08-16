@@ -22,6 +22,7 @@ export function Header() {
   const canFinance = hasPermission(perms, "workspace.finance.access");
   const canIndicators = hasPermission(perms, "workspace.indicators.access");
   const canAssets = hasPermission(perms, "workspace.assets.access");
+  const canLegal = hasPermission(perms, "workspace.legal.access");
 
   function go(w: WorkspaceName) {
     if (w === workspace) return;
@@ -35,7 +36,7 @@ export function Header() {
       <div className="flex items-center gap-4">
         <SidebarToggleButton className="md:hidden" />
         <h1 className="hidden text-sm font-medium text-slate-500 sm:block">Área logada</h1>
-        {(canProjects || canFinance || canIndicators || canAssets) && (
+        {(canProjects || canFinance || canIndicators || canAssets || canLegal) && (
           <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 bg-white">
             {canProjects && (
               <button
@@ -87,6 +88,19 @@ export function Header() {
                 }`}
               >
                 Gestão de Ativos
+              </button>
+            )}
+            {canLegal && (
+              <button
+                type="button"
+                onClick={() => go("legal")}
+                className={`px-3 py-1.5 text-sm font-medium ${
+                  workspace === "legal"
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Jurídico
               </button>
             )}
           </div>

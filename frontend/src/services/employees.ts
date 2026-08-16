@@ -271,3 +271,123 @@ export function parseCompetenciaYm(iso: string): { year: number; month: number }
   const [ys, ms] = part.split("-");
   return { year: Number(ys), month: Number(ms) };
 }
+
+// ---------------------------------------------------------------------------
+// Alocações contratuais — 1 colaborador → N contratos com remuneração própria
+// ---------------------------------------------------------------------------
+
+/**
+ * INDEPENDENTE: contratos distintos, cada um com o SEU valor (sem percentual — é sempre 100%).
+ * RATEIO: um único custo do colaborador dividido entre projetos por percentual (modelo histórico).
+ */
+export type AllocationType = "INDEPENDENTE" | "RATEIO";
+/**
+ * ATIVA     → vínculo vigente.
+ * ENCERRADA → existiu e terminou normalmente (tem rastro financeiro).
+ * CANCELADA → criado por engano, sem efeito financeiro. Some da tela por padrão.
+ */
+export type AssignmentStatus = "ATIVA" | "ENCERRADA" | "CANCELADA";
+
+export type EmployeeAssignment = {
+  id: string;
+  employee_id: string;
+  project_id: string | null;
+  project_name: string | null;
+  cost_center: string | null;
+  allocation_type: AllocationType;
+  role_title: string | null;
+  /** null = omitido por Dados sensíveis (employees.sensitive), nunca zero. */
+  salary_base: number | null;
+  allowance: number | null;
+  hours_per_month: number | null;
+  employment_type: string | null;
+  allocation_percent: number;
+  start_date: string | null;
+  end_date: string | null;
+  status: AssignmentStatus;
+  notes: string | null;
+  is_backfilled: boolean;
+  cancelled_at: string | null;
+};
+
+export type EmployeeAssignmentInput = {
+  project_id?: string | null;
+  cost_center?: string | null;
+  allocation_type?: AllocationType;
+  role_title?: string | null;
+  salary_base?: number | null;
+  allowance?: number | null;
+  hours_per_month?: number | null;
+  allocation_percent?: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  notes?: string | null;
+};
+
+export async function listEmployeeAssignments(
+  employeeId: string,
+  includeCancelled = false,
+): Promise<EmployeeAssignment[]> {
+  const q = includeCancelled ? "?include_cancelled=true" : "";
+  const { data } = await api.get<EmployeeAssignment[]>(`/employees/${employeeId}/assignments${q}`);
+  return data;
+}
+
+export async function createEmployeeAssignment(
+  employeeId: string,
+  payload: EmployeeAssignmentInput,
+): Promise<EmployeeAssignment> {
+  const { data } = await api.post<EmployeeAssignment>(`/employees/${employeeId}/assignments`, payload);
+  return data;
+}
+
+export async function updateEmployeeAssignment(
+  employeeId: string,
+  assignmentId: string,
+  payload: EmployeeAssignmentInput,
+): Promise<EmployeeAssignment> {
+  const { data } = await api.patch<EmployeeAssignment>(
+    `/employees/${employeeId}/assignments/${assignmentId}`,
+    payload,
+  );
+  return data;
+}
+
+/** Encerrar NUNCA exclui — o histórico de atuação precisa ser reconstruível. */
+export async function closeEmployeeAssignment(
+  employeeId: string,
+  assignmentId: string,
+  endDate?: string | null,
+): Promise<EmployeeAssignment> {
+  const { data } = await api.post<EmployeeAssignment>(
+    `/employees/${employeeId}/assignments/${assignmentId}/close`,
+    { end_date: endDate ?? null },
+  );
+  return data;
+}
+
+/**
+ * Cancelar = criada por ENGANO. O backend recusa (409) se já houver qualquer efeito financeiro,
+ * orientando a usar Encerrar — a mensagem do erro é exibida como está.
+ */
+export async function cancelEmployeeAssignment(
+  employeeId: string,
+  assignmentId: string,
+  reason: string,
+): Promise<EmployeeAssignment> {
+  const { data } = await api.post<EmployeeAssignment>(
+    `/employees/${employeeId}/assignments/${assignmentId}/cancel`,
+    { reason },
+  );
+  return data;
+}
+
+export async function reopenEmployeeAssignment(
+  employeeId: string,
+  assignmentId: string,
+): Promise<EmployeeAssignment> {
+  const { data } = await api.post<EmployeeAssignment>(
+    `/employees/${employeeId}/assignments/${assignmentId}/reopen`,
+  );
+  return data;
+}

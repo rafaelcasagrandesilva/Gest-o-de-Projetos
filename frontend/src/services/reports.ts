@@ -20,7 +20,8 @@ export type ReportType =
   | "assets_in_use"
   | "assets_inspections"
   | "assets_movements"
-  | "antecipacoes";
+  | "antecipacoes"
+  | "legal";
 
 export type ReportFormat = "xlsx" | "pdf";
 

@@ -35,6 +35,8 @@ from app.core.permission_codes import (
     FINANCIAL_DASHBOARD_SENSITIVE,
     INDICATORS_SENSITIVE,
     INVOICES_SENSITIVE,
+    LEGAL_CASES_SENSITIVE,
+    LEGAL_PERSONS_SENSITIVE,
     PAYABLES_SENSITIVE,
     PROJECTS_SENSITIVE,
     RECEIVABLES_SENSITIVE,
@@ -211,6 +213,37 @@ COST_ALLOCATION_SENSITIVE_FIELDS: tuple[str, ...] = (
     "allocated_amount_real", "allocated_amount_calculated",
 )
 
+# --- Jurídico (legal.sensitive) ---
+# Valores do PROCESSO. Número, partes, status, foro, datas e movimentação permanecem — o que
+# depende de `legal.sensitive` é a exposição financeira do passivo.
+LEGAL_CASE_SENSITIVE_FIELDS: tuple[str, ...] = (
+    "amount_claimed",
+    "amount_considered",
+    "amount_agreed",
+    "amount_paid",
+    "amount_pending",
+    "agreement_terms",  # descreve o plano de pagamento do acordo (valor por parcela)
+)
+# Valores da RESCISÃO do ex-colaborador + agregados derivados dos seus processos.
+LEGAL_PERSON_SENSITIVE_FIELDS: tuple[str, ...] = (
+    "severance_amount",
+    "fgts_balance",
+    "total_claimed",
+    "total_considered",
+    "total_agreed",
+    "total_paid",
+    "total_pending",
+)  # `case_count` (quantidade) permanece
+# KPIs e séries dos gráficos da tela de Processos (contagens permanecem).
+LEGAL_KPIS_SENSITIVE_FIELDS: tuple[str, ...] = (
+    "total_claimed",
+    "total_considered",
+    "total_agreed",
+    "total_paid",
+    "total_pending",
+)
+LEGAL_BUCKET_SENSITIVE_FIELDS: tuple[str, ...] = ("value",)
+
 
 SENSITIVE_SPECS: dict[str, SensitiveSpec] = {
     # Módulos de referência (já em produção) — agora registrados na fonte única.
@@ -361,6 +394,31 @@ SENSITIVE_SPECS: dict[str, SensitiveSpec] = {
     # --- Custos (costs.sensitive) ---
     "cost_item": SensitiveSpec(COSTS_SENSITIVE, COST_SENSITIVE_FIELDS),
     "cost_allocation": SensitiveSpec(COSTS_SENSITIVE, COST_ALLOCATION_SENSITIVE_FIELDS),
+    # --- Jurídico (legal.sensitive) ---
+    # Processos: valores do processo. Também governam os agregados do Dashboard e do relatório —
+    # de propósito, para não existirem dois códigos mandando no mesmo número.
+    "legal_case": SensitiveSpec(LEGAL_CASES_SENSITIVE, LEGAL_CASE_SENSITIVE_FIELDS),
+    # Desligados: rescisão/FGTS + totais.
+    #
+    # SEM `nested` para os processos da ficha — de propósito. `nested` propaga a decisão do PAI
+    # para os filhos (ver `_redact_model`), o que só é correto quando pai e filho compartilham a
+    # MESMA permissão, como em invoices→anticipations. Aqui os códigos são diferentes
+    # (`legal_persons.sensitive` × `legal_cases.sensitive`), e propagar vazaria valor de processo
+    # para quem só tem o sensitive de Desligados. O router redige cada nível com o SEU recurso.
+    "legal_person": SensitiveSpec(LEGAL_PERSONS_SENSITIVE, LEGAL_PERSON_SENSITIVE_FIELDS),
+    "legal_kpis": SensitiveSpec(LEGAL_CASES_SENSITIVE, LEGAL_KPIS_SENSITIVE_FIELDS),
+    "legal_bucket": SensitiveSpec(LEGAL_CASES_SENSITIVE, LEGAL_BUCKET_SENSITIVE_FIELDS),
+    "legal_overview": SensitiveSpec(
+        LEGAL_CASES_SENSITIVE, (),
+        nested=(
+            ("kpis", "legal_kpis"),
+            ("by_status", "legal_bucket"),
+            ("by_type", "legal_bucket"),
+            ("by_uf", "legal_bucket"),
+            ("by_company", "legal_bucket"),
+            ("by_project", "legal_bucket"),
+        ),
+    ),
 }
 
 

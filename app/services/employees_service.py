@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 from datetime import date
-from uuid import UUID
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import func, select
 
-from app.core.scenario import Scenario
 from app.models.company_finance import CompanyFinancialItem
 from app.models.employee import Employee, EmployeeAllocation
 from app.models.fleet import Vehicle
 from app.models.user import User
-from app.repositories.employees import EmployeeAllocationRepository, EmployeeRepository
+from app.repositories.employees import EmployeeRepository
 from app.schemas.employees import EmployeeRead
 from app.services.audit_service import AuditService
 from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_total_cost
@@ -71,7 +69,6 @@ class EmployeesService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.employees = EmployeeRepository(session)
-        self.allocations = EmployeeAllocationRepository(session)
         self.audit = AuditService(session)
 
     async def _compute_and_assign_total_cost(self, emp: Employee, *, reference: date | None) -> None:
@@ -379,40 +376,6 @@ class EmployeesService:
         )
         await self.session.commit()
 
-    async def list_allocations_by_project(
-        self,
-        *,
-        project_id: UUID,
-        scenario: str | Scenario | None = None,
-        competencia: date | None = None,
-    ) -> list[EmployeeAllocation]:
-        return await self.allocations.list_by_project(
-            project_id=project_id, scenario=scenario, competencia=competencia
-        )
-
-    async def create_allocation(
-        self,
-        *,
-        actor_user_id,
-        data: dict,
-        actor: User | None = None,
-        request: Request | None = None,
-    ) -> EmployeeAllocation:
-        alloc = EmployeeAllocation(**data)
-        await self.allocations.add(alloc)
-        await self.audit.log_action(
-            user=actor,
-            action="create",
-            entity="employee_allocation",
-            entity_id=alloc.id,
-            before=None,
-            after=model_to_dict(alloc),
-            context={
-                "descricao": "Alocação de colaborador em projeto",
-                "project_id": str(data.get("project_id", "")),
-            },
-            request=request,
-        )
-        await self.session.commit()
-        await self.session.refresh(alloc)
-        return alloc
+    # Os métodos do vínculo percentual legado (`EmployeeAllocation`) foram removidos na limpeza
+    # da RC junto com seus endpoints: 0 linhas na tabela, nenhum consumidor. Colaborador × projeto
+    # é `ProjectLabor`; o contrato é `EmployeeAssignment`.

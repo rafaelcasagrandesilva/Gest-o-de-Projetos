@@ -61,6 +61,26 @@ export const WORKSPACE_MENUS: Record<WorkspaceName, WorkspaceMenuItem[]> = {
     { to: "/indicators/roi", label: "ROI Operacional", perm: "indicators.read" },
     { to: "/indicators/evolucao-financeira", label: "Evolução Financeira", perm: "indicators.read" },
   ],
+  legal: [
+    { to: "/legal/dashboard", label: "Dashboard", perm: "legal_dashboard.read", end: true },
+    { to: "/legal/cases", label: "Processos", perm: "legal_cases.list" },
+    { to: "/legal/persons", label: "Desligados", perm: "legal_persons.list" },
+    { to: "/legal/reports", label: "Relatórios", perm: "legal_reports.read" },
+    // Manutenção dos dados — exige poder ALTERAR alguma das quatro entidades, OU importar
+    // (a aba Importações vive aqui dentro: sem `legal_imports.*` na lista, quem recebe só a
+    // permissão de importar não teria como CHEGAR à tela). Só leitura não vê o menu.
+    {
+      to: "/legal/admin",
+      label: "Administração",
+      perm: [
+        "legal_cases.create", "legal_cases.update", "legal_cases.delete",
+        "legal_persons.create", "legal_persons.update", "legal_persons.delete",
+        "legal_companies.create", "legal_companies.update", "legal_companies.delete",
+        "legal_projects.create", "legal_projects.update", "legal_projects.delete",
+        "legal_imports.list", "legal_imports.create",
+      ],
+    },
+  ],
 };
 
 /** True se o usuário tem a permissão do item (any-of quando `perm` é lista). */

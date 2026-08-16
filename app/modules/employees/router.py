@@ -37,6 +37,14 @@ from app.schemas.employees import (
     EmployeeUpdate,
     PayrollResponse,
 )
+from app.schemas.employee_assignment import (
+    EmployeeAssignmentCancel,
+    EmployeeAssignmentClose,
+    EmployeeAssignmentCreate,
+    EmployeeAssignmentRead,
+    EmployeeAssignmentUpdate,
+)
+from app.services.employee_assignment_service import EmployeeAssignmentService
 from app.services.employee_cost_service import calculate_clt_cost_fields
 from app.services.employee_monthly_payroll_service import EmployeeMonthlyPayrollService
 from app.services.employees_service import EmployeesService, default_cost_reference
@@ -327,3 +335,152 @@ async def delete_employee(
     await EmployeesService(db).delete_employee(
         actor_user_id=actor.id, employee_id=employee_id, actor=actor, request=request
     )
+
+
+# ---------------------------------------------------------------------------
+# Alocações contratuais (1 colaborador → N contratos com remuneração própria)
+#
+# Tudo vive DENTRO do cadastro do colaborador — a tela não abre outro lugar. Usa os verbos do
+# próprio módulo (`employees.*`), porque a Alocação é parte do cadastro da pessoa; os valores
+# passam por `employees.sensitive`, como o resto da ficha.
+# ---------------------------------------------------------------------------
+
+ASSIGNMENT_SENSITIVE_FIELDS: tuple[str, ...] = ("salary_base", "allowance")
+
+
+def _assignment_read(row, *, include_sensitive: bool) -> EmployeeAssignmentRead:
+    model = EmployeeAssignmentRead.model_validate(row).model_copy(
+        update={"project_name": row.project.name if row.project else None}
+    )
+    return redact(model, ASSIGNMENT_SENSITIVE_FIELDS, include_sensitive)
+
+
+@router.get(
+    "/{employee_id}/assignments",
+    response_model=list[EmployeeAssignmentRead],
+    dependencies=_read,
+)
+async def list_employee_assignments(
+    employee_id: UUID,
+    include_closed: bool = Query(default=True, description="Inclui alocações encerradas (histórico)"),
+    include_cancelled: bool = Query(
+        default=False, description="Inclui alocações canceladas (fora da tela por padrão)"
+    ),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[EmployeeAssignmentRead]:
+    rows = await EmployeeAssignmentService(db).list_for_employee(
+        employee_id, include_closed=include_closed, include_cancelled=include_cancelled
+    )
+    inc = user_has_permission(user, EMPLOYEES_SENSITIVE)
+    return [_assignment_read(r, include_sensitive=inc) for r in rows]
+
+
+@router.post(
+    "/{employee_id}/assignments",
+    response_model=EmployeeAssignmentRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))],
+)
+async def create_employee_assignment(
+    employee_id: UUID,
+    payload: EmployeeAssignmentCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> EmployeeAssignmentRead:
+    row = await EmployeeAssignmentService(db).create(
+        employee_id=employee_id, data=payload.model_dump(exclude_unset=True),
+        actor=user, request=request,
+    )
+    return _assignment_read(row, include_sensitive=user_has_permission(user, EMPLOYEES_SENSITIVE))
+
+
+@router.patch(
+    "/{employee_id}/assignments/{assignment_id}",
+    response_model=EmployeeAssignmentRead,
+    dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))],
+)
+async def update_employee_assignment(
+    employee_id: UUID,
+    assignment_id: UUID,
+    payload: EmployeeAssignmentUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> EmployeeAssignmentRead:
+    try:
+        row = await EmployeeAssignmentService(db).update(
+            assignment_id, payload.model_dump(exclude_unset=True), actor=user, request=request
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return _assignment_read(row, include_sensitive=user_has_permission(user, EMPLOYEES_SENSITIVE))
+
+
+@router.post(
+    "/{employee_id}/assignments/{assignment_id}/close",
+    response_model=EmployeeAssignmentRead,
+    dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))],
+)
+async def close_employee_assignment(
+    employee_id: UUID,
+    assignment_id: UUID,
+    payload: EmployeeAssignmentClose,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> EmployeeAssignmentRead:
+    """Encerrar a alocação — NUNCA apaga. O histórico de atuação precisa ser reconstruível."""
+    try:
+        row = await EmployeeAssignmentService(db).close(
+            assignment_id, end_date=payload.end_date, actor=user, request=request
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return _assignment_read(row, include_sensitive=user_has_permission(user, EMPLOYEES_SENSITIVE))
+
+
+@router.post(
+    "/{employee_id}/assignments/{assignment_id}/cancel",
+    response_model=EmployeeAssignmentRead,
+    dependencies=[Depends(require_permission(EMPLOYEES_DELETE))],
+)
+async def cancel_employee_assignment(
+    employee_id: UUID,
+    assignment_id: UUID,
+    payload: EmployeeAssignmentCancel,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> EmployeeAssignmentRead:
+    """Cancelar = criada por ENGANO. Recusado (409) se já houver qualquer efeito financeiro —
+    nesse caso a orientação é ENCERRAR, preservando a rastreabilidade."""
+    try:
+        row = await EmployeeAssignmentService(db).cancel(
+            assignment_id, reason=payload.reason, actor=user, request=request
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return _assignment_read(row, include_sensitive=user_has_permission(user, EMPLOYEES_SENSITIVE))
+
+
+@router.post(
+    "/{employee_id}/assignments/{assignment_id}/reopen",
+    response_model=EmployeeAssignmentRead,
+    dependencies=[Depends(require_permission(EMPLOYEES_UPDATE))],
+)
+async def reopen_employee_assignment(
+    employee_id: UUID,
+    assignment_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> EmployeeAssignmentRead:
+    try:
+        row = await EmployeeAssignmentService(db).reopen(
+            assignment_id, actor=user, request=request
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return _assignment_read(row, include_sensitive=user_has_permission(user, EMPLOYEES_SENSITIVE))

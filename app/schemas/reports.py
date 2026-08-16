@@ -25,6 +25,7 @@ ReportType = Literal[
     "assets_inspections",
     "assets_movements",
     "antecipacoes",
+    "legal",
 ]
 
 

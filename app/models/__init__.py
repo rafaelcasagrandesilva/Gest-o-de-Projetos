@@ -5,6 +5,11 @@ from app.models.costs import CorporateCost, CostAllocation, ProjectCost, Project
 from app.models.dashboard import KPI, ProjectResult
 from app.models.company_staff_cost import CompanyStaffCost
 from app.models.employee import Employee, EmployeeAllocation
+from app.models.employee_assignment import (
+    AllocationType,
+    AssignmentStatus,
+    EmployeeAssignment,
+)
 from app.models.cost_center_history import EmployeeCostCenterHistory, VehicleCostCenterHistory
 from app.models.employee_monthly_payroll_override import EmployeeMonthlyPayrollOverride
 from app.models.financial import Invoice, InvoiceAnticipation, Revenue
@@ -23,6 +28,18 @@ from app.models.advance_settlement_movement import AdvanceSettlementMovement
 from app.models.advance_settlement_event import AdvanceSettlementEvent
 from app.models.advance_repasse_ledger import AdvanceRepasseLedgerEntry
 from app.models.receivable_manual import ReceivableManualItem
+from app.models.legal import (
+    LegalCase,
+    LegalCaseStatus,
+    LegalCaseType,
+    LegalChangeAction,
+    LegalChangeLog,
+    LegalCompany,
+    LegalImportRun,
+    LegalEntityType,
+    LegalPerson,
+    LegalProject,
+)
 from app.models.fleet import Vehicle, VehicleUsage
 from app.models.project import Project
 from app.models.project_contract import ProjectContractAdditive
@@ -55,6 +72,9 @@ __all__ = [
     "CompanyStaffCost",
     "Employee",
     "EmployeeAllocation",
+    "EmployeeAssignment",
+    "AllocationType",
+    "AssignmentStatus",
     "EmployeeCostCenterHistory",
     "VehicleCostCenterHistory",
     "ReceivableInvoice",
@@ -65,6 +85,16 @@ __all__ = [
     "AdvanceSettlementEvent",
     "AdvanceRepasseLedgerEntry",
     "ReceivableManualItem",
+    "LegalCase",
+    "LegalCaseStatus",
+    "LegalCaseType",
+    "LegalChangeAction",
+    "LegalChangeLog",
+    "LegalCompany",
+    "LegalImportRun",
+    "LegalEntityType",
+    "LegalPerson",
+    "LegalProject",
     "Invoice",
     "InvoiceAnticipation",
     "Revenue",

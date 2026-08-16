@@ -39,6 +39,7 @@ from app.services.operational_cost_calc import (
 )
 from app.core.scenario import DEFAULT_SCENARIO, Scenario, coerce_scenario, parse_scenario
 from app.services.audit_service import AuditService
+from app.services.employee_assignment_service import EmployeeAssignmentService
 from app.services.settings_service import SettingsService
 from app.services.utils import model_to_dict
 from app.services.payable_snapshot_service import PayableSnapshotService
@@ -399,15 +400,26 @@ class ProjectStructureService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Colaborador já vinculado a este projeto nesta competência.",
             )
+        # Teto de 100% — agora consciente do TIPO da alocação. O teto existe para o RATEIO (um
+        # custo dividido não pode virar mais que ele mesmo). Contratos com REMUNERAÇÃO
+        # INDEPENDENTE valem 100% cada por definição e ficam fora da soma: era exatamente esta
+        # regra que impedia o colaborador de atuar em dois contratos simultâneos.
+        assignments = EmployeeAssignmentService(self.session)
+        independentes = await assignments.independent_project_ids(employee_id, competencia)
+        este_e_independente = project_id in independentes
         allocated_elsewhere = await self.labors.sum_allocation_percentage_for_employee_competencia(
-            employee_id=employee_id, competencia=competencia, scenario=scenario
+            employee_id=employee_id,
+            competencia=competencia,
+            scenario=scenario,
+            exclude_project_ids=independentes,
         )
-        if allocated_elsewhere + allocation_percentage > 100.0001:
+        if not este_e_independente and allocated_elsewhere + allocation_percentage > 100.0001:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     "A soma dos percentuais deste colaborador em todos os projetos nesta competência "
-                    "não pode ultrapassar 100%."
+                    "não pode ultrapassar 100%. Se são contratos distintos com valores próprios, "
+                    "marque a alocação como “Remuneração independente” no cadastro do colaborador."
                 ),
             )
         row = ProjectLabor(
@@ -417,6 +429,22 @@ class ProjectStructureService:
             allocation_percentage=allocation_percentage,
             scenario=scenario,
         )
+        # A ALOCAÇÃO é a origem do dinheiro: quando o contrato tem remuneração independente com
+        # valor próprio, ele desce para o override desta linha. Sem isto o vínculo usaria o salário
+        # do cadastro e os dois contratos pagariam igual — que é o problema que estamos resolvendo.
+        # Um valor explicitamente informado na criação continua tendo prioridade.
+        if este_e_independente and data.get("cost_salary_base") is None:
+            governing = await assignments.governing(
+                employee_id=employee_id, project_id=project_id, on_date=competencia
+            )
+            if governing is not None:
+                # `salary_base` da Alocação SUBSTITUI o do cadastro na fórmula existente — mesma
+                # semântica de `cost_salary_base` (para PJ com horas, é valor-hora; para CLT, é o
+                # salário). As horas também descem, senão um PJ usaria as horas do cadastro.
+                if governing.salary_base is not None:
+                    row.cost_salary_base = governing.salary_base
+                if governing.hours_per_month is not None:
+                    row.cost_pj_hours_per_month = governing.hours_per_month
         try:
             await self.labors.add(row)
             await self.session.flush()

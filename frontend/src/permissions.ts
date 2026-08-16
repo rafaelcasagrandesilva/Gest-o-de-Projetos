@@ -9,6 +9,7 @@ export const ALL_PERMISSION_CODES: string[] = [
   "workspace.finance.access",
   "workspace.assets.access",
   "workspace.indicators.access",
+  "workspace.legal.access",
   "dashboard.view",
   "dashboard.director",
   "indicators.view",
@@ -95,6 +96,16 @@ export const ALL_PERMISSION_CODES: string[] = [
   "reports.read",
   "settings.read", "settings.update",
   "alerts.read",
+  // Jurídico (Workspace Jurídico) — módulo novo, sem aliases legados `.view`/`.edit`.
+  // Jurídico — um recurso PRÓPRIO por menu (Dashboard, Processos, Desligados, Empresas, Projetos, Relatórios).
+  "legal_dashboard.read",
+  "legal_cases.reference", "legal_cases.list", "legal_cases.read", "legal_cases.create",
+  "legal_cases.update", "legal_cases.delete", "legal_cases.sensitive",
+  "legal_persons.reference", "legal_persons.list", "legal_persons.read", "legal_persons.create",
+  "legal_persons.update", "legal_persons.delete", "legal_persons.sensitive",
+  "legal_companies.list", "legal_companies.read", "legal_companies.create", "legal_companies.update", "legal_companies.delete",
+  "legal_projects.list", "legal_projects.read", "legal_projects.create", "legal_projects.update", "legal_projects.delete",
+  "legal_reports.read", "legal_reports.export",
 ];
 
 /** Códigos NOVOS do modelo de verbos (espelha `permission_codes.NEW_PERMISSION_CODES`). */
@@ -143,6 +154,15 @@ export const NEW_PERMISSION_CODES: string[] = [
   "reports.read",
   "settings.read", "settings.update",
   "alerts.read",
+  // Jurídico — um recurso PRÓPRIO por menu (Dashboard, Processos, Desligados, Empresas, Projetos, Relatórios).
+  "legal_dashboard.read",
+  "legal_cases.reference", "legal_cases.list", "legal_cases.read", "legal_cases.create",
+  "legal_cases.update", "legal_cases.delete", "legal_cases.sensitive",
+  "legal_persons.reference", "legal_persons.list", "legal_persons.read", "legal_persons.create",
+  "legal_persons.update", "legal_persons.delete", "legal_persons.sensitive",
+  "legal_companies.list", "legal_companies.read", "legal_companies.create", "legal_companies.update", "legal_companies.delete",
+  "legal_projects.list", "legal_projects.read", "legal_projects.create", "legal_projects.update", "legal_projects.delete",
+  "legal_reports.read", "legal_reports.export",
 ];
 
 export const PERMISSION_LABELS: Record<string, string> = {
@@ -152,6 +172,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "workspace.finance.access": "Workspace Financeiro",
   "workspace.assets.access": "Workspace Gestão de Ativos",
   "workspace.indicators.access": "Workspace Indicadores",
+  "workspace.legal.access": "Workspace Jurídico",
   "payable_snapshot.reconcile": "Contas a pagar — reconciliar snapshot",
   "indicators.view": "Indicadores (visualizar)",
   "indicators.director": "Indicadores diretoria (ranking global)",
@@ -225,6 +246,33 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "projects.update": "Projetos · Editar",
   "projects.sensitive": "Projetos · Dados sensíveis",
   "cost_center.reference": "Centro de Custo · Referenciar",
+  "legal_dashboard.read": "Jurídico · Dashboard · Visualizar",
+  "legal_cases.reference": "Jurídico · Processos · Referenciar",
+  "legal_cases.list": "Jurídico · Processos · Listar",
+  "legal_cases.read": "Jurídico · Processos · Visualizar",
+  "legal_cases.create": "Jurídico · Processos · Criar",
+  "legal_cases.update": "Jurídico · Processos · Editar",
+  "legal_cases.delete": "Jurídico · Processos · Desativar",
+  "legal_cases.sensitive": "Jurídico · Processos · Dados sensíveis",
+  "legal_persons.reference": "Jurídico · Desligados · Referenciar",
+  "legal_persons.list": "Jurídico · Desligados · Listar",
+  "legal_persons.read": "Jurídico · Desligados · Visualizar",
+  "legal_persons.create": "Jurídico · Desligados · Criar",
+  "legal_persons.update": "Jurídico · Desligados · Editar",
+  "legal_persons.delete": "Jurídico · Desligados · Desativar",
+  "legal_persons.sensitive": "Jurídico · Desligados · Dados sensíveis",
+  "legal_companies.list": "Jurídico · Empresas · Listar",
+  "legal_companies.read": "Jurídico · Empresas · Visualizar",
+  "legal_companies.create": "Jurídico · Empresas · Criar",
+  "legal_companies.update": "Jurídico · Empresas · Editar",
+  "legal_companies.delete": "Jurídico · Empresas · Desativar",
+  "legal_projects.list": "Jurídico · Projetos · Listar",
+  "legal_projects.read": "Jurídico · Projetos · Visualizar",
+  "legal_projects.create": "Jurídico · Projetos · Criar",
+  "legal_projects.update": "Jurídico · Projetos · Editar",
+  "legal_projects.delete": "Jurídico · Projetos · Desativar",
+  "legal_reports.read": "Jurídico · Relatórios · Visualizar",
+  "legal_reports.export": "Jurídico · Relatórios · Exportar",
 };
 
 /**
@@ -284,6 +332,27 @@ const PERMISSION_IMPLIES: Record<string, string[]> = {
   "vehicles.view": ["vehicles.read", "vehicles.sensitive", "vehicles.export", "cost_center.reference"],
   "vehicles.edit": ["vehicles.create", "vehicles.update", "vehicles.delete", "vehicles.sensitive", "vehicles.export"],
   "projects.view_list": ["cost_center.reference"],
+  // Jurídico — cadeia de verbos POR MENU. Nenhuma aresta cruza recursos: editar Processos
+  // não concede nada sobre Desligados nem sobre os catálogos.
+  "legal_cases.update": ["legal_cases.read"],
+  "legal_cases.delete": ["legal_cases.read"],
+  "legal_cases.create": ["legal_cases.reference"],
+  "legal_cases.read": ["legal_cases.list"],
+  "legal_cases.list": ["legal_cases.reference"],
+  "legal_persons.update": ["legal_persons.read"],
+  "legal_persons.delete": ["legal_persons.read"],
+  "legal_persons.create": ["legal_persons.reference"],
+  "legal_persons.read": ["legal_persons.list"],
+  "legal_persons.list": ["legal_persons.reference"],
+  "legal_companies.update": ["legal_companies.read"],
+  "legal_companies.delete": ["legal_companies.read"],
+  "legal_companies.create": ["legal_companies.read"],
+  "legal_companies.read": ["legal_companies.list"],
+  "legal_projects.update": ["legal_projects.read"],
+  "legal_projects.delete": ["legal_projects.read"],
+  "legal_projects.create": ["legal_projects.read"],
+  "legal_projects.read": ["legal_projects.list"],
+  "legal_reports.export": ["legal_reports.read"],
 };
 
 /** Fecho transitivo de `held` sob `PERMISSION_IMPLIES` (inclui os próprios códigos). */
@@ -330,6 +399,13 @@ export const RESOURCE_LABELS: Record<string, string> = {
   workspace_finance: "Workspace Financeiro",
   workspace_assets: "Workspace Gestão de Ativos",
   workspace_indicators: "Workspace Indicadores",
+  workspace_legal: "Workspace Jurídico",
+  legal_dashboard: "Jurídico · Dashboard",
+  legal_cases: "Jurídico · Processos",
+  legal_persons: "Jurídico · Desligados",
+  legal_companies: "Jurídico · Empresas",
+  legal_projects: "Jurídico · Projetos",
+  legal_reports: "Jurídico · Relatórios",
   system_admin: "Administração do sistema",
   system_all_projects: "Escopo global de projetos",
   project_documents: "Documentos do projeto",
@@ -345,6 +421,10 @@ export const RESOURCE_GROUPS: { label: string; resources: string[] }[] = [
   { label: "Financeiro", resources: ["financial_dashboard", "payables", "receivables", "invoices", "debts", "costs", "company_finance", "billing"] },
   { label: "Gestão", resources: ["dashboard", "indicators", "reports", "alerts", "audit"] },
   {
+    label: "Jurídico",
+    resources: ["legal_dashboard", "legal_cases", "legal_persons", "legal_companies", "legal_projects", "legal_reports"],
+  },
+  {
     label: "Sistema",
     resources: [
       "users",
@@ -353,6 +433,7 @@ export const RESOURCE_GROUPS: { label: string; resources: string[] }[] = [
       "workspace_finance",
       "workspace_assets",
       "workspace_indicators",
+      "workspace_legal",
       "system_admin",
       "system_all_projects",
       "project_documents",
@@ -435,6 +516,7 @@ const CODE_PLACEMENT: Record<string, { resource: string; column: PermissionColum
   "workspace.finance.access": { resource: "workspace_finance", column: "access" },
   "workspace.assets.access": { resource: "workspace_assets", column: "access" },
   "workspace.indicators.access": { resource: "workspace_indicators", column: "access" },
+  "workspace.legal.access": { resource: "workspace_legal", column: "access" },
   "invoices.reactivate": { resource: "invoices", column: "execute" },
   "payable_snapshot.reconcile": { resource: "payables", column: "execute" },
   "projects.documents.view": { resource: "project_documents", column: "read" },
@@ -595,6 +677,17 @@ export function hasPermission(permissionNames: string[] | undefined, code: strin
   if (code === "workspace.indicators.access") {
     return permissionNames.some((p) => ["indicators.view", "indicators.director"].includes(p));
   }
+  if (code === "workspace.legal.access") {
+    // Qualquer permissão de QUALQUER menu do Jurídico abre o workspace (espelha
+    // `permission_codes.LEGAL_WORKSPACE_GRANTING`). `.reference` sozinho não abre.
+    return permissionNames.some(
+      (p) =>
+        p === "legal_dashboard.read" ||
+        (/^legal_(cases|persons|companies|projects|reports)\./.test(p) &&
+          !p.endsWith(".reference") &&
+          !p.endsWith(".sensitive")),
+    );
+  }
   return false;
 }
 
@@ -639,5 +732,19 @@ export const ROLE_PERMISSION_PRESET: Record<"ADMIN" | "GESTOR" | "CONSULTA", str
     "vehicles.read",
     "vehicles.sensitive",
     "cost_center.reference",
+    // Jurídico — CONSULTA lê todos os menus, SEM os valores e SEM CRUD.
+    "workspace.legal.access",
+    "legal_dashboard.read",
+    "legal_cases.reference",
+    "legal_cases.list",
+    "legal_cases.read",
+    "legal_persons.reference",
+    "legal_persons.list",
+    "legal_persons.read",
+    "legal_companies.list",
+    "legal_companies.read",
+    "legal_projects.list",
+    "legal_projects.read",
+    "legal_reports.read",
   ],
 };

@@ -24,6 +24,7 @@ import {
 } from "@/services/employees";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
+import { EmployeeAssignments } from "@/components/employees/EmployeeAssignments";
 import { usePermission } from "@/hooks/usePermission";
 import { useAuxiliaryResource } from "@/hooks/useAuxiliaryResource";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
@@ -391,7 +392,10 @@ function CadastroColaboradorFields({
       </div>
       <div>
         <label htmlFor={`${idPrefix}-cc`} className="mb-1 block text-sm text-slate-600">
-          Centro de Custo
+          Centro de Custo Principal
+          <span className="ml-1 text-xs font-normal text-slate-400">
+            (organização; quem gera custo é a alocação)
+          </span>
         </label>
         <select
           id={`${idPrefix}-cc`}
@@ -432,19 +436,10 @@ function CadastroColaboradorFields({
           </div>
         ) : null}
       </div>
-      <div className="sm:col-span-2">
-        <label className="flex items-center gap-2 text-sm text-slate-700">
-          <input
-            type="checkbox"
-            checked={form.can_allocate_other_cost_centers}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, can_allocate_other_cost_centers: e.target.checked }))
-            }
-            className="rounded border-slate-300"
-          />
-          Pode ser alocado em outros Centros de Custo (diretores/gerentes/compartilhados)
-        </label>
-      </div>
+      {/* A checkbox "Pode ser alocado em outros Centros de Custo" foi REMOVIDA da interface:
+          quem determina onde o colaborador atua são as ALOCAÇÕES. O valor continua no estado do
+          formulário (e é reenviado no salvar) para não zerar quem já estava marcado — o flag segue
+          honrado no backend por compatibilidade com o legado. */}
       <div>
         <label htmlFor={`${idPrefix}-start`} className="mb-1 block text-sm text-slate-600">
           Admissão
@@ -1511,6 +1506,13 @@ function EditEmployeePanel({
           setForm={setForm}
           idPrefix={`edit-${emp.id}`}
           referenceCompetencia={referenceCompetencia}
+        />
+        {/* Alocações contratuais: 1 colaborador → N contratos com remuneração própria.
+            Fica DENTRO do cadastro, como pedido — nenhuma outra tela. */}
+        <EmployeeAssignments
+          employeeId={emp.id}
+          employmentType={form.employment_type}
+          canEdit
         />
         <div className="flex flex-wrap gap-2">
           <button

@@ -3,6 +3,7 @@ import { useScenario } from "@/context/ScenarioContext";
 import { hasPermission } from "@/permissions";
 import { fetchAdvanceInstitutions, type AdvanceInstitution } from "@/services/advanceInstitutions";
 import { listProjects, type Project } from "@/services/projects";
+import { LEGAL_STATUS_LABELS, fetchLegalOverview, type LegalFacets } from "@/services/legal";
 import {
   generateReport,
   type ReportFormat,
@@ -47,6 +48,16 @@ const REPORT_GROUPS: { label: string; reports: ReportDef[] }[] = [
     ],
   },
   {
+    label: "Jurídico",
+    reports: [
+      {
+        id: "legal",
+        label: "Jurídico — passivo, processos e desligados",
+        perm: "legal_reports.read",
+      },
+    ],
+  },
+  {
     label: "Administrativo",
     reports: [
       { id: "employees", label: "Colaboradores — nome, tipo e custo", perm: "employees.export" },
@@ -71,22 +82,37 @@ function nextCompetenciaLabel(competencia: string): string {
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
-export function Reports() {
+/**
+ * `group` restringe a tela a UM grupo de relatórios. Usado pelo menu Relatórios de um workspace
+ * fechado (Jurídico): abrir "Relatórios" lá dentro não deve oferecer relatórios do Financeiro.
+ * Sem a prop, a tela segue como sempre — todos os grupos que o usuário pode ver.
+ */
+export function Reports({ group }: { group?: string } = {}) {
   const { user } = useAuth();
   const { globalScenario } = useScenario();
   const permissionNames = user?.permission_names;
 
   const visibleGroups = useMemo(() => {
-    return REPORT_GROUPS.map((g) => ({
-      ...g,
-      // Fase 1: só permissão. `perm` ausente = visível a quem acessa Relatórios (reports.view do menu).
-      reports: g.reports.filter((d) => !d.perm || hasPermission(permissionNames, d.perm)),
-    })).filter((g) => g.reports.length > 0);
-  }, [permissionNames]);
+    return REPORT_GROUPS.filter((g) => !group || g.label === group)
+      .map((g) => ({
+        ...g,
+        // Fase 1: só permissão. `perm` ausente = visível a quem acessa Relatórios (reports.view do menu).
+        reports: g.reports.filter((d) => !d.perm || hasPermission(permissionNames, d.perm)),
+      }))
+      .filter((g) => g.reports.length > 0);
+  }, [permissionNames, group]);
 
   const visible = useMemo(() => visibleGroups.flatMap((g) => g.reports), [visibleGroups]);
 
   const [type, setType] = useState<ReportType | "">("");
+  // Filtros do relatório do Jurídico — os MESMOS eixos das telas do módulo.
+  const [legalStatus, setLegalStatus] = useState("");
+  const [legalUf, setLegalUf] = useState("");
+  const [legalCompany, setLegalCompany] = useState("");
+  const [legalProject, setLegalProject] = useState("");
+  const [legalQ, setLegalQ] = useState("");
+  const [legalIncludeInactive, setLegalIncludeInactive] = useState(false);
+  const [legalFacets, setLegalFacets] = useState<LegalFacets | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -162,6 +188,17 @@ export function Reports() {
     if (visible.length && !type) setType(visible[0].id);
   }, [visible, type]);
 
+  useEffect(() => {
+    if (type !== "legal" || legalFacets) return;
+    void (async () => {
+      try {
+        setLegalFacets((await fetchLegalOverview({})).facets);
+      } catch {
+        /* sem opções o relatório ainda gera (todos os registros) */
+      }
+    })();
+  }, [type, legalFacets]);
+
   function buildFilters(): Record<string, string | number | boolean> {
     if (!type) throw new Error("Selecione o relatório.");
     switch (type) {
@@ -213,6 +250,16 @@ export function Reports() {
         if (assetCategory.trim()) f.category = assetCategory.trim();
         if (assetStatus) f.status = assetStatus;
         if (assetCostCenter.trim()) f.cost_center_ref = assetCostCenter.trim();
+        return f;
+      }
+      case "legal": {
+        const f: Record<string, string | number | boolean> = {};
+        if (legalStatus) f.status = legalStatus;
+        if (legalUf) f.uf = legalUf;
+        if (legalCompany) f.company = legalCompany;
+        if (legalProject) f.project = legalProject;
+        if (legalQ.trim()) f.q = legalQ.trim();
+        if (legalIncludeInactive) f.include_inactive = true;
         return f;
       }
       case "assets_in_use":
@@ -276,6 +323,9 @@ export function Reports() {
   }
 
   const def = visible.find((d) => d.id === type);
+  // `legal_reports.read` mostra a tela e o relatório; GERAR o arquivo exige `legal_reports.export`.
+  // Sem isto o usuário só descobriria a falta da permissão ao receber 403 no download.
+  const cannotExportLegal = type === "legal" && !hasPermission(permissionNames, "legal_reports.export");
   const usesScenario = ![
     "payables_detailed",
     "receivables_detailed",
@@ -290,6 +340,7 @@ export function Reports() {
     "assets_inspections",
     "assets_movements",
     "antecipacoes",
+    "legal",
   ].includes(type);
 
   if (visible.length === 0) {
@@ -360,6 +411,89 @@ export function Reports() {
           </select>
           {def && <p className="mt-2 text-xs text-slate-500">{def.label}</p>}
         </div>
+
+        {type === "legal" && (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Field label="Status">
+              <select
+                value={legalStatus}
+                onChange={(e) => setLegalStatus(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="">Todos</option>
+                {(legalFacets?.statuses ?? []).map((x) => (
+                  <option key={x} value={x}>
+                    {LEGAL_STATUS_LABELS[x]}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Estado (UF)">
+              <select
+                value={legalUf}
+                onChange={(e) => setLegalUf(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="">Todos</option>
+                {(legalFacets?.ufs ?? []).map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Empresa">
+              <select
+                value={legalCompany}
+                onChange={(e) => setLegalCompany(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="">Todas</option>
+                {(legalFacets?.companies ?? []).map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Projeto">
+              <select
+                value={legalProject}
+                onChange={(e) => setLegalProject(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="">Todos</option>
+                {(legalFacets?.projects ?? []).map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Pesquisa">
+              <input
+                type="search"
+                value={legalQ}
+                onChange={(e) => setLegalQ(e.target.value)}
+                placeholder="Nome, CPF, processo…"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+            </Field>
+            <label className="flex items-end gap-2 pb-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={legalIncludeInactive}
+                onChange={(e) => setLegalIncludeInactive(e.target.checked)}
+                className="h-4 w-4 accent-indigo-600"
+              />
+              Incluir registros desativados
+            </label>
+            <p className="text-xs text-slate-500 sm:col-span-2 lg:col-span-3">
+              O Excel traz uma aba por menu do módulo (Resumo, Quebras, Processos e Desligados).
+              O PDF traz a leitura executiva (indicadores e quebras).
+            </p>
+          </div>
+        )}
 
         {type === "project_summary" && (
           <ProjectMonthFilters
@@ -786,10 +920,17 @@ export function Reports() {
           </div>
         )}
 
+        {cannotExportLegal && (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            Você pode consultar este relatório, mas não tem a permissão de exportar
+            (Jurídico · Relatórios · Exportar). Peça a um administrador.
+          </p>
+        )}
+
         <div className="flex flex-wrap gap-3 border-t border-slate-100 pt-4">
           <button
             type="button"
-            disabled={busy || !type}
+            disabled={busy || !type || cannotExportLegal}
             onClick={() => void run("xlsx")}
             className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
           >
@@ -798,7 +939,7 @@ export function Reports() {
           {type !== "antecipacoes" && (
             <button
               type="button"
-              disabled={busy || !type}
+              disabled={busy || !type || cannotExportLegal}
               onClick={() => void run("pdf")}
               className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
             >

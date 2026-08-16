@@ -46,6 +46,19 @@ def main() -> None:
         help="E-mail do usuário (default: admin@sgp.com)",
     )
 
+    p_legal = sub.add_parser(
+        "seed_legal",
+        help="Carga do Workspace Jurídico para desenvolvimento (idempotente). "
+        "Em produção a carga oficial é a importação da planilha pela tela.",
+    )
+    p_legal.add_argument(
+        "--file",
+        default=None,
+        help="JSON de seed local, não versionado (default: app/scripts/data/legal_seed.json)",
+    )
+    p_legal.add_argument("--xlsx", default=None, help="Importar direto da planilha (.xlsx)")
+    p_legal.add_argument("--painel", default=None, help="painel_passivo.html (opcional)")
+
     args = parser.parse_args()
     _configure_logging()
 
@@ -69,6 +82,37 @@ def main() -> None:
             logging.getLogger(__name__).error("%s", e)
             sys.exit(1)
         logging.getLogger(__name__).info("promote_admin concluído.")
+        return
+
+    if args.command == "seed_legal":
+        import asyncio
+        from pathlib import Path as _Path
+
+        from app.scripts.seed_legal import seed_legal
+
+        from app.services.legal_import_parser import LegalImportSourceError
+
+        try:
+            report = asyncio.run(
+                seed_legal(
+                    _Path(args.file) if args.file else None,
+                    xlsx=_Path(args.xlsx).expanduser() if args.xlsx else None,
+                    panel=_Path(args.painel).expanduser() if args.painel else None,
+                )
+            )
+        except (FileNotFoundError, LegalImportSourceError) as e:
+            logging.getLogger(__name__).error("%s", e)
+            sys.exit(1)
+        s = report.summary
+        logging.getLogger(__name__).info(
+            "seed_legal concluído: pessoas criadas=%d atualizadas=%d · processos criados=%d "
+            "atualizados=%d · sem alteração=%d",
+            s.people_new,
+            s.people_updated,
+            s.cases_new,
+            s.cases_updated,
+            s.people_unchanged + s.cases_unchanged,
+        )
         return
 
     parser.error("Comando desconhecido.")

@@ -30,6 +30,10 @@ import { Assets } from "@/pages/Assets";
 import { AssetsDashboard } from "@/pages/AssetsDashboard";
 import { AssetDetailPage } from "@/pages/AssetDetail";
 import { Epis } from "@/pages/Epis";
+import { LegalAdmin } from "@/pages/legal/LegalAdmin";
+import { LegalCases } from "@/pages/legal/LegalCases";
+import { LegalDashboard } from "@/pages/legal/LegalDashboard";
+import { LegalPersons } from "@/pages/legal/LegalPersons";
 import { RoiOperacional } from "@/pages/indicators/RoiOperacional";
 import { EvolucaoFinanceira } from "@/pages/indicators/EvolucaoFinanceira";
 
@@ -108,6 +112,14 @@ export default function App() {
               <Route path="assets/:assetId" element={<AssetDetailPage />} />
               <Route path="epis" element={<Epis />} />
               <Route path="epis/:assetId" element={<AssetDetailPage />} />
+
+              <Route path="legal/dashboard" element={<LegalDashboard />} />
+              <Route path="legal/cases" element={<LegalCases />} />
+              <Route path="legal/persons" element={<LegalPersons />} />
+              {/* Mesma tela de Relatórios dos demais workspaces (padrão de /finance/reports):
+                  ela já filtra os tipos por permissão, então o Jurídico só enxerga o seu. */}
+              <Route path="legal/reports" element={<Reports group="Jurídico" />} />
+              <Route path="legal/admin" element={<LegalAdmin />} />
 
               <Route path="indicators/roi" element={<RoiOperacional />} />
               <Route path="indicators/evolucao-financeira" element={<EvolucaoFinanceira />} />
