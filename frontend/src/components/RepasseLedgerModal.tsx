@@ -10,7 +10,8 @@ import {
   type WithdrawalPurpose,
 } from "@/services/advanceRepasseLedger";
 import { formatApiError } from "@/utils/apiError";
-import { formatCurrency, formatCurrencyOrDash, normalizeCurrencyForApi, sanitizeCurrencyTyping } from "@/utils/currency";
+import { formatCurrency, normalizeCurrencyForApi, sanitizeCurrencyTyping } from "@/utils/currency";
+import { Money } from "@/components/Money";
 
 function formatDateBr(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -161,9 +162,8 @@ export function RepasseLedgerModal({
                         </span>
                       </td>
                       <td className="px-2 py-1.5 text-slate-600">{SOURCE_LABELS[e.source_type]}</td>
-                      <td className={`px-2 py-1.5 text-right tabular-nums ${isIn ? "text-emerald-700" : "text-red-700"}`}>
-                        {isIn ? "+" : "−"}
-                        {formatCurrencyOrDash(e.amount)}
+                      <td className={`px-2 py-1.5 ${isIn ? "text-emerald-700" : "text-red-700"}`}>
+                        <Money value={e.amount} sign={isIn ? "+" : "−"} />
                       </td>
                       <td className="max-w-[240px] px-2 py-1.5 text-slate-600">
                         <div className="flex items-center gap-1.5">

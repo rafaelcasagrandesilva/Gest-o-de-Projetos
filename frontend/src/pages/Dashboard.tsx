@@ -480,7 +480,9 @@ export function Dashboard() {
         />
       </div>
 
-      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+      {/* `auto-rows-fr`: quando a faixa quebra em duas linhas (telas médias), as linhas ficam com
+          a mesma altura em vez de cada uma se ajustar ao seu conteúdo. */}
+      <div className="grid auto-rows-fr grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
         <KpiCard
           label={multiMonth ? `Receita (${scenarioLabelShort}) — período` : `Receita (${scenarioLabelShort})`}
           value={formatMoney(s.total_revenue ?? s.revenue_total)}
@@ -615,8 +617,12 @@ function ScenarioCompareCard({
     deltaCls = favorable ? "text-emerald-700" : "text-red-700";
   }
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-sm font-medium text-slate-700">{label}</p>
+    <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      {/* Mesma faixa fixa do KpiCard: "Custo total (soma no período)" ocupa duas linhas e não pode
+          empurrar as linhas de valor para fora do alinhamento com os cards vizinhos. */}
+      <p className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-5 text-slate-700" title={label}>
+        {label}
+      </p>
       <div className="mt-3 space-y-1.5 text-sm">
         <div className="flex justify-between gap-2">
           <span className="text-slate-500">Previsto</span>
@@ -651,11 +657,21 @@ function KpiCard({
   accent?: string;
   subtitle?: string;
 }) {
+  // Três FAIXAS de altura fixa (rótulo · valor · subtítulo). Sem isso, um rótulo de duas linhas
+  // empurra o valor para baixo e os cards da mesma faixa deixam de se alinhar entre si — e o
+  // subtítulo é reservado mesmo quando ausente, para que todos os valores fiquem na mesma altura.
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
-      <p className="text-sm font-medium text-slate-500">{label}</p>
-      <p className={`mt-1 text-2xl font-semibold tabular-nums ${accent ?? "text-slate-900"}`}>{value}</p>
-      {subtitle != null ? <p className="mt-0.5 text-sm text-gray-500">{subtitle}</p> : null}
+    <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+      <p className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-5 text-slate-500" title={label}>
+        {label}
+      </p>
+      <p
+        className={`mt-1 min-h-[2rem] text-2xl font-semibold leading-8 tabular-nums ${accent ?? "text-slate-900"}`}
+      >
+        {value}
+      </p>
+      {/* Sempre renderizado: a faixa reservada mantém a base dos cards alinhada mesmo sem texto. */}
+      <p className="mt-0.5 min-h-[1.25rem] text-sm leading-5 text-gray-500">{subtitle}</p>
     </div>
   );
 }

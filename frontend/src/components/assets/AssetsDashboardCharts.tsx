@@ -3,6 +3,7 @@ import type {
   AssetDashboardGroupRow,
   AssetDashboardPhysicalRow,
 } from "@/services/assetsDashboard";
+import { Money } from "@/components/Money";
 import { formatCurrencyOrDash } from "@/utils/currency";
 import {
   Bar,
@@ -88,8 +89,8 @@ export function AssetsDashboardCharts({ byCategory, byCostCenter, physicalCondit
       <div className={CHART_CARD}>
         <p className="text-sm font-semibold text-slate-900">Categoria de ativos</p>
         <p className="mt-0.5 text-xs text-slate-500">Quantidade e valor patrimonial</p>
-        <div className="mt-4 flex flex-1 flex-col gap-4 md:flex-row">
-          <div className="h-[220px] min-w-0 flex-1">
+        <div className="mt-4 flex flex-1 flex-col items-center gap-4 md:flex-row md:items-center">
+          <div className="h-[220px] w-full min-w-0 flex-1 md:w-auto">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -117,22 +118,45 @@ export function AssetsDashboardCharts({ byCategory, byCostCenter, physicalCondit
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <ul className="flex flex-col gap-2 text-sm text-slate-700 md:max-w-[14rem]">
-            {categoryData.map((d) => (
-              <li key={d.name} className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-2">
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-full"
-                    style={{ background: CATEGORY_COLORS[d.name] ?? "#94a3b8" }}
-                  />
-                  {d.name}
-                </span>
-                <span className="tabular-nums text-slate-500">
-                  {showSensitive ? `${d.count} · ${formatBRL(d.value)}` : d.count}
-                </span>
-              </li>
-            ))}
-          </ul>
+          {/* Legenda como TABELA: com "59 · R$ 123.721,01" num único bloco de texto, o rótulo
+              longo ("Instrumentação") quebrava a linha e desalinhava a lista inteira. Em colunas
+              próprias, cada número tem largura garantida e nada empurra nada. */}
+          <div className="min-w-0 overflow-x-auto">
+            <table className="w-full text-sm md:w-auto">
+              <thead>
+                <tr className="text-xs font-medium text-slate-400">
+                  <th className="pb-1.5 text-left font-medium">Categoria</th>
+                  <th className="pb-1.5 pl-4 text-right font-medium">Qtd.</th>
+                  {showSensitive ? (
+                    <th className="pb-1.5 pl-4 text-right font-medium">Valor patrimonial</th>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody>
+                {categoryData.map((d) => (
+                  <tr key={d.name} className="border-t border-slate-100">
+                    <td className="py-1.5 pr-2 text-slate-700">
+                      <span className="flex items-center gap-2">
+                        <span
+                          className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ background: CATEGORY_COLORS[d.name] ?? "#94a3b8" }}
+                        />
+                        {d.name}
+                      </span>
+                    </td>
+                    <td className="py-1.5 pl-4 text-right tabular-nums whitespace-nowrap text-slate-500">
+                      {d.count}
+                    </td>
+                    {showSensitive ? (
+                      <td className="py-1.5 pl-4 whitespace-nowrap text-slate-500">
+                        <Money value={d.value} />
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -220,7 +244,9 @@ export function AssetsDashboardCharts({ byCategory, byCostCenter, physicalCondit
           <table className="min-w-full text-left text-sm">
             <thead className="text-xs uppercase text-slate-500">
               <tr>
-                <th className="px-2 py-2">Centro</th>
+                {/* `w-full` no Centro: ele absorve a folga da tabela e as colunas de dinheiro
+                    encolhem até o conteúdo — assim o "R$" fica junto do número, e não numa ponta. */}
+                <th className="w-full px-2 py-2">Centro</th>
                 <th className="px-2 py-2 text-right">Qtd.</th>
                 <th className="px-2 py-2 text-right">Valor total</th>
                 <th className="px-2 py-2 text-right">Ticket médio</th>
@@ -230,9 +256,13 @@ export function AssetsDashboardCharts({ byCategory, byCostCenter, physicalCondit
               {ccData.map((r) => (
                 <tr key={r.key} className="border-t border-slate-100">
                   <td className="px-2 py-2 font-medium text-slate-800">{r.name}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{r.asset_count}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{formatBRL(r.amount_total)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{formatBRL(r.average_value)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">{r.asset_count}</td>
+                  <td className="px-2 py-2 whitespace-nowrap">
+                    <Money value={r.amount_total} />
+                  </td>
+                  <td className="px-2 py-2 whitespace-nowrap">
+                    <Money value={r.average_value} />
+                  </td>
                 </tr>
               ))}
             </tbody>

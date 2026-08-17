@@ -3,8 +3,9 @@ import { usePermission } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { listProjects, type Project } from "@/services/projects";
 import { createRevenue, deleteRevenue, listRevenues, type Revenue } from "@/services/financial";
-import { formatCurrencyOrDash, normalizeCurrencyForApi, sanitizeCurrencyTyping } from "@/utils/currency";
+import { normalizeCurrencyForApi, sanitizeCurrencyTyping } from "@/utils/currency";
 import { isAxiosError } from "axios";
+import { Money } from "@/components/Money";
 
 function monthStartInput(): string {
   const d = new Date();
@@ -310,8 +311,8 @@ export function RevenuePage() {
               <thead className="border-b border-slate-100 bg-slate-50/80">
                 <tr>
                   <th className="px-4 py-3 font-medium text-slate-600">Competência</th>
-                  <th className="px-4 py-3 font-medium text-slate-600">Valor</th>
-                  <th className="px-4 py-3 font-medium text-slate-600">Retenção (R$)</th>
+                  <th className="px-4 py-3 text-right font-medium text-slate-600">Valor</th>
+                  <th className="px-4 py-3 text-right font-medium text-slate-600">Retenção (R$)</th>
                   <th className="px-4 py-3 font-medium text-slate-600">Status</th>
                   <th className="px-4 py-3 font-medium text-slate-600">Descrição</th>
                   <th className="px-4 py-3" />
@@ -323,9 +324,11 @@ export function RevenuePage() {
                   .map((r) => (
                     <tr key={r.id} className="border-b border-slate-50">
                       <td className="px-4 py-3">{r.competencia}</td>
-                      <td className="px-4 py-3 tabular-nums">{formatCurrencyOrDash(r.amount)}</td>
-                      <td className="px-4 py-3 tabular-nums text-slate-600">
-                        {formatCurrencyOrDash(r.retention_value)}
+                      <td className="px-4 py-3">
+                        <Money value={r.amount} />
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        <Money value={r.retention_value} />
                       </td>
                       <td className="px-4 py-3">{r.status}</td>
                       <td className="px-4 py-3 text-slate-600">{r.description ?? "—"}</td>

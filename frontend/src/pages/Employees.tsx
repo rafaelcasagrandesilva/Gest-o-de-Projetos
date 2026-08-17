@@ -30,6 +30,7 @@ import { useAuxiliaryResource } from "@/hooks/useAuxiliaryResource";
 import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
 import { CollapsiblePanel } from "@/components/ExpandableFormSection";
 import { formatCurrencyOrDash, parseCurrencyInput } from "@/utils/currency";
+import { Money } from "@/components/Money";
 
 function monthStartIso(): string {
   const d = new Date();
@@ -1023,11 +1024,11 @@ export function Employees() {
                     <td className="px-4 py-3">{emp.employment_type}</td>
                     {canSeeSensitive && (
                       <>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                          {emp.salary_base != null ? formatMoney(emp.salary_base) : "—"}
+                        <td className="px-4 py-3 text-slate-700">
+                          <Money value={emp.salary_base} />
                         </td>
-                        <td className="px-4 py-3 text-right font-medium tabular-nums text-slate-900">
-                          {formatMoney(emp.total_cost)}
+                        <td className="px-4 py-3 font-medium text-slate-900">
+                          <Money value={emp.total_cost} />
                         </td>
                       </>
                     )}
@@ -1250,18 +1251,20 @@ export function Employees() {
                           </td>
                           <td className="px-4 py-3">{line.employment_type}</td>
                           <td className="px-4 py-3 text-slate-600">{ccByEmp.get(line.employee_id) || "—"}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{formatMoney(line.projects_total)}</td>
-                          <td className="px-4 py-3 text-right tabular-nums text-slate-600">
-                            {formatMoney(line.administrative_cost)}
+                          <td className="px-4 py-3">
+                            <Money value={line.projects_total} />
                           </td>
-                          <td className="px-4 py-3 text-right font-medium tabular-nums">
-                            {formatMoney(line.grand_total)}
+                          <td className="px-4 py-3 text-slate-600">
+                            <Money value={line.administrative_cost} />
                           </td>
-                          <td className="px-4 py-3 text-right tabular-nums text-slate-600">
-                            {formatMoney(prevEmp)}
+                          <td className="px-4 py-3 font-medium">
+                            <Money value={line.grand_total} />
                           </td>
-                          <td className="px-4 py-3 text-right tabular-nums text-slate-600">
-                            {formatMoney(realEmp)}
+                          <td className="px-4 py-3 text-slate-600">
+                            <Money value={prevEmp} />
+                          </td>
+                          <td className="px-4 py-3 text-slate-600">
+                            <Money value={realEmp} />
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums text-indigo-700">
                             {formatDeltaPrevReal(prevEmp, realEmp)}

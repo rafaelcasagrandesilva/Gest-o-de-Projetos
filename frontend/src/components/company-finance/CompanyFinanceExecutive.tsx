@@ -67,6 +67,7 @@ import {
   formatCurrencyOrDash,
   normalizeCurrencyForApi,
 } from "@/utils/currency";
+import { Money } from "@/components/Money";
 
 const MONTH_SHORT = [
   "JAN",
@@ -1697,12 +1698,13 @@ function PendingEntriesSection({
                 <td className="px-3 py-2 tabular-nums text-slate-700">
                   {mesLabel(p.competencia)}/{p.competencia.split("-")[0]}
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                <td className="px-3 py-2 text-slate-700">
                   {typeof p.ultimo_valor === "number" ? (
-                    <span>
-                      {formatBRL(p.ultimo_valor)}
+                    <span className="block">
+                      <Money value={p.ultimo_valor} />
+                      {/* Mês de referência em linha própria: inline ele empurraria o número. */}
                       {p.ultimo_mes ? (
-                        <span className="ml-1 text-xs text-slate-400">
+                        <span className="block text-right text-xs text-slate-400">
                           ({mesLabel(p.ultimo_mes)}/{p.ultimo_mes.split("-")[0]})
                         </span>
                       ) : null}

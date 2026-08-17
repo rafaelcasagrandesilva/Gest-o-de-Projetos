@@ -29,6 +29,7 @@ import {
   RECEIVABLE_VIEW_SORT_COLUMNS,
   defaultReceivableViewSort,
 } from "@/tableSort/receivables";
+import { Money } from "@/components/Money";
 
 /** Null-safe: delega ao util compartilhado (valor redigido → "—"). */
 const formatBRL = formatCurrencyOrDash;
@@ -361,17 +362,21 @@ export function Receivables() {
                   </td>
                   <td className="whitespace-nowrap px-2 py-2">{formatDateBr(r.issue_date)}</td>
                   <td className="whitespace-nowrap px-2 py-2">{formatDateBr(r.due_date)}</td>
-                  <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatCurrencyOrDash(r.net_value)}</td>
-                  <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                    {formatCurrencyOrDash(r.amount_received_advance)}
+                  <td className="whitespace-nowrap px-2 py-2">
+                    <Money value={r.net_value} />
                   </td>
-                  <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                    {formatCurrencyOrDash(r.amount_received_customer)}
+                  <td className="whitespace-nowrap px-2 py-2">
+                    <Money value={r.amount_received_advance} />
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-2">
+                    <Money value={r.amount_received_customer} />
                   </td>
                   <td className="whitespace-nowrap px-2 py-2">
                     {uiStatus !== "RECEBIDO" || !r.received_at ? "—" : formatDateBr(r.received_at)}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatCurrencyOrDash(r.remaining)}</td>
+                  <td className="whitespace-nowrap px-2 py-2">
+                    <Money value={r.remaining} />
+                  </td>
                   <td className="px-2 py-2">
                     <span
                       className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${statusBadgeClass(uiStatus)}`}

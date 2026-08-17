@@ -956,10 +956,12 @@ function MassSettlementModal({
                         {formatDateBr(o.vencimento)}
                         {o.dias_em_atraso > 0 && <span className="ml-1 text-[10px] text-red-700">{o.dias_em_atraso}d</span>}
                       </td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{formatCurrencyOrDash(o.valor_residual)}</td>
+                      <td className="px-2 py-1.5">
+                        <Money value={o.valor_residual} />
+                      </td>
                       <td className="px-2 py-1.5 text-right">
                         {mode === "INTEGRAL" ? (
-                          <span className="tabular-nums text-slate-500">{formatCurrencyOrDash(o.valor_residual)}</span>
+                          <Money value={o.valor_residual} className="text-slate-500" />
                         ) : (
                           <div className="flex items-center justify-end gap-1">
                             <input
@@ -1170,7 +1172,9 @@ function SettlementEventsModal({
                             {m.nf_number || "—"}
                             {m.client_name ? <span className="ml-1 text-xs text-slate-500">· {m.client_name}</span> : ""}
                           </td>
-                          <td className="px-2 py-1.5 text-right tabular-nums">{formatCurrencyOrDash(m.amount)}</td>
+                          <td className="px-2 py-1.5">
+                            <Money value={m.amount} />
+                          </td>
                           <td className="px-2 py-1.5 text-slate-600">{m.funding_source_label}</td>
                           <td className="max-w-[220px] truncate px-2 py-1.5 text-slate-600" title={m.observation || undefined}>{m.observation || "—"}</td>
                         </tr>

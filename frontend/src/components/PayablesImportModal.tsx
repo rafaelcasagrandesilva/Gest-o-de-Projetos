@@ -21,6 +21,7 @@ import {
 } from "@/services/payables";
 import { formatApiError } from "@/utils/apiError";
 import { formatCurrencyOrDash } from "@/utils/currency";
+import { Money } from "@/components/Money";
 
 type Props = {
   open: boolean;
@@ -657,7 +658,7 @@ export function PayablesImportModal({ open, onClose, onImported }: Props) {
                       <th className="px-2 py-2">Centro de custo</th>
                       <th className="px-2 py-2">Nome</th>
                       <th className="px-2 py-2">Vencimento</th>
-                      <th className="px-2 py-2">Valor</th>
+                      <th className="px-2 py-2 text-right">Valor</th>
                       <th className="px-2 py-2">Categoria</th>
                       <th className="px-2 py-2">Mensagem</th>
                     </tr>
@@ -688,7 +689,9 @@ export function PayablesImportModal({ open, onClose, onImported }: Props) {
                               {row.name ?? "—"}
                             </td>
                             <td className="whitespace-nowrap px-2 py-1.5">{formatDateBr(row.due_date)}</td>
-                            <td className="whitespace-nowrap px-2 py-1.5 tabular-nums">{formatBRL(row.amount)}</td>
+                            <td className="whitespace-nowrap px-2 py-1.5">
+                              <Money value={row.amount} />
+                            </td>
                             <td className="max-w-[90px] truncate px-2 py-1.5">{row.category ?? "—"}</td>
                             <td
                               className="max-w-[160px] truncate px-2 py-1.5 text-slate-500"

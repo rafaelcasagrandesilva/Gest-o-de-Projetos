@@ -18,6 +18,7 @@ import { fetchAdvanceInstitutions, type AdvanceInstitution } from "@/services/ad
 import { formatApiError } from "@/utils/apiError";
 import { formatCurrencyField, formatCurrencyOrDash, normalizeCurrencyForApi } from "@/utils/currency";
 import type { AdvanceBasis } from "@/services/receivableAdvanceBatches";
+import { Money } from "@/components/Money";
 
 // Bases de antecipação (Bruto / Líquido / Líquido −10%). Compartilhadas por LEPTA e Daycoval:
 // definem o valor antecipado sugerido por NF (mesma regra do backend LeptaOperationHandler).
@@ -295,7 +296,9 @@ export function AdvanceBatchModal({
         </td>
         <td className="px-2 py-1.5 whitespace-nowrap">{formatDateBr(inv.issue_date)}</td>
         <td className="px-2 py-1.5 whitespace-nowrap">{formatDateBr(inv.due_date)}</td>
-        <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(inv.gross_amount)}</td>
+        <td className="px-2 py-1.5">
+          <Money value={inv.gross_amount} />
+        </td>
         <td className="px-2 py-1.5 text-xs">{inv.status}</td>
         {isLepta || isDaycoval ? (
           <td className="px-2 py-1.5">

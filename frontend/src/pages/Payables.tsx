@@ -29,6 +29,7 @@ import {
   payableCompetenceLabel,
   todayIsoLocal,
 } from "@/utils/payableCompetence";
+import { Money } from "@/components/Money";
 
 /** Centros fixos permitidos no manual — alinhado a `MANUAL_PAYABLE_FIXED_COST_CENTERS` no backend. */
 const PAYABLES_MANUAL_FIXED_COST_CENTERS = ["Administrativo", "Financeiro"] as const;
@@ -1076,8 +1077,8 @@ function PayablesSnapshotTable({
                   <td className="min-w-0 px-2 py-1.5 align-middle text-slate-700">
                     <TruncatedCell value={r.cost_center} maxWidthClass="max-w-[160px]" />
                   </td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-slate-700">
-                    {money(r.amount_original)}
+                  <td className="whitespace-nowrap px-2 py-1.5 text-slate-700">
+                    <Money value={r.amount_original} />
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right align-middle tabular-nums text-slate-900">
                     {isEditing ? (
@@ -1102,8 +1103,8 @@ function PayablesSnapshotTable({
                       money(r.amount_final)
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-slate-800">
-                    {money(r.amount_paid)}
+                  <td className="whitespace-nowrap px-2 py-1.5 text-slate-800">
+                    <Money value={r.amount_paid} />
                   </td>
                   <td
                     className={`whitespace-nowrap px-2 py-1.5 text-right tabular-nums font-medium ${saldoClassName(

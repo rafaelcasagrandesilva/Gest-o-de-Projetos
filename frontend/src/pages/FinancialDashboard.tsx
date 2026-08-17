@@ -26,6 +26,7 @@ import {
 import type { TooltipProps } from "recharts";
 import { CHART_COLORS, formatBRLAxis } from "@/utils/chartTheme";
 import { DashboardToolbar } from "@/components/dashboard/DashboardToolbar";
+import { Money } from "@/components/Money";
 
 const MONTH_SHORT_PT = [
   "Jan",
@@ -606,7 +607,9 @@ export function FinancialDashboard() {
                           <table className="min-w-[700px] w-full divide-y divide-slate-200 text-sm">
                             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                               <tr>
-                                <th className="px-3 py-2">
+                                {/* `w-full` no rótulo: a coluna de valor encolhe até o conteúdo
+                                    e o "R$" fica junto do número (mesmo padrão do Jurídico). */}
+                                <th className="w-full px-3 py-2">
                                   {breakdown.type === "custos" ? "Centro de custo" : "Projeto"}
                                 </th>
                                 <th className="px-3 py-2 text-right">Valor</th>
@@ -616,12 +619,16 @@ export function FinancialDashboard() {
                               {breakdown.groups.map((g) => (
                                 <tr key={g.label} className="hover:bg-slate-50/80">
                                   <td className="px-3 py-2 font-medium">{g.label}</td>
-                                  <td className="px-3 py-2 text-right tabular-nums">{formatBRL(Number(g.value ?? 0))}</td>
+                                  <td className="px-3 py-2">
+                                    <Money value={Number(g.value ?? 0)} />
+                                  </td>
                                 </tr>
                               ))}
                               <tr className="bg-slate-50">
                                 <td className="px-3 py-2 font-semibold">TOTAL</td>
-                                <td className="px-3 py-2 text-right font-semibold tabular-nums">{formatBRL(breakdown.total)}</td>
+                                <td className="px-3 py-2 font-semibold">
+                                  <Money value={breakdown.total} />
+                                </td>
                               </tr>
                             </tbody>
                           </table>
@@ -635,7 +642,7 @@ export function FinancialDashboard() {
                             <table className="min-w-[700px] w-full divide-y divide-slate-200 text-sm">
                               <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                                 <tr>
-                                  <th className="px-3 py-2">Projeto</th>
+                                  <th className="w-full px-3 py-2">Projeto</th>
                                   <th className="px-3 py-2 text-right">Valor</th>
                                 </tr>
                               </thead>
@@ -643,13 +650,15 @@ export function FinancialDashboard() {
                                 {(breakdown.received_groups ?? []).map((g) => (
                                   <tr key={g.label} className="hover:bg-slate-50/80">
                                     <td className="px-3 py-2 font-medium">{g.label}</td>
-                                    <td className="px-3 py-2 text-right tabular-nums">{formatBRL(Number(g.value ?? 0))}</td>
+                                    <td className="px-3 py-2">
+                                      <Money value={Number(g.value ?? 0)} />
+                                    </td>
                                   </tr>
                                 ))}
                                 <tr className="bg-slate-50">
                                   <td className="px-3 py-2 font-semibold">TOTAL RECEBIDO</td>
-                                  <td className="px-3 py-2 text-right font-semibold tabular-nums">
-                                    {formatBRL(Number(breakdown.received_total ?? 0))}
+                                  <td className="px-3 py-2 font-semibold">
+                                    <Money value={Number(breakdown.received_total ?? 0)} />
                                   </td>
                                 </tr>
                               </tbody>
@@ -663,7 +672,7 @@ export function FinancialDashboard() {
                             <table className="min-w-[700px] w-full divide-y divide-slate-200 text-sm">
                               <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                                 <tr>
-                                  <th className="px-3 py-2">Centro de custo</th>
+                                  <th className="w-full px-3 py-2">Centro de custo</th>
                                   <th className="px-3 py-2 text-right">Valor</th>
                                 </tr>
                               </thead>
@@ -671,13 +680,15 @@ export function FinancialDashboard() {
                                 {(breakdown.paid_groups ?? []).map((g) => (
                                   <tr key={g.label} className="hover:bg-slate-50/80">
                                     <td className="px-3 py-2 font-medium">{g.label}</td>
-                                    <td className="px-3 py-2 text-right tabular-nums">{formatBRL(Number(g.value ?? 0))}</td>
+                                    <td className="px-3 py-2">
+                                      <Money value={Number(g.value ?? 0)} />
+                                    </td>
                                   </tr>
                                 ))}
                                 <tr className="bg-slate-50">
                                   <td className="px-3 py-2 font-semibold">TOTAL PAGO</td>
-                                  <td className="px-3 py-2 text-right font-semibold tabular-nums">
-                                    {formatBRL(Number(breakdown.paid_total ?? 0))}
+                                  <td className="px-3 py-2 font-semibold">
+                                    <Money value={Number(breakdown.paid_total ?? 0)} />
                                   </td>
                                 </tr>
                               </tbody>

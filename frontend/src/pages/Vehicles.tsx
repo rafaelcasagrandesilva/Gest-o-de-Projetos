@@ -19,6 +19,7 @@ import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import { FLEET_VEHICLE_SORT_COLUMNS, defaultFleetVehicleSort } from "@/tableSort/vehicles";
 import { formatCurrencyOrDash, sumCurrencyOrNull } from "@/utils/currency";
+import { Money } from "@/components/Money";
 
 function monthStartIso(): string {
   const d = new Date();
@@ -596,7 +597,7 @@ export function Vehicles() {
                 {/* Centro de Custo: informação NÃO financeira — sempre visível. */}
                 <SortableTh label="Centro de Custo" column="cost_center" variant="standard" {...headerSort} />
                 {canSeeSensitive && (
-                  <SortableTh label="Custo mensal" column="monthly_cost" variant="standard" {...headerSort} />
+                  <SortableTh label="Custo mensal" column="monthly_cost" variant="standard" align="right" {...headerSort} />
                 )}
                 <SortableTh label="Condutor" column="driver" variant="standard" {...headerSort} />
                 <SortableTh label="Ativo" column="active" variant="standard" {...headerSort} />
@@ -615,7 +616,9 @@ export function Vehicles() {
                     <TruncatedCell value={v.cost_center || "—"} maxWidthClass="max-w-[220px]" />
                   </td>
                   {canSeeSensitive && (
-                    <td className="px-4 py-3 font-medium tabular-nums">{formatCurrency(v.monthly_cost)}</td>
+                    <td className="px-4 py-3 font-medium">
+                      <Money value={v.monthly_cost} />
+                    </td>
                   )}
                   <td className="min-w-0 max-w-[260px] px-4 py-3 align-middle">
                     <TruncatedText maxWidthClass="max-w-[260px]">

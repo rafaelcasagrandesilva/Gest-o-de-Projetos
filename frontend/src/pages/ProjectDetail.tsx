@@ -61,6 +61,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Money } from "@/components/Money";
 
 function monthStart(): string {
   const d = new Date();
@@ -1139,7 +1140,7 @@ function LaborTab({
         <table className="w-full min-w-[32rem] text-left text-sm">
           <thead className="border-b border-slate-200 bg-slate-50 text-xs font-medium uppercase text-slate-500">
             <tr>
-              <SortableTh label="Nome" column="name" variant="standard" {...headerSort} />
+              <SortableTh label="Nome" column="name" variant="standard" className="w-full" {...headerSort} />
               <SortableTh label="Tipo" column="type" variant="standard" {...headerSort} />
               <SortableTh label="%" column="percent" variant="standard" align="right" {...headerSort} />
               <SortableTh label="Custo proporcional" column="cost" variant="standard" align="right" {...headerSort} />
@@ -1182,7 +1183,9 @@ function LaborTab({
                       <td className="px-4 py-3 text-slate-600">{r.tipo}</td>
                       <td className="px-4 py-3 text-right tabular-nums">{r.allocation_percentage}%</td>
                       {/* Custo cheio no projeto = mão de obra alocada + avulsos (Componentes Variáveis). */}
-                      <td className="px-4 py-3 text-right tabular-nums">{money(r.total_cost)}</td>
+                      <td className="px-4 py-3">
+                        <Money value={r.total_cost} />
+                      </td>
                       <td className="px-4 py-3 text-right">
                         <button
                           type="button"
@@ -1712,10 +1715,11 @@ function VehiclesTab({
                             </span>
                           ) : null}
                         </td>
-                        <td className="px-4 py-3 font-medium tabular-nums">
-                          {money(r.monthly_cost)}
+                        <td className="px-4 py-3 font-medium">
+                          <Money value={r.monthly_cost} />
+                          {/* Custo por km é uma métrica derivada, não uma coluna — segue abaixo. */}
                           {!isPrevisto && r.fuel_cost_per_km_realized != null ? (
-                            <span className="mt-0.5 block text-xs font-normal text-slate-500 tabular-nums">
+                            <span className="mt-0.5 block text-right text-xs font-normal text-slate-500 tabular-nums">
                               ≈ {money(r.fuel_cost_per_km_realized)}/km
                             </span>
                           ) : null}
@@ -1852,7 +1856,7 @@ function SystemsTab({
         <table className="w-full min-w-[24rem] text-left text-sm">
           <thead className="border-b border-slate-100 bg-slate-50/80">
             <tr>
-              <SortableTh label="Nome" column="name" variant="standard" {...headerSort} />
+              <SortableTh label="Nome" column="name" variant="standard" className="w-full" {...headerSort} />
               <SortableTh label="Valor mensal" column="value" variant="standard" align="right" {...headerSort} />
               <th className="px-4 py-3 w-24" />
             </tr>
@@ -1868,7 +1872,9 @@ function SystemsTab({
               sortedRows.map((r) => (
                 <tr key={r.id} className="border-b border-slate-50 last:border-0">
                   <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-slate-700">{formatCurrency(r.value)}</td>
+                  <td className="px-4 py-3 text-slate-700">
+                    <Money value={r.value} />
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <button
                       type="button"
@@ -1982,7 +1988,7 @@ function FixedTab({
         <table className="w-full min-w-[24rem] text-left text-sm">
           <thead className="border-b border-slate-100 bg-slate-50/80">
             <tr>
-              <SortableTh label="Nome" column="name" variant="standard" {...headerSort} />
+              <SortableTh label="Nome" column="name" variant="standard" className="w-full" {...headerSort} />
               <SortableTh label="Valor mensal" column="value" variant="standard" align="right" {...headerSort} />
               <th className="px-4 py-3 w-24" />
             </tr>
@@ -1998,7 +2004,9 @@ function FixedTab({
               sortedRows.map((r) => (
                 <tr key={r.id} className="border-b border-slate-50 last:border-0">
                   <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-slate-700">{formatCurrency(r.value)}</td>
+                  <td className="px-4 py-3 text-slate-700">
+                    <Money value={r.value} />
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <button
                       type="button"

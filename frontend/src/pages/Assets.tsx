@@ -4,7 +4,7 @@ import { AssetExpirationBadge } from "@/components/assets/AssetExpirationBadge";
 import { AssetPhysicalConditionBadge } from "@/components/assets/AssetPhysicalConditionBadge";
 import { AssetStatusBadge } from "@/components/assets/AssetStatusBadge";
 import { AssetMoneyInput } from "@/components/assets/AssetMoneyInput";
-import { ASSET_STATUS_LABELS, formatBRL, parseBRLInput } from "@/components/assets/assetLabels";
+import { ASSET_STATUS_LABELS, parseBRLInput } from "@/components/assets/assetLabels";
 import { AssetSizeField } from "@/components/assets/AssetSizeField";
 import { EPI_MACRO_CATEGORY, PATRIMONIAL_MACRO_CATEGORIES } from "@/components/assets/assetCategories";
 import { assetSupportsSize, formatAssetCategoryLine, SIZE_SUGGESTIONS } from "@/components/assets/assetSize";
@@ -28,6 +28,7 @@ import { listCostCenterRefs, costCenterRefsAsProjects } from "@/services/costCen
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import { ASSET_SORT_COLUMNS, defaultAssetSort } from "@/tableSort/assets";
+import { Money } from "@/components/Money";
 
 const STATUS_OPTIONS: { value: AssetStatus | ""; label: string }[] = [
   { value: "", label: "Todos os status" },
@@ -413,7 +414,7 @@ export function Assets({ variant = "patrimonial" }: AssetsPageProps) {
                   <td className="px-4 py-3">{row.cost_center_label ?? "—"}</td>
                   {showValueColumn ? (
                     <td className="px-4 py-3 text-slate-700">
-                      {row.purchase_value != null ? formatBRL(row.purchase_value) : "—"}
+                      <Money value={row.purchase_value} />
                     </td>
                   ) : null}
                   <td className="px-4 py-3">

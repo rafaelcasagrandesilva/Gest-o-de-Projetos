@@ -28,6 +28,7 @@ import {
   formatCurrencyOrDash,
   normalizeCurrencyForApi,
 } from "@/utils/currency";
+import { Money } from "@/components/Money";
 
 function formatAxiosDetail(e: unknown): string {
   if (!isAxiosError(e)) return "Erro inesperado.";
@@ -868,10 +869,14 @@ export function Invoices() {
                       <td className="whitespace-nowrap px-2 py-2 tabular-nums">{formatCompetenceBr(row.competence_month)}</td>
                       <td className="whitespace-nowrap px-2 py-2">{row.due_days} d</td>
                       <td className="whitespace-nowrap px-2 py-2">{formatDateBr(row.due_date)}</td>
-                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatCurrencyOrDash(row.gross_amount)}</td>
-                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{formatCurrencyOrDash(row.net_amount)}</td>
-                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                        {formatCurrencyOrDash(row.received_amount)}
+                      <td className="whitespace-nowrap px-2 py-2">
+                        <Money value={row.gross_amount} />
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-2">
+                        <Money value={row.net_amount} />
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-2">
+                        <Money value={row.received_amount} />
                       </td>
                       <td className="px-2 py-2">
                         <span
@@ -1156,11 +1161,11 @@ export function Invoices() {
                                                 {batchStatusLabel(op.status)}
                                               </span>
                                             </td>
-                                            <td className="px-3 py-2 text-right tabular-nums">
-                                              {formatCurrencyOrDash(op.advanced_amount)}
+                                            <td className="px-3 py-2">
+                                              <Money value={op.advanced_amount} />
                                             </td>
-                                            <td className="px-3 py-2 text-right tabular-nums">
-                                              {formatCurrencyOrDash(op.received_amount)}
+                                            <td className="px-3 py-2">
+                                              <Money value={op.received_amount} />
                                             </td>
                                           </tr>
                                         ))}

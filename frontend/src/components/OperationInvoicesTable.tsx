@@ -1,9 +1,6 @@
 import { useMemo } from "react";
 import type { AdvanceBatchItem } from "@/services/receivableAdvanceBatches";
-import { formatCurrencyOrDash } from "@/utils/currency";
-
-/** Fonte única (utils/currency): valor redigido → "—". */
-const formatBRL = formatCurrencyOrDash;
+import { Money } from "@/components/Money";
 
 function formatDateBr(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -145,10 +142,16 @@ export function OperationInvoicesTable({
                 <td className="max-w-[140px] truncate px-2 py-1.5">{it.project_name ?? "—"}</td>
                 <td className="max-w-[140px] truncate px-2 py-1.5">{it.client_name ?? "—"}</td>
                 <td className="px-2 py-1.5 tabular-nums">{formatCompetence(it.competence_month)}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(it.gross_amount)}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(it.net_amount)}</td>
+                <td className="px-2 py-1.5">
+                  <Money value={it.gross_amount} />
+                </td>
+                <td className="px-2 py-1.5">
+                  <Money value={it.net_amount} />
+                </td>
                 <td className="px-2 py-1.5">{it.advance_basis ? (BASIS_LABELS[it.advance_basis] ?? it.advance_basis) : "—"}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(it.advanced_amount)}</td>
+                <td className="px-2 py-1.5">
+                  <Money value={it.advanced_amount} />
+                </td>
                 <td className="whitespace-nowrap px-2 py-1.5">{formatDateBr(it.due_date)}</td>
                 <td className="px-2 py-1.5">
                   <span

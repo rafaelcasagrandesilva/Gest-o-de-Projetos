@@ -1,5 +1,6 @@
 import type { ScenarioKind } from "@/context/ScenarioContext";
 import type { ProjectBreakdownRow } from "@/services/dashboard";
+import { Money } from "@/components/Money";
 import { formatCurrencyOrDash } from "@/utils/currency";
 import {
   Bar,
@@ -85,29 +86,51 @@ function buildShareRows(
   }));
 }
 
-function RevenueShareLegend({ rows }: { rows: ShareRow[] }) {
+/**
+ * Legenda em TABELA: projeto · valor · participação, cada um em sua coluna.
+ *
+ * Antes o valor e o percentual vinham num único bloco de texto ("R$ 630.000,00 · 81.2%"), então
+ * a posição de tudo dependia do comprimento do nome e do número — cada linha caía num lugar.
+ * Em colunas, o `R$` forma uma coluna, os números alinham pela direita e o `%` idem. A coluna do
+ * nome leva `w-full` para absorver a folga e manter as de número junto ao seu conteúdo.
+ */
+function ShareLegend({
+  rows,
+  ariaLabel,
+  dense = false,
+}: {
+  rows: ShareRow[];
+  ariaLabel: string;
+  /** Rodapé do gráfico de barras: fonte menor que a legenda do donut. */
+  dense?: boolean;
+}) {
   return (
-    <ul
-      className="flex w-full flex-col gap-2.5 text-sm text-slate-800 md:max-w-[min(100%,20rem)]"
-      role="list"
-      aria-label="Faturamento por projeto — valor e participação"
-    >
-      {rows.map((row) => (
-        <li key={row.projectId} className="flex items-baseline gap-3" role="listitem">
-          <span
-            className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-slate-200/80"
-            style={{ backgroundColor: row.color }}
-            aria-hidden
-          />
-          <span className="min-w-0">
-            <span className="block truncate font-medium text-slate-900">{row.name}</span>
-            <span className="tabular-nums text-slate-600">
-              {formatCurrency(row.value)} · {(row.share * 100).toFixed(1)}%
-            </span>
-          </span>
-        </li>
-      ))}
-    </ul>
+    <table className={`w-full ${dense ? "text-xs" : "text-sm"}`} aria-label={ariaLabel}>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.projectId} className="border-t border-slate-100 first:border-t-0">
+            <td className="w-full py-1.5 pr-3">
+              <span className="flex min-w-0 items-center gap-2">
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-slate-200/80"
+                  style={{ backgroundColor: row.color }}
+                  aria-hidden
+                />
+                <span className="truncate font-medium text-slate-900" title={row.name}>
+                  {row.name}
+                </span>
+              </span>
+            </td>
+            <td className="py-1.5 pl-3 whitespace-nowrap text-slate-600">
+              <Money value={row.value} />
+            </td>
+            <td className="py-1.5 pl-3 text-right tabular-nums whitespace-nowrap text-slate-500">
+              {(row.share * 100).toFixed(1)}%
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -218,7 +241,12 @@ export function FinancialDashboardCharts({
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <RevenueShareLegend rows={revenueRows} />
+            <div className="w-full min-w-0 md:max-w-[min(100%,22rem)]">
+              <ShareLegend
+                rows={revenueRows}
+                ariaLabel="Faturamento por projeto — valor e participação"
+              />
+            </div>
           </div>
         )}
       </div>
@@ -261,23 +289,13 @@ export function FinancialDashboardCharts({
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-            <ul className="mt-3 flex flex-col gap-1.5 border-t border-slate-100 pt-3 text-xs text-slate-700" role="list">
-              {costRows.map((row) => (
-                <li key={row.projectId} className="flex items-baseline justify-between gap-3" role="listitem">
-                  <span className="inline-flex min-w-0 items-center gap-2">
-                    <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-sm ring-1 ring-slate-200/80"
-                      style={{ backgroundColor: row.color }}
-                      aria-hidden
-                    />
-                    <span className="truncate">{row.name}</span>
-                  </span>
-                  <span className="shrink-0 tabular-nums text-slate-900">
-                    {formatCurrency(row.value)} · {(row.share * 100).toFixed(1)}%
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <div className="mt-3 border-t border-slate-100 pt-3">
+              <ShareLegend
+                rows={costRows}
+                ariaLabel="Custos operacionais por projeto — valor e participação"
+                dense
+              />
+            </div>
           </div>
         )}
       </div>
