@@ -14,20 +14,25 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 
 // Fase 1: visibilidade por PERMISSÃO (espelha app/modules/reports/router._REPORT_TYPE_VIEW_PERMISSION),
 // nunca por perfil. `perm` ausente = sem exigência de módulo (basta reports.view do próprio menu).
+//
+// Os códigos aqui são os MESMOS do mapa do backend — por verbo (`invoices.read`), não os legados
+// (`invoices.view`). Perfis criados no modelo por verbos (ex.: FINANCEIRO) não têm nenhum `.view`:
+// gatear por eles escondia da tela relatórios que o backend autorizava. Quem tem o código legado
+// continua vendo tudo, porque `.view` implica `.read` no grafo de permissões.
 type ReportDef = { id: ReportType; label: string; perm?: string };
 
 const REPORT_GROUPS: { label: string; reports: ReportDef[] }[] = [
   {
     label: "Financeiro",
     reports: [
-      { id: "payables_detailed", label: "Contas a pagar — detalhado", perm: "payables.view" },
-      { id: "receivables_detailed", label: "Contas a receber — detalhado", perm: "receivables.view" },
-      { id: "invoices_detailed", label: "Notas fiscais — detalhado", perm: "invoices.view" },
-      { id: "invoices", label: "Notas fiscais — resumo (legado)", perm: "invoices.view" },
-      { id: "antecipacoes", label: "Antecipações — Operações e Liquidações", perm: "invoices.view" },
-      { id: "debt", label: "Endividamento — matriz mensal", perm: "debts.view" },
-      { id: "fixed_costs", label: "Custos fixos (empresa) — matriz mensal", perm: "company_finance.view" },
-      { id: "revenues", label: "Receitas lançadas (faturamento)", perm: "billing.view" },
+      { id: "payables_detailed", label: "Contas a pagar — detalhado", perm: "payables.read" },
+      { id: "receivables_detailed", label: "Contas a receber — detalhado", perm: "receivables.read" },
+      { id: "invoices_detailed", label: "Notas fiscais — detalhado", perm: "invoices.read" },
+      { id: "invoices", label: "Notas fiscais — resumo (legado)", perm: "invoices.read" },
+      { id: "antecipacoes", label: "Antecipações — Operações e Liquidações", perm: "invoices.read" },
+      { id: "debt", label: "Endividamento — matriz mensal", perm: "debts.read" },
+      { id: "fixed_costs", label: "Custos fixos (empresa) — matriz mensal", perm: "company_finance.read" },
+      { id: "revenues", label: "Receitas lançadas (faturamento)", perm: "billing.read" },
     ],
   },
   {
@@ -35,16 +40,16 @@ const REPORT_GROUPS: { label: string; reports: ReportDef[] }[] = [
     reports: [
       { id: "project_summary", label: "Projeto — resumo financeiro e custos" },
       { id: "company_summary", label: "Empresa — resumo financeiro por projeto" },
-      { id: "dashboard", label: "Dashboard — série mensal receita/custos/margem", perm: "dashboard.view" },
+      { id: "dashboard", label: "Dashboard — série mensal receita/custos/margem", perm: "dashboard.read" },
     ],
   },
   {
     label: "Patrimônio",
     reports: [
-      { id: "assets_inventory", label: "Inventário patrimonial", perm: "assets.view" },
-      { id: "assets_in_use", label: "Ativos em uso", perm: "assets.view" },
-      { id: "assets_inspections", label: "Inspeções e vencimentos", perm: "assets.view" },
-      { id: "assets_movements", label: "Movimentações patrimoniais", perm: "assets.view" },
+      { id: "assets_inventory", label: "Inventário patrimonial", perm: "assets.read" },
+      { id: "assets_in_use", label: "Ativos em uso", perm: "assets.read" },
+      { id: "assets_inspections", label: "Inspeções e vencimentos", perm: "assets.read" },
+      { id: "assets_movements", label: "Movimentações patrimoniais", perm: "assets.read" },
     ],
   },
   {
