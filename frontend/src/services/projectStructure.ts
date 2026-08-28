@@ -183,6 +183,8 @@ export interface CategoryCopyResult {
   category: CostCategory;
   label: string;
   copied: number;
+  /** Nomes do que ficou de fora da cópia. Vazio no caminho normal — a cópia é exata. */
+  skipped?: string[];
 }
 
 export interface InitializeCompetenciaResult {
@@ -206,6 +208,55 @@ export async function initializeCompetencia(
 
 export async function deleteLabor(projectId: string, laborId: string): Promise<void> {
   await api.delete(`/projects/${projectId}/structure/labors/${laborId}/`);
+}
+
+export interface BulkDeleteResult {
+  total: number;
+  excluidos: number;
+  /** Itens com pagamento já lançado no CAP — excluir deixa o título órfão. */
+  com_pagamento: string[];
+}
+
+/**
+ * Exclui vários itens de uma aba de uma vez. Com `confirm: false` o backend só RELATA o
+ * que aconteceria — é assim que a tela avisa antes de destruir.
+ */
+export async function bulkDeleteStructureItems(
+  projectId: string,
+  category: CostCategory,
+  ids: string[],
+  confirm: boolean,
+): Promise<BulkDeleteResult> {
+  const { data } = await api.post<BulkDeleteResult>(
+    `/projects/${projectId}/structure/bulk-delete`,
+    { category, ids, confirm },
+  );
+  return data;
+}
+
+/** Edição de Sistemas e Custos diversos (o backend já expunha PATCH; faltava a tela). */
+export async function updateSystem(
+  projectId: string,
+  systemId: string,
+  body: { name?: string; value?: number },
+): Promise<ProjectSystemCost> {
+  const { data } = await api.patch<ProjectSystemCost>(
+    `/projects/${projectId}/structure/systems/${systemId}`,
+    body,
+  );
+  return data;
+}
+
+export async function updateFixedOperational(
+  projectId: string,
+  fixedId: string,
+  body: { name?: string; value?: number },
+): Promise<ProjectOperationalFixed> {
+  const { data } = await api.patch<ProjectOperationalFixed>(
+    `/projects/${projectId}/structure/fixed-operational/${fixedId}`,
+    body,
+  );
+  return data;
 }
 
 export async function updateLaborCosts(

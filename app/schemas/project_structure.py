@@ -85,10 +85,29 @@ class InitializeCompetenciaBody(BaseModel):
         return out
 
 
+class BulkDeleteBody(BaseModel):
+    # labor | vehicles | systems | misc — as mesmas 4 abas da Inicializar Competência.
+    category: str
+    ids: list[UUID]
+    # Duas fases: sem confirmar, o backend só RELATA o que aconteceria (quantos itens e
+    # quais têm pagamento no CAP) para a tela avisar antes de destruir.
+    confirm: bool = False
+
+
+class BulkDeleteResult(BaseModel):
+    total: int
+    excluidos: int
+    # Itens cujo título do Contas a Pagar já tem pagamento: excluí-los deixa o título órfão
+    # (o pagamento é preservado, mas vira resíduo "Origem removida").
+    com_pagamento: list[str] = []
+
+
 class CategoryCopyResultRead(BaseModel):
     category: str  # labor | vehicles | systems | misc
     label: str  # rótulo plural (ex.: "colaboradores")
     copied: int
+    # Nomes do que ficou de fora da cópia (deve ser vazio: a cópia é exata por contrato).
+    skipped: list[str] = []
 
 
 class InitializeCompetenciaResult(BaseModel):

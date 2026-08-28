@@ -5,6 +5,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -613,6 +614,126 @@ class ProjectStructureService:
                     deleted_employee_id,
                     deleted_competencia,
                 )
+
+    # --- Exclusão em massa (as 4 abas) -------------------------------------
+
+    # Cada aba: (repositório, método de exclusão unitária, nome do parâmetro do id).
+    # Delegar à exclusão unitária mantém auditoria e reconciliação do CAP idênticas ao
+    # fluxo de sempre — a ação em massa é só o laço, nunca um caminho paralelo.
+    _BULK_CATEGORIES = {
+        "labor": ("labors", "delete_labor", "labor_id"),
+        "vehicles": ("vehicles", "delete_project_vehicle", "allocation_id"),
+        "systems": ("systems", "delete_system", "system_id"),
+        "misc": ("fixed", "delete_fixed", "fixed_id"),
+    }
+
+    async def delete_items_bulk(
+        self,
+        *,
+        project_id: UUID,
+        category: str,
+        ids: list[UUID],
+        confirm: bool,
+        actor: User | None = None,
+        request: Request | None = None,
+    ) -> dict:
+        """Exclui N itens da mesma aba e competência de uma vez.
+
+        Duas fases para a tela poder AVISAR antes de destruir: com `confirm=False` apenas
+        relata o que aconteceria.
+
+        O alerta que importa: excluir um item cujo título do CAP já tem PAGAMENTO deixa o
+        título órfão (o pagamento é preservado — a reconciliação nunca apaga linha paga —,
+        mas passa a aparecer como resíduo "Origem removida"). Quem decide se vale a pena é o
+        usuário, e para isso precisa saber o número ANTES.
+        """
+        cfg = self._BULK_CATEGORIES.get(category)
+        if cfg is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Categoria inválida."
+            )
+        if not ids:
+            return {"total": 0, "excluidos": 0, "com_pagamento": []}
+
+        repo_attr, delete_method, id_kwarg = cfg
+        repo = getattr(self, repo_attr)
+
+        rows = []
+        for item_id in ids:
+            row = await repo.get(item_id)
+            if not row or row.project_id != project_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Um dos itens não pertence a este projeto (atualize a tela).",
+                )
+            rows.append(row)
+
+        if len({normalize_competencia(r.competencia) for r in rows}) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A exclusão em massa atua em uma única competência por vez.",
+            )
+
+        com_pagamento = await self._bulk_items_with_paid_payables(category, rows)
+
+        if not confirm:
+            return {"total": len(rows), "excluidos": 0, "com_pagamento": com_pagamento}
+
+        excluidos = 0
+        for row in rows:
+            fn = getattr(self, delete_method)
+            kwargs = {id_kwarg: row.id}
+            # Só a exclusão de mão de obra registra auditoria com ator/request.
+            if delete_method == "delete_labor":
+                kwargs |= {"actor": actor, "request": request}
+            await fn(**kwargs)
+            excluidos += 1
+        return {"total": len(rows), "excluidos": excluidos, "com_pagamento": com_pagamento}
+
+    async def _bulk_items_with_paid_payables(self, category: str, rows: list) -> list[str]:
+        """Rótulos dos itens cujo título no CAP já tem pagamento ativo.
+
+        Veículos não geram título no Contas a Pagar — nunca há aviso ali.
+        """
+        from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
+
+        if category == "vehicles":
+            return []
+
+        rotulos: list[str] = []
+        for row in rows:
+            if coerce_scenario(row.scenario) is not Scenario.REALIZADO:
+                continue
+            comp = normalize_competencia(row.competencia)
+            if category == "labor":
+                # CAP do mês M paga a folha da competência M-1.
+                mes, ref_id = next_competencia(comp), row.employee_id
+                snap_type = PayableSnapshotType.COLLABORATOR
+            else:
+                # Sistemas e Custos diversos: título na PRÓPRIA competência, ref = a linha.
+                mes, ref_id = comp, row.id
+                snap_type = PayableSnapshotType.FIXED_COST
+            existe = (
+                await self.session.execute(
+                    select(PayableSnapshot.id)
+                    .where(
+                        PayableSnapshot.type == snap_type,
+                        PayableSnapshot.ref_id == ref_id,
+                        PayableSnapshot.project_id == row.project_id,
+                        PayableSnapshot.month == mes,
+                        PayableSnapshot.amount_paid > 0,
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if existe is None:
+                continue
+            if category == "labor":
+                emp = await self.employees.get(row.employee_id)
+                rotulos.append(str(getattr(emp, "full_name", None) or row.employee_id))
+            else:
+                rotulos.append(str(getattr(row, "name", None) or row.id))
+        return rotulos
 
     # --- Vehicle (alocação frota → projeto) ---
 

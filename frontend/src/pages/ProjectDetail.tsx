@@ -16,6 +16,8 @@ import {
   deleteFixedOperational,
   deleteLabor,
   deleteSystem,
+  updateSystem,
+  updateFixedOperational,
   deleteVehicle,
   fetchLaborDetails,
   listFixedOperational,
@@ -32,6 +34,13 @@ import {
 import { InitializeCompetenciaModal } from "@/components/project/InitializeCompetenciaModal";
 import { Toast } from "@/components/Toast";
 import {
+  BulkActionBar,
+  BulkDeleteDialog,
+  BulkHeaderCheckbox,
+  BulkRowCheckbox,
+  useBulkSelection,
+} from "@/components/project/useBulkSelection";
+import {
   getMonthlyPayroll,
   listEmployees,
   saveMonthlyPayroll,
@@ -39,6 +48,7 @@ import {
 } from "@/services/employees";
 import { usePermission } from "@/hooks/usePermission";
 import { formatCurrencyOrDash, sumCurrencyOrNull } from "@/utils/currency";
+import { shortPersonNames } from "@/utils/personName";
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
 import {
@@ -88,7 +98,9 @@ const LABOR_BAR_MAX = "#1d4ed8";
 
 type LaborChartRow = {
   key: string;
+  /** Rótulo curto do eixo ("Rafael C.") — nome completo fica em `fullName`. */
   name: string;
+  fullName: string;
   cost: number | null;
   pctOfTotal: number;
   isMax: boolean;
@@ -105,7 +117,8 @@ function LaborShareTooltip({
   const p = payload[0].payload;
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-md">
-      <p className="font-medium text-slate-900">{p.name}</p>
+      {/* Nome COMPLETO aqui: o eixo é abreviado, o tooltip não. */}
+      <p className="font-medium text-slate-900">{p.fullName}</p>
       <p className="tabular-nums text-slate-700">{money(p.cost)}</p>
       <p className="text-slate-600">{(p.pctOfTotal * 100).toFixed(1)}% do total</p>
     </div>
@@ -833,7 +846,11 @@ export function ProjectDetail() {
 
       <Toast
         open={!!initResult}
-        title="Competência inicializada com sucesso."
+        title={
+          (initResult?.results ?? []).some((r) => (r.skipped?.length ?? 0) > 0)
+            ? "Competência inicializada — com pendências."
+            : "Competência inicializada com sucesso."
+        }
         onClose={() => setInitResult(null)}
       >
         <ul className="space-y-1">
@@ -847,6 +864,18 @@ export function ProjectDetail() {
               </span>
             </li>
           ))}
+          {/* Nada pode sair da cópia em silêncio: era o sucesso mudo que escondia a perda. */}
+          {(initResult?.results ?? [])
+            .filter((r) => (r.skipped?.length ?? 0) > 0)
+            .map((r) => (
+              <li key={`skip-${r.category}`} className="flex items-start gap-2 text-amber-700">
+                <span aria-hidden>⚠</span>
+                <span>
+                  Não copiado ({r.label}): {r.skipped!.join(", ")}. Verifique o percentual de
+                  alocação ou marque a alocação como “Remuneração independente”.
+                </span>
+              </li>
+            ))}
         </ul>
       </Toast>
     </div>
@@ -877,11 +906,25 @@ function LaborTab({
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
+
   const linkedIds = useMemo(() => new Set(rows.map((r) => r.employee_id)), [rows]);
 
   const { sortedRows, headerSort } = useTableSort(rows, PROJECT_LABOR_SORT_COLUMNS, {
     defaultCompare: defaultProjectLaborSort,
   });
+
+  const bulk = useBulkSelection({
+    projectId,
+    category: "labor",
+    rows: sortedRows,
+    getId: (r) => r.labor_id,
+    resetKey: `${competencia}|${editScenario}`,
+    onDone: () => {
+      setOpenDetailId(null);
+      onRefresh();
+    },
+  });
+
   const availableEmployees = useMemo(
     () => employeeOptions.filter((e) => !linkedIds.has(e.id)),
     [employeeOptions, linkedIds],
@@ -928,9 +971,13 @@ function LaborTab({
     const sorted = [...rows].sort((a, b) => (b.total_cost ?? 0) - (a.total_cost ?? 0));
     const totalMaoDeObra = sumCurrencyOrNull(sorted.map((r) => r.total_cost));
     const maxCost = sorted.length ? sorted[0].total_cost ?? 0 : 0;
-    const chartData: LaborChartRow[] = sorted.map((r) => ({
+    // Rótulos curtos calculados sobre a LISTA (e não um a um) para desfazer empates:
+    // dois "Luiz C." no mesmo gráfico seriam pior que o nome comprido.
+    const rotulos = shortPersonNames(sorted.map((r) => r.name));
+    const chartData: LaborChartRow[] = sorted.map((r, i) => ({
       key: r.labor_id,
-      name: r.name.length > 42 ? `${r.name.slice(0, 39)}…` : r.name,
+      name: rotulos[i],
+      fullName: r.name,
       cost: r.total_cost,
       pctOfTotal:
         totalMaoDeObra != null && totalMaoDeObra > 0 && r.total_cost != null
@@ -1116,7 +1163,8 @@ function LaborTab({
                     }
                     className="text-xs"
                   />
-                  <YAxis type="category" dataKey="name" width={132} tick={{ fontSize: 11 }} interval={0} />
+                  {/* Rótulo curto cabe em uma linha só — some a sobreposição entre vizinhos. */}
+                  <YAxis type="category" dataKey="name" width={104} tick={{ fontSize: 11 }} interval={0} />
                   <Tooltip content={<LaborShareTooltip />} cursor={{ fill: "rgba(148, 163, 184, 0.12)" }} />
                   <Bar dataKey="cost" radius={[0, 4, 4, 0]} maxBarSize={32}>
                     {laborShare.chartData.map((entry) => (
@@ -1136,10 +1184,18 @@ function LaborTab({
         ) : null}
       </div>
 
+      <BulkActionBar
+        bulk={bulk}
+        noun="colaborador"
+        nounPlural="colaboradores"
+        disabled={structureReadOnly}
+      />
+
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full min-w-[32rem] text-left text-sm">
           <thead className="border-b border-slate-200 bg-slate-50 text-xs font-medium uppercase text-slate-500">
             <tr>
+              <BulkHeaderCheckbox bulk={bulk} disabled={structureReadOnly} />
               <SortableTh label="Nome" column="name" variant="standard" className="w-full" {...headerSort} />
               <SortableTh label="Tipo" column="type" variant="standard" {...headerSort} />
               <SortableTh label="%" column="percent" variant="standard" align="right" {...headerSort} />
@@ -1150,7 +1206,7 @@ function LaborTab({
           <tbody>
             {sortedRows.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
                   Nenhum colaborador vinculado nesta competência.
                 </td>
               </tr>
@@ -1160,7 +1216,17 @@ function LaborTab({
                 const b = r.breakdown;
                 return (
                   <Fragment key={r.labor_id}>
-                    <tr className="border-b border-slate-100">
+                    <tr
+                      className={`border-b border-slate-100 ${
+                        bulk.selectedIds.has(r.labor_id) ? "bg-indigo-50/60" : ""
+                      }`}
+                    >
+                      <BulkRowCheckbox
+                        bulk={bulk}
+                        id={r.labor_id}
+                        label={r.name}
+                        disabled={structureReadOnly}
+                      />
                       <td className="px-4 py-3 font-medium text-slate-900">
                         <span className="align-middle">{r.name}</span>
                         <span
@@ -1198,7 +1264,7 @@ function LaborTab({
                     </tr>
                     {open && (
                       <tr className="border-b border-slate-100 bg-slate-50/80">
-                        <td colSpan={5} className="px-4 py-3 text-xs text-slate-700">
+                        <td colSpan={6} className="px-4 py-3 text-xs text-slate-700">
                           <dl className="mb-3 grid gap-2 border-b border-slate-200 pb-3 sm:grid-cols-3">
                             <div>
                               <dt className="text-slate-500">Alocação</dt>
@@ -1302,6 +1368,8 @@ function LaborTab({
           </tbody>
         </table>
       </div>
+
+      <BulkDeleteDialog bulk={bulk} noun="colaborador" nounPlural="colaboradores" />
     </div>
   );
 }
@@ -1335,6 +1403,8 @@ function VehiclesTab({
   const [editKm, setEditKm] = useState("");
   const [editFt, setEditFt] = useState<"ETHANOL" | "GASOLINE" | "DIESEL">("GASOLINE");
   const [editFuelRealized, setEditFuelRealized] = useState("");
+  // Falha de validação do combustível precisa ser VISÍVEL: antes o save só dava `return`.
+  const [vehicleError, setVehicleError] = useState<string | null>(null);
   const [editVid, setEditVid] = useState("");
 
   useEffect(() => {
@@ -1371,6 +1441,18 @@ function VehiclesTab({
     defaultCompare: defaultProjectVehicleSort,
   });
 
+  const bulk = useBulkSelection({
+    projectId,
+    category: "vehicles",
+    rows: sortedRows,
+    getId: (r) => r.id,
+    resetKey: `${competencia}|${editScenario}`,
+    onDone: () => {
+      setEditingId(null);
+      onRefresh();
+    },
+  });
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (structureReadOnly) return;
@@ -1385,8 +1467,16 @@ function VehiclesTab({
         scenario: editScenario,
       });
     } else {
+      if (fuelRealized.trim() === "") {
+        setVehicleError("Informe o valor real de combustível (R$).");
+        return;
+      }
       const v = Number(fuelRealized);
-      if (Number.isNaN(v) || v < 0) return;
+      if (!Number.isFinite(v) || v < 0) {
+        setVehicleError("Valor de combustível inválido.");
+        return;
+      }
+      setVehicleError(null);
       await createVehicle(projectId, {
         competencia,
         vehicle_id: fleetVid,
@@ -1401,6 +1491,7 @@ function VehiclesTab({
   }
 
   function startEdit(r: ProjectVehicle) {
+    setVehicleError(null);
     setEditingId(r.id);
     setEditKm(r.km_per_month != null ? String(r.km_per_month) : "");
     setEditFt((r.fuel_type as typeof editFt) || "GASOLINE");
@@ -1419,8 +1510,18 @@ function VehiclesTab({
         km_per_month: Number(editKm),
       });
     } else {
+      // `Number("")` é 0, não NaN: sem o teste de vazio, um campo em branco (ou um valor que
+      // o input type=number recusa, como "1.234,56") era salvo como R$ 0,00 sem aviso nenhum.
+      if (editFuelRealized.trim() === "") {
+        setVehicleError("Informe o valor real de combustível (R$).");
+        return;
+      }
       const v = Number(editFuelRealized);
-      if (Number.isNaN(v) || v < 0) return;
+      if (!Number.isFinite(v) || v < 0) {
+        setVehicleError("Valor de combustível inválido.");
+        return;
+      }
+      setVehicleError(null);
       await updateProjectVehicleAllocation(projectId, editingId, {
         vehicle_id: editVid,
         fuel_cost_realized: v,
@@ -1581,10 +1682,13 @@ function VehiclesTab({
         </div>
       </div>
 
+      <BulkActionBar bulk={bulk} noun="veículo" nounPlural="veículos" disabled={structureReadOnly} />
+
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="border-b border-slate-100 bg-slate-50/80">
             <tr>
+              <BulkHeaderCheckbox bulk={bulk} disabled={structureReadOnly} />
               <SortableTh label="Placa" column="plate" variant="standard" {...headerSort} />
               <SortableTh label="Modelo" column="model" variant="standard" {...headerSort} />
               <SortableTh label="Condutor" column="driver" variant="standard" {...headerSort} />
@@ -1597,7 +1701,7 @@ function VehiclesTab({
           <tbody>
             {sortedRows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={8} className="px-4 py-6 text-center text-slate-500">
                   Nenhum veículo nesta competência.
                 </td>
               </tr>
@@ -1612,6 +1716,7 @@ function VehiclesTab({
                   <Fragment key={r.id}>
                     {editingId === r.id ? (
                       <tr className="border-b border-slate-50 bg-amber-50/40">
+                        <td className="px-4 py-3" />
                         <td className="px-4 py-3 align-top" colSpan={3}>
                           <label className="text-xs text-slate-500">Veículo</label>
                           <select
@@ -1681,6 +1786,9 @@ function VehiclesTab({
                         <td className="px-4 py-3 text-slate-400">—</td>
                         <td className="px-4 py-3 align-top text-right">
                           <div className="flex flex-col gap-1">
+                          {vehicleError ? (
+                            <span className="text-xs text-rose-600">{vehicleError}</span>
+                          ) : null}
                           <button
                             type="button"
                             disabled={structureReadOnly}
@@ -1700,7 +1808,17 @@ function VehiclesTab({
                         </td>
                       </tr>
                     ) : (
-                      <tr className="border-b border-slate-50">
+                      <tr
+                        className={`border-b border-slate-50 ${
+                          bulk.selectedIds.has(r.id) ? "bg-indigo-50/60" : ""
+                        }`}
+                      >
+                        <BulkRowCheckbox
+                          bulk={bulk}
+                          id={r.id}
+                          label={r.plate}
+                          disabled={structureReadOnly}
+                        />
                         <td className="px-4 py-3 font-medium tabular-nums">{r.plate}</td>
                         <td className="px-4 py-3 text-slate-600">{r.model ?? "—"}</td>
                         <td className="px-4 py-3">{r.driver_name ?? "—"}</td>
@@ -1749,7 +1867,7 @@ function VehiclesTab({
                     )}
                     {showFuelCompare && editingId !== r.id ? (
                       <tr className="border-b border-slate-50 bg-slate-50/70">
-                        <td colSpan={7} className="px-4 py-2 text-xs text-slate-600">
+                        <td colSpan={8} className="px-4 py-2 text-xs text-slate-600">
                           <span className="font-medium text-slate-800">Combustível (previsto × realizado):</span>{" "}
                           Previsto {money(pv!)} · Realizado {money(rv!)} · Δ {money(rv! - pv!)}
                         </td>
@@ -1762,6 +1880,8 @@ function VehiclesTab({
           </tbody>
         </table>
       </div>
+
+      <BulkDeleteDialog bulk={bulk} noun="veículo" nounPlural="veículos" />
     </div>
   );
 }
@@ -1792,6 +1912,47 @@ function SystemsTab({
   const { sortedRows, headerSort } = useTableSort(rows, NAMED_VALUE_SORT_COLUMNS, {
     defaultCompare: defaultNamedValueSort,
   });
+
+  const bulk = useBulkSelection({
+    projectId,
+    category: "systems",
+    rows: sortedRows,
+    getId: (r) => r.id,
+    resetKey: `${competencia}|${editScenario}`,
+    onDone: onRefresh,
+  });
+
+  // Edição in-place: o backend já expunha PATCH — faltava a tela.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editValue, setEditValue] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+
+  function startEdit(r: { id: string; name: string; value: number | null }) {
+    setEditingId(r.id);
+    setEditName(r.name);
+    setEditValue(r.value != null ? String(r.value) : "");
+    setEditError(null);
+  }
+
+  async function saveEdit() {
+    if (structureReadOnly || !editingId) return;
+    const nome = editName.trim();
+    if (!nome) {
+      setEditError("Informe o nome.");
+      return;
+    }
+    // Campo vazio vira NaN aqui (e não 0), então o valor em branco é recusado de verdade.
+    const v = editValue.trim() === "" ? NaN : Number(editValue);
+    if (!Number.isFinite(v) || v < 0) {
+      setEditError("Valor inválido.");
+      return;
+    }
+    await updateSystem(projectId, editingId, { name: nome, value: v });
+    setEditingId(null);
+    setEditError(null);
+    onRefresh();
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -1852,48 +2013,129 @@ function SystemsTab({
         </div>
       </div>
 
+      <BulkActionBar
+        bulk={bulk}
+        noun="sistema"
+        nounPlural="sistemas"
+        disabled={structureReadOnly}
+      />
+
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full min-w-[24rem] text-left text-sm">
           <thead className="border-b border-slate-100 bg-slate-50/80">
             <tr>
+              <BulkHeaderCheckbox bulk={bulk} disabled={structureReadOnly} />
               <SortableTh label="Nome" column="name" variant="standard" className="w-full" {...headerSort} />
               <SortableTh label="Valor mensal" column="value" variant="standard" align="right" {...headerSort} />
-              <th className="px-4 py-3 w-24" />
+              <th className="px-4 py-3 w-32" />
             </tr>
           </thead>
           <tbody>
             {sortedRows.length === 0 ? (
               <tr>
-                <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={4} className="px-4 py-6 text-center text-slate-500">
                   Nenhum sistema cadastrado nesta competência.
                 </td>
               </tr>
             ) : (
-              sortedRows.map((r) => (
-                <tr key={r.id} className="border-b border-slate-50 last:border-0">
-                  <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
-                  <td className="px-4 py-3 text-slate-700">
-                    <Money value={r.value} />
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
+              sortedRows.map((r) =>
+                editingId === r.id ? (
+                  <tr key={r.id} className="border-b border-slate-50 bg-slate-50/60 last:border-0">
+                    <td className="px-4 py-3" />
+                    <td className="px-4 py-3">
+                      <input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        aria-label="Nome"
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                      />
+                      {editError ? (
+                        <span className="mt-1 block text-xs text-rose-600">{editError}</span>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3">
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        aria-label="Valor mensal"
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm tabular-nums"
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex flex-col gap-1">
+                        <button
+                          type="button"
+                          disabled={structureReadOnly}
+                          onClick={() => void saveEdit()}
+                          className="text-sm text-indigo-600 hover:underline disabled:opacity-50"
+                        >
+                          Salvar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingId(null);
+                            setEditError(null);
+                          }}
+                          className="text-sm text-slate-600 hover:underline"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  <tr
+                    key={r.id}
+                    className={`border-b border-slate-50 last:border-0 ${
+                      bulk.selectedIds.has(r.id) ? "bg-indigo-50/60" : ""
+                    }`}
+                  >
+                    <BulkRowCheckbox
+                      bulk={bulk}
+                      id={r.id}
+                      label={r.name}
                       disabled={structureReadOnly}
-                      onClick={async () => {
-                        await deleteSystem(projectId, r.id);
-                        onRefresh();
-                      }}
-                      className="text-red-600 hover:underline disabled:opacity-50"
-                    >
-                      Excluir
-                    </button>
-                  </td>
-                </tr>
-              ))
+                    />
+                    <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <Money value={r.value} />
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex justify-end gap-3">
+                        <button
+                          type="button"
+                          disabled={structureReadOnly}
+                          onClick={() => startEdit(r)}
+                          className="text-indigo-600 hover:underline disabled:opacity-50"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={structureReadOnly}
+                          onClick={async () => {
+                            await deleteSystem(projectId, r.id);
+                            onRefresh();
+                          }}
+                          className="text-red-600 hover:underline disabled:opacity-50"
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ),
+              )
             )}
           </tbody>
         </table>
       </div>
+
+      <BulkDeleteDialog bulk={bulk} noun="sistema" nounPlural="sistemas" />
     </div>
   );
 }
@@ -1924,6 +2166,47 @@ function FixedTab({
   const { sortedRows, headerSort } = useTableSort(rows, NAMED_VALUE_SORT_COLUMNS, {
     defaultCompare: defaultNamedValueSort,
   });
+
+  const bulk = useBulkSelection({
+    projectId,
+    category: "misc",
+    rows: sortedRows,
+    getId: (r) => r.id,
+    resetKey: `${competencia}|${editScenario}`,
+    onDone: onRefresh,
+  });
+
+  // Edição in-place: o backend já expunha PATCH — faltava a tela.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editValue, setEditValue] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+
+  function startEdit(r: { id: string; name: string; value: number | null }) {
+    setEditingId(r.id);
+    setEditName(r.name);
+    setEditValue(r.value != null ? String(r.value) : "");
+    setEditError(null);
+  }
+
+  async function saveEdit() {
+    if (structureReadOnly || !editingId) return;
+    const nome = editName.trim();
+    if (!nome) {
+      setEditError("Informe o nome.");
+      return;
+    }
+    // Campo vazio vira NaN aqui (e não 0), então o valor em branco é recusado de verdade.
+    const v = editValue.trim() === "" ? NaN : Number(editValue);
+    if (!Number.isFinite(v) || v < 0) {
+      setEditError("Valor inválido.");
+      return;
+    }
+    await updateFixedOperational(projectId, editingId, { name: nome, value: v });
+    setEditingId(null);
+    setEditError(null);
+    onRefresh();
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -1984,48 +2267,129 @@ function FixedTab({
         </div>
       </div>
 
+      <BulkActionBar
+        bulk={bulk}
+        noun="custo"
+        nounPlural="custos"
+        disabled={structureReadOnly}
+      />
+
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full min-w-[24rem] text-left text-sm">
           <thead className="border-b border-slate-100 bg-slate-50/80">
             <tr>
+              <BulkHeaderCheckbox bulk={bulk} disabled={structureReadOnly} />
               <SortableTh label="Nome" column="name" variant="standard" className="w-full" {...headerSort} />
               <SortableTh label="Valor mensal" column="value" variant="standard" align="right" {...headerSort} />
-              <th className="px-4 py-3 w-24" />
+              <th className="px-4 py-3 w-32" />
             </tr>
           </thead>
           <tbody>
             {sortedRows.length === 0 ? (
               <tr>
-                <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={4} className="px-4 py-6 text-center text-slate-500">
                   Nenhum custo diverso nesta competência.
                 </td>
               </tr>
             ) : (
-              sortedRows.map((r) => (
-                <tr key={r.id} className="border-b border-slate-50 last:border-0">
-                  <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
-                  <td className="px-4 py-3 text-slate-700">
-                    <Money value={r.value} />
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
+              sortedRows.map((r) =>
+                editingId === r.id ? (
+                  <tr key={r.id} className="border-b border-slate-50 bg-slate-50/60 last:border-0">
+                    <td className="px-4 py-3" />
+                    <td className="px-4 py-3">
+                      <input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        aria-label="Nome"
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                      />
+                      {editError ? (
+                        <span className="mt-1 block text-xs text-rose-600">{editError}</span>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3">
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        aria-label="Valor mensal"
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm tabular-nums"
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex flex-col gap-1">
+                        <button
+                          type="button"
+                          disabled={structureReadOnly}
+                          onClick={() => void saveEdit()}
+                          className="text-sm text-indigo-600 hover:underline disabled:opacity-50"
+                        >
+                          Salvar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingId(null);
+                            setEditError(null);
+                          }}
+                          className="text-sm text-slate-600 hover:underline"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  <tr
+                    key={r.id}
+                    className={`border-b border-slate-50 last:border-0 ${
+                      bulk.selectedIds.has(r.id) ? "bg-indigo-50/60" : ""
+                    }`}
+                  >
+                    <BulkRowCheckbox
+                      bulk={bulk}
+                      id={r.id}
+                      label={r.name}
                       disabled={structureReadOnly}
-                      onClick={async () => {
-                        await deleteFixedOperational(projectId, r.id);
-                        onRefresh();
-                      }}
-                      className="text-red-600 hover:underline disabled:opacity-50"
-                    >
-                      Excluir
-                    </button>
-                  </td>
-                </tr>
-              ))
+                    />
+                    <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <Money value={r.value} />
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex justify-end gap-3">
+                        <button
+                          type="button"
+                          disabled={structureReadOnly}
+                          onClick={() => startEdit(r)}
+                          className="text-indigo-600 hover:underline disabled:opacity-50"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={structureReadOnly}
+                          onClick={async () => {
+                            await deleteFixedOperational(projectId, r.id);
+                            onRefresh();
+                          }}
+                          className="text-red-600 hover:underline disabled:opacity-50"
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ),
+              )
             )}
           </tbody>
         </table>
       </div>
+
+      <BulkDeleteDialog bulk={bulk} noun="custo" nounPlural="custos" />
     </div>
   );
 }

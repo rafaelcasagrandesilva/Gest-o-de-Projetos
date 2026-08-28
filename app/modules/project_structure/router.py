@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -19,6 +19,8 @@ from app.api.sensitive import redact_for
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.project_structure import (
+    BulkDeleteBody,
+    BulkDeleteResult,
     CategoryCopyResultRead,
     InitializeCompetenciaBody,
     InitializeCompetenciaResult,
@@ -162,7 +164,9 @@ async def initialize_competencia(
         target_competencia=outcome.target.competencia,
         target_scenario=outcome.target.scenario.value,
         results=[
-            CategoryCopyResultRead(category=r.category.value, label=r.label, copied=r.copied)
+            CategoryCopyResultRead(
+                category=r.category.value, label=r.label, copied=r.copied, skipped=list(r.skipped)
+            )
             for r in outcome.results
         ],
     )
@@ -209,6 +213,47 @@ async def delete_structure_labor(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
     await assert_may_write_scenario(user=actor, scenario=row.scenario, db=db, project_id=project_id)
     await _svc(db).delete_labor(labor_id=labor_id, actor=actor, request=request)
+
+
+@router.post(
+    "/{project_id}/structure/bulk-delete",
+    response_model=BulkDeleteResult,
+    dependencies=_write,
+)
+async def bulk_delete_structure_items(
+    project_id: UUID,
+    payload: BulkDeleteBody,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+    _: User = Depends(require_project_access),
+) -> BulkDeleteResult:
+    """Exclui vários itens de uma aba de uma vez (mesma competência).
+
+    Sem `confirm`, apenas relata o que aconteceria — é o que permite à tela avisar quantos
+    têm pagamento lançado no Contas a Pagar antes de o usuário confirmar.
+    """
+    svc = _svc(db)
+    cfg = svc._BULK_CATEGORIES.get(payload.category)
+    if cfg is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Categoria inválida.")
+    if payload.ids:
+        # Permissão de escrita avaliada no cenário dos itens alvo, como no delete unitário.
+        first = await getattr(svc, cfg[0]).get(payload.ids[0])
+        if first is None or first.project_id != project_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado.")
+        await assert_may_write_scenario(
+            user=actor, scenario=first.scenario, db=db, project_id=project_id
+        )
+    out = await svc.delete_items_bulk(
+        project_id=project_id,
+        category=payload.category,
+        ids=payload.ids,
+        confirm=payload.confirm,
+        actor=actor,
+        request=request,
+    )
+    return BulkDeleteResult(**out)
 
 
 # --- Veículos ---
