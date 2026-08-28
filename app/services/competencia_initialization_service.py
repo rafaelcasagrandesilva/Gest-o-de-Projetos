@@ -23,26 +23,34 @@ import enum
 import logging
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.scenario import Scenario
+from app.models.payment_component import PaymentVariableComponent
 from app.models.project_operational import (
     ProjectLabor,
     ProjectOperationalFixed,
     ProjectSystemCost,
     ProjectVehicle,
 )
+from app.repositories.employees import EmployeeRepository
+from app.repositories.fleet import VehicleRepository as FleetVehicleRepository
 from app.repositories.project_operational import (
     ProjectLaborRepository,
     ProjectOperationalFixedRepository,
     ProjectSystemCostRepository,
     ProjectVehicleRepository,
 )
+from app.services.employee_assignment_service import EmployeeAssignmentService
+from app.services.operational_cost_calc import compute_project_vehicle_monthly_cost
 from app.services.payable_snapshot_service import PayableSnapshotService
+from app.services.settings_service import SettingsService
 from app.utils.date_utils import normalize_competencia, previous_competencia
 
 logger = logging.getLogger(__name__)
@@ -100,6 +108,10 @@ class CompetenciaRef:
 class CategoryCopyOutcome:
     category: CostCategory
     copied: int
+    # Nomes do que NÃO pôde ser copiado. Cópia é "exata" por contrato: quando algo fica de
+    # fora, a tela precisa dizer o quê — sucesso silencioso com perda de dado foi exatamente
+    # o que fez a inicialização parecer que "não trazia 100% dos dados".
+    skipped: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
@@ -120,6 +132,8 @@ class CompetenciaInitializationService:
         self.vehicles = ProjectVehicleRepository(session)
         self.systems = ProjectSystemCostRepository(session)
         self.fixed = ProjectOperationalFixedRepository(session)
+        self.employees = EmployeeRepository(session)
+        self.fleet = FleetVehicleRepository(session)
         self.payables = PayableSnapshotService(session)
 
     # ---- API de alto nível (endpoint atual) --------------------------------
@@ -170,8 +184,8 @@ class CompetenciaInitializationService:
         results: list[CategoryCopyOutcome] = []
         try:
             for cat in cats:
-                copied = await self._replace_category(cat, source, target)
-                results.append(CategoryCopyOutcome(category=cat, copied=copied))
+                copied, skipped = await self._replace_category(cat, source, target)
+                results.append(CategoryCopyOutcome(category=cat, copied=copied, skipped=skipped))
             await self.session.commit()
         except IntegrityError as e:
             await self.session.rollback()
@@ -189,7 +203,7 @@ class CompetenciaInitializationService:
 
     async def _replace_category(
         self, category: CostCategory, source: CompetenciaRef, target: CompetenciaRef
-    ) -> int:
+    ) -> tuple[int, tuple[str, ...]]:
         if category is CostCategory.LABOR:
             return await self._replace_labor(source, target)
         if category is CostCategory.VEHICLES:
@@ -198,9 +212,57 @@ class CompetenciaInitializationService:
             return await self._replace_systems(source, target)
         return await self._replace_misc(source, target)
 
+    # ---- Auxiliares --------------------------------------------------------
+
+    async def _employee_label(self, employee_id: UUID) -> str:
+        """Nome do colaborador para a mensagem de omissão (id cru não ajuda o usuário)."""
+        emp = await self.employees.get(employee_id)
+        for attr in ("full_name", "name", "nome"):
+            v = getattr(emp, attr, None) if emp is not None else None
+            if v and str(v).strip():
+                return str(v).strip()
+        return str(employee_id)
+
+    async def _copy_variable_components(
+        self, *, source_labor: ProjectLabor, target_labor: ProjectLabor
+    ) -> int:
+        """Replica os Componentes Variáveis (benefícios/ajudas) do vínculo de origem.
+
+        Sem isto a cópia não era exata em dois sentidos: os componentes da origem não vinham,
+        e os do destino eram destruídos junto com a linha antiga (FK ON DELETE CASCADE).
+        """
+        rows = (
+            (
+                await self.session.execute(
+                    select(PaymentVariableComponent).where(
+                        PaymentVariableComponent.project_labor_id == source_labor.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for c in rows:
+            self.session.add(
+                PaymentVariableComponent(
+                    type_id=c.type_id,
+                    employee_id=c.employee_id,
+                    competencia=target_labor.competencia,
+                    amount=c.amount,
+                    note=c.note,
+                    project_labor_id=target_labor.id,
+                    company_financial_item_id=c.company_financial_item_id,
+                )
+            )
+        if rows:
+            await self.session.flush()
+        return len(rows)
+
     # ---- Mão de obra (vínculo + snapshot de custos) ------------------------
 
-    async def _replace_labor(self, source: CompetenciaRef, target: CompetenciaRef) -> int:
+    async def _replace_labor(
+        self, source: CompetenciaRef, target: CompetenciaRef
+    ) -> tuple[int, tuple[str, ...]]:
         tgt_rows = await self.labors.list_by_project(
             project_id=target.project_id, competencia=target.competencia, scenario=target.scenario, limit=_COPY_LIMIT
         )
@@ -214,42 +276,57 @@ class CompetenciaInitializationService:
 
         copied = 0
         added: set[UUID] = set()
+        skipped: list[str] = []
+        assignments = EmployeeAssignmentService(self.session)
         for pr in src_rows:
             if pr.employee_id in added:
                 continue
-            # Preserva a regra existente: soma de alocação do colaborador ≤ 100% no mês.
-            used = await self.labors.sum_allocation_percentage_for_employee_competencia(
-                employee_id=pr.employee_id, competencia=target.competencia, scenario=target.scenario
+            # Teto de 100% CIENTE DO TIPO da alocação — igual ao `create_labor`. O teto vale
+            # para o RATEIO; contratos com remuneração INDEPENDENTE valem 100% cada e ficam
+            # fora da soma. Sem `exclude_project_ids`, o colaborador multi-contrato estourava
+            # o teto e era descartado silenciosamente da cópia.
+            independentes = await assignments.independent_project_ids(
+                pr.employee_id, target.competencia
             )
+            este_e_independente = target.project_id in independentes
             pct = float(pr.allocation_percentage)
-            if used + pct > 100.0001:
-                logger.warning(
-                    "Inicializar competência: cópia de mão de obra omitida (>100%%) employee=%s project=%s comp=%s",
-                    pr.employee_id,
-                    target.project_id,
-                    target.competencia,
-                )
-                continue
-            self.session.add(
-                ProjectLabor(
-                    project_id=target.project_id,
+            if not este_e_independente:
+                used = await self.labors.sum_allocation_percentage_for_employee_competencia(
+                    employee_id=pr.employee_id,
                     competencia=target.competencia,
                     scenario=target.scenario,
-                    employee_id=pr.employee_id,
-                    allocation_percentage=pct,
-                    cost_salary_base=pr.cost_salary_base,
-                    cost_additional_costs=pr.cost_additional_costs,
-                    cost_extra_hours_50=pr.cost_extra_hours_50,
-                    cost_extra_hours_70=pr.cost_extra_hours_70,
-                    cost_extra_hours_100=pr.cost_extra_hours_100,
-                    cost_pj_hours_per_month=pr.cost_pj_hours_per_month,
-                    # Campo LEGADO (antiga "Ajuda de custo PJ"), substituído por Componentes
-                    # Variáveis. NÃO é propagado: copiá-lo criava ajudas de custo "congeladas"
-                    # (sem UI para editar/remover) em cada nova competência. Ver componentes variáveis.
-                    cost_pj_additional_cost=None,
-                    cost_total_override=pr.cost_total_override,
+                    exclude_project_ids=independentes,
                 )
+                if used + pct > 100.0001:
+                    nome = await self._employee_label(pr.employee_id)
+                    logger.warning(
+                        "Inicializar competência: cópia de mão de obra omitida (>100%%) employee=%s project=%s comp=%s",
+                        pr.employee_id,
+                        target.project_id,
+                        target.competencia,
+                    )
+                    skipped.append(nome)
+                    continue
+            row = ProjectLabor(
+                project_id=target.project_id,
+                competencia=target.competencia,
+                scenario=target.scenario,
+                employee_id=pr.employee_id,
+                allocation_percentage=pct,
+                cost_salary_base=pr.cost_salary_base,
+                cost_additional_costs=pr.cost_additional_costs,
+                cost_extra_hours_50=pr.cost_extra_hours_50,
+                cost_extra_hours_70=pr.cost_extra_hours_70,
+                cost_extra_hours_100=pr.cost_extra_hours_100,
+                cost_pj_hours_per_month=pr.cost_pj_hours_per_month,
+                # Campo LEGADO (antiga "Ajuda de custo PJ"), substituído por Componentes
+                # Variáveis — que são copiados logo abaixo, com UI própria para editar/remover.
+                cost_pj_additional_cost=None,
+                cost_total_override=pr.cost_total_override,
             )
+            self.session.add(row)
+            await self.session.flush()
+            await self._copy_variable_components(source_labor=pr, target_labor=row)
             added.add(pr.employee_id)
             copied += 1
         await self.session.flush()
@@ -263,11 +340,13 @@ class CompetenciaInitializationService:
                     labor_competencia=target.competencia,
                     scenario=Scenario.REALIZADO,
                 )
-        return copied
+        return copied, tuple(skipped)
 
     # ---- Veículos (alocação de frota; sem sync de payable, como no CRUD) ---
 
-    async def _replace_vehicles(self, source: CompetenciaRef, target: CompetenciaRef) -> int:
+    async def _replace_vehicles(
+        self, source: CompetenciaRef, target: CompetenciaRef
+    ) -> tuple[int, tuple[str, ...]]:
         tgt_rows = await self.vehicles.list_by_project(
             project_id=target.project_id, competencia=target.competencia, scenario=target.scenario, limit=_COPY_LIMIT
         )
@@ -277,8 +356,33 @@ class CompetenciaInitializationService:
         for r in tgt_rows:
             await self.vehicles.delete(r)
         await self.session.flush()
+
+        # PREVISTO → REALIZADO: o combustível do previsto é ESTIMADO por km e não vale como
+        # realizado, então desce ZERADO para o usuário informar o valor real. Zero (e não
+        # nulo) porque o REALIZADO exige o campo preenchido: copiar nulo criava uma linha que
+        # a própria API recusa depois, e era isso que travava a edição na tela.
+        zera_combustivel = (
+            source.scenario is Scenario.PREVISTO and target.scenario is Scenario.REALIZADO
+        )
+        settings = await SettingsService(self.session).get_or_create() if zera_combustivel else None
+
         copied = 0
         for sv in src_rows:
+            fuel_realized = Decimal("0") if zera_combustivel else sv.fuel_cost_realized
+            monthly = sv.monthly_cost
+            if zera_combustivel:
+                fleet = await self.fleet.get(sv.vehicle_id)
+                if fleet is not None:
+                    # Sem o recálculo o custo carregaria o combustível estimado do previsto.
+                    monthly = compute_project_vehicle_monthly_cost(
+                        scenario=Scenario.REALIZADO,
+                        settings=settings,
+                        vehicle_type=fleet.vehicle_type,
+                        fuel_type=sv.fuel_type,
+                        km_per_month=float(sv.km_per_month) if sv.km_per_month is not None else None,
+                        fuel_cost_realized=0.0,
+                        fixed_monthly_cost=float(fleet.monthly_cost),
+                    )
             self.session.add(
                 ProjectVehicle(
                     project_id=target.project_id,
@@ -287,17 +391,19 @@ class CompetenciaInitializationService:
                     vehicle_id=sv.vehicle_id,
                     fuel_type=sv.fuel_type,
                     km_per_month=sv.km_per_month,
-                    fuel_cost_realized=sv.fuel_cost_realized,
-                    monthly_cost=sv.monthly_cost,
+                    fuel_cost_realized=fuel_realized,
+                    monthly_cost=monthly,
                 )
             )
             copied += 1
         await self.session.flush()
-        return copied
+        return copied, ()
 
     # ---- Sistemas / Custos diversos (valor nomeado + sync de payable) ------
 
-    async def _replace_systems(self, source: CompetenciaRef, target: CompetenciaRef) -> int:
+    async def _replace_systems(
+        self, source: CompetenciaRef, target: CompetenciaRef
+    ) -> tuple[int, tuple[str, ...]]:
         tgt_rows = await self.systems.list_by_project(
             project_id=target.project_id, competencia=target.competencia, scenario=target.scenario, limit=_COPY_LIMIT
         )
@@ -331,9 +437,11 @@ class CompetenciaInitializationService:
                     labor_competencia=target.competencia,
                     scenario=Scenario.REALIZADO,
                 )
-        return copied
+        return copied, ()
 
-    async def _replace_misc(self, source: CompetenciaRef, target: CompetenciaRef) -> int:
+    async def _replace_misc(
+        self, source: CompetenciaRef, target: CompetenciaRef
+    ) -> tuple[int, tuple[str, ...]]:
         tgt_rows = await self.fixed.list_by_project(
             project_id=target.project_id, competencia=target.competencia, scenario=target.scenario, limit=_COPY_LIMIT
         )
@@ -367,4 +475,4 @@ class CompetenciaInitializationService:
                     labor_competencia=target.competencia,
                     scenario=Scenario.REALIZADO,
                 )
-        return copied
+        return copied, ()

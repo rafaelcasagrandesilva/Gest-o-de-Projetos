@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -258,6 +258,19 @@ def _collaborator_payable_snapshot_name(display_name: str, component_label: str)
     if not label:
         return display_name
     return f"{display_name} — {label}"
+
+
+def _collaborator_payable_component_label(row_name: str | None) -> str:
+    """Rótulo do componente a partir do nome do título ("Fulano — Salário CLT" → "Salário CLT").
+
+    O NOME DO COLABORADOR muda (correção de cadastro); o rótulo do componente não. Casar o
+    título por ele é o que impede a sincronização de criar uma segunda linha EM ABERTO ao lado
+    de uma já PAGA só porque o nome foi corrigido no cadastro.
+    """
+    if not row_name:
+        return ""
+    _head, sep, tail = str(row_name).rpartition(" — ")
+    return tail.strip() if sep else ""
 
 
 def _allocate_payable_components(
@@ -811,6 +824,9 @@ class PayableSnapshotService:
         unlinked: list[PayableSnapshot] = [l for l in cap_lines if l.entry_id is None]
 
         result = {"synced": 0, "created": 0, "skipped_paid": []}
+        # Lançamentos materializados por nós (valor de REFERÊNCIA) — todo o resto veio da grade,
+        # digitado pelo usuário, e por isso sempre vira título.
+        auto_reference_entry_ids: set[UUID] = set()
 
         # Materializa o lançamento de referência quando não há nada (elegível, acima do piso).
         if not entries and not cap_lines:
@@ -833,6 +849,7 @@ class PayableSnapshotService:
             )
             self.session.add(entry)
             await self.session.flush()
+            auto_reference_entry_ids.add(entry.id)
             entries = [entry]
 
         if not entries:
@@ -844,6 +861,7 @@ class PayableSnapshotService:
 
         for entry in entries:
             new_amount = _money2(entry.valor)
+            entry_is_explicit = entry.id not in auto_reference_entry_ids
             due = entry.due_date or _default_due_date(comp, day=10)
             # Descrição do LANÇAMENTO vira o subtítulo do título (mesmo padrão do Endividamento
             # e dos Componentes Variáveis). Vazia → cai no `item_description` do item (descrição
@@ -858,8 +876,20 @@ class PayableSnapshotService:
                 linked[entry.id] = row
 
             if row is None:
-                # Cria o título apenas para item elegível e competência materializável.
-                if not (eligible and can_create) or new_amount <= 0:
+                # Lançamento EXPLÍCITO na grade sempre vira título: a vigência e o piso
+                # governam apenas a materialização automática do valor de REFERÊNCIA (bloco
+                # acima), nunca um valor que o usuário digitou. Era esta porta que fazia a box
+                # preenchida ficar sem título no CAP ("pago, mas não localizado").
+                if new_amount <= 0:
+                    continue
+                # `can_create` continua valendo SEMPRE: mês ainda não aberto no CAP não
+                # materializa nada (senão o cronograma futuro viraria título de uma vez).
+                if not can_create:
+                    continue
+                # Já a VIGÊNCIA do cadastro é dispensada para lançamento explícito: o valor
+                # digitado na grade manda. Era esta porta que deixava a box preenchida sem
+                # título ("pago, mas não localizado" no Contas a Pagar).
+                if not entry_is_explicit and not eligible:
                     continue
                 row = PayableSnapshot(
                     month=comp,
@@ -945,7 +975,19 @@ class PayableSnapshotService:
         settings = await SettingsService(self.session).get_or_create()
         cc_svc = CompanyFinanceCostCenterService(self.session)
 
-        # Itens ativos cuja vigência cobre a competência.
+        # Itens ativos cuja vigência cobre a competência — MAIS os que têm lançamento
+        # explícito nela. Um valor digitado na grade é uma afirmação do usuário de que aquele
+        # custo existe naquela competência: ele precisa virar título mesmo que a vigência do
+        # cadastro não cubra o mês (ex.: item cadastrado depois, com lançamentos retroativos),
+        # senão a box mostra valor e o Contas a Pagar não tem o que baixar.
+        has_entry_in_comp = (
+            select(CompanyFinancialPayment.item_id)
+            .where(
+                CompanyFinancialPayment.item_id == CompanyFinancialItem.id,
+                CompanyFinancialPayment.competencia == comp,
+            )
+            .exists()
+        )
         stmt = (
             select(CompanyFinancialItem)
             .options(
@@ -955,8 +997,19 @@ class PayableSnapshotService:
             .where(
                 CompanyFinancialItem.tipo.in_(("custo_fixo", "endividamento")),
                 CompanyFinancialItem.is_active.is_(True),
-                or_(CompanyFinancialItem.start_date.is_(None), CompanyFinancialItem.start_date <= month_end),
-                or_(CompanyFinancialItem.end_date.is_(None), CompanyFinancialItem.end_date >= comp),
+                or_(
+                    and_(
+                        or_(
+                            CompanyFinancialItem.start_date.is_(None),
+                            CompanyFinancialItem.start_date <= month_end,
+                        ),
+                        or_(
+                            CompanyFinancialItem.end_date.is_(None),
+                            CompanyFinancialItem.end_date >= comp,
+                        ),
+                    ),
+                    has_entry_in_comp,
+                ),
             )
         )
         items = list((await self.session.execute(stmt)).scalars().unique().all())
@@ -1243,10 +1296,11 @@ class PayableSnapshotService:
             emp, settings, source_month, real, payroll_override=override_map.get(emp.id)
         )
         allocated = _allocate_payable_components(integral_components, factor)
+        # Indexado pelo RÓTULO do componente (estável), não pelo nome completo — ver
+        # `_collaborator_payable_component_label`.
         expected: dict[str, Decimal] = {}
         for component_label, amt in allocated:
-            snapshot_name = _collaborator_payable_snapshot_name(display_name, component_label)
-            expected[snapshot_name] = Decimal(str(amt))
+            expected[(component_label or "").strip()] = Decimal(str(amt))
 
         consolidated = round(sum(float(v) for v in expected.values()), 2)
         logger.info(
@@ -1267,16 +1321,32 @@ class PayableSnapshotService:
         month_generated = await self.is_generated(month=payment_month)
         matched_ids: set[UUID] = set()
 
-        for snapshot_name, new_amt in expected.items():
-            row = next((r for r in existing if r.name == snapshot_name), None)
-            if row is None:
-                legacy = next(
-                    (r for r in existing if r.name == display_name and r.id not in matched_ids),
+        for component_label, new_amt in expected.items():
+            snapshot_name = _collaborator_payable_snapshot_name(display_name, component_label)
+            # `existing` já está restrito a (mês, tipo, ref_id=colaborador, projeto), então o
+            # rótulo basta para identificar o componente — e é imune à troca de nome.
+            row = next(
+                (
+                    r
+                    for r in existing
+                    if r.id not in matched_ids
+                    and _collaborator_payable_component_label(r.name) == component_label
+                ),
+                None,
+            )
+            if row is None and component_label:
+                # Título legado sem rótulo (formato antigo: 1 linha por colaborador) → adota.
+                row = next(
+                    (
+                        r
+                        for r in existing
+                        if r.id not in matched_ids and not _collaborator_payable_component_label(r.name)
+                    ),
                     None,
                 )
-                if legacy is not None:
-                    row = legacy
-                    row.name = snapshot_name
+            if row is not None and row.name != snapshot_name:
+                # Nome do cadastro mudou: renomeia o título existente em vez de criar outro.
+                row.name = snapshot_name
             if row is None:
                 if new_amt <= 0 or not month_generated:
                     continue
@@ -1317,10 +1387,28 @@ class PayableSnapshotService:
                 )
                 continue
 
+            row.cost_center = cost_center
+
+            # Título com pagamento NUNCA tem o valor reescrito — mesma regra que os Custos
+            # Fixos e os Componentes Variáveis já aplicam. Sem ela, um recálculo da mão de
+            # obra transformava PAGO em EM ABERTO (valor sobe) ou em pago-a-maior (desce).
+            if _money2(row.amount_paid) > 0 or await _has_active_payments(
+                self.session, snapshot_id=row.id
+            ):
+                if _money2(row.amount_final) != new_amt:
+                    logger.info(
+                        "payables dynamic sync preserve paid snapshot_id=%s name=%s "
+                        "amount_final=%s calculado=%s",
+                        row.id,
+                        row.name,
+                        row.amount_final,
+                        new_amt,
+                    )
+                continue
+
             before_o = _money2(row.amount_original)
             before_f = _money2(row.amount_final)
             before_p = _money2(row.amount_paid)
-            row.cost_center = cost_center
             _apply_dynamic_payable_amounts(row, new_amount=new_amt)
             changed += 1
             _log_payable_dynamic_sync(
@@ -1486,7 +1574,27 @@ class PayableSnapshotService:
                 before_paid=Decimal("0"),
             )
         else:
-            if _payable_row_is_dynamic_sync_protected(row):
+            # Título com pagamento NUNCA tem o valor reescrito — mesma regra dos Custos
+            # Fixos, dos Componentes Variáveis e da mão de obra. `_payable_row_is_dynamic_
+            # sync_protected` NÃO cobre isto: ela olha tipo/tags/final≠original, nunca
+            # pagamento. Sem esta guarda, editar um Sistema ou Custo diverso já pago (ou
+            # rodar a Inicializar Competência sobre ele) devolvia o título a EM ABERTO
+            # quando o valor subia, e o deixava pago-a-maior quando descia.
+            has_payment = _money2(row.amount_paid) > 0 or await _has_active_payments(
+                self.session, snapshot_id=row.id
+            )
+            if has_payment:
+                if _money2(row.amount_final) != new_amt:
+                    logger.info(
+                        "payables dynamic sync preserve paid %s snapshot_id=%s name=%s "
+                        "amount_final=%s calculado=%s",
+                        source_kind,
+                        row.id,
+                        row.name,
+                        row.amount_final,
+                        new_amt,
+                    )
+            elif _payable_row_is_dynamic_sync_protected(row):
                 logger.info(
                     "payables dynamic sync skip protected %s snapshot_id=%s",
                     source_kind,

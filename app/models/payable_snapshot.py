@@ -114,11 +114,13 @@ class PayableSnapshot(TimestampUUIDMixin, Base):
     # pelo `type` na leitura). Combinada com `ref_id`, identifica a origem de cada linha.
     origin: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
 
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # TEXT (migration 0119): `name` é concatenação de full_name + rótulo do componente, e
+    # `item_description` recebe a nota livre do componente variável — as duas estouravam 255.
+    name: Mapped[str] = mapped_column(Text, nullable=False)
     # Descrição do item, separada do `name` (que é o Credor). Hoje preenchida em
     # lançamentos de Endividamento vinculados ao cadastro; genérica de propósito
     # (reutilizável por outros tipos no futuro). NULL em legados/demais tipos.
-    item_description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    item_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     cost_center: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
 
