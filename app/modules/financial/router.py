@@ -1214,6 +1214,10 @@ async def confirm_payables_import(
 async def create_manual_payables_snapshot(
     payload: PayableSnapshotManualCreate,
     db: AsyncSession = Depends(get_db),
+    # `redact_for` no retorno precisa do usuário. Sem esta dependência o handler estourava
+    # NameError DEPOIS do commit: a despesa era gravada e o front recebia "Network Error"
+    # (um 500 não passa pelo middleware de CORS, então o browser não mostra o status real).
+    user: User = Depends(get_current_user),
 ) -> PayableSnapshotRead:
     # Exige snapshot do mês já gerado (via GET) para manter consistência.
     fin = FinanceService(db)
