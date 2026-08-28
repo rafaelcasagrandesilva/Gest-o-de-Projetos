@@ -22,6 +22,7 @@ import {
 import { fetchCostCenters } from "@/services/employees";
 import { CostCenterCombo } from "@/components/CostCenterCombo";
 import { usePermission } from "@/hooks/usePermission";
+import { formatApiError } from "@/utils/apiError";
 import { formatCurrencyField, formatCurrencyOrDash, normalizeCurrencyForApi } from "@/utils/currency";
 
 type DetailTab = "geral" | "contrato" | "documentos" | "historico";
@@ -224,8 +225,8 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
     setError(null);
     try {
       await downloadProjectDocument(doc);
-    } catch {
-      setError("Não foi possível baixar o documento.");
+    } catch (e) {
+      setError(`Não foi possível baixar o documento: ${formatApiError(e)}`);
     } finally {
       setBusyDocId(null);
     }

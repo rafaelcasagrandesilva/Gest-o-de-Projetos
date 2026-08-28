@@ -234,7 +234,12 @@ async def download_project_document(
         raise HTTPException(status_code=404, detail="Documento não encontrado.")
     path = svc.document_disk_path(doc)
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="Arquivo não encontrado no servidor.")
+        # O registro existe no banco, mas o binário sumiu do disco (ex.: redeploy
+        # sem volume persistente). Mensagem explícita para não parecer erro de rede.
+        raise HTTPException(
+            status_code=404,
+            detail="Arquivo não encontrado no armazenamento do servidor. Reenvie o documento.",
+        )
     return FileResponse(path, filename=doc.original_filename)
 
 

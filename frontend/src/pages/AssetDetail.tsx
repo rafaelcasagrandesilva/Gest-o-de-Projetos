@@ -52,7 +52,7 @@ import {
 } from "@/services/assets";
 import { type Project } from "@/services/projects";
 import { listCostCenterRefs, costCenterRefsAsProjects } from "@/services/costCenters";
-import { formatApiError } from "@/utils/apiError";
+import { formatApiError, hydrateBlobError } from "@/utils/apiError";
 
 function todayIsoLocal(): string {
   const t = new Date();
@@ -376,8 +376,8 @@ export function AssetDetailPage() {
       a.download = fileName;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      setError("Não foi possível baixar o arquivo.");
+    } catch (e) {
+      setError(`Não foi possível baixar o arquivo: ${formatApiError(await hydrateBlobError(e))}`);
     }
   }
 

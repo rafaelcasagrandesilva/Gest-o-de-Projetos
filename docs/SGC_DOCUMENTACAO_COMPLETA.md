@@ -889,10 +889,13 @@ sgp_linked_projects  — IDs de projetos vinculados
 | DB_POOL_SIZE | 5 | Tamanho do pool | Recomendado |
 | DB_MAX_OVERFLOW | 15 | Overflow do pool | Recomendado |
 | DB_POOL_RECYCLE_SECONDS | 1800 | Recycle do pool | Não |
+| **STORAGE_ROOT** | (vazio) | Raiz única dos uploads em disco (ex.: `/data` = mount do volume). Quando definida, NFs, anexos de ativos e documentos de projeto derivam dela — variável específica abaixo continua vencendo. Se vazia, a raiz é deduzida da pasta que contém RECEIVABLE_UPLOAD_DIR. | **CRÍTICO em prod** |
 | RECEIVABLE_UPLOAD_DIR | var/receivable_uploads | Diretório de uploads de NFs | Prod: volume persistente |
 | RECEIVABLE_PDF_MAX_BYTES | 5MB | Limite de tamanho de PDF | Não |
 | ASSET_UPLOAD_DIR | var/asset_uploads | Diretório de uploads de ativos | Prod: volume persistente |
 | ASSET_UPLOAD_MAX_BYTES | 15MB | Limite de upload de ativos | Não |
+| PROJECT_DOCUMENT_DIR | (derivado da raiz) | Diretório dos documentos de projeto | Prod: volume persistente |
+| PROJECT_DOCUMENT_MAX_BYTES | 25MB | Limite de upload de documento de projeto | Não |
 
 ### Frontend (`.env`)
 

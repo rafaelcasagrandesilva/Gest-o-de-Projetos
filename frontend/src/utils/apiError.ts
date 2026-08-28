@@ -26,3 +26,19 @@ export function formatApiError(e: unknown): string {
   }
   return e.message;
 }
+
+/**
+ * Respostas com `responseType: "blob"` também entregam o corpo de ERRO como Blob,
+ * então o `detail` do FastAPI se perde. Converte o corpo para JSON no próprio erro
+ * para que `formatApiError` consiga ler a causa real.
+ */
+export async function hydrateBlobError(e: unknown): Promise<unknown> {
+  if (isAxiosError(e) && e.response?.data instanceof Blob) {
+    try {
+      e.response.data = JSON.parse(await e.response.data.text());
+    } catch {
+      /* corpo não-JSON: mantém o Blob e o chamador usa a mensagem padrão */
+    }
+  }
+  return e;
+}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { usePermission } from "@/hooks/usePermission";
+import { MissingFilesSection } from "@/components/settings/MissingFilesSection";
 import { PaymentComponentTypesSettings } from "@/components/settings/PaymentComponentTypesSettings";
 import { downloadAuditLogExport } from "@/services/audit";
 import { fetchSettings, updateSettings, type SystemSettings } from "@/services/settings";
@@ -47,6 +48,7 @@ export function Settings() {
   const canEditSettings = usePermission("settings.update");
   const canViewSettings = usePermission("settings.read");
   const canExportAudit = usePermission("audit.export");
+  const isSystemAdmin = usePermission("system.admin");
   const location = useLocation();
   const auditSectionRef = useRef<HTMLElement | null>(null);
 
@@ -227,6 +229,8 @@ export function Settings() {
           </button>
         </section>
       )}
+
+      {isSystemAdmin && <MissingFilesSection />}
 
       {canViewSettings && s && (
         <>

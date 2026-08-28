@@ -1,3 +1,5 @@
+import { hydrateBlobError } from "@/utils/apiError";
+
 import { api } from "./api";
 
 export interface Project {
@@ -229,9 +231,15 @@ export async function uploadProjectDocument(
 
 /** Baixa o documento (blob autenticado) e dispara o download no navegador. */
 export async function downloadProjectDocument(doc: ProjectDocument): Promise<void> {
-  const { data } = await api.get<Blob>(`/projects/${doc.project_id}/documents/${doc.id}/download`, {
-    responseType: "blob",
-  });
+  let data: Blob;
+  try {
+    const resp = await api.get<Blob>(`/projects/${doc.project_id}/documents/${doc.id}/download`, {
+      responseType: "blob",
+    });
+    data = resp.data;
+  } catch (e) {
+    throw await hydrateBlobError(e);
+  }
   const url = URL.createObjectURL(data);
   const a = document.createElement("a");
   a.href = url;

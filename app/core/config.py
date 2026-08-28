@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -32,6 +34,11 @@ class Settings(BaseSettings):
     db_pool_size: int = Field(default=5, ge=1, le=50, alias="DB_POOL_SIZE")
     db_max_overflow: int = Field(default=15, ge=0, le=100, alias="DB_MAX_OVERFLOW")
     db_pool_recycle: int = Field(default=1800, ge=300, alias="DB_POOL_RECYCLE_SECONDS")
+
+    # Raiz única de todo upload em disco. Em produção aponte para o volume persistente
+    # (ex.: STORAGE_ROOT=/data): os diretórios abaixo passam a ser derivados dela, então
+    # qualquer novo campo de upload nasce no volume sem depender de mais uma variável.
+    storage_root: str | None = Field(default=None, alias="STORAGE_ROOT")
 
     # Armazenamento local de PDFs das NFs (contas a receber); em produção prefira volume persistente.
     receivable_upload_dir: str = Field(default="var/receivable_uploads", alias="RECEIVABLE_UPLOAD_DIR")
@@ -77,6 +84,53 @@ class Settings(BaseSettings):
         raise ValueError(
             "Defina CORS_ORIGINS no .env com os domínios HTTPS do frontend (ex.: https://app.seudominio.com)."
         )
+
+    @model_validator(mode="after")
+    def align_storage_dirs(self) -> "Settings":
+        """Mantém todo upload em disco na mesma raiz dos PDFs de NF.
+
+        Em produção só `RECEIVABLE_UPLOAD_DIR` apontava para o volume persistente;
+        anexos de ativos e documentos de projeto ficavam no default relativo, dentro
+        do container efêmero, e sumiam a cada redeploy. Aqui os diretórios que NÃO
+        foram definidos explicitamente por variável de ambiente passam a derivar da
+        raiz — `STORAGE_ROOT` quando existir, senão a pasta que contém o diretório
+        das NFs. Quem define a variável continua no controle, e o diretório das NFs
+        nunca é reescrito (não mexe no que já funciona).
+        """
+        root = self.resolved_storage_root()
+        if root is None:
+            return self
+        derived = {
+            # Só entram aqui os diretórios sem variável própria definida; por isso o
+            # das NFs é derivado apenas quando STORAGE_ROOT é quem define a raiz.
+            "receivable_upload_dir": "receivable_uploads",
+            "asset_upload_dir": "asset_uploads",
+            "project_document_dir": "project_documents",
+        }
+        for field, subdir in derived.items():
+            if field not in self.model_fields_set:
+                object.__setattr__(self, field, str(root / subdir))
+        return self
+
+    def resolved_storage_root(self) -> Path | None:
+        """Raiz de armazenamento, ou None quando não há como derivá-la."""
+        raw = (self.storage_root or "").strip()
+        if raw:
+            return Path(raw)
+        if "receivable_upload_dir" not in self.model_fields_set:
+            return None  # ambiente sem configuração: preserva os defaults relativos
+        nf_dir = Path(self.receivable_upload_dir)
+        parent = nf_dir.parent
+        # RECEIVABLE_UPLOAD_DIR=/data → a própria pasta é a raiz (o pai seria "/").
+        return nf_dir if parent in (Path("/"), Path(".")) else parent
+
+    def storage_dirs(self) -> dict[str, Path]:
+        """Diretórios de upload em uso, para log/diagnóstico no startup."""
+        return {
+            "RECEIVABLE_UPLOAD_DIR": Path(self.receivable_upload_dir),
+            "ASSET_UPLOAD_DIR": Path(self.asset_upload_dir),
+            "PROJECT_DOCUMENT_DIR": Path(self.project_document_dir),
+        }
 
     def is_production(self) -> bool:
         return self._is_production_env(self.env)

@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.run_migrations import run_alembic_upgrade
 from app.core.schema_guard import warn_if_scenario_schema_missing
 from app.database.session import engine, get_db
+from app.utils.storage import log_storage_dirs, salvage_legacy_uploads
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,8 @@ async def startup_event() -> None:
     run_alembic_upgrade()
     await warn_if_scenario_schema_missing(engine)
     await seed_admin()
+    log_storage_dirs()
+    salvage_legacy_uploads()
     logger.info("Startup: migrations + seed_admin concluídos.")
 
 

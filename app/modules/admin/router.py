@@ -8,9 +8,10 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, require_permission
-from app.core.permission_codes import AUDIT_EXPORT
+from app.core.permission_codes import AUDIT_EXPORT, SYSTEM_ADMIN
 from app.models.user import User
 from app.services.audit_export_service import stream_audit_export_txt
+from app.services.storage_report_service import missing_files_report
 
 
 router = APIRouter()
@@ -44,3 +45,19 @@ async def export_audit_logs(
             "Cache-Control": "no-store",
         },
     )
+
+
+@router.get(
+    "/storage/missing-files",
+    summary="Anexos registrados no banco cujo arquivo não está em disco",
+)
+async def storage_missing_files(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_permission(SYSTEM_ADMIN)),
+) -> dict:
+    """O que precisa ser reenviado após um redeploy que apagou uploads efêmeros.
+
+    Confere documentos de projeto, anexos de ativos e PDFs de NF contra o disco,
+    usando a mesma resolução de caminho dos respectivos endpoints de download.
+    """
+    return await missing_files_report(db)
