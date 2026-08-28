@@ -12,6 +12,8 @@ export function ProjectFilterDropdown({
   onToggle,
   emptyText = "Nenhum projeto",
   noOptionsText = "Nenhum projeto ativo.",
+  disabled = false,
+  disabledTitle,
 }: {
   options: ProjectOption[];
   selected: Set<string>;
@@ -20,6 +22,10 @@ export function ProjectFilterDropdown({
   emptyText?: string;
   /** rótulo quando não há opções */
   noOptionsText?: string;
+  /** Bloqueia a seleção (ex.: modo Contas a Pagar, que é sempre da empresa inteira). */
+  disabled?: boolean;
+  /** Explica ao usuário POR QUE está bloqueado (vira o title do botão). */
+  disabledTitle?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -48,7 +54,9 @@ export function ProjectFilterDropdown({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex min-w-[180px] items-center justify-between gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50 focus:border-indigo-500 focus:outline-none"
+        disabled={disabled}
+        title={disabled ? disabledTitle : undefined}
+        className="flex min-w-[180px] items-center justify-between gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50 focus:border-indigo-500 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
         aria-haspopup="listbox"
         aria-expanded={open}
       >

@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.scenario import Scenario, coerce_scenario
+from app.models.payable_snapshot import PayableSnapshot
 from app.repositories.projects import ProjectRepository
 from app.services.financial_service import FinancialService
 from app.utils.date_utils import iter_competencias_inclusive, normalize_competencia
@@ -452,6 +454,8 @@ class IndicatorsService:
             for pid, name in targets
         }
 
+        cap_por_mes = await self._cap_costs_by_month(start=norm_start, end=norm_end)
+
         for comp in months:
             rows = [
                 await self._project_roi_dict(
@@ -468,10 +472,14 @@ class IndicatorsService:
                 {
                     "competencia": comp,
                     "faturamento": agg["revenue"],
+                    # Custo TOTAL (M.O. + veículos + sistemas + fixos + impostos + rateio
+                    # + antecipação) — já é o que o Dashboard Operacional exibe.
+                    "custo_total": agg["cost"],
                     "custo_mo": agg["labor_cost"],
                     "custo_veiculos": agg["vehicle_cost"],
                     "lucro_operacional": agg["operational_profit"],
                     "lucro_liquido": agg["net_profit"],
+                    "custo_cap": cap_por_mes.get(comp, 0.0),
                 }
             )
 
@@ -488,6 +496,58 @@ class IndicatorsService:
             "kpis": kpis,
             "insights": insights,
         }
+
+    async def _cap_costs_by_month(self, *, start: date, end: date) -> dict[date, float]:
+        """Total do Contas a Pagar por mês, na MESMA definição da tela do CAP.
+
+        A tela usa "Mês (fluxo de caixa)" (`list_for_operational_month`), que é a união de:
+          A) obrigações da competência do mês (`month` = mês);
+          B) obrigações de QUALQUER competência com pagamento realizado no mês.
+
+        Espelhar isso aqui é o que faz o gráfico bater com o total que o financeiro confere
+        na tela. Consequência aceita: um título pago fora da sua competência conta no mês
+        dele e no mês do pagamento — somar a linha ao longo do período o conta duas vezes.
+
+        Sem filtro de projeto de propósito: a maior parte do CAP é corporativa (`project_id`
+        nulo). Filtrar descartaria ~75% do custo e produziria um lucro líquido irreal — por
+        isso o modo Contas a Pagar desabilita os filtros na tela.
+
+        `DISTINCT` no bloco B porque um título com dois pagamentos no mesmo mês não pode
+        entrar duas vezes.
+        """
+        sql = text(
+            """
+            with alvo as (
+                select cast(generate_series(cast(:start as date), cast(:end as date),
+                                            interval '1 month') as date) as mes
+            ),
+            competencia as (
+                select a.mes, s.id, s.amount_final
+                  from alvo a
+                  join payable_snapshots s on s.month = a.mes
+            ),
+            pago_no_mes as (
+                select distinct a.mes, s.id, s.amount_final
+                  from alvo a
+                  join payable_payments pp
+                    on pp.reversed_at is null
+                   and pp.payment_date >= a.mes
+                   and pp.payment_date < (a.mes + interval '1 month')
+                  join payable_snapshots s on s.id = pp.payable_snapshot_id
+                 where s.month <> a.mes
+            ),
+            uniao as (
+                select * from competencia
+                union
+                select * from pago_no_mes
+            )
+            select mes, coalesce(sum(amount_final), 0) as total
+              from uniao
+             group by mes
+            """
+        )
+        rows = (await self._session.execute(sql, {"start": start, "end": end})).all()
+        return {normalize_competencia(m): float(v or 0) for m, v in rows}
 
     @staticmethod
     def _build_kpis(points: list[dict]) -> dict:

@@ -9,9 +9,13 @@ export type SeriesVisibility = Record<string, boolean>;
  * — séries ocultas/exibidas e o modo de exibição de valores — através de qualquer
  * reconstrução do gráfico (checkbox, zoom, resize, modal, etc.).
  */
-export function useFinancialChartViz(seriesIds: readonly string[]) {
+export function useFinancialChartViz(
+  seriesIds: readonly string[],
+  /** Padrão por série; ausente = ligada. Permite entregar o Lucro Líquido DESLIGADO. */
+  defaults?: Record<string, boolean>,
+) {
   const [selectedSeries, setSelectedSeries] = useState<SeriesVisibility>(
-    () => Object.fromEntries(seriesIds.map((id) => [id, true])),
+    () => Object.fromEntries(seriesIds.map((id) => [id, defaults?.[id] ?? true])),
   );
   const [showAllValues, setShowAllValues] = useState(false);
 

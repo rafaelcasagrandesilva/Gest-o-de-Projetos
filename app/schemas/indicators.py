@@ -88,10 +88,18 @@ class FinancialEvolutionPoint(BaseModel):
 
     competencia: date
     faturamento: float | None = None
+    # Custo TOTAL do projeto: mão de obra + veículos + sistemas + fixos operacionais
+    # + impostos + rateio + antecipação — a mesma soma do Dashboard Operacional.
+    custo_total: float | None = None
+    # Mantidos para compatibilidade de quem já consome o payload; o gráfico usa `custo_total`.
     custo_mo: float | None = None
     custo_veiculos: float | None = None
     lucro_operacional: float | None = None
     lucro_liquido: float | None = None
+    # Modo "Contas a Pagar": soma dos títulos LANÇADOS no CAP naquele mês, da EMPRESA
+    # INTEIRA (a maior parte do CAP é corporativa, sem projeto — filtrar por projeto
+    # descartaria ~75% do custo). Por isso o modo desabilita os filtros na tela.
+    custo_cap: float | None = None
 
 
 class FinancialKpi(BaseModel):

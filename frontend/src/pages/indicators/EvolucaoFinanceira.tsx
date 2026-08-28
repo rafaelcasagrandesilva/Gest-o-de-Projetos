@@ -21,7 +21,14 @@ import { DashboardModal } from "@/components/dashboard/executive/DashboardModal"
 import { KpiCard } from "@/components/dashboard/executive/KpiCard";
 import { InsightsPanel, type InsightItem } from "@/components/dashboard/executive/InsightsPanel";
 import { ProjectFilterDropdown } from "@/components/indicators/ProjectFilterDropdown";
-import { FinancialEvolutionMainChart, MAIN_SERIES_IDS } from "@/components/indicators/FinancialEvolutionMainChart";
+import {
+  CAP_SERIES,
+  CAP_SERIES_IDS,
+  DEFAULT_SERIES_VISIBILITY,
+  FinancialEvolutionMainChart,
+  MAIN_SERIES,
+  MAIN_SERIES_IDS,
+} from "@/components/indicators/FinancialEvolutionMainChart";
 import { NetProfitChart } from "@/components/indicators/NetProfitChart";
 import { useFinancialChartViz } from "@/hooks/useFinancialChartViz";
 
@@ -39,6 +46,38 @@ function monthAbbr(competencia: string): string {
 }
 
 const TENDENCIA_LABEL: Record<string, string> = { alta: "Em alta", baixa: "Em queda", estavel: "Estável" };
+
+/**
+ * Modo "Contas a Pagar": troca a origem do custo. Exclusivo por construção — o catálogo de
+ * séries inteiro é substituído, então não há como o usuário ver custo de projeto e título
+ * do CAP no mesmo gráfico e somar a mesma despesa duas vezes.
+ */
+function CapModeToggle({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label
+      className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition ${
+        checked
+          ? "border-indigo-300 bg-indigo-50 text-indigo-900"
+          : "border-slate-200 text-slate-600 hover:bg-slate-50"
+      }`}
+      title="Usa os títulos do Contas a Pagar como custo e deriva o Lucro Líquido deles"
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-4 w-4 accent-indigo-600"
+      />
+      Contas a Pagar
+    </label>
+  );
+}
 
 /** Toggle "Exibir valores em todos os pontos" (reutilizado no card e no modal). */
 function ValueToggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -97,8 +136,59 @@ export function EvolucaoFinanceira() {
 
   // Controles de UX do gráfico principal (não alteram dados nem filtros).
   // Estado de visualização controlado pelo React (preservado entre reconstruções).
-  const { selectedSeries, showAllValues, setShowAllValues, applySelection } = useFinancialChartViz(MAIN_SERIES_IDS);
+  const { selectedSeries, showAllValues, setShowAllValues, applySelection } = useFinancialChartViz(
+    [...MAIN_SERIES_IDS, ...CAP_SERIES_IDS],
+    DEFAULT_SERIES_VISIBILITY,
+  );
   const [expanded, setExpanded] = useState(false);
+  // Modo Contas a Pagar: troca a origem do custo (CAP no lugar do custo do projeto) e
+  // deriva o Lucro Líquido dele. É EXCLUSIVO — as séries do modo normal saem do gráfico,
+  // porque somar custo de projeto com título do CAP contaria a mesma despesa duas vezes.
+  const [capMode, setCapMode] = useState(false);
+
+  // Ligar o modo CP força a visão da EMPRESA INTEIRA. Deixar um projeto filtrado faria o
+  // faturamento vir filtrado enquanto o custo soma tudo — o lucro líquido sairia errado e
+  // sem nenhum sinal na tela.
+  //
+  // "Todos" no filtro de projeto é TODOS OS IDS SELECIONADOS, não seleção vazia: vazio quer
+  // dizer "nenhum projeto" e a tela fica em branco.
+  const preCapFiltersRef = useRef<{ projects: Set<string>; costCenters: Set<string> } | null>(null);
+  useEffect(() => {
+    if (capMode) {
+      // Guarda a seleção do usuário para devolvê-la quando ele sair do modo. Só na ENTRADA:
+      // o efeito também roda quando o período recarrega o ranking, e sobrescrever aqui
+      // devolveria "todos" em vez da escolha original dele.
+      if (preCapFiltersRef.current === null) {
+        preCapFiltersRef.current = {
+          projects: new Set(selProjects),
+          costCenters: new Set(selCostCenters),
+        };
+      }
+      setSelProjects(new Set(rankingItems.map((i) => i.project_id)));
+      setSelCostCenters(new Set());
+      return;
+    }
+    const anterior = preCapFiltersRef.current;
+    if (anterior) {
+      setSelProjects(anterior.projects);
+      setSelCostCenters(anterior.costCenters);
+      preCapFiltersRef.current = null;
+    }
+    // `selProjects`/`selCostCenters` de propósito fora das dependências: o efeito reage à
+    // TROCA de modo, não a cada clique do usuário nos filtros.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [capMode, rankingItems]);
+
+  // Lucro Líquido do modo CP é derivado aqui — o backend entrega faturamento e custo_cap,
+  // e a conta é exatamente a que o usuário descreveu: Faturamento − Custos (CP).
+  const chartPoints = useMemo(
+    () =>
+      (data?.points ?? []).map((p) => ({
+        ...p,
+        lucro_liquido_cap: (p.faturamento ?? 0) - (p.custo_cap ?? 0),
+      })),
+    [data],
+  );
   const modalChartRef = useRef<EChartsType | null>(null);
 
   useEffect(() => {
@@ -280,6 +370,8 @@ export function EvolucaoFinanceira() {
             onToggle={toggle(setSelProjects)}
             emptyText="Nenhum projeto"
             noOptionsText="Nenhum projeto com movimentação no período."
+            disabled={capMode}
+            disabledTitle="O modo Contas a Pagar é sempre da empresa inteira: a maior parte dos títulos do CAP é corporativa, sem projeto."
           />
         </FilterField>
         <FilterField label="Centro de custo">
@@ -289,6 +381,8 @@ export function EvolucaoFinanceira() {
             onToggle={toggle(setSelCostCenters)}
             emptyText="Todos os centros"
             noOptionsText="Nenhum centro de custo cadastrado."
+            disabled={capMode}
+            disabledTitle="O modo Contas a Pagar é sempre da empresa inteira."
           />
         </FilterField>
         <FilterField label="Atalhos">
@@ -353,9 +447,14 @@ export function EvolucaoFinanceira() {
             <ChartCard
               className="lg:col-span-2"
               title="Evolução mensal"
-              subtitle="Receita, custos e resultado operacional"
+              subtitle={
+                capMode
+                  ? "Receita e custos do Contas a Pagar"
+                  : "Receita, custos e resultado operacional"
+              }
               aside={
                 <div className="flex flex-wrap items-center gap-3">
+                  <CapModeToggle checked={capMode} onChange={setCapMode} />
                   <ValueToggle checked={showAllValues} onChange={setShowAllValues} />
                   <ChartToolButton onClick={() => setExpanded(true)} label="Expandir gráfico">
                     {ExpandIcon}
@@ -364,11 +463,21 @@ export function EvolucaoFinanceira() {
                 </div>
               }
             >
+              {capMode ? (
+                <p className="mb-2 text-xs text-slate-500">
+                  Mesmo total da tela do Contas a Pagar (mês de fluxo de caixa): obrigações da
+                  competência <strong>mais</strong> as de outras competências pagas no mês —
+                  empresa inteira, incluindo repasses de antecipação. O Lucro Líquido (CP) é
+                  Faturamento − Custos (CP). Os filtros de projeto e centro de custo não se
+                  aplicam neste modo.
+                </p>
+              ) : null}
               <FinancialEvolutionMainChart
-                points={data!.points}
+                points={chartPoints}
                 showAllValues={showAllValues}
                 selectedSeries={selectedSeries}
                 onSelectedSeriesChange={applySelection}
+                seriesCatalog={capMode ? CAP_SERIES : MAIN_SERIES}
               />
             </ChartCard>
 
@@ -410,6 +519,8 @@ export function EvolucaoFinanceira() {
         onClose={() => setExpanded(false)}
         actions={
           <>
+            {/* Mesmos controles do card: expandir não pode perder uma opção pelo caminho. */}
+            <CapModeToggle checked={capMode} onChange={setCapMode} />
             <ValueToggle checked={showAllValues} onChange={setShowAllValues} />
             <ChartToolButton
               onClick={() => modalChartRef.current?.dispatchAction({ type: "dataZoom", start: 0, end: 100 })}
@@ -421,8 +532,18 @@ export function EvolucaoFinanceira() {
         }
       >
         {data ? (
+          <>
+          {capMode ? (
+            <p className="mb-2 text-xs text-slate-500">
+              Mesmo total da tela do Contas a Pagar (mês de fluxo de caixa): obrigações da
+              competência <strong>mais</strong> as de outras competências pagas no mês —
+              empresa inteira, incluindo repasses de antecipação. O Lucro Líquido (CP) é
+              Faturamento − Custos (CP).
+            </p>
+          ) : null}
           <FinancialEvolutionMainChart
-            points={data.points}
+            points={chartPoints}
+            seriesCatalog={capMode ? CAP_SERIES : MAIN_SERIES}
             showAllValues={showAllValues}
             selectedSeries={selectedSeries}
             onSelectedSeriesChange={applySelection}
@@ -432,6 +553,7 @@ export function EvolucaoFinanceira() {
             }}
             height="78vh"
           />
+          </>
         ) : null}
       </DashboardModal>
     </div>

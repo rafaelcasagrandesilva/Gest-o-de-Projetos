@@ -11,8 +11,9 @@ import { createSmartLabelLayout } from "@/utils/smartLabelLayout";
 /**
  * Gráfico principal do Dashboard Executivo (Apache ECharts).
  *
- * Séries: Faturamento, Custos de M.O., Custos de Veículos (laranja; só aparece se
- * houver custo no período) e Lucro Operacional. Comportamento profissional:
+ * Séries: Faturamento, Custos (custo TOTAL do projeto: M.O. + veículos + sistemas +
+ * fixos operacionais + impostos + rateio + antecipação — a mesma soma do Dashboard
+ * Operacional), Lucro Operacional e Lucro Líquido. Comportamento profissional:
  * visibilidade das séries controlada pelo React (preserva o estado do usuário),
  * legenda clicável, layout inteligente de rótulos (helper) recalculado a cada
  * interação, e modo `expanded` com zoom (dataZoom). Não reseta o gráfico ao mudar
@@ -21,15 +22,15 @@ import { createSmartLabelLayout } from "@/utils/smartLabelLayout";
  */
 
 const TOL = 0.005;
-/** Custos de Veículos — laranja, mantendo a identidade visual do mockup original. */
-const VEHICLE_COLOR = "#f59e0b";
+/** Lucro Líquido — teal, para não competir com o verde do Lucro Operacional. */
+const NET_PROFIT_COLOR = "#0d9488";
 
-/** Metadados estáveis das séries do gráfico principal. */
+/** Metadados estáveis das séries do gráfico principal (modo normal). */
 export const MAIN_SERIES = [
   { id: "faturamento", name: "Faturamento", field: "faturamento", color: CHART_COLORS.faturamento },
-  { id: "maoObra", name: "Custos de M.O.", field: "custo_mo", color: CHART_COLORS.custos },
-  { id: "veiculos", name: "Custos de Veículos", field: "custo_veiculos", color: VEHICLE_COLOR },
+  { id: "custo", name: "Custos", field: "custo_total", color: CHART_COLORS.custos },
   { id: "lucroOperacional", name: "Lucro Operacional", field: "lucro_operacional", color: CHART_COLORS.caixaPos },
+  { id: "lucroLiquido", name: "Lucro Líquido", field: "lucro_liquido", color: NET_PROFIT_COLOR },
 ] as const satisfies ReadonlyArray<{
   id: string;
   name: string;
@@ -37,8 +38,40 @@ export const MAIN_SERIES = [
   color: string;
 }>;
 
+/**
+ * Modo "Contas a Pagar": o custo vem do CAP (todos os títulos lançados no mês, empresa
+ * inteira) e o Lucro Líquido é derivado dele — Faturamento − Custos (CP). As séries do
+ * modo normal ficam fora: misturar as duas origens de custo no mesmo gráfico faria o
+ * leitor somar coisas que não se somam.
+ */
+export const CAP_SERIES = [
+  { id: "faturamento", name: "Faturamento", field: "faturamento", color: CHART_COLORS.faturamento },
+  { id: "custoCap", name: "Custos (Contas a Pagar)", field: "custo_cap", color: CHART_COLORS.custos },
+  { id: "lucroLiquidoCap", name: "Lucro Líquido (CP)", field: "lucro_liquido_cap", color: NET_PROFIT_COLOR },
+] as const satisfies ReadonlyArray<{
+  id: string;
+  name: string;
+  field: string;
+  color: string;
+}>;
+
 export const MAIN_SERIES_IDS = MAIN_SERIES.map((s) => s.id);
-const NAME_TO_ID = Object.fromEntries(MAIN_SERIES.map((s) => [s.name, s.id]));
+export const CAP_SERIES_IDS = CAP_SERIES.map((s) => s.id);
+
+/** Só Faturamento, Custos e Lucro Operacional acesos; Lucro Líquido entra desligado. */
+export const DEFAULT_SERIES_VISIBILITY: Record<string, boolean> = {
+  faturamento: true,
+  custo: true,
+  lucroOperacional: true,
+  lucroLiquido: false,
+  custoCap: true,
+  lucroLiquidoCap: true,
+};
+const NAME_TO_ID = Object.fromEntries(
+  [...MAIN_SERIES, ...CAP_SERIES].map((s) => [s.name, s.id]),
+);
+
+type SeriesSpec = { id: string; name: string; field: string; color: string };
 
 function hexToRgba(hex: string, alpha: number): string {
   const h = hex.replace("#", "");
@@ -61,6 +94,7 @@ export function FinancialEvolutionMainChart({
   expanded = false,
   onReady,
   height = 380,
+  seriesCatalog,
 }: {
   points: FinancialEvolutionPoint[];
   showAllValues: boolean;
@@ -71,19 +105,25 @@ export function FinancialEvolutionMainChart({
   expanded?: boolean;
   onReady?: (instance: EChartsType) => void;
   height?: number | string;
+  /** Catálogo de séries: MAIN_SERIES (padrão) ou CAP_SERIES no modo Contas a Pagar. */
+  seriesCatalog?: ReadonlyArray<SeriesSpec>;
 }) {
   const option = useMemo<EChartsOption>(() => {
+    const catalog = (seriesCatalog ?? MAIN_SERIES) as ReadonlyArray<SeriesSpec>;
     const months = points.map((p) => monthLabel(p.competencia));
     const last = points.length - 1;
     const numsById: Record<string, number[]> = Object.fromEntries(
-      MAIN_SERIES.map((s) => [s.id, points.map((p) => Number(p[s.field]))]),
+      catalog.map((s) => [
+        s.id,
+        points.map((p) => Number((p as unknown as Record<string, unknown>)[s.field])),
+      ]),
     );
-    const hasVehicle = numsById.veiculos.some((v) => Math.abs(v) > TOL);
-    const isVisibleInCatalog = (id: string) => id !== "veiculos" || hasVehicle;
+    // Todas as séries do catálogo existem sempre; quem escolhe o que aparece é o usuário.
+    const isVisibleInCatalog = (_id: string) => true;
 
     const smartLayout = createSmartLabelLayout({ expanded });
 
-    const series = MAIN_SERIES.map((s) => {
+    const series = catalog.map((s) => {
       const nums = numsById[s.id];
       const present = isVisibleInCatalog(s.id);
       return {
@@ -147,7 +187,7 @@ export function FinancialEvolutionMainChart({
     // aqui markLine/markArea do ECharts). Apenas apresentação: sem tocar séries, tooltips
     // ou cálculos. Os overlays ficam sempre DENTRO do range dos dados (guardas abaixo),
     // então NÃO alteram a escala do eixo.
-    const presentValues = MAIN_SERIES.flatMap((s) => (isVisibleInCatalog(s.id) ? numsById[s.id] : [])).filter(
+    const presentValues = catalog.flatMap((s) => (isVisibleInCatalog(s.id) ? numsById[s.id] : [])).filter(
       (v) => Number.isFinite(v),
     );
     const dataMin = presentValues.length ? Math.min(...presentValues) : 0;
@@ -185,9 +225,9 @@ export function FinancialEvolutionMainChart({
     };
     series.push(baselineSeries as unknown as (typeof series)[number]);
 
-    const legendNames = MAIN_SERIES.filter((s) => isVisibleInCatalog(s.id)).map((s) => s.name);
+    const legendNames = catalog.filter((s) => isVisibleInCatalog(s.id)).map((s) => s.name);
     const legendSelected: Record<string, boolean> = Object.fromEntries(
-      MAIN_SERIES.filter((s) => isVisibleInCatalog(s.id)).map((s) => [s.name, selectedSeries[s.id] !== false]),
+      catalog.filter((s) => isVisibleInCatalog(s.id)).map((s) => [s.name, selectedSeries[s.id] !== false]),
     );
 
     return {
@@ -249,7 +289,7 @@ export function FinancialEvolutionMainChart({
       },
       series,
     };
-  }, [points, showAllValues, expanded, selectedSeries]);
+  }, [points, showAllValues, expanded, selectedSeries, seriesCatalog]);
 
   const onEvents = useMemo(
     () => ({
