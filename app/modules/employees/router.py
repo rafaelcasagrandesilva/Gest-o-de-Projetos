@@ -209,6 +209,22 @@ async def list_employees(
         default=None,
         description="Filtra por Centro de Custo do projeto (Mão de Obra). Omitido = todos.",
     ),
+    cost_center: str | None = Query(
+        default=None,
+        description=(
+            "Filtra diretamente por Centro de Custo (a relação de colaboradores usa este, não "
+            "project_id: há centros administrativos que não são projeto). Tem precedência sobre "
+            "project_id quando ambos vierem."
+        ),
+    ),
+    strict_cost_center: bool = Query(
+        default=False,
+        description=(
+            "Com project_id: traz SÓ quem é do Centro de Custo do projeto ou tem alocação ativa "
+            "nele. Sem isto (padrão do seletor de Mão de Obra), também vêm os compartilhados e os "
+            "que ainda não têm centro definido."
+        ),
+    ),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     competencia: date | None = Query(
@@ -218,10 +234,32 @@ async def list_employees(
     user: User = Depends(get_current_user),
 ) -> list[EmployeeRead]:
     comp = competencia or default_cost_reference()
+    svc = EmployeesService(db)
+    cc = (cost_center or "").strip() if isinstance(cost_center, str) else ""
+    if cc:
+        # Centro de Custo explícito: não passa pela resolução via projeto.
+        rows = await svc.list_employees_as_read(
+            offset=offset,
+            limit=limit,
+            competencia=comp,
+            search=search,
+            cost_center=cc,
+            strict_cost_center=strict_cost_center is True,
+        )
+        include = user_has_permission(user, EMPLOYEES_SENSITIVE)
+        return [redact(r, EMPLOYEE_SENSITIVE_FIELDS, include) for r in rows]
     # Filtro de Mão de Obra por Centro de Custo do projeto — lógica ÚNICA no serviço
     # (mesma usada por /hr/employees e /collaborators), sem regra duplicada aqui.
-    rows = await EmployeesService(db).list_employees_read_for_project(
-        offset=offset, limit=limit, competencia=comp, search=search, project_id=project_id
+    rows = await svc.list_employees_read_for_project(
+        offset=offset,
+        limit=limit,
+        competencia=comp,
+        search=search,
+        project_id=project_id,
+        # `is True` de propósito: chamadas DIRETAS ao handler (testes) não passam pelo FastAPI,
+        # e aí o valor que chega é o próprio objeto `Query` — truthy. Comparar por identidade
+        # mantém o modo permissivo (o do seletor de Mão de Obra) como default de verdade.
+        strict_cost_center=strict_cost_center is True,
     )
     include = user_has_permission(user, EMPLOYEES_SENSITIVE)
     return [redact(r, EMPLOYEE_SENSITIVE_FIELDS, include) for r in rows]

@@ -1,6 +1,4 @@
 import {
-  Fragment,
-  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -12,23 +10,20 @@ import {
   createEmployee,
   deleteEmployee,
   fetchCostCenters,
-  fetchPayroll,
   listEmployees,
   parseCompetenciaYm,
   previewCltCost,
   updateEmployee,
   type Employee,
   type EmployeeCreate,
-  type PayrollLine,
-  type PayrollResponse,
 } from "@/services/employees";
-import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
 import { EmployeeAssignments } from "@/components/employees/EmployeeAssignments";
+import { EmployeesOverviewCards } from "@/components/employees/EmployeesOverviewCards";
+import { CostCenterBadges } from "@/components/employees/CostCenterBadges";
 import { usePermission } from "@/hooks/usePermission";
 import { useAuxiliaryResource } from "@/hooks/useAuxiliaryResource";
-import { TruncatedCell, TruncatedText } from "@/components/TruncatedText";
-import { CollapsiblePanel } from "@/components/ExpandableFormSection";
+import { TruncatedCell } from "@/components/TruncatedText";
 import { formatCurrencyOrDash, parseCurrencyInput } from "@/utils/currency";
 import { Money } from "@/components/Money";
 
@@ -236,17 +231,7 @@ function formToUpdatePayload(
 /** Null-safe: delega ao util compartilhado (valor redigido → "—"). */
 const formatMoney = formatCurrencyOrDash;
 
-const formatCurrency = formatMoney;
-
-/** Variação percentual realizado vs previsto no total do colaborador. */
-function formatDeltaPrevReal(prevT: number, realT: number): string {
-  if (prevT === 0 && realT === 0) return "—";
-  if (prevT === 0) return "—";
-  const p = ((realT - prevT) / prevT) * 100;
-  return `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
-}
-
-type ScenarioKind = "PREVISTO" | "REALIZADO";
+type StatusFilter = "ATIVOS" | "INATIVOS" | "TODOS";
 
 function CltCostLivePreview({
   form,
@@ -656,87 +641,39 @@ export function Employees() {
   const readOnly = !canUpdateEmployees;
   const [items, setItems] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
-  // Recurso AUXILIAR (filtro por Projeto): carregado de forma independente do recurso principal
-  // (a lista de colaboradores). Sem projects.list, o filtro é ocultado — a página NÃO falha.
-  const canFilterByProject = usePermission("projects.list");
-  const projectsAux = useAuxiliaryResource<Project[]>(
-    () => listProjects(),
-    [],
-    [],
-    canFilterByProject,
-  );
-  const [payrollLoading, setPayrollLoading] = useState(true);
+  // Recurso AUXILIAR (filtro por Centro de Custo): carregado de forma independente do recurso
+  // principal (a lista de colaboradores). Se falhar, o filtro some — a página NÃO falha.
+  // Vocabulário ÚNICO do sistema (Centros Administrativos + centros dos projetos ativos), o que
+  // cobre os centros que não são projeto: Administrativo, Financeiro, TI, Diretoria…
+  const costCentersAux = useAuxiliaryResource<string[]>(() => fetchCostCenters(), []);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [referenceCompetencia, setReferenceCompetencia] = useState(monthStartIso);
-  const [scenario, setScenario] = useState<ScenarioKind>("REALIZADO");
-  const [filterProjectId, setFilterProjectId] = useState("");
-  const [payPrev, setPayPrev] = useState<PayrollResponse | null>(null);
-  const [payReal, setPayReal] = useState<PayrollResponse | null>(null);
-  const [expandedPayroll, setExpandedPayroll] = useState<Set<string>>(() => new Set());
-  // UI/UX: cadastro em Drawer (oculto por padrão) + seções da competência recolhidas por padrão.
+  // Mês de referência do custo CLT e do histórico de Centro de Custo. Sem seletor na tela: a
+  // relação de colaboradores é do quadro de HOJE — competência é assunto de folha/CAP.
+  const [referenceCompetencia] = useState(monthStartIso);
+  const [filterCostCenter, setFilterCostCenter] = useState("");
+  // A listagem traz ativos e inativos; a Situação é aplicada aqui na tela.
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>("ATIVOS");
+
+  // Parâmetros da listagem — um só lugar, para que as recargas (criar/editar/excluir)
+  // preservem exatamente os filtros que estão na tela.
+  const listParams = useMemo(
+    () => ({
+      competencia: referenceCompetencia,
+      limit: 200,
+      // `strict_cost_center`: esta é uma RELAÇÃO de colaboradores, não um seletor de alocação —
+      // quem não tem centro definido não pode aparecer em todo centro.
+      ...(filterCostCenter ? { cost_center: filterCostCenter, strict_cost_center: true } : {}),
+    }),
+    [referenceCompetencia, filterCostCenter],
+  );
+  // UI/UX: cadastro em Drawer (oculto por padrão).
   const [showNewDrawer, setShowNewDrawer] = useState(false);
-  const [showResumo, setShowResumo] = useState(false);
-  const [showCustos, setShowCustos] = useState(false);
   // Ponto de entrada de "Histórico" do colaborador (placeholder preparado para evolução futura).
   const [historyEmp, setHistoryEmp] = useState<Employee | null>(null);
 
-  const refreshPayroll = useCallback(async () => {
-    // Sem Dados Sensíveis, os blocos financeiros não existem — não busca a folha (evita 403).
-    if (!canSeeSensitive) {
-      setPayPrev(null);
-      setPayReal(null);
-      setPayrollLoading(false);
-      return;
-    }
-    setPayrollLoading(true);
-    try {
-      const base = {
-        competencia: referenceCompetencia,
-        ...(filterProjectId ? { project_id: filterProjectId } : {}),
-      };
-      const [p, r] = await Promise.all([
-        fetchPayroll({ ...base, scenario: "PREVISTO" }),
-        fetchPayroll({ ...base, scenario: "REALIZADO" }),
-      ]);
-      setPayPrev(p);
-      setPayReal(r);
-      setError(null);
-    } catch (e) {
-      setPayPrev(null);
-      setPayReal(null);
-      setError(
-        isAxiosError(e) && e.response?.status === 403
-          ? "Sem permissão."
-          : "Erro ao carregar folha consolidada."
-      );
-    } finally {
-      setPayrollLoading(false);
-    }
-  }, [referenceCompetencia, filterProjectId, canSeeSensitive]);
-
-  const payroll = scenario === "PREVISTO" ? payPrev : payReal;
-
-  const prevTotalsByEmp = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const l of payPrev?.lines ?? []) m.set(l.employee_id, l.grand_total);
-    return m;
-  }, [payPrev]);
-
-  const realTotalsByEmp = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const l of payReal?.lines ?? []) m.set(l.employee_id, l.grand_total);
-    return m;
-  }, [payReal]);
-
-  // Centro de Custo por colaborador (para a coluna da listagem).
-  const ccByEmp = useMemo(() => {
-    const m = new Map<string, string | null>();
-    for (const e of items) m.set(e.id, e.cost_center);
-    return m;
-  }, [items]);
 
   useEffect(() => {
     let cancelled = false;
@@ -744,7 +681,7 @@ export function Employees() {
       try {
         // Recurso PRINCIPAL (obrigatório): só a lista de colaboradores. O filtro por Projeto é
         // auxiliar e carrega em separado (useAuxiliaryResource), então não pode derrubar esta carga.
-        const emps = await listEmployees({ competencia: referenceCompetencia, limit: 200 });
+        const emps = await listEmployees(listParams);
         if (!cancelled) setItems(emps);
       } catch {
         if (!cancelled) setError("Erro ao listar colaboradores.");
@@ -755,11 +692,7 @@ export function Employees() {
     return () => {
       cancelled = true;
     };
-  }, [referenceCompetencia]);
-
-  useEffect(() => {
-    void refreshPayroll();
-  }, [refreshPayroll]);
+  }, [listParams]);
 
   // Fecha o Drawer de novo colaborador com Esc.
   useEffect(() => {
@@ -809,9 +742,8 @@ export function Employees() {
       await createEmployee(formToCreatePayload(form, referenceCompetencia));
       setForm(emptyForm);
       setShowNewDrawer(false); // fecha o Drawer automaticamente após salvar
-      const data = await listEmployees({ competencia: referenceCompetencia, limit: 200 });
+      const data = await listEmployees(listParams);
       setItems(data);
-      await refreshPayroll(); // mantém competência/cenário/projeto atuais (filtros preservados)
     } catch (err) {
       if (isAxiosError(err) && err.response?.data?.detail) {
         const d = err.response.data.detail;
@@ -839,9 +771,8 @@ export function Employees() {
         // Reativar reabre o ciclo (o backend limpa a data de desligamento).
         await updateEmployee(emp.id, { is_active: true });
       }
-      const data = await listEmployees({ competencia: referenceCompetencia, limit: 200 });
+      const data = await listEmployees(listParams);
       setItems(data);
-      await refreshPayroll();
     } catch (err) {
       if (isAxiosError(err) && typeof err.response?.data?.detail === "string") {
         setError(err.response.data.detail);
@@ -855,9 +786,8 @@ export function Employees() {
     if (!confirm("Excluir colaborador?")) return;
     try {
       await deleteEmployee(id);
-      const data = await listEmployees({ competencia: referenceCompetencia, limit: 200 });
+      const data = await listEmployees(listParams);
       setItems(data);
-      await refreshPayroll();
     } catch (err) {
       // Cadastro com movimentação não pode ser excluído — o backend orienta a inativar.
       if (isAxiosError(err) && typeof err.response?.data?.detail === "string") {
@@ -868,38 +798,11 @@ export function Employees() {
     }
   }
 
-  const teamSummary = useMemo(() => {
-    if (!payroll) {
-      return {
-        totalColaboradores: 0,
-        totalFolha: 0,
-        totalClt: 0,
-        totalPj: 0,
-        folhaClt: 0,
-        folhaPj: 0,
-      };
-    }
-    const activeLines = payroll.lines.filter((l) => l.is_active);
-    const cltList = activeLines.filter((l) => l.employment_type === "CLT");
-    const pjList = activeLines.filter((l) => l.employment_type === "PJ");
-    return {
-      totalColaboradores: activeLines.length,
-      totalFolha: payroll.totals.grand_total,
-      totalClt: cltList.length,
-      totalPj: pjList.length,
-      folhaClt: cltList.reduce((s, l) => s + l.grand_total, 0),
-      folhaPj: pjList.reduce((s, l) => s + l.grand_total, 0),
-    };
-  }, [payroll]);
-
-  function toggleExpandPayroll(id: string) {
-    setExpandedPayroll((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
+  const visibleItems = useMemo(() => {
+    if (filterStatus === "TODOS") return items;
+    const ativo = filterStatus === "ATIVOS";
+    return items.filter((e) => Boolean(e.is_active) === ativo);
+  }, [items, filterStatus]);
 
   // Acesso ao módulo exige Visualizar (employees.read). Sem isso, nada é renderizado.
   if (!canAccessModule) {
@@ -913,59 +816,44 @@ export function Employees() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-semibold text-slate-900">Colaboradores — folha mensal</h2>
+        <h2 className="text-xl font-semibold text-slate-900">Colaboradores</h2>
         <p className="text-sm text-slate-500">
-          O <strong>custo mensal CLT</strong> é calculado no cadastro (salário, periculosidade, função dirigida,
-          encargos das Configurações, VR e opcionais) e gravado no colaborador. A folha soma as alocações em{" "}
-          <strong>projetos</strong> (usa esse custo automaticamente; overrides ficam na aba Mão de obra) e os{" "}
-          <strong>custos administrativos</strong> abaixo.
+          Relação de colaboradores. O <strong>custo mensal CLT</strong> é calculado no cadastro (salário,
+          periculosidade, função dirigida, encargos das Configurações, VR e opcionais) e exibido para o mês
+          corrente. O filtro por <strong>Centro de Custo</strong> traz quem é do centro mais quem tem alocação
+          ativa nele. A coluna Centro de Custo mostra todos os centros do colaborador — o do cadastro em
+          destaque e os das alocações ao lado. Os consolidados da folha ficam no Dashboard do projeto e no
+          Contas a Pagar.
         </p>
       </div>
 
       <div className="flex flex-wrap items-end gap-4 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-        <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">Competência</label>
-          <input
-            type="month"
-            value={referenceCompetencia.slice(0, 7)}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v) setReferenceCompetencia(`${v}-01`);
-            }}
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-          />
+        <div className="min-w-[10rem]">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Situação</label>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value as StatusFilter)}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+          >
+            <option value="ATIVOS">Ativos</option>
+            <option value="INATIVOS">Não ativos</option>
+            <option value="TODOS">Todos</option>
+          </select>
         </div>
-        <div>
-          <span className="mb-1 block text-xs font-medium text-slate-600">Cenário</span>
-          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-            {(["PREVISTO", "REALIZADO"] as const).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setScenario(s)}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
-                  scenario === s ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
-                }`}
-              >
-                {s === "PREVISTO" ? "Previsto" : "Realizado"}
-              </button>
-            ))}
-          </div>
-        </div>
-        {/* Filtro auxiliar: só aparece quando o recurso de Projetos está disponível (usuário tem
-            projects.list). Sem acesso, o controle some — nenhuma mensagem de erro. */}
-        {projectsAux.available && (
-          <div className="min-w-[12rem]">
-            <label className="mb-1 block text-xs font-medium text-slate-600">Projeto (filtro)</label>
+        {/* Filtro auxiliar: some se o vocabulário de Centros de Custo não puder ser carregado —
+            nenhuma mensagem de erro, a lista continua funcionando. */}
+        {costCentersAux.available && (
+          <div className="min-w-[14rem]">
+            <label className="mb-1 block text-xs font-medium text-slate-600">Centro de Custo</label>
             <select
-              value={filterProjectId}
-              onChange={(e) => setFilterProjectId(e.target.value)}
+              value={filterCostCenter}
+              onChange={(e) => setFilterCostCenter(e.target.value)}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
             >
-              <option value="">Todos os projetos</option>
-              {projectsAux.data.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
+              <option value="">Todos os centros</option>
+              {costCentersAux.data.map((cc) => (
+                <option key={cc} value={cc}>
+                  {cc}
                 </option>
               ))}
             </select>
@@ -989,12 +877,20 @@ export function Employees() {
         </div>
       )}
 
+      {!loading && <EmployeesOverviewCards items={items} />}
+
       {/* TABELA DE CADASTRO — informação principal, logo após os filtros e o botão. */}
       {loading ? (
         <div className="text-slate-500">Carregando…</div>
       ) : (
         <div>
-          <h3 className="mb-2 text-lg font-semibold text-slate-900">Colaboradores cadastrados</h3>
+          <h3 className="mb-2 text-lg font-semibold text-slate-900">
+            Colaboradores cadastrados{" "}
+            <span className="text-sm font-normal text-slate-500">
+              ({visibleItems.length}
+              {visibleItems.length === items.length ? "" : ` de ${items.length}`})
+            </span>
+          </h3>
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <table className="w-full text-left text-sm">
               <thead className="border-b border-slate-100 bg-slate-50/80">
@@ -1002,6 +898,7 @@ export function Employees() {
                   <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
                   <th className="px-4 py-3 font-medium text-slate-600">Cargo</th>
                   <th className="px-4 py-3 font-medium text-slate-600">Tipo</th>
+                  <th className="px-4 py-3 font-medium text-slate-600">Centro de Custo</th>
                   {canSeeSensitive && (
                     <>
                       <th className="px-4 py-3 text-right font-medium text-slate-600">Salário base</th>
@@ -1013,7 +910,7 @@ export function Employees() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((emp) => (
+                {visibleItems.map((emp) => (
                   <tr key={emp.id} className="border-b border-slate-50">
                     <td className="min-w-0 max-w-[280px] px-4 py-3 align-middle">
                       <TruncatedCell value={emp.full_name} maxWidthClass="max-w-[280px]" />
@@ -1022,6 +919,9 @@ export function Employees() {
                       <TruncatedCell value={emp.role_title} maxWidthClass="max-w-[220px]" />
                     </td>
                     <td className="px-4 py-3">{emp.employment_type}</td>
+                    <td className="px-4 py-3 align-middle">
+                      <CostCenterBadges employee={emp} />
+                    </td>
                     {canSeeSensitive && (
                       <>
                         <td className="px-4 py-3 text-slate-700">
@@ -1085,232 +985,6 @@ export function Employees() {
         </div>
       )}
 
-      {/* Resumo/Custos da competência: só existem com Dados Sensíveis (employees.sensitive). */}
-      {canSeeSensitive && (
-        <>
-      {/* RESUMO DA COMPETÊNCIA — inicia recolhido. */}
-      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <button
-          type="button"
-          onClick={() => setShowResumo((v) => !v)}
-          className="flex w-full items-center gap-2 px-4 py-3 text-left"
-          aria-expanded={showResumo}
-        >
-          <span className="text-slate-400">{showResumo ? "▼" : "▶"}</span>
-          <span className="text-lg font-semibold text-slate-900">Resumo da competência</span>
-        </button>
-        <CollapsiblePanel open={showResumo}>
-          <div className="border-t border-slate-100 px-4 py-4">
-            {payrollLoading ? (
-              <div className="text-slate-500">Carregando…</div>
-            ) : (
-              <div className="space-y-4">
-                <p className="text-sm text-slate-500">
-              Totais no cenário <strong>{scenario === "PREVISTO" ? "previsto" : "realizado"}</strong>
-              {filterProjectId ? " — apenas alocações do projeto selecionado (custos administrativos mantidos)." : "."}
-            </p>
-            {payroll ? (
-              <div className="rounded-xl border-2 border-indigo-100 bg-gradient-to-br from-white to-indigo-50/30 p-5 shadow-sm">
-                <p className="text-sm font-medium text-slate-600">Folha total</p>
-                <p className="mt-1 text-3xl font-semibold tabular-nums text-slate-900">
-                  {formatCurrency(payroll.totals.grand_total)}
-                </p>
-                <div className="mt-3 flex flex-wrap gap-x-8 gap-y-2 text-sm">
-                  <span className="tabular-nums text-slate-700">
-                    <span className="font-medium text-slate-500">Projetos:</span>{" "}
-                    {formatMoney(payroll.totals.sum_projects)}
-                  </span>
-                  <span className="tabular-nums text-slate-700">
-                    <span className="font-medium text-slate-500">Administrativo:</span>{" "}
-                    {formatMoney(payroll.totals.sum_administrative)}
-                  </span>
-                </div>
-              </div>
-            ) : null}
-            {payPrev && payReal ? (
-              <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4">
-                <p className="text-sm font-semibold text-slate-800">Previsto × Realizado (mesma competência)</p>
-                <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-                  <div>
-                    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Previsto</dt>
-                    <dd className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
-                      {formatMoney(payPrev.totals.grand_total)}
-                    </dd>
-                    <dd className="mt-1 text-xs text-slate-600">
-                      Proj. {formatMoney(payPrev.totals.sum_projects)} · Adm.{" "}
-                      {formatMoney(payPrev.totals.sum_administrative)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Realizado</dt>
-                    <dd className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
-                      {formatMoney(payReal.totals.grand_total)}
-                    </dd>
-                    <dd className="mt-1 text-xs text-slate-600">
-                      Proj. {formatMoney(payReal.totals.sum_projects)} · Adm.{" "}
-                      {formatMoney(payReal.totals.sum_administrative)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Δ (real vs prev.)</dt>
-                    <dd className="mt-1 text-lg font-semibold tabular-nums text-indigo-700">
-                      {formatDeltaPrevReal(payPrev.totals.grand_total, payReal.totals.grand_total)}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-            ) : null}
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <p className="text-sm font-medium text-slate-500">Colaboradores ativos (folha)</p>
-                <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">
-                  {teamSummary.totalColaboradores}
-                </p>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <p className="text-sm font-medium text-slate-500">CLT (ativos)</p>
-                <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{teamSummary.totalClt}</p>
-                <p className="mt-1 text-sm tabular-nums text-slate-600">{formatCurrency(teamSummary.folhaClt)}</p>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <p className="text-sm font-medium text-slate-500">PJ (ativos)</p>
-                <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{teamSummary.totalPj}</p>
-                <p className="mt-1 text-sm tabular-nums text-slate-600">{formatCurrency(teamSummary.folhaPj)}</p>
-              </div>
-            </div>
-              </div>
-            )}
-          </div>
-        </CollapsiblePanel>
-      </section>
-
-      {/* CUSTOS DA COMPETÊNCIA — inicia recolhido. */}
-      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <button
-          type="button"
-          onClick={() => setShowCustos((v) => !v)}
-          className="flex w-full items-center gap-2 px-4 py-3 text-left"
-          aria-expanded={showCustos}
-        >
-          <span className="text-slate-400">{showCustos ? "▼" : "▶"}</span>
-          <span className="text-lg font-semibold text-slate-900">
-            Custos da competência{payroll ? ` (${payroll.lines.length} colaboradores)` : ""}
-          </span>
-        </button>
-        <CollapsiblePanel open={showCustos}>
-          <div className="border-t border-slate-100 px-4 py-4">
-            {payrollLoading ? (
-              <div className="text-slate-500">Carregando…</div>
-            ) : payroll ? (
-            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b border-slate-100 bg-slate-50/80">
-                  <tr>
-                    <th className="px-4 py-3 font-medium text-slate-600" />
-                    <th className="px-4 py-3 font-medium text-slate-600">Nome</th>
-                    <th className="px-4 py-3 font-medium text-slate-600">Cargo</th>
-                    <th className="px-4 py-3 font-medium text-slate-600">Tipo</th>
-                    <th className="px-4 py-3 font-medium text-slate-600">Centro de Custo</th>
-                    <th className="px-4 py-3 text-right font-medium text-slate-600">Projetos</th>
-                    <th className="px-4 py-3 text-right font-medium text-slate-600">Adm.</th>
-                    <th className="px-4 py-3 text-right font-medium text-slate-600">
-                      Total ({scenario === "PREVISTO" ? "prev." : "real."})
-                    </th>
-                    <th className="px-4 py-3 text-right font-medium text-slate-600">Previsto</th>
-                    <th className="px-4 py-3 text-right font-medium text-slate-600">Realizado</th>
-                    <th className="px-4 py-3 text-right font-medium text-slate-600">Δ (%)</th>
-                    <th className="px-4 py-3 font-medium text-slate-600">Ativo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payroll.lines.map((line: PayrollLine) => {
-                    const open = expandedPayroll.has(line.employee_id);
-                    const prevEmp = prevTotalsByEmp.get(line.employee_id) ?? 0;
-                    const realEmp = realTotalsByEmp.get(line.employee_id) ?? 0;
-                    return (
-                      <Fragment key={line.employee_id}>
-                        <tr className={`border-b border-slate-50 ${!line.is_active ? "opacity-70" : ""}`}>
-                          <td className="px-4 py-3">
-                            {line.by_project.length > 0 ? (
-                              <button
-                                type="button"
-                                onClick={() => toggleExpandPayroll(line.employee_id)}
-                                className="text-indigo-600 hover:underline"
-                              >
-                                {open ? "−" : "+"}
-                              </button>
-                            ) : (
-                              <span className="text-slate-300">·</span>
-                            )}
-                          </td>
-                          <td className="min-w-0 max-w-[280px] px-4 py-3 align-middle font-medium text-slate-900">
-                            <TruncatedCell value={line.full_name} maxWidthClass="max-w-[280px]" />
-                          </td>
-                          <td className="min-w-0 max-w-[220px] px-4 py-3 align-middle text-slate-600">
-                            <TruncatedCell value={line.role_title} maxWidthClass="max-w-[220px]" />
-                          </td>
-                          <td className="px-4 py-3">{line.employment_type}</td>
-                          <td className="px-4 py-3 text-slate-600">{ccByEmp.get(line.employee_id) || "—"}</td>
-                          <td className="px-4 py-3">
-                            <Money value={line.projects_total} />
-                          </td>
-                          <td className="px-4 py-3 text-slate-600">
-                            <Money value={line.administrative_cost} />
-                          </td>
-                          <td className="px-4 py-3 font-medium">
-                            <Money value={line.grand_total} />
-                          </td>
-                          <td className="px-4 py-3 text-slate-600">
-                            <Money value={prevEmp} />
-                          </td>
-                          <td className="px-4 py-3 text-slate-600">
-                            <Money value={realEmp} />
-                          </td>
-                          <td className="px-4 py-3 text-right tabular-nums text-indigo-700">
-                            {formatDeltaPrevReal(prevEmp, realEmp)}
-                          </td>
-                          <td className="px-4 py-3">{line.is_active ? "Sim" : "Não"}</td>
-                        </tr>
-                        {open && line.by_project.length > 0 ? (
-                          <tr className="border-b border-slate-50 bg-slate-50/50">
-                            <td colSpan={12} className="px-4 py-3">
-                              <p className="mb-2 text-xs font-medium text-slate-600">Por projeto</p>
-                              <ul className="space-y-1 text-xs text-slate-700">
-                                {line.by_project.map((s) => (
-                                  <li
-                                    key={s.labor_id}
-                                    className="flex flex-wrap justify-between gap-2 border-b border-slate-100/80 py-1"
-                                  >
-                                    <span className="min-w-0 flex-1">
-                                      <TruncatedText maxWidthClass="max-w-[240px]">{s.project_name}</TruncatedText>
-                                    </span>
-                                    <span className="tabular-nums text-slate-600">
-                                      {s.allocation_percentage}% → {formatMoney(s.allocated_cost)}
-                                      <span className="ml-2 text-slate-400">
-                                        (integral {formatMoney(s.full_monthly_cost)})
-                                      </span>
-                                    </span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </td>
-                          </tr>
-                        ) : null}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            ) : (
-              <div className="text-slate-500">Sem dados.</div>
-            )}
-          </div>
-        </CollapsiblePanel>
-      </section>
-        </>
-      )}
-
       {editingId && !readOnly && (
         <EditEmployeePanel
           emp={items.find((e) => e.id === editingId)!}
@@ -1318,10 +992,9 @@ export function Employees() {
           onCancel={() => setEditingId(null)}
           onSaved={async () => {
             setEditingId(null);
-            const data = await listEmployees({ competencia: referenceCompetencia, limit: 200 });
+            const data = await listEmployees(listParams);
             setItems(data);
-            await refreshPayroll();
-          }}
+                }}
         />
       )}
 

@@ -29,6 +29,10 @@ class EmployeeRead(UUIDTimestampRead):
     end_date: date | None = None
     # Centro de Custo principal + flag de alocação compartilhada.
     cost_center: str | None = None
+    # TODOS os centros onde o colaborador atua: o do cadastro mais os das alocações ATIVAS.
+    # Quem tem contrato em mais de um centro aparece com todos (o `cost_center` sozinho
+    # mostrava só o principal e escondia o multi-contrato na listagem).
+    cost_centers: list[str] = Field(default_factory=list)
     can_allocate_other_cost_centers: bool = False
     has_periculosidade: bool = False
     has_adicional_dirigida: bool = False

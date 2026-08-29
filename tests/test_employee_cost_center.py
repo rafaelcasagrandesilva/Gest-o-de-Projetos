@@ -84,6 +84,28 @@ class EmployeeCostCenterDBTests(unittest.IsolatedAsyncioTestCase):
             rows_all = await svc.list_employees(search=f"CC {tag}", cost_center=None, limit=50)
             self.assertEqual(len({r.full_name for r in rows_all}), 4)
 
+            # ESTRITO (relação de colaboradores da tela Colaboradores): compartilhado e não
+            # classificado saem — eles só existem para o SELETOR de alocação, e faziam o filtro
+            # por projeto parecer que "não filtrava nada".
+            estrito = await svc.list_employees_read_for_project(
+                search=f"CC {tag}",
+                competencia=date(2099, 7, 1),
+                project_id=proj_cc.id,
+                strict_cost_center=True,
+                limit=50,
+            )
+            nomes_estrito = {r.full_name for r in estrito}
+            self.assertEqual(nomes_estrito, {e_match.full_name})
+
+            # E o modo padrão (seletor) permanece intacto — nenhuma regressão na Mão de Obra.
+            padrao = await svc.list_employees_read_for_project(
+                search=f"CC {tag}", competencia=date(2099, 7, 1), project_id=proj_cc.id, limit=50
+            )
+            self.assertEqual(
+                {r.full_name for r in padrao},
+                {e_match.full_name, e_shared.full_name, e_null.full_name},
+            )
+
             # --- Folha: só quem tem lançamento no CAP (mês de pagamento) aparece ---
             comp = date(2099, 7, 1)  # competência trabalhada; paga no CAP de 2099-08
             # e_match: tem folha no CAP → aparece. e_null/e_other: sem lançamento → não aparecem.
@@ -239,6 +261,8 @@ class EmployeesEndpointFilterDBTests(unittest.IsolatedAsyncioTestCase):
                     await cchs.ensure_initial_history(e)
 
                 # Chama o handler real do endpoint /employees, com project_id (como o frontend).
+                # Chamada direta (fora do FastAPI) exige passar TODO parâmetro de Query — sem
+                # isso o default continua sendo o objeto `Query`, que é truthy.
                 reads = await employees_endpoint(
                     db=s,
                     search=f"CC {tag}",
@@ -246,15 +270,35 @@ class EmployeesEndpointFilterDBTests(unittest.IsolatedAsyncioTestCase):
                     offset=0,
                     limit=50,
                     competencia=comp,
+                    strict_cost_center=False,
                 )
                 names = {r.full_name for r in reads}
                 self.assertIn(e_match.full_name, names)      # mesmo centro → aparece
                 self.assertIn(e_null.full_name, names)       # sem centro → aparece
                 self.assertNotIn(e_other.full_name, names)   # centro diferente → NÃO aparece
 
+                # ESTRITO (relação de colaboradores): quem não tem centro sai da lista.
+                reads_estrito = await employees_endpoint(
+                    db=s,
+                    search=f"CC {tag}",
+                    project_id=proj.id,
+                    offset=0,
+                    limit=50,
+                    competencia=comp,
+                    strict_cost_center=True,
+                )
+                nomes_estrito = {r.full_name for r in reads_estrito}
+                self.assertEqual(nomes_estrito, {e_match.full_name})
+
                 # Sem project_id → sem filtro (todos aparecem).
                 reads_all = await employees_endpoint(
-                    db=s, search=f"CC {tag}", project_id=None, offset=0, limit=50, competencia=comp
+                    db=s,
+                    search=f"CC {tag}",
+                    project_id=None,
+                    offset=0,
+                    limit=50,
+                    competencia=comp,
+                    strict_cost_center=False,
                 )
                 self.assertEqual(len({r.full_name for r in reads_all}), 3)
             finally:

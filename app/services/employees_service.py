@@ -79,14 +79,54 @@ class EmployeesService:
         else:
             emp.total_cost = calculate_pj_total_cost(emp)
 
+    async def active_assignment_cost_centers(self, employee_ids: list) -> dict:
+        """Centros de Custo das alocações ATIVAS, por colaborador (uma query, sem N+1)."""
+        ids = [i for i in employee_ids if i is not None]
+        if not ids:
+            return {}
+        from app.models.employee_assignment import AssignmentStatus, EmployeeAssignment
+
+        rows = (
+            await self.session.execute(
+                select(EmployeeAssignment.employee_id, EmployeeAssignment.cost_center).where(
+                    EmployeeAssignment.employee_id.in_(ids),
+                    EmployeeAssignment.status == AssignmentStatus.ATIVA,
+                )
+            )
+        ).all()
+        out: dict = {}
+        for emp_id, cc in rows:
+            nome = (cc or "").strip()
+            if nome:
+                out.setdefault(emp_id, set()).add(nome)
+        return out
+
+    @staticmethod
+    def _merge_cost_centers(principal: str | None, alocados: set | None) -> list[str]:
+        """Centro do cadastro + centros das alocações, sem repetir, em ordem estável."""
+        nomes = []
+        vistos = set()
+        for nome in [(principal or "").strip(), *sorted(alocados or ())]:
+            chave = nome.lower()
+            if nome and chave not in vistos:
+                vistos.add(chave)
+                nomes.append(nome)
+        return nomes
+
     async def employee_to_read(self, emp: Employee, *, competencia: date) -> EmployeeRead:
         settings = await SettingsService(self.session).get_or_create()
         if emp.employment_type == "CLT":
             tc = calculate_clt_cost(emp, settings, competencia.year, competencia.month)
         else:
             tc = calculate_pj_total_cost(emp)
+        alocados = (await self.active_assignment_cost_centers([emp.id])).get(emp.id)
         base = EmployeeRead.model_validate(emp)
-        return base.model_copy(update={"total_cost": tc})
+        return base.model_copy(
+            update={
+                "total_cost": tc,
+                "cost_centers": self._merge_cost_centers(emp.cost_center, alocados),
+            }
+        )
 
     async def list_employees_as_read(
         self,
@@ -96,21 +136,35 @@ class EmployeesService:
         competencia: date,
         search: str | None = None,
         cost_center: str | None = None,
+        strict_cost_center: bool = False,
     ) -> list[EmployeeRead]:
         # Filtro por Centro de Custo é TEMPORAL: resolve pela própria `competencia` do
         # relatório/lista (histórico). O valor congelado no cache não governa mais.
         rows = await self.employees.list(
-            offset=offset, limit=limit, search=search, cost_center=cost_center, competence=competencia
+            offset=offset,
+            limit=limit,
+            search=search,
+            cost_center=cost_center,
+            competence=competencia,
+            strict_cost_center=strict_cost_center,
         )
         settings = await SettingsService(self.session).get_or_create()
         y, m = competencia.year, competencia.month
+        centros = await self.active_assignment_cost_centers([e.id for e in rows])
         out: list[EmployeeRead] = []
         for emp in rows:
             if emp.employment_type == "CLT":
                 tc = calculate_clt_cost(emp, settings, y, m)
             else:
                 tc = calculate_pj_total_cost(emp)
-            out.append(EmployeeRead.model_validate(emp).model_copy(update={"total_cost": tc}))
+            out.append(
+                EmployeeRead.model_validate(emp).model_copy(
+                    update={
+                        "total_cost": tc,
+                        "cost_centers": self._merge_cost_centers(emp.cost_center, centros.get(emp.id)),
+                    }
+                )
+            )
         return out
 
     async def list_employees(
@@ -184,11 +238,22 @@ class EmployeesService:
         competencia: date,
         search: str | None = None,
         project_id=None,
+        strict_cost_center: bool = False,
     ) -> list[EmployeeRead]:
-        """Idem `list_employees_for_project`, porém já no formato de leitura (com custo)."""
+        """Idem `list_employees_for_project`, porém já no formato de leitura (com custo).
+
+        `strict_cost_center` serve à RELAÇÃO de colaboradores (tela Colaboradores): traz só quem
+        é do centro do projeto ou tem alocação ativa nele. O padrão (False) preserva o seletor de
+        Mão de Obra, onde quem não tem centro precisa continuar disponível para ser alocado.
+        """
         cc = await self.cost_center_filter_for_project(project_id)
         return await self.list_employees_as_read(
-            offset=offset, limit=limit, competencia=competencia, search=search, cost_center=cc
+            offset=offset,
+            limit=limit,
+            competencia=competencia,
+            search=search,
+            cost_center=cc,
+            strict_cost_center=strict_cost_center,
         )
 
     async def get_employee(self, employee_id) -> Employee:

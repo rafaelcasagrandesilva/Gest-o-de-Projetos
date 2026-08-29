@@ -21,15 +21,17 @@ class EmployeeRepository(Repository[Employee]):
         search: str | None = None,
         cost_center: str | None = None,
         competence: date | None = None,
+        strict_cost_center: bool = False,
     ) -> list[Employee]:
         stmt = select(Employee)
         if search is not None:
             q = str(search).strip()
             if q:
                 stmt = stmt.where(Employee.full_name.ilike(f"%{q}%"))
-        # Filtro por Centro de Custo (Projetos → Custos → Mão de Obra): quando informado,
-        # mostra apenas colaboradores do MESMO centro OU compartilhados
-        # (can_allocate_other_cost_centers) OU sem centro (legado/não classificado).
+        # Filtro por Centro de Custo. Dois modos:
+        #   padrão  (seletor de Mão de Obra) — do MESMO centro OU com alocação ativa nele OU
+        #           compartilhados (can_allocate_other_cost_centers) OU sem centro definido;
+        #   estrito (relação de colaboradores) — só quem é do centro ou tem alocação ativa nele.
         #
         # TEMPORAL: com `competence`, o centro do colaborador é resolvido POR COMPETÊNCIA a
         # partir do histórico (subquery correlata — 1 query, sem N+1, paginação no banco).
@@ -60,10 +62,16 @@ class EmployeeRepository(Repository[Employee]):
                 )
                 .exists()
             )
+            # ESTRITO (listagem/relação de colaboradores): pertence ao centro ou tem alocação
+            # ativa nele. Fora ficam os "elegíveis por conveniência" — quem pode atuar em outros
+            # centros e quem ainda não tem centro definido —, que só fazem sentido em um SELETOR
+            # de alocação, não numa relação de quem é do projeto.
+            pertence = or_(func.lower(eff_cc) == cc.lower(), tem_alocacao_no_centro)
             stmt = stmt.where(
-                or_(
-                    func.lower(eff_cc) == cc.lower(),
-                    tem_alocacao_no_centro,
+                pertence
+                if strict_cost_center
+                else or_(
+                    pertence,
                     Employee.can_allocate_other_cost_centers.is_(True),
                     eff_cc.is_(None),
                 )

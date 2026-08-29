@@ -20,6 +20,8 @@ export interface Employee {
   end_date: string | null;
   /** Centro de Custo principal + flag de alocação compartilhada. */
   cost_center: string | null;
+  /** Todos os centros onde atua: o do cadastro + os das alocações ATIVAS. */
+  cost_centers: string[];
   can_allocate_other_cost_centers: boolean;
   has_periculosidade: boolean;
   has_adicional_dirigida: boolean;
@@ -82,6 +84,10 @@ export async function listEmployees(params?: {
   limit?: number;
   /** Filtra por Centro de Custo do projeto (Mão de Obra). */
   project_id?: string;
+  /** Filtra direto por Centro de Custo (precede project_id). */
+  cost_center?: string;
+  /** Só quem é do centro ou tem alocação ativa nele (exclui compartilhados/sem centro). */
+  strict_cost_center?: boolean;
 }): Promise<Employee[]> {
   const { data } = await api.get<Employee[]>("/employees/", { params });
   return data;
