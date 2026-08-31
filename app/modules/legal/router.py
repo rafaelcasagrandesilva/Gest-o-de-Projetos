@@ -864,9 +864,10 @@ async def executive_summary(db: AsyncSession = Depends(get_db)) -> LegalExecutiv
 async def list_events(
     start: datetime = Query(..., description="Início da janela (inclusive)"),
     end: datetime = Query(..., description="Fim da janela (inclusive)"),
+    case_id: UUID | None = Query(default=None, description="Recorta os compromissos de um processo."),
     db: AsyncSession = Depends(get_db),
 ) -> list[LegalEventRead]:
-    events = await LegalEventService(db).list_between(start=start, end=end)
+    events = await LegalEventService(db).list_between(start=start, end=end, case_id=case_id)
     return await _events_with_case_context(db, events)
 
 

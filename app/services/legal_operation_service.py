@@ -207,13 +207,20 @@ class LegalEventService:
         return new
 
     async def list_between(
-        self, *, start: datetime, end: datetime, only_open: bool = False
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        only_open: bool = False,
+        case_id: UUID | None = None,
     ) -> list[LegalEvent]:
         stmt = select(LegalEvent).where(
             LegalEvent.scheduled_for.is_not(None),
             LegalEvent.scheduled_for >= start,
             LegalEvent.scheduled_for <= end,
         )
+        if case_id is not None:
+            stmt = stmt.where(LegalEvent.case_id == case_id)
         if only_open:
             stmt = stmt.where(LegalEvent.status == LegalEventStatus.AGENDADO.value)
         rows = await self.session.execute(stmt.order_by(LegalEvent.scheduled_for.asc()))

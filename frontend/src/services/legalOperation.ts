@@ -87,9 +87,13 @@ export async function fetchLegalSummary(): Promise<LegalExecutiveSummary> {
   return data;
 }
 
-export async function listEvents(start: Date, end: Date): Promise<LegalEvent[]> {
+export async function listEvents(start: Date, end: Date, caseId?: string): Promise<LegalEvent[]> {
   const { data } = await api.get<LegalEvent[]>("/legal/events", {
-    params: { start: start.toISOString(), end: end.toISOString() },
+    params: {
+      start: start.toISOString(),
+      end: end.toISOString(),
+      ...(caseId ? { case_id: caseId } : {}),
+    },
   });
   return data;
 }
