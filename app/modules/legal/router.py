@@ -26,6 +26,8 @@ from fastapi import (
     UploadFile,
     status,
 )
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,6 +79,15 @@ from app.schemas.legal import (
     LegalProjectRead,
     LegalProjectUpdate,
 )
+from app.schemas.legal import (
+    LegalEventConclude,
+    LegalEventCreate,
+    LegalEventRead,
+    LegalEventReschedule,
+    LegalExecutiveSummary,
+    LegalNoteCreate,
+    LegalTimelineEntryRead,
+)
 from app.schemas.legal_import import LegalImportReport, LegalImportRunRead
 from app.services.legal_import_parser import (
     LegalImportSourceError,
@@ -84,6 +95,12 @@ from app.services.legal_import_parser import (
     build_payload,
 )
 from app.services.legal_import_service import LegalImportService
+from app.services.legal_operation_service import (
+    LegalEventService,
+    LegalTimelineService,
+    LegalWorkService,
+)
+from app.models.legal_operation import LegalTimelineEntryType
 from app.services.legal_service import MONEY_FIELDS, CaseFilters, LegalService, PersonFilters
 
 router = APIRouter()
@@ -821,3 +838,141 @@ async def confirm_legal_import(
     """Executa a importação. Os mesmos arquivos da pré-visualização produzem o mesmo resultado."""
     parsed = await _read_source_files(spreadsheet, panel)
     return await LegalImportService(db).apply(parsed, actor=user, request=request)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 0 — Central de Trabalho, Agenda e Timeline
+#
+# Permissões: reaproveitam os recursos JÁ existentes do módulo (`legal_cases.*`). A
+# especificação prevê recursos próprios (`legal_events`, `legal_timeline`) na Fase 1; trocar o
+# gate depois é uma linha, e evita mexer agora em permissões semeadas nos perfis.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/work-center", dependencies=_cases_list + _workspace)
+async def work_center(db: AsyncSession = Depends(get_db)) -> dict:
+    """Central de Trabalho: o que exige ação hoje, o que vem na semana e o que não tem dono."""
+    return await LegalWorkService(db).work_center()
+
+
+@router.get("/summary", response_model=LegalExecutiveSummary, dependencies=_overview + _workspace)
+async def executive_summary(db: AsyncSession = Depends(get_db)) -> LegalExecutiveSummary:
+    return LegalExecutiveSummary(**await LegalWorkService(db).executive_summary())
+
+
+@router.get("/events", response_model=list[LegalEventRead], dependencies=_cases_list + _workspace)
+async def list_events(
+    start: datetime = Query(..., description="Início da janela (inclusive)"),
+    end: datetime = Query(..., description="Fim da janela (inclusive)"),
+    db: AsyncSession = Depends(get_db),
+) -> list[LegalEventRead]:
+    events = await LegalEventService(db).list_between(start=start, end=end)
+    return await _events_with_case_context(db, events)
+
+
+@router.post(
+    "/events", response_model=LegalEventRead, status_code=201, dependencies=_cases_update + _workspace
+)
+async def create_event(
+    payload: LegalEventCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> LegalEventRead:
+    event = await LegalEventService(db).create(payload.model_dump(), actor_id=actor.id)
+    await db.commit()
+    await db.refresh(event)
+    return (await _events_with_case_context(db, [event]))[0]
+
+
+@router.post(
+    "/events/{event_id}/conclude",
+    response_model=LegalEventRead,
+    dependencies=_cases_update + _workspace,
+)
+async def conclude_event(
+    event_id: UUID,
+    payload: LegalEventConclude,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> LegalEventRead:
+    event = await LegalEventService(db).conclude(event_id, outcome=payload.outcome, actor_id=actor.id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Evento não encontrado.")
+    await db.commit()
+    await db.refresh(event)
+    return (await _events_with_case_context(db, [event]))[0]
+
+
+@router.post(
+    "/events/{event_id}/reschedule",
+    response_model=LegalEventRead,
+    dependencies=_cases_update + _workspace,
+)
+async def reschedule_event(
+    event_id: UUID,
+    payload: LegalEventReschedule,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> LegalEventRead:
+    """Adiar preserva o histórico: o evento antigo fica ADIADO e aponta o novo."""
+    novo = await LegalEventService(db).reschedule(
+        event_id, new_datetime=payload.new_datetime, reason=payload.reason, actor_id=actor.id
+    )
+    if novo is None:
+        raise HTTPException(status_code=404, detail="Evento não encontrado.")
+    await db.commit()
+    await db.refresh(novo)
+    return (await _events_with_case_context(db, [novo]))[0]
+
+
+@router.get(
+    "/cases/{case_id}/timeline",
+    response_model=list[LegalTimelineEntryRead],
+    dependencies=_cases_read + _workspace,
+)
+async def case_timeline(case_id: UUID, db: AsyncSession = Depends(get_db)) -> list[LegalTimelineEntryRead]:
+    rows = await LegalTimelineService(db).list_for_case(case_id)
+    return [LegalTimelineEntryRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/cases/{case_id}/timeline",
+    response_model=LegalTimelineEntryRead,
+    status_code=201,
+    dependencies=_cases_update + _workspace,
+)
+async def add_case_note(
+    case_id: UUID,
+    payload: LegalNoteCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> LegalTimelineEntryRead:
+    """Observação da equipe vira FATO datado — nunca um campo que alguém sobrescreve."""
+    entry = await LegalTimelineService(db).record(
+        case_id=case_id,
+        entry_type=LegalTimelineEntryType.NOTA,
+        title=payload.title,
+        description=payload.description,
+        occurred_at=payload.occurred_at,
+        created_by_id=actor.id,
+    )
+    await db.commit()
+    await db.refresh(entry)
+    return LegalTimelineEntryRead.model_validate(entry)
+
+
+async def _events_with_case_context(db: AsyncSession, events: list) -> list[LegalEventRead]:
+    """Anexa número do processo e reclamante para a linha da agenda ser autoexplicativa."""
+    ids = {e.case_id for e in events if e.case_id}
+    contexto: dict = {}
+    if ids:
+        rows = await db.execute(
+            select(LegalCase.id, LegalCase.case_number, LegalCase.claimant_name).where(LegalCase.id.in_(ids))
+        )
+        contexto = {cid: (numero, reclamante) for cid, numero, reclamante in rows.all()}
+    out = []
+    for e in events:
+        read = LegalEventRead.model_validate(e)
+        numero, reclamante = contexto.get(e.case_id, (None, None))
+        out.append(read.model_copy(update={"case_number": numero, "claimant": reclamante}))
+    return out

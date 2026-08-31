@@ -1,4 +1,6 @@
 import { DetailMoney, DetailRow, StatusPill, formatDateBR } from "@/components/legal/LegalPanelPieces";
+import { LegalCaseTimeline } from "@/components/legal/LegalCaseTimeline";
+import { usePermission } from "@/hooks/usePermission";
 import { LEGAL_STATUS_LABELS, LEGAL_TYPE_LABELS, type LegalCase } from "@/services/legal";
 
 /**
@@ -18,6 +20,7 @@ export function LegalCaseModal({
   onOpenPerson?: (personId: string) => void;
 }) {
   const c = legalCase;
+  const canWriteTimeline = usePermission("legal_cases.update");
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4"
@@ -132,6 +135,11 @@ export function LegalCaseModal({
               <p className="whitespace-pre-line text-sm text-slate-700">{c.notes}</p>
             </section>
           ) : null}
+
+          {/* A ficha deixa de ser estática: o processo passa a ter história (M3). */}
+          <div className="border-t border-slate-100 pt-4">
+            <LegalCaseTimeline caseId={c.id} canWrite={canWriteTimeline} />
+          </div>
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-5 py-3">

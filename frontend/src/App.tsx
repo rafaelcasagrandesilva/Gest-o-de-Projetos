@@ -33,6 +33,8 @@ import { Epis } from "@/pages/Epis";
 import { LegalAdmin } from "@/pages/legal/LegalAdmin";
 import { LegalCases } from "@/pages/legal/LegalCases";
 import { LegalDashboard } from "@/pages/legal/LegalDashboard";
+import { LegalWorkCenter } from "@/pages/legal/LegalWorkCenter";
+import { LegalAgenda } from "@/pages/legal/LegalAgenda";
 import { LegalPersons } from "@/pages/legal/LegalPersons";
 import { RoiOperacional } from "@/pages/indicators/RoiOperacional";
 import { EvolucaoFinanceira } from "@/pages/indicators/EvolucaoFinanceira";
@@ -113,6 +115,8 @@ export default function App() {
               <Route path="epis" element={<Epis />} />
               <Route path="epis/:assetId" element={<AssetDetailPage />} />
 
+              <Route path="legal/central" element={<LegalWorkCenter />} />
+              <Route path="legal/agenda" element={<LegalAgenda />} />
               <Route path="legal/dashboard" element={<LegalDashboard />} />
               <Route path="legal/cases" element={<LegalCases />} />
               <Route path="legal/persons" element={<LegalPersons />} />

@@ -40,6 +40,17 @@ from app.models.legal import (
     LegalPerson,
     LegalProject,
 )
+from app.models.legal_operation import (
+    LegalAssignmentRole,
+    LegalCaseAssignment,
+    LegalEvent,
+    LegalEventModality,
+    LegalEventStatus,
+    LegalEventType,
+    LegalFactSource,
+    LegalTimelineEntry,
+    LegalTimelineEntryType,
+)
 from app.models.fleet import Vehicle, VehicleUsage
 from app.models.project import Project
 from app.models.project_contract import ProjectContractAdditive
@@ -56,6 +67,15 @@ from app.models.asset import Asset, AssetAssignment, AssetAttachment, AssetInspe
 from app.models.user import ProjectUser, Role, User, UserRole
 
 __all__ = [
+    "LegalEvent",
+    "LegalEventType",
+    "LegalEventStatus",
+    "LegalEventModality",
+    "LegalTimelineEntry",
+    "LegalTimelineEntryType",
+    "LegalFactSource",
+    "LegalCaseAssignment",
+    "LegalAssignmentRole",
     "Alert",
     "AuditLog",
     "CompanyFinancialItem",

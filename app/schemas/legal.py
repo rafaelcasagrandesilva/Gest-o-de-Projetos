@@ -276,3 +276,76 @@ class LegalChangeLogRead(ORMModel):
     old_value: str | None = None
     new_value: str | None = None
     changed_by_email: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 0 — operação: agenda, timeline e Central de Trabalho
+# ---------------------------------------------------------------------------
+
+
+class LegalEventBase(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    event_type: str = "OUTRO"
+    scheduled_for: datetime | None = None
+    due_at: datetime | None = None
+    location: str | None = Field(default=None, max_length=255)
+    modality: str | None = Field(default=None, max_length=16)
+    notes: str | None = None
+    case_id: UUID | None = None
+    responsible_user_id: UUID | None = None
+
+
+class LegalEventCreate(LegalEventBase):
+    pass
+
+
+class LegalEventRead(LegalEventBase):
+    id: UUID
+    status: str
+    outcome: str | None = None
+    rescheduled_to_id: UUID | None = None
+    created_at: datetime
+    # Contexto do processo, para a linha da agenda não exigir uma segunda consulta.
+    case_number: str | None = None
+    claimant: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LegalEventConclude(BaseModel):
+    outcome: str | None = None
+
+
+class LegalEventReschedule(BaseModel):
+    new_datetime: datetime
+    reason: str | None = None
+
+
+class LegalTimelineEntryRead(BaseModel):
+    id: UUID
+    occurred_at: datetime
+    entry_type: str
+    title: str
+    description: str | None = None
+    source: str
+    is_milestone: bool
+    ref_type: str | None = None
+    ref_id: UUID | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LegalNoteCreate(BaseModel):
+    """Observação da equipe: vira FATO datado, não campo de texto sobrescrito (B7)."""
+
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    occurred_at: datetime | None = None
+
+
+class LegalExecutiveSummary(BaseModel):
+    em_andamento: int = 0
+    acordos: int = 0
+    valor_acordos: float = 0
+    pendente: float = 0
+    encerrados: int = 0

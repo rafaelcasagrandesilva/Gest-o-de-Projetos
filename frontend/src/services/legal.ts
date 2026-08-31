@@ -155,6 +155,12 @@ export async function listLegalCases(filters: LegalCaseFilters = {}): Promise<Le
   return data;
 }
 
+/** Um processo pelo id — usado pelo deep link vindo da Central de Trabalho. */
+export async function getLegalCase(id: string): Promise<LegalCase> {
+  const { data } = await api.get<LegalCase>(`/legal/cases/${id}`);
+  return data;
+}
+
 export async function fetchLegalOverview(filters: LegalCaseFilters = {}): Promise<LegalOverview> {
   const { data } = await api.get<LegalOverview>(`/legal/cases/overview?${caseParams(filters)}`);
   return data;

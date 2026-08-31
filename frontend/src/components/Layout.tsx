@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { ScenarioProvider } from "@/context/ScenarioContext";
 import { SidebarProvider } from "@/context/SidebarContext";
@@ -8,11 +9,31 @@ import { IndicatorsSidebar } from "./IndicatorsSidebar";
 import { LegalSidebar } from "./LegalSidebar";
 import { ProjectsSidebar } from "./ProjectsSidebar";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { useWorkspace } from "@/context/WorkspaceContext";
+import { useWorkspace, type WorkspaceName } from "@/context/WorkspaceContext";
+
+/**
+ * Prefixo da rota → workspace. Entrar por link direto (ou por um "Abrir caso" vindo de outra
+ * tela) tem de trazer o menu e o cabeçalho certos: sem isso a pessoa vê a tela do Jurídico com
+ * o chrome de Projetos.
+ */
+const WORKSPACE_BY_PREFIX: [string, WorkspaceName][] = [
+  ["/legal", "legal"],
+  ["/finance", "finance"],
+  ["/assets", "assets"],
+  ["/epis", "assets"],
+  ["/indicators", "indicators"],
+  ["/projects", "projects"],
+];
 
 export function Layout() {
-  const { workspace } = useWorkspace();
+  const { workspace, setWorkspace } = useWorkspace();
   const location = useLocation();
+
+  useEffect(() => {
+    const alvo = WORKSPACE_BY_PREFIX.find(([prefixo]) => location.pathname.startsWith(prefixo))?.[1];
+    if (alvo && alvo !== workspace) setWorkspace(alvo);
+  }, [location.pathname, workspace, setWorkspace]);
+
   return (
     <ScenarioProvider>
       <SidebarProvider>

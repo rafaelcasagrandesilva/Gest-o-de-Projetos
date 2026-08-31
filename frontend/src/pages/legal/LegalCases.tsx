@@ -21,6 +21,7 @@ import {
   LEGAL_STATUS_STYLES,
   LEGAL_TYPE_LABELS,
   fetchLegalOverview,
+  getLegalCase,
   listLegalCases,
   type LegalCase,
   type LegalCaseFilters,
@@ -85,6 +86,28 @@ export function LegalCases() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<LegalCase | null>(null);
+
+  // Deep link `?case=<id>`: a Central de Trabalho leva direto ao processo do item clicado.
+  // Sem isso, "Abrir caso" deixaria o usuário na lista, procurando de novo o que já achou.
+  const deepLinkCase = searchParams.get("case");
+  useEffect(() => {
+    if (!deepLinkCase || selected) return;
+    const found = cases.find((c) => c.id === deepLinkCase);
+    if (found) {
+      setSelected(found);
+      return;
+    }
+    // Fora da página carregada (filtro ou paginação): busca o processo direto.
+    let cancelled = false;
+    void getLegalCase(deepLinkCase)
+      .then((c) => {
+        if (!cancelled) setSelected(c);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [deepLinkCase, cases, selected]);
 
   useEffect(() => {
     const id = setTimeout(() => {
