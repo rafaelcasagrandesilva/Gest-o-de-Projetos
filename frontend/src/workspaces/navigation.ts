@@ -62,11 +62,12 @@ export const WORKSPACE_MENUS: Record<WorkspaceName, WorkspaceMenuItem[]> = {
     { to: "/indicators/evolucao-financeira", label: "Evolução Financeira", perm: "indicators.read" },
   ],
   legal: [
-    // Central de Trabalho é a porta de entrada do workspace (O1): o dia começa por ela.
+    // O Painel do passivo abre o menu — e, por consequência, é a tela de entrada do workspace
+    // (a navegação inicial usa o primeiro item permitido).
+    { to: "/legal/dashboard", label: "Painel do passivo", perm: "legal_dashboard.read" },
     { to: "/legal/central", label: "Central de Trabalho", perm: "legal_cases.list", end: true },
     { to: "/legal/agenda", label: "Agenda", perm: "legal_cases.list" },
     { to: "/legal/cases", label: "Processos", perm: "legal_cases.list" },
-    { to: "/legal/dashboard", label: "Painel do passivo", perm: "legal_dashboard.read" },
     { to: "/legal/persons", label: "Desligados", perm: "legal_persons.list" },
     { to: "/legal/reports", label: "Relatórios", perm: "legal_reports.read" },
     // Manutenção dos dados — exige poder ALTERAR alguma das quatro entidades, OU importar
