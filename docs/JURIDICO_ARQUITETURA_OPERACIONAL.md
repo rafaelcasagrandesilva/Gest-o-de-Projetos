@@ -1,646 +1,550 @@
-# Jurídico — arquitetura da gestão operacional do contencioso
+# Jurídico — arquitetura da gestão do passivo
 
-**Versão 2** · documento de arquitetura · **nenhuma linha de código escrita**
-Estado analisado: `3c3346e` (29/08/2026) · 148 processos e 159 pessoas em produção
-A versão 1 permanece no histórico do git (`docs/JURIDICO_ARQUITETURA_OPERACIONAL.md` em `3c3346e`).
+**Versão 3** · documento de arquitetura · **nenhuma linha de código escrita**
+Estado analisado: `2517efe` (29/08/2026) · 148 processos e 159 pessoas em produção
+Versões 1 e 2 permanecem no histórico do git.
 
 ---
 
-## 0. O que mudou da versão 1
+## 0. Veredito, antes do detalhe
 
-O feedback derrubou quatro decisões minhas e acrescentou três eixos que faltavam.
-Registro aqui o que mudou e por quê, porque a diferença entre as versões é o próprio
-raciocínio de projeto.
+Você está certo, e a mudança de perspectiva **exige alterar a decisão estrutural mais central
+da v2**: a raiz do modelo deixa de ser o processo judicial.
 
-| Na v1 | Na v2 | Motivo |
+Os dados de produção sustentam a tese de um jeito que eu não esperava:
+
+| Evidência | Número | O que significa |
 |---|---|---|
-| `legal_movements` (andamentos) + `legal_events` (agenda) como entidades irmãs | **Timeline de fatos** + **Eventos** (compromissos), com papéis distintos | Andamento e audiência não são a mesma coisa: um é fato passado, o outro é compromisso com data. Confundi-los gerava duas listas concorrentes |
-| Agenda especializada em audiências | **Evento genérico** — audiência, perícia, sessão arbitral, reunião, prazo processual, prazo interno, vencimento de parcela, diligência, tarefa. Calendário é *visualização* | Sua observação: não criar estrutura só para audiências |
-| `legal_tasks` como entidade separada | **Absorvida por eventos** (tipo `PRAZO_INTERNO` / `TAREFA`) | Pelo mesmo princípio: providência é um compromisso com responsável e data |
-| Dois eixos de estado | **Três eixos**: processual, **operacional (pipeline da equipe)** e financeiro | Sua observação: o rito do tribunal não descreve como a equipe conduz o caso |
-| Acordo com status `EM_NEGOCIACAO` | **Negociação → Propostas → Acordo**, entidades distintas | Sua observação: negociação é uma fase com idas e vindas, não um estado do acordo |
-| Um responsável (`responsible_user_id`) | **Papéis múltiplos e datados** (jurídico, RH, financeiro, advogado externo, preposto) | Sua observação |
-| `legal_payments` | **Lançamentos financeiros com direção e recuperabilidade** | Depósito recursal e bloqueio são dinheiro que sai e *pode voltar*. Tratá-los como pagamento erra o custo do contencioso |
-| Dashboards | **Central de alertas** como tela principal; dashboards em segundo plano | Sua observação |
+| Pessoas com **mais de um processo** | **23 de 122** (19%) | O processo já não é a unidade natural. Uma pessoa é uma exposição; os processos são consequências dela |
+| Processos com **data de distribuição** | **0 de 148** | O acervo tem classificação, não tem tempo |
+| Processos com **data de audiência** | **0 de 148** | Idem |
+| Pessoas com data de desligamento | 134 de 159 | O gatilho do ciclo existe |
+| Defasagem desligamento → distribuição | **incalculável hoje** | A métrica de prevenção que você quer não é derivável do acervo atual |
 
-**Conceitos novos que proponho** (§13): prescrição bienal como radar de risco, provisão contábil
-por competência, tempo em etapa (SLA), depósitos e garantias, reversões explícitas, checklist de
-completude, custo total do contencioso e métricas de negociação.
+A última linha é a mais importante: **nenhuma das perguntas de prevenção que você listou pode
+ser respondida com o dado que temos**. Elas só passam a existir quando o SGC virar o sistema de
+operação. Isso não enfraquece a proposta — é o argumento mais forte a favor dela, e obriga a
+arquitetura a garantir que esses dados nasçam a partir de agora.
 
----
+**O que muda estruturalmente nesta versão** (detalhe nas seções seguintes):
 
-## 1. Princípios
+1. Nova raiz: **Caso** (`legal_matters`) — o risco administrado. O **processo** vira uma entidade
+   *dentro* do caso, e um caso pode ter mais de um processo (19% já têm).
+2. Timeline, eventos e negociações passam a pertencer ao **caso**, não ao processo — porque
+   notificação extrajudicial, tentativa de acordo e prescrição acontecem **antes de existir
+   processo**. Na v2 isso era impossível de registrar.
+3. **Pedidos** (`legal_claim_items`) entram como entidade: sem eles não existe "reincidência de
+   pedidos" nem "principais pedidos por obra".
+4. **Contexto do desligamento congelado** no caso (obra, centro de custo, gestor, motivo): a
+   análise de prevenção precisa do valor *da época*, não do vínculo atual.
+5. **Motor de regras** com um primitivo único — o **Sinal** — do qual derivam alertas,
+   indicadores, dashboards e futuras notificações.
+6. Catálogos ganham **ficha 360º** como modelo de leitura: pessoa, empresa, projeto, escritório,
+   advogado, sócio, conta bancária e câmara arbitral.
 
-1. **O processo é uma linha do tempo, não uma ficha.** O cadastro guarda identidade e
-   classificação; a vida do processo é uma sequência de fatos datados.
-2. **Fato e compromisso são coisas diferentes.** Fato aconteceu (timeline). Compromisso tem data
-   e pode ser futuro (evento). O calendário é uma visualização de eventos; a timeline é a
-   história oficial.
-3. **Três eixos independentes de estado**: onde o processo está no rito (processual), como a
-   equipe está conduzindo (operacional) e o que devemos (financeiro).
-4. **Toda informação tem procedência.** Cada fato registra de onde veio — manual, carga inicial,
-   publicação, integração. É isso que permite automação futura conviver com registro manual.
-5. **Nada é excluído; tudo é revertido.** Bloqueio liberado, depósito levantado, acordo rompido:
-   todos são fatos novos que apontam para o anterior.
-6. **O SGC é a fonte oficial após a carga.** A planilha é o marco zero e se encerra ali.
-7. **O jurídico conversa com os outros workspaces.** RH origina, jurídico conduz, financeiro
-   paga, contabilidade provisiona, diretoria acompanha.
-8. **Valor é dado sensível**, e bloqueio em conta pessoal de sócio é o dado mais sensível do
-   módulo.
+**E o que eu recuso fazer agora**, com o motivo (§10): event sourcing puro, linguagem de regras
+(DSL), score de risco por machine learning, relação N:N entre caso e processo, e cadastro
+bancário completo.
 
 ---
 
-## 2. A timeline como centro
+## 1. A mudança de perspectiva: a empresa administra risco
 
-### O que é
-
-Uma tabela **append-only** — `legal_timeline` — com uma linha por fato relevante do processo,
-em ordem cronológica. É a tela principal do processo e o histórico oficial.
+### 1.1 O ciclo completo
 
 ```
-06/03/2026  ⚖  DISTRIBUIÇÃO      Processo distribuído na 3ª Vara do Trabalho de Campinas
-14/03/2026  📄  DOCUMENTO         Contestação protocolada                        [anexo]
-02/04/2026  📅  EVENTO REALIZADO  Audiência inicial — sem acordo
-02/04/2026  ↻  ESTADO            Processual: EM_INSTRUCAO → AGUARDANDO_SENTENCA
-18/04/2026  💬  PROPOSTA          Empresa propôs R$ 28.000 em 4x — recusada
-30/04/2026  💬  PROPOSTA          Empresa propôs R$ 41.500 em 6x — aceita
-05/05/2026  🤝  ACORDO            Homologado: R$ 41.500 em 6 parcelas
-10/06/2026  💰  PAGAMENTO         Parcela 1/6 — R$ 6.916,67
-22/06/2026  🔒  BLOQUEIO          SISBAJUD R$ 12.400 — conta Itaú ****4471
+  ┌─────────────── CASO (legal_matters) — a unidade que a empresa administra ───────────────┐
+  │                                                                                          │
+  │  Desligamento ──▶ Período prescricional ──▶ Risco potencial ──▶ [ PROCESSO DISTRIBUÍDO ] │
+  │   (RH)              (2 anos, contando)        (score, fatores)         │                 │
+  │                                                                        ▼                 │
+  │                                                            Contencioso ──▶ Negociação    │
+  │                                                                        │        │        │
+  │                                                              Execução ◀─┘        │        │
+  │                                                                  │              │        │
+  │                                                            Pagamento ◀──────────┘        │
+  │                                                                  │                       │
+  │                                                             Quitação ──▶ Arquivamento    │
+  └──────────────────────────────────────────────────────────────────────────────────────────┘
+                                      ▲
+                    O processo é UMA FASE, não o começo nem o todo.
+                    Um caso pode encerrar sem nunca gerar processo (prescrição
+                    consumada) ou gerar mais de um (19% dos casos atuais).
 ```
 
-### A regra que mantém o modelo íntegro
+### 1.2 O caso como raiz
 
-> **A timeline nunca é a fonte do fato. Ela é a projeção ordenada dos fatos.**
-
-Um pagamento vive na tabela de lançamentos financeiros; a linha na timeline **aponta** para ele
-(`ref_type` + `ref_id`). Isso evita a armadilha clássica de transformar o histórico num
-depósito de texto solto, onde não se soma nada e não se corrige nada.
-
-A exceção é a **nota**: um comentário da equipe cujo fato *é* a própria entrada.
-
-### Estrutura
+`legal_matters` — o passivo em acompanhamento:
 
 | Campo | Papel |
 |---|---|
-| `case_id`, `occurred_at` | O processo e quando o fato ocorreu (não quando foi digitado) |
-| `entry_type` | DISTRIBUICAO · ANDAMENTO · PUBLICACAO · EVENTO_REALIZADO · MUDANCA_ESTADO · NEGOCIACAO · PROPOSTA · ACORDO · FINANCEIRO · BLOQUEIO · DOCUMENTO · NOTA · CARGA_INICIAL |
-| `title`, `description` | O resumo que aparece na linha e o detalhe |
-| `ref_type`, `ref_id` | O fato de origem (pagamento, proposta, evento, bloqueio…) |
-| `source` | MANUAL · CARGA_INICIAL · PUBLICACAO · INTEGRACAO · SISTEMA |
-| `created_by_id`, `created_at` | Quem registrou e quando |
-| `is_milestone` | Marco (distribuição, sentença, acordo, arquivamento) — permite a visão resumida |
+| `origin` | DESLIGAMENTO · CONTRATO · ACIDENTE · FISCAL · CIVEL_TERCEIRO · OUTRO |
+| `matter_type` | TRABALHISTA · CIVEL · TRIBUTARIO · ADMINISTRATIVO |
+| `lifecycle_stage` | POTENCIAL · EXTRAJUDICIAL · JUDICIALIZADO · EM_EXECUCAO · QUITADO · ENCERRADO · **PRESCRITO** |
+| `person_id` | A pessoa exposta (quando há) |
+| `prescription_deadline` | Data-limite calculada a partir do desligamento |
+| `risk_score`, `risk_factors` | Score e os fatores que o compõem (§6.4) |
+| `exposure_estimated` | Exposição estimada **antes** de existir valor de causa |
+| Contexto congelado | §5 |
 
-**Uma única porta de escrita.** Todo serviço do módulo registra pela mesma função. Se cada
-serviço escrever direto na tabela, em seis meses metade dos fatos não estará na timeline — é o
-tipo de erosão que só aparece quando já é caro consertar.
+O **processo judicial** (`legal_cases`, a tabela que já existe) permanece com o que é
+genuinamente judicial: número CNJ, vara, foro, rito, fases processuais, valor da causa.
 
-### Timeline × trilha de auditoria
+> **Nota de vocabulário.** Mantenho `legal_cases` significando *processo*. Em terminologia
+> jurídica anglófona, *matter* (o assunto que o cliente administra) e *case* (o litígio) são
+> conceitos distintos e consagrados — a mesma distinção que você fez. Renomear a tabela custaria
+> migração de permissões já semeadas nos perfis, com risco desproporcional ao ganho. Na tela, os
+> nomes são **Caso** e **Processo**.
 
-Já existe `legal_change_logs`, que registra "o campo X mudou de A para B". Os dois convivem com
-públicos diferentes: a **trilha** é técnica e de compliance (quem alterou o quê); a **timeline**
-é a história do processo, escrita para quem conduz o caso. Não fundir os dois é deliberado —
-misturar "campo `city` alterado" com "sentença publicada" destrói a legibilidade do histórico.
+### 1.3 Um caso, N processos
 
-### Carga inicial na timeline
+Evidência: 22 pessoas com 2 processos e 1 com 3. Inspecionando os pares, eles compartilham vara
+e sequência de numeração — são desdobramentos da mesma exposição, não riscos distintos.
 
-Os 148 processos importados recebem **uma** entrada: `CARGA_INICIAL`, com o texto da última
-movimentação do JusBrasil e a data da importação. Não inventamos histórico que não temos — e
-fica visível que a vida do processo no SGC começa ali.
+**Decisão:** `legal_matters` **1 : N** `legal_cases`.
 
----
+**Não** proponho N:N (um processo com vários casos, como na ação plúrima) agora. Ela existe no
+mundo real, mas não no acervo atual, e a tabela de partes (`legal_case_parties`) já registra
+vários reclamantes num mesmo processo — o que cobre a consulta sem antecipar a complexidade. Se
+aparecer uma ação plúrima de verdade, a promoção de 1:N para N:N é uma migração aditiva.
 
-## 3. Eventos — tudo o que tem data
+### 1.4 A consequência que quebra a v2
 
-Uma entidade genérica, `legal_events`, cobre todo compromisso do processo. O calendário, a
-agenda da semana e a lista de prazos são **visualizações** dela.
+Se o caso começa no desligamento, então **timeline, eventos e negociações não podem pertencer ao
+processo** — eles existem antes dele. Uma notificação extrajudicial, uma tentativa de acordo
+antes da ação, o vencimento do prazo prescricional: todos são fatos do caso.
 
-| Campo | Papel |
-|---|---|
-| `case_id`, `event_type` | AUDIENCIA · PERICIA · SESSAO_ARBITRAL · REUNIAO · PRAZO_PROCESSUAL · PRAZO_INTERNO · VENCIMENTO_PARCELA · DILIGENCIA · TAREFA |
-| `scheduled_for` | Quando acontece. **Nulo = backlog** (tarefa sem data marcada) |
-| `due_at` | Prazo fatal, quando diferente do agendamento |
-| `status` | AGENDADO · REALIZADO · CUMPRIDO · ADIADO · CANCELADO · **PERDIDO** |
-| `responsible_id` | Quem responde por ele |
-| `location`, `is_virtual`, `link` | Presencial ou telepresencial |
-| `outcome`, `outcome_notes` | O que resultou — vira entrada na timeline ao concluir |
-| `source_type`, `source_id` | Quando o evento **espelha** outra entidade (ver abaixo) |
-| `source` | MANUAL · CARGA_INICIAL · PUBLICACAO · INTEGRACAO |
-
-### Eventos espelhados — a decisão mais delicada desta seção
-
-Vencimento de parcela é um compromisso com data: precisa aparecer no calendário e nos alertas.
-Mas o dado verdadeiro é a parcela do acordo.
-
-**Decisão:** o evento é criado, atualizado e cancelado **pelo serviço dono da entidade de
-origem** (`source_type = INSTALLMENT`), nunca editado à mão. O ganho é ter uma única superfície
-de agenda — calendário e alertas fazem uma consulta só, não uma união de cinco tabelas. O custo
-é manter a sincronia; ela fica contida em um ponto do código e coberta por teste.
-
-A alternativa — calendário unindo eventos + parcelas + prazos — evita a duplicação, mas espalha
-a lógica de agenda por todas as telas e complica cada novo tipo de compromisso. Prefiro a
-primeira, e registro a alternativa porque é uma escolha, não um óbvio.
+Na v2 eu tinha pendurado tudo em `case_id`. Na v3, **tudo pendura em `matter_id`**, com
+`case_id` **opcional** — preenchido quando o fato pertence a um processo específico. Isso
+destrava um cenário que a v2 simplesmente não modelava: **acordo extrajudicial sem processo**.
 
 ---
 
-## 4. Os três eixos de estado
+## 2. O agregado e a disciplina que ele impõe
 
-### 4.1 Processual — onde o processo está no rito (fato externo)
+Sua preocupação — "daqui a dois anos cada funcionalidade nova cria uma tabela isolada sem um
+centro claro" — é o problema certo. Mas a leitura ingênua de "tudo pertence ao processo"
+produziria o erro oposto: um escritório de advocacia ou uma conta bancária **não** pertencem a
+um caso; são entidades compartilhadas por muitos.
 
-```
-DISTRIBUIDO → EM_INSTRUCAO → AGUARDANDO_SENTENCA → COM_SENTENCA
-                                    ↓                    ↓
-                              EM_RECURSO ─────────→ EM_EXECUCAO
-                                                         ↓
-                                            AGUARDANDO_ARQUIVAMENTO → ARQUIVADO
-```
-`SUSPENSO` é transversal. Muda por andamento, decisão ou publicação — nunca por vontade da
-equipe.
+A distinção que resolve isso é clássica em DDD: **limite de consistência ≠ modelo de leitura**.
 
-### 4.2 Operacional — como a equipe está conduzindo (decisão interna)
+### 2.1 O que está dentro do agregado
+
+Entidades sem vida própria: só existem em relação a um caso, são criadas e alteradas **através
+da raiz**, e morrem com ela.
 
 ```
-NOVO → ANALISE → CONTESTACAO → PRODUCAO_DE_PROVAS → NEGOCIACAO → EXECUCAO → PAGAMENTO → ARQUIVADO
+CASO (raiz)
+├── processos (legal_cases)          ├── negociações → propostas → acordos → parcelas
+├── timeline (fatos)                 ├── lançamentos financeiros
+├── eventos (compromissos)           ├── restrições (bloqueios)
+├── pedidos (claim items)            ├── documentos
+├── partes (vínculo com catálogo)    ├── responsáveis (vínculo com catálogo)
+└── observações                      └── sinais (§6)
 ```
 
-É um **pipeline (kanban)**, e a diferença em relação ao eixo processual é de dono: o tribunal
-governa o primeiro, a equipe governa o segundo. Um processo pode estar `EM_INSTRUCAO` no rito e
-`NEGOCIACAO` na condução — que é justamente o caso mais comum.
+### 2.2 O que é referenciado, não contido
 
-> **Decisão estrutural: as etapas são dados, não enum.** Uma tabela
-> `legal_pipeline_stages` (ordem, nome, cor, SLA em dias, `is_terminal`) permite mudar o fluxo da
-> equipe sem migration. E o campo **SLA por etapa** dá, de graça, a resposta genérica para
-> "parado há muito tempo" — inclusive "negociações paradas", que deixa de ser uma regra
-> especial. Cada processo guarda `stage_id` e `stage_since`; **tempo em etapa** é a métrica
-> operacional central.
+Entidades com identidade e ciclo próprios, apontadas por id: **pessoa, empresa, projeto,
+escritório, advogado, sócio, conta bancária, câmara arbitral, usuário**. Elas aparecem no caso
+como vínculo (`legal_case_parties`, `legal_case_assignments`), nunca como cópia.
 
-### 4.3 Financeiro — o que devemos
+### 2.3 As quatro regras que impedem a proliferação
 
-```
-SEM_OBRIGACAO → EM_NEGOCIACAO → ACORDO_HOMOLOGADO → PAGAMENTO_EM_CURSO → QUITADO
-                                       ↓                     ↓
-                                       └──── INADIMPLENTE ◀──┘
-```
+Esta subseção é a resposta direta ao seu receio. Ela vale como norma do módulo:
 
-Majoritariamente **derivado**: quem move este eixo são as propostas, o acordo e as parcelas.
-Digitação manual só para os casos sem acordo (condenação transitada, improcedência).
+1. **Todo fato novo sobre um caso entra no agregado e escreve na timeline** pela mesma porta. Se
+   uma funcionalidade nova precisa de tabela própria, ela é filha do caso e sua criação
+   registra um fato.
+2. **Toda entidade compartilhada vira catálogo com ficha 360º** (§3) — nunca uma tabela solta
+   pendurada em um caso.
+3. **Nada consulta as tabelas filhas por fora.** Leitura agregada é projeção (§3.3), não
+   `SELECT` avulso espalhado em serviços.
+4. **Consistência entre agregados é eventual e idempotente.** O pagamento vive no caso e vira
+   título no Contas a Pagar por chave de origem — não por transação distribuída. É o mecanismo
+   que Custos Fixos e Endividamento já usam.
+
+### 2.4 Um aviso sobre agregados grandes
+
+O agregado do caso é grande, e agregado grande tem custo: carregar tudo para alterar um campo é
+desperdício, e transações longas causam contenção. **Não** proponho carregar o agregado inteiro
+em memória a cada operação. A raiz é o **ponto de entrada dos comandos** e a dona das
+invariantes; cada serviço carrega o que precisa. É disciplina de escrita, não um objeto
+monolítico.
 
 ---
 
-## 5. Negociação, propostas e acordo
+## 3. Catálogos e fichas 360º
 
-O ponto do seu feedback que mais muda o modelo. A negociação é uma **fase com histórico**, não
-um estado do acordo.
+### 3.1 As entidades
 
-```
-Processo ──1:N── Negociação ──1:N── Proposta ──(aceita)──▶ Acordo ──1:N── Parcela
-                     │                                        │              │
-              canal, motivo,                            homologação,     vencimento,
-              responsável                               cláusula penal      valor
-                                                              │              │
-                                                              └──────────────┴──▶ Lançamentos
-                                                                                  financeiros
-```
-
-### `legal_negotiations` — a rodada
-
-| Campo | Papel |
-|---|---|
-| `case_id`, `opened_at`, `closed_at` | O período da negociação |
-| `channel` | DIRETO · AUDIENCIA_CONCILIACAO · CAMARA_ARBITRAL · MEDIACAO · ADVOGADOS |
-| `status` | ABERTA · SUSPENSA · ENCERRADA_COM_ACORDO · ENCERRADA_SEM_ACORDO |
-| `responsible_id`, `notes` | Quem conduz |
-| `last_interaction_at` | Alimenta "negociações paradas há muito tempo" |
-
-Um processo pode ter **várias** negociações ao longo do tempo — a que fracassou em março e a
-que reabriu em agosto são rodadas distintas, e comparar as duas é informação de gestão.
-
-### `legal_proposals` — cada proposta da mesa
-
-| Campo | Papel |
-|---|---|
-| `negotiation_id`, `proposed_at` | A rodada e a data |
-| `proposed_by` | EMPRESA · RECLAMANTE · JUIZO · CAMARA |
-| `amount`, `installment_count`, `terms` | O que foi oferecido |
-| `status` | APRESENTADA · RECUSADA · ACEITA · EXPIRADA · SUBSTITUIDA |
-| `rejected_reason` | Por que não fechou — vira aprendizado |
-
-O seu exemplo cabe inteiro: empresa propõe (proposta 1, recusada), melhora (proposta 2,
-recusada), vai à câmara arbitral (nova negociação ou mesma rodada com canal atualizado), nova
-proposta (aceita) → acordo homologado.
-
-**Métricas que só existem com esse desenho:** desconto obtido sobre o valor da causa, tempo
-médio até o acordo, taxa de aceite por canal, quantas rodadas até fechar.
-
-### `legal_agreements` — o acordo
-
-Nasce de uma proposta aceita (`accepted_proposal_id`), com homologação, cláusula penal e status
-CUMPRIDO · DESCUMPRIDO · ROMPIDO. As parcelas (`legal_agreement_installments`) saem dele com
-vencimento, valor e baixa — e cada uma projeta um evento de vencimento (§3) e um título no
-Contas a Pagar (§9).
-
----
-
-## 6. Dinheiro: o que sai, o que volta e o que está retido
-
-Um erro comum — que eu cometi na v1 — é tratar tudo como "pagamento". Depósito recursal e
-bloqueio judicial são **dinheiro que sai do caixa e pode voltar**. Somá-los ao custo do
-contencioso infla o prejuízo; ignorá-los esconde o impacto no caixa.
-
-### `legal_financial_entries` — um livro só, com direção
-
-| Campo | Papel |
-|---|---|
-| `case_id`, `amount`, `occurred_at` | O lançamento |
-| `direction` | **SAIDA** (paga, deposita, é bloqueado) · **RETORNO** (levanta, é liberado) |
-| `entry_type` | PAGAMENTO_ACORDO · CONDENACAO · CUSTAS · HONORARIOS · PERICIA · DEPOSITO_RECURSAL · DEPOSITO_GARANTIA · LEVANTAMENTO · LIBERACAO_BLOQUEIO · CONVERSAO_BLOQUEIO |
-| `recoverable` | Depósito é recuperável; pagamento de acordo não |
-| `installment_id`, `restriction_id` | O que este lançamento quita ou libera |
-| `reverses_entry_id` | Reversão aponta o lançamento revertido — nunca se apaga |
-| `payable_entry_id` | Vínculo com o título no Contas a Pagar |
-| `document_id` | Comprovante |
-
-Disso saem, sem cálculo paralelo: **custo efetivo** (saídas não recuperáveis), **capital retido**
-(saídas recuperáveis ainda não devolvidas) e **impacto de caixa no mês**.
-
-### `legal_restrictions` — bloqueios e restrições
-
-Como na v1 (SISBAJUD, penhora, arresto, RENAJUD, indisponibilidade, penhora de faturamento),
-com alvo separado em `legal_restriction_targets`: conta da empresa, **conta pessoal de sócio**,
-veículo, imóvel, recebível. O desfecho — liberação ou conversão em pagamento — é um lançamento
-financeiro de RETORNO ou a conversão em SAIDA definitiva, sempre apontando o bloqueio de origem.
-
----
-
-## 7. Papéis e responsáveis
-
-`legal_case_assignments`: N papéis por processo, **datados**.
-
-| Campo | Papel |
-|---|---|
-| `case_id`, `role` | RESPONSAVEL_JURIDICO · RESPONSAVEL_RH · RESPONSAVEL_FINANCEIRO · ADVOGADO_EXTERNO · PREPOSTO · ESCRITORIO |
-| `user_id` · `person_id` · `law_firm_id` | Interno (usuário do SGC), pessoa externa ou escritório |
-| `started_at`, `ended_at` | Histórico: quem respondia pelo caso em cada época |
-| `is_primary` | O responsável principal daquele papel |
-
-Três efeitos práticos: **"minha carteira"** (filtro por papel do usuário logado), **alertas
-direcionados** a quem de fato responde, e **carga de trabalho por pessoa** — quantos processos
-ativos, quantos eventos na semana.
-
-O papel RH é o que amarra o módulo ao ciclo de desligamento (§9).
-
----
-
-## 8. Central de alertas
-
-A tela principal do workspace passa a ser a central de alertas, não um dashboard.
-
-| Alerta | Regra | Severidade |
+| Entidade | Situação | Observação |
 |---|---|---|
-| Audiências de hoje | eventos de audiência com `scheduled_for` hoje | crítica |
-| Audiências da semana | próximos 7 dias | atenção |
-| Prazos vencendo | `due_at` dentro do horizonte configurado | atenção |
-| **Prazos vencidos** | `due_at` passado e status ≠ cumprido | **crítica** |
-| Parcelas vencendo | vencimento nos próximos N dias | atenção |
-| **Parcelas atrasadas** | vencidas sem baixa | **crítica** |
-| **Bloqueios novos** | restrições ativas criadas há menos de N dias | **crítica** |
-| Processos sem movimentação | último fato na timeline há mais de N dias | atenção |
-| Negociações paradas | `last_interaction_at` acima do limite | atenção |
-| Etapa estourando o SLA | `stage_since` acima do SLA da etapa (§4.2) | atenção |
-| Processos incompletos | checklist de completude (§13) | informativa |
+| **Pessoa** | existe (`legal_persons`) | Ganha `person_type` (ex-colaborador, sócio, terceiro, advogado) e vínculo com `employees` |
+| **Empresa** | existe (`legal_companies`) | Vazia em produção — passa a ser preenchida no lugar do texto livre |
+| **Projeto** | existe (`legal_projects`) | Ganha vínculo com `projects.id` do SGC |
+| **Escritório** | novo | Bancas contratadas, com honorários |
+| **Advogado** | novo | Interno ou externo, vinculado a escritório |
+| **Sócio** | pessoa com tipo | Titular de conta pessoal atingida |
+| **Conta bancária** | novo | Titular (empresa ou sócio), banco, **identificação mascarada** (§10.5) |
+| **Câmara arbitral** | novo | Referenciada pelas negociações |
 
-### Como isso funciona sem inventar infraestrutura
+### 3.2 O padrão único de ficha
 
-O sistema **não tem serviço de e-mail nem agendador** — verifiquei. Então:
-
-- **Agora**: os alertas são **calculados por consulta** quando a tela abre. Com 148 processos
-  isso é instantâneo, e não há job para quebrar. Os limites (`N` dias) ficam em
-  `legal_alert_rules`, configuráveis.
-- **`legal_alert_acknowledgements`**: o usuário dá ciência ou adia um alerta, e ele para de
-  incomodar até a data escolhida. Sem isso, uma central de alertas vira ruído em duas semanas e
-  a equipe passa a ignorá-la — é o modo de falha mais comum desse tipo de tela.
-- **Depois**: quando houver agendador e canal (e-mail, WhatsApp), um job lê **as mesmas regras**
-  e dispara notificação. Nenhuma regra é reescrita; muda apenas o gatilho.
-
----
-
-## 9. Integração com o restante do SGC
-
-O ciclo que você descreveu, com o ponto de contato de cada workspace:
+Toda ficha tem a mesma anatomia, o que a torna barata de construir e previsível de usar:
 
 ```
-   RH                    JURÍDICO                FINANCEIRO           CONTABILIDADE        DIRETORIA
-   │                        │                        │                     │                   │
-desligamento ──┐            │                        │                     │                   │
-(employees.    │            │                        │                     │                   │
- end_date)     └──▶ processo nasce                   │                     │                   │
-                    (vínculo employee_id)            │                     │                   │
-                            │                        │                     │                   │
-                    conduz: timeline,                │                     │                   │
-                    eventos, negociação              │                     │                   │
-                            │                        │                     │                   │
-                    acordo homologado ──▶ parcela vira título              │                   │
-                            │             no CAP (origem LEGAL)            │                   │
-                            │                        │                     │                   │
-                            │                   pagamento ──▶ baixa a parcela                  │
-                            │                        │                     │                   │
-                    risco classificado ──────────────┴──▶ provisão por competência             │
-                            │                                              │                   │
-                            └──────────────────────────────────────────────┴──▶ passivo, custo,
-                                                                                 desembolso
+┌──────────────────────────────────────────────────────────────┐
+│ Identificação          │ Números                             │
+│ (nome, documento,      │ casos · processos · passivo ·       │
+│  vínculos)             │ acordos · pago · bloqueado          │
+├────────────────────────┴─────────────────────────────────────┤
+│ Casos relacionados          (lista, com estado e valor)      │
+├──────────────────────────────────────────────────────────────┤
+│ Timeline consolidada        (fatos de todos os casos)        │
+├──────────────────────────────────────────────────────────────┤
+│ Sinais abertos              (o que exige atenção)            │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-**RH → Jurídico.** `legal_persons` já prevê vínculo opcional com `employees` (está escrito no
-próprio modelo). Formalizar esse vínculo destrava o **radar de prescrição** (§13): desligados
-sem processo, ordenados pela proximidade dos dois anos.
+O que muda por entidade é só o recorte:
 
-**Jurídico → Financeiro.** Parcela homologada vira título no Contas a Pagar pela origem `LEGAL`,
-idempotente por `(origem, referência, competência)` — a mesma mecânica de Custos Fixos e
-Endividamento. A baixa no CAP retorna para a parcela. Você já concordou com esse ponto; ele é
-pré-requisito da Fase B.
+- **Empresa** — processos, passivo, acordos, pagamentos, bloqueios, histórico.
+- **Projeto/obra** — quantos processos, quanto já custou, **quanto ainda pode custar** (exposição
+  + provisão), principais pedidos.
+- **Desligado** — a linha do tempo inteira dentro do SGC: admissão, alocações, desligamento
+  (dados de RH) **e** os fatos do caso jurídico. É uma ficha que atravessa módulos.
+- **Escritório** — carteira, desfechos, tempo médio, custo em honorários.
+- **Sócio** — casos em que é parte, contas atingidas, valor bloqueado.
 
-**Jurídico → Contabilidade.** `legal_provisions`: valor provisionado por processo e competência,
-derivado do risco (provável/possível/remota) com percentuais configuráveis. Série histórica
-mensal.
+### 3.3 Como se constroem — sem virar tabela nova
 
-**Jurídico → Projetos.** Hoje `legal_projects` é um catálogo de texto, sem ligação com os
-projetos reais do SGC. Ligá-lo a `projects.id` permite responder **quanto o contencioso de uma
-obra custou** — informação de precificação para uma empresa que vende contratos de mão de obra.
+Fichas são **projeções de leitura**, montadas por consultas sobre o agregado. Nenhuma delas cria
+entidade de negócio. Onde a soma ficar cara, o caminho é **cache derivado com dono único e
+recálculo a partir dos fatos** — o mesmo padrão das colunas derivadas do caso.
 
-**Jurídico → Indicadores.** Passivo, provisão e desembolso entram nos dashboards executivos já
-existentes (ECharts), sem tela nova.
-
----
-
-## 10. O SGC como fonte oficial
-
-Virar fonte oficial não é uma frase no documento: são três mecanismos.
-
-**1. Corte explícito da carga.** Um marco no módulo (`legal_source_cutover_at`) separa o antes
-do depois. Depois dele, a importação da planilha fica **desabilitada por padrão** — reabri-la
-exige ação administrativa consciente e registrada. Sem isso, um dia alguém reimporta a planilha
-antiga e sobrescreve meses de operação.
-
-**2. Procedência em todo fato.** `source` em timeline, eventos e lançamentos distingue o que
-veio da carga, do registro manual, de uma publicação ou de uma integração. É o que permite
-confiar em números mistos e, no futuro, deixar automação e digitação convivendo.
-
-**3. Completude como métrica visível.** Um processo importado tem 8 campos preenchidos; um
-processo operado tem responsáveis, etapa, eventos e timeline. O checklist de completude (§13)
-mostra a diferença e é o termômetro de que o módulo virou operação de verdade — não uma tela
-nova em cima do mesmo dado velho.
+O corolário: pedir uma ficha nova no futuro (ex.: por gestor) é escrever uma projeção, não
+alterar o modelo.
 
 ---
 
-## 11. Modelo completo
+## 4. Pedidos — o que faltava para prevenção
+
+Você quer "reincidência de determinados pedidos" e "principais pedidos por projeto". Isso não é
+derivável de nada que existe hoje ou que propus nas versões anteriores.
+
+**`legal_claim_types`** (catálogo): horas extras, adicional de periculosidade, adicional de
+insalubridade, verbas rescisórias, FGTS, dano moral, acúmulo de função, intervalo intrajornada,
+equiparação salarial, reconhecimento de vínculo…
+
+**`legal_claim_items`** (pedidos do caso): tipo, valor pedido, valor considerado, resultado
+(procedente, improcedente, parcial, acordado) e o processo em que foi pleiteado.
+
+O que isso destrava — e que é o coração da sua ideia de prevenção:
+
+| Pergunta | Resposta |
+|---|---|
+| Qual pedido mais aparece contra nós? | Frequência por tipo |
+| Qual pedido mais **custa**? | Valor deferido/acordado por tipo |
+| Que obra concentra que tipo de pedido? | Cruzamento com o contexto (§5) |
+| Onde está a falha operacional? | Pedido recorrente é sintoma de processo interno defeituoso — hora extra sistemática, intervalo não concedido, adicional não pago |
+
+O último item é o salto de "software jurídico" para "ferramenta de gestão": o padrão dos pedidos
+aponta a causa raiz na operação, não no jurídico.
+
+---
+
+## 5. Contexto congelado do desligamento
+
+Para responder "quais gestores, contratos ou obras geram mais ações", o caso precisa guardar o
+contexto **da época** — não o vínculo atual. Centro de custo muda, gestor muda, obra encerra; um
+`JOIN` com o cadastro de hoje responderia a pergunta errada.
+
+O caso congela, na abertura: obra/projeto, centro de custo, gestor responsável, cargo, data de
+admissão e de desligamento, motivo do desligamento, tempo de casa e se houve homologação.
+
+Boa parte disso já existe no SGC (`employees`, histórico de centro de custo, alocações). O caso
+copia — deliberadamente — porque análise histórica exige o valor do momento.
+
+---
+
+## 6. Motor de regras
+
+### 6.1 O primitivo único: o Sinal
+
+Uma regra avaliada produz um **Sinal**: "este caso, nesta data, atende esta condição, com esta
+severidade e este valor".
 
 ```
-                    ┌──────────────────┐        ┌────────────────────┐
-   RH: employees ───│  legal_persons   │        │   legal_law_firms  │
-                    │ + person_type    │        │  escritórios       │
-                    │ + employee_id    │        └─────────┬──────────┘
-                    └────────┬─────────┘                  │
-                             │                            │
-                    ┌────────▼────────────────────────────▼──────────┐
-                    │            legal_case_assignments              │
-                    │  papéis datados: jurídico, RH, financeiro,     │
-                    │  advogado externo, preposto, escritório        │
-                    └────────────────────┬───────────────────────────┘
-                                         │
-   ┌───────────────┐          ┌──────────▼──────────┐         ┌──────────────────┐
-   │legal_companies│──────────│    legal_cases      │─────────│  legal_projects  │
-   └───────────────┘          │  ─────────────────  │         │  → projects.id   │
-                              │ procedural_status   │         └──────────────────┘
-   ┌───────────────┐          │ stage_id + since  ──┼──▶ legal_pipeline_stages
-   │legal_case_    │──────────│ financial_status    │         (etapas configuráveis + SLA)
-   │  parties      │          │ risk_level · phase  │
-   └───────────────┘          │ secrecy             │
-                              └──┬────┬────┬────┬───┘
-        ┌────────────────────────┘    │    │    └────────────────────┐
-        │                             │    │                         │
-┌───────▼────────┐          ┌─────────▼──┐ │              ┌──────────▼─────────┐
-│ legal_timeline │◀─────────│legal_events│ │              │ legal_restrictions │
-│ FATOS          │  projeta │COMPROMISSOS│ │              │ bloqueios, penhoras│
-│ append-only    │          │ agenda,    │ │              └──────────┬─────────┘
-│ ref → o fato   │          │ prazos,    │ │                         │
-└───────┬────────┘          │ tarefas    │ │              ┌──────────▼─────────┐
-        │                   └────────────┘ │              │legal_restriction_  │
-        │ projeta                          │              │  targets           │
-        │                                  │              │ conta empresa ·    │
-┌───────┴──────────────────────────────────▼─────────┐    │ conta sócio ·      │
-│  legal_negotiations ──1:N── legal_proposals        │    │ veículo · imóvel   │
-│         └──(aceita)──▶ legal_agreements            │    └────────────────────┘
-│                    └──1:N── installments           │
-└────────────────────────────┬───────────────────────┘
-                             │
-                  ┌──────────▼────────────┐        ┌────────────────────┐
-                  │legal_financial_entries│───────▶│  payable_snapshots │
-                  │ SAIDA / RETORNO       │ origem │  (Contas a Pagar)  │
-                  │ recuperável ou não    │ =LEGAL └────────────────────┘
-                  └───────────────────────┘
-                             │
-                  ┌──────────▼────────────┐        ┌────────────────────┐
-                  │   legal_provisions    │        │  legal_documents   │
-                  │ por competência       │        │  anexos (volume)   │
-                  └───────────────────────┘        └────────────────────┘
-
-     Transversais: legal_alert_rules · legal_alert_acknowledgements · legal_change_logs
+                        ┌──────────────────┐
+   catálogo de regras   │      SINAL       │   parâmetros por regra
+   (definidas em código)│  matter_id       │   (limiares, severidade,
+            │           │  rule_id         │    papel destinatário)
+            └──────────▶│  severity        │◀────────────┘
+                        │  due_at, value   │
+                        │  detected_at     │
+                        └────────┬─────────┘
+                                 │
+        ┌────────────┬───────────┼────────────┬──────────────────┐
+        ▼            ▼           ▼            ▼                  ▼
+    ALERTAS     INDICADORES  DASHBOARDS   NOTIFICAÇÕES     SCORE DE RISCO
+   (abertos)     (contagens    (séries)     (futuro,        (soma de sinais
+                  e somas)                 mesmo motor)      ponderados)
 ```
 
-**Entidades novas (16):** `legal_timeline`, `legal_events`, `legal_pipeline_stages`,
-`legal_case_assignments`, `legal_negotiations`, `legal_proposals`, `legal_agreements`,
-`legal_agreement_installments`, `legal_financial_entries`, `legal_restrictions`,
-`legal_restriction_targets`, `legal_case_parties`, `legal_documents`, `legal_law_firms`,
-`legal_provisions`, `legal_alert_rules` (+ `legal_alert_acknowledgements`).
+Tudo o que você listou — audiência em menos de 7 dias, parcela vence amanhã, bloqueio novo,
+acordo parado há 20 dias, processo sem andamento há 60 dias, etapa acima do SLA, execução há mais
+de 180 dias, valor acima de R$ X — é a mesma coisa: **uma regra que produz sinais**. A diferença
+entre alerta e indicador é só o que se faz com o sinal.
 
-**Mudanças no `legal_cases`:** ganha `procedural_status`, `stage_id`/`stage_since`,
-`financial_status`, `phase`, `risk_level`, `secrecy`, `employee_id`, `company_id`/`project_id`
-normalizados e as colunas derivadas de leitura rápida — `last_timeline_at`, `next_event_at`,
-`open_alerts_count`. Perde `status`, `hearing_date`, `last_movement*`, `agreement_terms` e os
-valores digitados, que passam a ser derivados.
+### 6.2 Regras em código, parâmetros no banco — e por que não uma DSL
 
-> As três colunas derivadas são denormalização deliberada: ordenar 148 processos por "parado há
-> mais tempo" ou "próximo compromisso" sem elas exigiria subconsulta por linha. Regra: são
-> mantidas por um único serviço, e qualquer divergência é resolvida recalculando a partir dos
-> fatos — nunca editando a coluna.
+Cada regra é uma definição **nomeada e versionada no código**, com parâmetros em
+`legal_rules` (limiar, severidade, papel destinatário, ativa/inativa).
 
----
+Você levantou a hipótese de um mecanismo genérico. **Recomendo não construir uma linguagem de
+regras**, e o motivo é experiência com o padrão, não preguiça:
 
-## 12. Escalabilidade: o que decidimos agora e o que isso destrava
+- Uma DSL vira uma linguagem de programação de segunda classe: sem depuração, sem teste, sem
+  tipo. O primeiro bug de produção numa expressão salva no banco custa dias.
+- Regras reais precisam de dados que uma expressão simples não alcança (agregações, janelas,
+  permissões).
+- O ganho prometido — "usuário cria regra sozinho" — quase nunca se materializa: quem escreve
+  regra é quem entende o modelo.
 
-| Decisão estrutural agora | Destrava depois |
-|---|---|
-| Timeline append-only com `source` e `ref` polimórfico | **Captura de publicações** e **integração com tribunais** escrevem na timeline como qualquer outro fato — sem redesenho |
-| Idempotência por chave natural em toda ingestão (número CNJ + hash do andamento) | Publicação capturada duas vezes não duplica — pré-requisito de qualquer integração |
-| `case_number` no padrão CNJ, com tribunal/vara/ano derivados | **JusBrasil, PJe e DataJud** são endereçados por esse número |
-| Regras de alerta em tabela, não em código | **Notificações automáticas** quando houver agendador: mesmo motor, outro gatilho |
-| Etapas do pipeline como dados | Mudar o fluxo da equipe sem migration |
-| Timeline como fonte única do histórico textual | **IA para resumir processo**: um input só, já ordenado e com procedência |
-| Papéis datados incluindo escritório externo | **Gestão de escritórios terceirizados** e, mais adiante, acesso externo restrito |
-| `legal_provisions` por competência **desde a Fase D** | **Provisão contábil** e indicadores executivos com série histórica — que **não pode ser reconstruída depois**: se não registrarmos mês a mês, o histórico não existe |
-| Documentos com categoria e vínculo ao fato | OCR e extração automática no futuro |
+O que **realmente** se ganha com um motor é o registro único e o primitivo comum. Isso se obtém
+com regras em código e parâmetros configuráveis, que é o desenho que proponho. Se um dia
+houver demanda concreta de regra criada pelo usuário, o caminho é um **construtor guiado**
+(campo + operador + valor, dentro de um conjunto fechado), não uma linguagem livre.
 
-O item da provisão é o que mais me preocupa em adiar: todos os outros podem ser acrescentados
-quando forem necessários; a série histórica, não — ela só existe se começar a ser gravada.
+### 6.3 Avaliação
 
----
+Com 148 casos, os sinais são calculados **por consulta** quando a tela abre (a v2 já apontava:
+não há agendador). O que acrescento aqui é a **persistência do sinal quando ele muda de estado**
+— nasceu, foi reconhecido, foi resolvido —, porque isso permite medir o que nenhum cálculo
+instantâneo mede: quanto tempo levamos para reagir a um bloqueio, quantos prazos venceram sem
+ciência, se a operação está melhorando.
 
-## 13. Conceitos que proponho e ainda não discutimos
+### 6.4 Score de risco: determinístico, não estatístico
 
-**1. Prescrição bienal como radar de risco.** Na Justiça do Trabalho o ex-empregado tem dois
-anos após o desligamento para ajuizar. Com o vínculo `employees ↔ legal_persons`, o módulo
-mostra: desligados nos últimos 24 meses **sem processo**, ordenados pela data-limite. É
-prevenção — e hoje ninguém no sistema tem essa visão.
+"Pessoas com alto risco de ajuizamento" é a funcionalidade mais sedutora e a mais fácil de
+errar. Com 148 casos, **não há volume para machine learning** — um modelo treinado nisso
+produziria confiança injustificada.
 
-**2. Provisão contábil por competência.** §9 e §12.
+Proponho um score **explicável**, composto por fatores observáveis e ponderados (regras, como
+tudo o mais): tempo restante de prescrição, motivo do desligamento, existência de verbas em
+aberto, índice de ações da obra e do gestor, reincidência de pedidos naquele contrato, e se
+houve homologação. Cada caso mostra **quais fatores** compuseram a nota.
 
-**3. Tempo em etapa (SLA).** §4.2 — resposta genérica a "parado há muito tempo".
-
-**4. Depósitos, garantias e capital retido.** §6 — dinheiro que sai e pode voltar.
-
-**5. Reversões explícitas.** Acordo rompido, bloqueio liberado, depósito levantado, pagamento
-estornado: todos são fatos novos apontando o anterior (`reverses_entry_id`). Nunca `UPDATE` que
-apaga o passado — a regra que o módulo já adota para exclusão.
-
-**6. Checklist de completude.** Um processo ativo deveria ter responsável jurídico, etapa, valor
-da causa, classificação de risco e ao menos um evento futuro. O que falta vira alerta
-informativo e uma barra de completude na lista. É o termômetro da §10.
-
-**7. Custo total do contencioso.** Acordo + custas + honorários + perícia + depósitos não
-devolvidos, agregável por processo, projeto/obra, escritório e período. Hoje só existe "valor
-pago do acordo".
-
-**8. Métricas de negociação.** Desconto sobre o valor da causa, tempo até o acordo, taxa de
-aceite por canal, número de rodadas. Saem de graça do modelo de propostas.
-
-**9. Carteira por papel.** "Meus processos" filtrando por papel do usuário — o jurídico vê os
-seus, o RH vê os que originou, o financeiro vê os que têm parcela a pagar.
-
-**10. Modelos de eventos por rito.** Ao distribuir um processo trabalhista, criar
-automaticamente os compromissos típicos (contestação, audiência inicial). Um catálogo simples
-de "checklists de abertura" evita esquecimento — e é barato depois que eventos existem.
+Quando houver alguns anos de histórico com desfechos registrados, revisitar com estatística faz
+sentido — e aí o modelo já terá os dados rotulados, porque o desenho os coleta desde o começo.
 
 ---
 
-## 14. Telas
+## 7. O que muda em relação à v2
 
-| Tela | Papel |
-|---|---|
-| **Central de alertas** | Entrada do workspace: o que exige ação hoje, agrupado por severidade |
-| **Processo — timeline** | Tela principal do caso: histórico cronológico + registrar fato + painel lateral com estados, papéis, valores e próximos compromissos |
-| **Pipeline (kanban)** | Processos por etapa operacional, com tempo em etapa e arrastar para mover |
-| **Agenda / calendário** | Visualização dos eventos por semana e mês, filtrável por tipo e responsável |
-| **Lista de processos** | A tela atual, com os filtros novos (etapa, risco, responsável, completude) |
-| **Negociações** | Rodadas abertas e o histórico de propostas |
-| **Financeiro do contencioso** | Parcelas a vencer, atrasadas, capital retido e desembolso do mês |
-| **Bloqueios** | Restrições ativas por tipo e titular |
-| **Passivo** (existente, evoluído) | Visão de diretoria: passivo, provisão, custo total |
-| **Administração** | Catálogos, etapas do pipeline, regras de alerta, importação (encerrada após o corte) |
-
----
-
-## 15. Permissões
-
-Mantido o padrão do módulo — um recurso por menu, verbos padrão, `sensitive` onde há valor:
-
-| Recurso | Observação |
-|---|---|
-| `legal_timeline` | list, read, create (registrar fato), update |
-| `legal_events` | list, read, create, update, delete — cobre agenda, prazos e tarefas |
-| `legal_pipeline` | read, update (mover etapa) · `legal_pipeline.configure` para editar etapas |
-| `legal_negotiations` | + **sensitive** (valores das propostas) |
-| `legal_agreements` | + **sensitive** |
-| `legal_financial` | + **sensitive** — lançamentos, parcelas, depósitos |
-| `legal_restrictions` | + **sensitive** — o dado mais crítico do módulo |
-| `legal_documents` | list, read, create, delete |
-| `legal_alerts` | read · `legal_alerts.configure` para as regras |
-| `legal_provisions` | read + **sensitive** |
-
-Duas regras que atravessam o módulo: **segredo de justiça** (`secrecy`) restringe a leitura aos
-responsáveis do processo, independentemente das demais permissões; e **bloqueio em conta pessoal
-de sócio** só para diretoria e jurídico — nunca para perfil de consulta.
-
----
-
-## 16. Migração dos 148 processos
-
-| Eixo | Regra |
-|---|---|
-| Processual | Mapeamento direto do status atual (em andamento → `EM_INSTRUCAO`, com decisão → `COM_SENTENCA`, suspenso → `SUSPENSO`, encerrado → `ARQUIVADO`) |
-| Financeiro | Acordo → `EM_NEGOCIACAO` · acordo finalizado → `QUITADO` · encerrado → **fila de revisão** (quitado ou sem obrigação) |
-| **Operacional** | **Todos entram em `NOVO`**, exceto arquivados. A etapa é o estado do *nosso* trabalho: não dá para inferir da planilha, e chutar seria pior que triar |
-| Timeline | Uma entrada `CARGA_INICIAL` por processo, com o texto da última movimentação |
-| Acordos | `agreement_terms` (texto) vira acordo + parcelas com **revisão assistida**: a tela sugere a leitura de `"3 X 2.333,34"` e o jurídico confirma |
-| Valores | `amount_paid`/`amount_pending` viram lançamento de abertura, para o derivado bater com o histórico |
-
-A triagem inicial (148 processos passando por `NOVO`) é trabalho real da equipe, mas é o
-momento em que o acervo importado vira acervo operado — e cada processo ganha responsável,
-etapa e próximo compromisso.
-
----
-
-## 17. Roadmap revisado
-
-| Fase | Entrega | Por que nesta ordem |
+| Na v2 | Na v3 | Motivo |
 |---|---|---|
-| **A — Núcleo operacional** | Timeline · eventos · pipeline configurável · papéis · central de alertas · migração e triagem | É o que você usa todo dia, e não toca em dinheiro: o menor risco com o maior ganho |
-| **B — Negociação e acordo** | Negociações · propostas · acordos · parcelas · lançamentos financeiros · integração com o CAP | Depende da timeline (§2) e é onde entra o dinheiro |
-| **C — Patrimônio** | Bloqueios · alvos · depósitos e garantias · capital retido · painel patrimonial | Depende dos lançamentos financeiros da fase B |
-| **D — Integração interna** | Vínculo RH ↔ processo · radar de prescrição · provisão por competência · custo por projeto · indicadores executivos | Depende de acordo e financeiro para ter o que provisionar |
-| **E — Automação** | Captura de publicações · notificações · resumo por IA · portal de escritórios | Só faz sentido com a operação rodando e a timeline alimentada |
+| Processo como raiz | **Caso** (`legal_matters`) como raiz; processo é uma fase | A empresa administra risco; 19% dos casos já têm mais de um processo |
+| Timeline, eventos e negociações em `case_id` | Em **`matter_id`**, com `case_id` opcional | Fatos existem antes do processo: prescrição, notificação, acordo extrajudicial |
+| Sem pedidos | **`legal_claim_items`** + catálogo | Sem eles não há reincidência nem "principais pedidos" |
+| Contexto por join com o cadastro atual | **Contexto congelado** no caso | Análise histórica exige o valor da época |
+| Regras de alerta como tabela de limiares | **Motor de regras com Sinal** como primitivo comum | Alertas, indicadores, dashboards e notificações passam a derivar de uma fonte |
+| Catálogos como listas de apoio | **Fichas 360º** como modelo de leitura padronizado | O processo deixa de ser o único ponto de consulta |
+| Radar de prescrição como consulta | **Estágio do ciclo de vida** (`POTENCIAL`, `PRESCRITO`) | Prescrição vira estado do caso, não um relatório |
 
-As decisões estruturais da §12 são tomadas **na fase A**, mesmo que a funcionalidade
-correspondente venha na E — é o que evita retrabalho.
-
----
-
-## 18. Decisões pendentes
-
-Resolvidas pelo seu feedback: acordo integra o CAP · agenda é derivada de eventos · pipeline
-operacional entra · negociação separada de acordo · papéis múltiplos · alertas antes de
-dashboards.
-
-Ainda em aberto:
-
-1. **Etapas iniciais do pipeline e SLA de cada uma.** Proponho as suas oito
-   (Novo → Análise → Contestação → Produção de provas → Negociação → Execução → Pagamento →
-   Arquivado). Faltam os prazos esperados por etapa, que alimentam os alertas — quantos dias em
-   "Negociação" já é preocupante?
-2. **Percentuais de provisão por risco.** Provável = 100%? Possível = 50%? Remota = 0%? É
-   definição contábil, e o número muda o passivo publicado.
-3. **Identificação da conta bloqueada.** O SGC não tem cadastro de contas bancárias. Registro
-   como identificador (banco + final da conta) ou criamos o cadastro?
-4. **Honorários de escritório** entram como lançamento do processo (custo total do contencioso)
-   ou ficam no financeiro corporativo?
-5. **Quem preenche o papel "Responsável RH"** — usuário do SGC ou pessoa externa? Isso define se
-   o alerta chega a alguém de fato.
-6. **Data do corte da fonte oficial** (§10) e quem pode reabrir a importação.
-7. **Notificação por e-mail** exige infraestrutura que o sistema não tem (nem serviço de e-mail
-   nem agendador). Fica para a fase E, ou entra antes como projeto próprio?
-8. **Radar de prescrição** (§13.1): entra na fase D como proposto, ou é prioritário o suficiente
-   para antecipar? É prevenção de passivo novo, não gestão do existente.
+O que **não** muda: timeline como projeção (não fonte), eventos genéricos com calendário
+derivado, pipeline configurável com SLA, negociação separada do acordo, lançamentos com direção
+e recuperabilidade, papéis datados, alertas sem depender de agendador.
 
 ---
 
-## 19. Riscos
+## 8. Modelo completo
+
+```
+        RH / SGC                          CATÁLOGOS (identidade própria, ficha 360º)
+   ┌──────────────┐        ┌────────────┬────────────┬───────────┬──────────┬──────────┐
+   │  employees   │───────▶│  pessoas   │  empresas  │  projetos │escritórios│ câmaras  │
+   │ desligamento │        │  (+sócios) │            │ →projects │ advogados │  contas  │
+   └──────────────┘        └─────┬──────┴──────┬─────┴─────┬─────┴─────┬────┴────┬─────┘
+                                 │             │           │           │         │
+                                 └─────────────┴─────┬─────┴───────────┴─────────┘
+                                                     │  (vínculos: partes, responsáveis)
+   ┌─────────────────────────────────────────────────▼──────────────────────────────────┐
+   │                          CASO — legal_matters (raiz do agregado)                    │
+   │  origem · tipo · lifecycle_stage · prescrição · score de risco · exposição          │
+   │  contexto congelado: obra, centro de custo, gestor, motivo, tempo de casa           │
+   ├────────────────────────────────────────────────────────────────────────────────────┤
+   │  processos          timeline          eventos          pedidos                     │
+   │  (legal_cases)      (fatos)           (compromissos)   (claim items)               │
+   │  nº CNJ, vara,      append-only,      agenda, prazos,  tipo, valor,                │
+   │  rito, fases        procedência       parcelas         resultado                   │
+   │                                                                                     │
+   │  negociações → propostas → acordos → parcelas                                      │
+   │  lançamentos financeiros (saída/retorno · recuperável)                             │
+   │  restrições → alvos (conta empresa · conta sócio · veículo · imóvel)               │
+   │  documentos · partes · responsáveis · observações · sinais                         │
+   └───────────────┬──────────────────────────────────────────────┬─────────────────────┘
+                   │                                              │
+     origem LEGAL  ▼                                              ▼
+        ┌────────────────────┐                        ┌────────────────────────┐
+        │  payable_snapshots │                        │  MOTOR DE REGRAS       │
+        │  (Contas a Pagar)  │                        │  regras → SINAIS →     │
+        └────────────────────┘                        │  alertas · indicadores │
+                                                      │  dashboards · score    │
+        ┌────────────────────┐                        └────────────────────────┘
+        │  legal_provisions  │  provisão por competência → indicadores executivos
+        └────────────────────┘
+```
+
+---
+
+## 9. Fonte oficial e política de integração
+
+O princípio que você reforçou vira **regra de arquitetura**, não intenção:
+
+1. **Corte explícito.** Um marco encerra a carga; depois dele a importação fica desabilitada e
+   reabri-la exige ação administrativa registrada.
+2. **Procedência em todo fato** (`MANUAL · CARGA_INICIAL · PUBLICACAO · INTEGRACAO · SISTEMA`).
+3. **Integração enriquece, nunca substitui.** Uma fonte externa pode *preencher lacuna* e
+   *acrescentar fato novo*; não pode sobrescrever campo preenchido na operação. Esta regra já
+   existe e está provada no importador atual ("campo vazio nunca sobrescreve informação
+   existente" e a preservação dos dados enriquecidos) — a v3 apenas a promove a política do
+   módulo inteiro.
+4. **Toda ingestão é idempotente por chave natural** (número CNJ + hash do fato), para que
+   captura repetida não duplique.
+5. **Conflito é conflito, não sobrescrita.** Divergência entre a fonte externa e o registro
+   operacional vira sinal para revisão humana.
+
+---
+
+## 10. O que eu recomendo não fazer agora
+
+Espírito crítico, como você pediu — cinco tentações e por que recuso cada uma.
+
+**10.1 Event sourcing puro.** A timeline parece convidar: por que não fazer dela a fonte da
+verdade e derivar todo o estado? Porque o custo é alto (replay, versionamento de eventos,
+projeções a manter) e o ganho não se realiza aqui: o módulo precisa de consultas relacionais
+ricas — somar passivo por obra, listar parcelas vencidas — que ficam caras sobre um log. A
+timeline continua **projeção**, e o estado vive em tabelas normalizadas.
+
+**10.2 Linguagem de regras.** §6.2.
+
+**10.3 Score por machine learning.** §6.4.
+
+**10.4 N:N entre caso e processo.** §1.3 — aditivo depois, se aparecer.
+
+**10.5 Cadastro bancário completo.** Guardar agência, conta e titularidade completa cria
+responsabilidade de segurança desproporcional ao uso. O bloqueio precisa saber *qual conta*, não
+*como acessá-la*: banco, identificação mascarada (final) e titular bastam.
+
+**10.6 Módulo separado ou microserviço.** O valor do Jurídico no SGC vem justamente da
+integração — RH origina, financeiro paga, indicadores consolidam. Separá-lo destruiria isso.
+
+---
+
+## 11. Horizonte de cinco a dez anos
+
+**Dado pessoal e retenção.** O módulo acumula CPF, motivo de desligamento, valores, contas de
+sócios e, em perícia, dado de saúde. Em dez anos serão milhares de pessoas, a maioria sem
+relação atual com a empresa. Proponho decidir **agora** a política: prazo de retenção após o
+arquivamento, anonimização do que passa desse prazo (preservando os números para estatística) e
+registro de acesso a caso sob segredo. É mais barato desenhar isso antes do que retroagir sobre
+dez anos de histórico.
+
+**Volume.** 148 casos hoje; com o ciclo completo, cada desligamento vira um caso — algo como
+centenas por ano. Nada que exija arquitetura especial; a atenção fica na timeline e nos sinais,
+que crescem por fato e não por caso, e por isso precisam de índice por caso e data desde o
+início.
+
+**Multiempresa.** O grupo tem mais de uma entidade (a planilha já distingue). Se um dia houver
+separação por empresa no acesso, o caminho é o vínculo com `legal_companies` — que já existe no
+modelo. Nenhuma decisão nova é necessária hoje, apenas não amarrar consultas a uma empresa
+implícita.
+
+---
+
+## 12. Migração dos dados atuais
+
+| Item | Regra |
+|---|---|
+| Cada processo atual | Vira **1 caso + 1 processo**. Onde a mesma pessoa tem 2 ou 3 processos (23 pessoas), vira **1 caso com N processos** — revisado na triagem |
+| Estágio do ciclo | Derivado do status atual: em andamento/com decisão/suspenso → `JUDICIALIZADO`; acordo → `JUDICIALIZADO`; acordo finalizado → `QUITADO`; encerrado → `ENCERRADO` |
+| Pessoas com desligamento e sem processo | **Viram casos `POTENCIAL`** com prescrição calculada — 25 pessoas hoje sem `termination_date` ficam de fora até o dado ser preenchido |
+| Contexto congelado | Preenchido com o que houver (empresa, projeto do texto atual); o que faltar entra no checklist de completude |
+| Pedidos | Não existem no acervo. Passam a ser registrados dos novos casos em diante — sem retroagir |
+| Timeline | Uma entrada `CARGA_INICIAL` por caso |
+| Datas de distribuição e audiência | **Não existem** (0 de 148). A triagem preenche as dos casos ativos; nos encerrados, ficam vazias e assim são exibidas |
+
+A honestidade do último item importa: o sistema deve mostrar "não informado", nunca uma data
+inventada por inferência.
+
+---
+
+## 13. Roadmap revisado
+
+| Fase | Entrega | Por quê nesta ordem |
+|---|---|---|
+| **0 — Fundação** | Caso como raiz · timeline · procedência · registro de regras e Sinal · migração dos 148 | Todas as fases seguintes escrevem sobre essas três coisas. Fazer depois é refazer |
+| **A — Operação** | Eventos e agenda · pipeline configurável · papéis · central de alertas (sinais) · triagem | O uso diário, sem tocar em dinheiro |
+| **B — Negociação e dinheiro** | Negociações · propostas · acordos · parcelas · lançamentos · integração com o CAP | Depende da timeline e da fundação |
+| **C — Patrimônio** | Restrições · alvos · contas · depósitos · capital retido | Depende dos lançamentos |
+| **D — Prevenção** | Vínculo RH · casos potenciais · prescrição · pedidos · contexto congelado · score · fichas 360º | É a fase que diferencia o produto — e a que mais depende de dado acumulado |
+| **E — Automação** | Captura de publicações · notificações · resumo por IA · portal de escritórios | Só com a operação madura |
+
+Mudança relevante em relação à v2: **a fundação virou fase própria**. A raiz do agregado, a
+timeline e o motor de regras precisam existir antes de qualquer funcionalidade, senão cada fase
+seguinte cria seu próprio centro — exatamente o que você quer evitar.
+
+A fase D (prevenção) depende de dado que só nasce com a operação rodando: por isso ela vem
+depois, mas **a coleta começa na fase 0**, com o contexto congelado e a procedência.
+
+---
+
+## 14. Decisões pendentes
+
+Já resolvidas: caso como raiz · agenda derivada de eventos · pipeline configurável · negociação
+separada · papéis múltiplos · alertas sem agendador · conta bancária como catálogo (mascarada) ·
+integração enriquece sem substituir.
+
+Em aberto — as quatro primeiras bloqueiam a fase 0:
+
+1. **Prazo prescricional a adotar.** Dois anos após o desligamento é a regra geral trabalhista.
+   Confirma? Casos cíveis e tributários têm prazos distintos — modelo por tipo de caso.
+2. **Abertura automática de caso potencial no desligamento.** Todo desligado vira caso
+   `POTENCIAL` automaticamente, ou só quando alguém marcar? Automático dá cobertura total e
+   volume alto; manual dá curadoria e risco de esquecimento. **Recomendo automático**, com
+   encerramento em massa por prescrição.
+3. **Fatores e pesos do score de risco.** Preciso da sua leitura do negócio: o que faz um
+   desligamento virar ação com mais frequência?
+4. **SLA de cada etapa do pipeline** (pendente da v2).
+5. **Percentuais de provisão por risco** (pendente da v2) — a série histórica só existe se
+   começar.
+6. **Política de retenção e anonimização** (§11).
+7. **Honorários de escritório** como lançamento do caso ou financeiro corporativo (pendente).
+8. **Quem preenche o papel "Responsável RH"** (pendente).
+
+---
+
+## 15. Riscos
 
 | Risco | Mitigação |
 |---|---|
-| A timeline não ser alimentada e o módulo voltar a ser repositório | O alerta "sem movimentação há N dias" é o termômetro, e fica na tela principal. A completude (§13.6) mede o mesmo por outro ângulo |
-| Central de alertas virar ruído e ser ignorada | Ciência e adiamento por alerta (§8) desde a primeira versão |
-| Triagem dos 148 processos travar a adoção | O sistema é utilizável durante a triagem: processo em `NOVO` funciona, só não tem etapa definida |
-| Duplicidade de desembolso entre jurídico e CAP | Origem `LEGAL` idempotente, decidida na fase B antes de qualquer título |
-| Evento espelhado sair de sincronia com a parcela | Um único serviço dono da criação/atualização, coberto por teste de regressão |
-| Dado de sócio e bloqueio vazando para consulta | `sensitive` próprio + revisão dos presets antes de publicar a fase C |
-| Reimportação da planilha sobrescrevendo operação | Corte da fonte oficial (§10) desabilita a importação por padrão |
-| Escopo crescer para integração com tribunais antes da operação estar madura | Fase E, explicitamente depois de A–D |
+| O agregado grande virar objeto monolítico e lento | §2.4: a raiz é ponto de entrada dos comandos, não um objeto carregado inteiro |
+| Casos potenciais automáticos gerarem ruído (centenas abertos) | Encerramento automático por prescrição + filtro padrão que esconde os de risco baixo |
+| O motor de regras crescer para uma DSL por pressão de flexibilidade | §6.2 registra a decisão e o caminho alternativo (construtor guiado) |
+| Score de risco ser lido como previsão confiável | Score sempre exibido com os fatores que o compõem; nunca um número solto |
+| A fase 0 parecer "não entregar nada" ao usuário final | Ela entrega a timeline e a triagem — visíveis desde o primeiro dia |
+| Pedidos não serem registrados e a análise de prevenção nunca acontecer | Fazem parte do checklist de completude do caso judicializado |
+| Reimportação da planilha sobrescrevendo a operação | Corte da fonte oficial (§9) |
 
 ---
 
-## 20. Documentos relacionados
+## 16. Documentos relacionados
 
-- [`JURIDICO_IMPORTACAO_PLANILHA.md`](JURIDICO_IMPORTACAO_PLANILHA.md) — a carga inicial, que
-  permanece válida como marco zero e se encerra no corte da fonte oficial
+- [`JURIDICO_IMPORTACAO_PLANILHA.md`](JURIDICO_IMPORTACAO_PLANILHA.md) — a carga inicial e as
+  regras de preservação que a §9 promove a política do módulo
 - [`JURIDICO_RUNBOOK_DEPLOY.md`](JURIDICO_RUNBOOK_DEPLOY.md) — deploy do módulo
 - [`SGC_DOCUMENTACAO_COMPLETA.md`](SGC_DOCUMENTACAO_COMPLETA.md) — estado atual do sistema
 - [`CHANGELOG.md`](../CHANGELOG.md) — histórico de mudanças
