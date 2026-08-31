@@ -90,6 +90,18 @@ export function LegalCases() {
   // Deep link `?case=<id>`: a Central de Trabalho leva direto ao processo do item clicado.
   // Sem isso, "Abrir caso" deixaria o usuário na lista, procurando de novo o que já achou.
   const deepLinkCase = searchParams.get("case");
+
+  /**
+   * Fechar o detalhe também limpa o `?case=` da URL. Sem isso o efeito abaixo reabriria o modal
+   * imediatamente — o processo "não fecha".
+   */
+  const fecharDetalhe = useCallback(() => {
+    setSelected(null);
+    if (!deepLinkCase) return;
+    const proximo = new URLSearchParams(searchParams);
+    proximo.delete("case");
+    setSearchParams(proximo, { replace: true });
+  }, [deepLinkCase, searchParams, setSearchParams]);
   useEffect(() => {
     if (!deepLinkCase || selected) return;
     const found = cases.find((c) => c.id === deepLinkCase);
@@ -570,9 +582,9 @@ export function LegalCases() {
       {selected ? (
         <LegalCaseModal
           legalCase={selected}
-          onClose={() => setSelected(null)}
+          onClose={fecharDetalhe}
           onOpenPerson={(id) => {
-            setSelected(null);
+            fecharDetalhe();
             navigate(`/legal/persons?person_id=${id}`);
           }}
         />
