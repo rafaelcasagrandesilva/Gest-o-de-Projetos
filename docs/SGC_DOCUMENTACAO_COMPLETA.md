@@ -1,1506 +1,1016 @@
 # SGC — Sistema de Gestão Corporativa
-## Documentação Técnica Completa — Auditoria
+## Documentação Técnica Completa
 
-**Data da auditoria:** 2026-06-11  
-**Versão analisada:** branch principal (`Gest-o-de-Projetos/`)  
-**Auditor:** Claude Code (Sonnet 4.6)
+**Estado documentado:** commit `21f4c07` (29/08/2026)
+**Escopo:** o que existe implementado hoje. O histórico de mudanças fica em
+[`CHANGELOG.md`](../CHANGELOG.md).
 
----
-
-## ÍNDICE
-
-1. [Visão Geral do Sistema](#1-visão-geral-do-sistema)
-2. [Arquitetura](#2-arquitetura)
-3. [Estrutura de Diretórios](#3-estrutura-de-diretórios)
-4. [Backend — Modelos de Dados](#4-backend--modelos-de-dados)
-5. [Backend — Endpoints da API](#5-backend--endpoints-da-api)
-6. [Backend — Serviços](#6-backend--serviços)
-7. [Backend — Repositórios](#7-backend--repositórios)
-8. [Autenticação e Autorização](#8-autenticação-e-autorização)
-9. [Banco de Dados — Migrations](#9-banco-de-dados--migrations)
-10. [Frontend — Estrutura](#10-frontend--estrutura)
-11. [Variáveis de Ambiente](#11-variáveis-de-ambiente)
-12. [Infraestrutura e Deploy](#12-infraestrutura-e-deploy)
-13. [Scripts e Utilitários](#13-scripts-e-utilitários)
-14. [Testes Automatizados](#14-testes-automatizados)
-15. [Documentação Funcional dos Módulos](#15-documentação-funcional-dos-módulos)
-16. [Análise de Segurança](#16-análise-de-segurança)
-17. [Riscos Identificados](#17-riscos-identificados)
-18. [Recomendações Priorizadas](#18-recomendações-priorizadas)
-19. [Plano de Correção](#19-plano-de-correção)
+> Este documento foi gerado a partir do código-fonte: a lista de endpoints vem das rotas
+> registradas no FastAPI, as tabelas vêm dos modelos SQLAlchemy e as permissões vêm de
+> `app/core/permission_codes.py`. Ao alterar o sistema, regenere ou atualize as seções
+> correspondentes — a versão anterior deste documento era de junho e ficou dois meses
+> atrás do código, ao ponto de não mencionar módulos inteiros.
 
 ---
 
-## 1. VISÃO GERAL DO SISTEMA
+## Índice
 
-O **SGC (Sistema de Gestão Corporativa)** é uma aplicação web fullstack destinada à gestão financeira e operacional de uma empresa de consultoria/engenharia. O sistema centraliza:
-
-- Gestão de projetos e alocação de recursos
-- Controle financeiro (contas a pagar, receber, faturamento)
-- Gestão de ativos e EPIs
-- Indicadores de performance (ROI operacional)
-- Gestão de frota de veículos
-- Controle de colaboradores CLT e PJ
-- Endividamento e custos fixos corporativos
-- Auditoria de todas as ações
-
-### Stack Tecnológica
-
-| Camada | Tecnologia |
-|--------|-----------|
-| Backend | Python 3.x + FastAPI |
-| ORM | SQLAlchemy 2.0 (async) |
-| Banco de Dados | PostgreSQL (asyncpg driver) |
-| Migrations | Alembic |
-| Autenticação | JWT (python-jose, HS256) |
-| Hashing de Senha | bcrypt (passlib, com suporte a argon2 e pbkdf2) |
-| Frontend | React 18 + TypeScript + Vite |
-| Estilização | Tailwind CSS |
-| HTTP Client | Axios |
-| Gráficos | Recharts |
-| Roteamento | React Router v6 |
-| Relatórios | openpyxl (Excel) + reportlab (PDF) |
-| Deploy | Railway (backend + frontend como serviços separados) |
+1. [Visão geral](#1-visão-geral)
+2. [Arquitetura e stack](#2-arquitetura-e-stack)
+3. [Estrutura de diretórios](#3-estrutura-de-diretórios)
+4. [Módulos funcionais](#4-módulos-funcionais)
+5. [Autorização — o modelo de permissões](#5-autorização--o-modelo-de-permissões)
+6. [Modelo de dados](#6-modelo-de-dados)
+7. [API — endpoints por módulo](#7-api--endpoints-por-módulo)
+8. [Frontend — telas e rotas](#8-frontend--telas-e-rotas)
+9. [Armazenamento de arquivos](#9-armazenamento-de-arquivos)
+10. [Variáveis de ambiente](#10-variáveis-de-ambiente)
+11. [Banco de dados e migrations](#11-banco-de-dados-e-migrations)
+12. [Testes automatizados](#12-testes-automatizados)
+13. [Infraestrutura e deploy](#13-infraestrutura-e-deploy)
+14. [Ambiente local](#14-ambiente-local)
+15. [Documentos complementares](#15-documentos-complementares)
 
 ---
 
-## 2. ARQUITETURA
+## 1. Visão geral
 
-### Diagrama de Camadas
+O SGC é uma aplicação web para a gestão financeira e operacional de uma empresa de
+consultoria e engenharia. Ele cobre cinco áreas de trabalho (*workspaces*), cada uma com o
+seu próprio menu e conjunto de permissões:
 
-```
-┌─────────────────────────────────────────────────┐
-│                   FRONTEND                       │
-│   React 18 + TypeScript + Vite + Tailwind        │
-│   Express.js (servidor estático de produção)     │
-│   Deploy: Railway (porta dinâmica)               │
-└──────────────────────┬──────────────────────────┘
-                       │ HTTPS / REST JSON
-                       │ Bearer JWT
-                       ▼
-┌─────────────────────────────────────────────────┐
-│                   API FASTAPI                    │
-│   app/main.py — CORSMiddleware, AuthStateMiddleware │
-│   ForwardedProtoMiddleware                       │
-│   /api/v1/ prefix                                │
-│   22 módulos (routers)                           │
-└──────────────────────┬──────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────┐
-│               CAMADA DE DEPENDÊNCIAS             │
-│   app/api/deps.py — get_current_user             │
-│   require_permission, require_roles              │
-│   get_current_workspace                          │
-└──────────────────────┬──────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────┐
-│               CAMADA DE SERVIÇOS                 │
-│   app/services/*.py — lógica de negócio          │
-│   AuthService, AuditService, ReportService, etc. │
-└──────────────────────┬──────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────┐
-│              CAMADA DE REPOSITÓRIOS              │
-│   app/repositories/*.py — acesso a dados         │
-│   UserRepository, ProjectRepository, etc.        │
-└──────────────────────┬──────────────────────────┘
-                       │ SQLAlchemy async ORM
-                       ▼
-┌─────────────────────────────────────────────────┐
-│               PostgreSQL                         │
-│   67 migrations / tabelas                        │
-│   Schemas: public (produção) + cenários          │
-└─────────────────────────────────────────────────┘
-```
+| Workspace | O que resolve |
+|---|---|
+| **Projetos** | Cadastro de projetos e contratos, estrutura de custos (mão de obra, veículos, sistemas, fixos), colaboradores, frota, faturamento e dashboard operacional |
+| **Financeiro** | Contas a Pagar, Contas a Receber, Notas Fiscais, Antecipações de recebíveis, Endividamento e Custos Fixos da empresa |
+| **Indicadores** | Dashboards executivos — ROI operacional e Evolução Financeira |
+| **Gestão de Ativos** | Patrimônio, EPIs, entregas e devoluções, inspeções e vencimentos |
+| **Jurídico** | Processos, pessoas, empresas e projetos do contencioso, com carga pela planilha oficial |
 
-### Fluxo de Autenticação
+Dois conceitos atravessam o sistema inteiro e explicam boa parte das regras:
+
+- **Competência** — o mês de referência de um custo ou lançamento. Quase todo dado
+  financeiro é indexado por competência, e a folha de um mês é paga no Contas a Pagar do
+  mês seguinte.
+- **Centro de Custo** — o agrupamento que liga colaboradores, veículos e custos a um
+  projeto ou a uma área administrativa (Administrativo, Financeiro, TI, Diretoria…). O
+  vocabulário é único e centralizado: Centros Administrativos fixos mais os centros dos
+  projetos ativos.
+
+---
+
+## 2. Arquitetura e stack
 
 ```
-1. POST /api/v1/auth/login {email, password}
-2. AuthService.login():
-   a. Busca usuário por email
-   b. Verifica senha (bcrypt/argon2/pbkdf2 com rehash automático)
-   c. Loga ação em audit_logs
-   d. build_session_claims() — monta claims com roles, permissões, workspaces, projetos vinculados
-3. create_access_token() — JWT HS256, expiry 24h (padrão)
-4. Resposta: {access_token: "eyJ..."}
-5. Frontend: armazena em localStorage["sgp_access_token"]
-6. Interceptor Axios: adiciona header Authorization: Bearer <token> em toda requisição
-7. Backend: HTTPBearer → decode_token() → UserRepository.get_with_roles() → request.state.user
+┌──────────────────────────┐        ┌──────────────────────────┐
+│  Frontend (React + Vite) │  HTTPS │  Backend (FastAPI)       │
+│  React 18 · TS · Tailwind│ ─────► │  Python · SQLAlchemy 2   │
+│  ECharts · Recharts      │  JWT   │  Pydantic v2 · Alembic   │
+└──────────────────────────┘        └───────────┬──────────────┘
+                                                │ asyncpg
+                                    ┌───────────▼──────────────┐
+                                    │  PostgreSQL              │
+                                    └──────────────────────────┘
+                                    ┌──────────────────────────┐
+                                    │  Volume persistente      │
+                                    │  (anexos: NF, ativos,    │
+                                    │   documentos de projeto) │
+                                    └──────────────────────────┘
 ```
 
-### Fluxo de Autorização (RBAC)
+**Backend** — FastAPI ≥ 0.115, SQLAlchemy 2 (async, `asyncpg`), Pydantic v2 +
+pydantic-settings, Alembic, python-jose (JWT), passlib/bcrypt, openpyxl (Excel) e
+reportlab (PDF). Servido por uvicorn.
+
+**Frontend** — React 18 com TypeScript, React Router 6, Axios, Tailwind. Gráficos em
+Apache ECharts (padrão dos dashboards executivos) e Recharts (telas mais antigas). Em
+produção é servido por um Express (`server.js`).
+
+**Padrões que valem para o código todo:**
+
+- Regra de negócio vive em `app/services/`; o router só autoriza, valida entrada e
+  serializa saída. Consultas ficam em `app/repositories/`.
+- Autorização por **permissão**, nunca por nome de perfil.
+- Valores financeiros passam pelo eixo de **Dados Sensíveis**: ter acesso ao módulo não
+  implica ver valores.
+- Recursos auxiliares de tela (filtros, vocabulários) carregam por `useAuxiliaryResource`:
+  se o usuário não tiver permissão, o controle some — a página não quebra.
+
+---
+
+## 3. Estrutura de diretórios
 
 ```
-Roles: ADMIN | GESTOR | CONSULTA
-  │
-  ├── ADMIN → preset: todas permissões (exceto EXPLICIT_GRANT_ONLY)
-  ├── GESTOR → preset: leitura+escrita de quase tudo (sem users.manage em alguns casos)
-  └── CONSULTA → preset: apenas leitura
-  
-Permissões granulares (user_permissions) sobrescrevem o preset da role.
-EXPLICIT_GRANT_ONLY: invoices.reactivate, audit.export (nunca herdadas, apenas grant explícito)
-
-Superusuário: email hardcoded "rafael.casagrande@meconsulting.com.br" OU APP_SUPERUSER_EMAILS
-  → Acesso total a tudo, sem verificação de permissão
-  
-Workspaces: projects | finance | assets | indicators
-  → Segmentação de interface (não de segurança — backend aplica permissões por endpoint)
+.
+├── app/                      # Backend
+│   ├── main.py               # App FastAPI, middlewares, startup (migrations + storage)
+│   ├── api/                  # Dependências, middleware, registro de rotas, eixo sensível
+│   ├── core/                 # Config, segurança, códigos de permissão, bootstrap
+│   ├── models/               # Modelos SQLAlchemy (66 tabelas)
+│   ├── schemas/              # Contratos Pydantic de entrada e saída
+│   ├── modules/              # Um pacote por módulo, cada um com o seu router
+│   ├── services/             # Regra de negócio (60 serviços)
+│   ├── repositories/         # Consultas ao banco
+│   ├── utils/                # Datas, dinheiro, ciclo de vida, storage, JSON
+│   └── database/             # Sessão e base declarativa
+├── alembic/versions/         # 119 migrations
+├── frontend/src/
+│   ├── pages/                # 30 telas
+│   ├── components/           # Componentes reutilizáveis
+│   ├── services/             # Clientes HTTP por módulo
+│   ├── context/              # Auth, workspace, cenário, sidebar
+│   ├── hooks/                # usePermission, useAuxiliaryResource, …
+│   └── permissions.ts        # Espelho do grafo de permissões do backend
+├── docs/                     # Esta documentação e os documentos por funcionalidade
+├── scripts/                  # Utilitários operacionais e relatórios pontuais
+├── tests/                    # 48 arquivos de teste
+└── var/                      # Uploads em ambiente local
 ```
 
 ---
 
-## 3. ESTRUTURA DE DIRETÓRIOS
+## 4. Módulos funcionais
 
-```
-Gest-o-de-Projetos/
-├── .env.example                  # Template de variáveis de ambiente
-├── .env.local                    # Variáveis locais de desenvolvimento (NÃO commitar)
-├── alembic.ini                   # Configuração do Alembic
-├── alembic/
-│   ├── env.py                    # Ambiente de migrations
-│   ├── script.py.mako            # Template de migration
-│   └── versions/                 # 67 migrations (0001–0067)
-├── app/
-│   ├── main.py                   # Ponto de entrada FastAPI, middlewares, startup
-│   ├── api/
-│   │   ├── deps.py               # Dependências: auth, permissões, workspace
-│   │   ├── middleware.py         # ForwardedProtoMiddleware, AuthStateMiddleware
-│   │   └── router.py             # Router principal, monta protected + admin
-│   ├── core/
-│   │   ├── bootstrap.py          # Seed admin (cria admin@admin.com se não existir)
-│   │   ├── config.py             # Settings (Pydantic BaseSettings)
-│   │   ├── permission_codes.py   # Constantes de permissões + presets por role
-│   │   ├── run_migrations.py     # Roda alembic upgrade head no startup
-│   │   ├── scenario.py           # Enum Scenario: PREVISTO | REALIZADO
-│   │   ├── schema_guard.py       # Valida presença de colunas 'scenario' no boot
-│   │   ├── security.py           # JWT, bcrypt, hash/verify senha
-│   │   └── session_context.py    # Build de claims JWT, workspaces, permissões
-│   ├── database/
-│   │   ├── base.py               # Base declarativa + TimestampUUIDMixin
-│   │   └── session.py            # Engine async + AsyncSessionLocal + get_db
-│   ├── models/                   # 25 arquivos de modelos SQLAlchemy
-│   ├── modules/                  # 22 módulos (cada um com router.py, schemas, service)
-│   ├── repositories/             # 10 repositórios de acesso a dados
-│   ├── schemas/                  # Pydantic schemas de entrada/saída
-│   ├── services/                 # Serviços de lógica de negócio
-│   └── utils/                    # Utilitários (money, dates, json, audit_diff)
-├── docs/                         # Documentação interna
-├── frontend/
-│   ├── index.html
-│   ├── server.js                 # Servidor Express para produção (Railway)
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── src/
-│   │   ├── App.tsx               # Roteamento principal React Router
-│   │   ├── context/              # AuthContext, ScenarioContext, WorkspaceContext, SidebarContext
-│   │   ├── hooks/                # usePermission, useConsultaReadOnly, useTableSort
-│   │   ├── pages/                # 23 páginas
-│   │   ├── services/             # 22 serviços de API (Axios)
-│   │   ├── components/           # Componentes reutilizáveis
-│   │   └── permissions.ts        # Função hasPermission (frontend)
-├── manage.py                     # CLI: reset_db, promote_admin
-├── Makefile                      # Targets: reset-db, reset-db-confirm
-├── requirements.txt              # Dependências Python
-├── scripts/
-│   ├── backup_postgres.sh        # Script de backup PostgreSQL
-│   ├── promote_user_admin.py     # Promove usuário a ADMIN
-│   ├── promote_user_admin.sql    # SQL de promoção manual
-│   ├── fix_local_db_ownership.sh
-│   └── audit_payables_may_2026.sql
-└── tests/                        # 11 arquivos de testes
-```
+### Projetos e estrutura de custos
 
----
+Cadastro de projetos com contrato, aditivos (prazo e valor) e documentos anexados. Cada
+projeto tem um **Centro de Custo** próprio, que é o que liga colaboradores e veículos a
+ele.
 
-## 4. BACKEND — MODELOS DE DADOS
+A estrutura de custos do projeto tem quatro abas — **Mão de Obra**, **Veículos**,
+**Sistemas** e **Custos Diversos** — sempre por competência e por cenário
+(**Previsto** × **Realizado**). Recursos relevantes:
 
-### 4.1 Usuários e Autenticação
+- **Inicializar Competência**: copia a estrutura de um mês para outro, incluindo os
+  Componentes Variáveis; o que não puder ser copiado é informado na tela, nunca descartado
+  em silêncio.
+- **Exclusão em massa** por aba, com prévia que avisa quantos itens já têm pagamento
+  lançado no Contas a Pagar.
+- Tudo o que é lançado aqui alimenta o Contas a Pagar por sincronização (ver adiante).
 
-#### `users` (User)
-| Campo | Tipo | Observações |
-|-------|------|------------|
-| id | UUID PK | |
-| email | String(255) | unique, indexed |
-| full_name | String(255) | |
-| password_hash | String(255) | bcrypt/argon2/pbkdf2 |
-| is_active | Boolean | default=True |
-| deleted_at | DateTime(tz) | soft delete |
-| created_at / updated_at | DateTime(tz) | auto |
+### Colaboradores
 
-#### `roles`
-| Campo | Tipo |
-|-------|------|
-| id | UUID PK |
-| name | String(50) unique — ADMIN, GESTOR, CONSULTA |
-| description | String(255) nullable |
+Relação de cadastro com filtros de **Centro de Custo** e **Situação**, coluna com todos os
+centros em que a pessoa atua e cards de Cadastrados, Situação e Vínculo CLT × PJ, mais a
+distribuição por centro. O **custo mensal CLT** é calculado no cadastro (salário,
+periculosidade, função dirigida, encargos das Configurações, VR e opcionais) e gravado no
+colaborador; PJ tem cálculo próprio por hora ou valor fixo.
 
-#### `user_roles` (UserRole)
-| Campo | Tipo |
-|-------|------|
-| user_id | UUID FK → users |
-| role_id | UUID FK → roles |
-| UNIQUE | (user_id, role_id) |
+Recursos ligados ao colaborador:
 
-#### `permissions`
-| Campo | Tipo |
-|-------|------|
-| id | UUID PK |
-| name | String(100) unique — código de permissão |
-| description | String(255) |
+- **Alocações** (`employee_assignments`): a pessoa pode atuar em vários contratos, com
+  remuneração **independente** (padrão) ou por **rateio**. É a camada que destravou o
+  multi-contrato — o teto de 100% só vale para o rateio.
+- **Histórico de Centro de Custo**: o centro é temporal; competências anteriores preservam
+  o centro que valia à época.
+- **Override mensal da folha**: valores reais do holerite por competência.
+- **Componentes Variáveis de Pagamento**: benefícios e ajudas de custo que seguem um
+  pipeline único até o Contas a Pagar e o relatório de folha.
 
-#### `user_permissions`
-| Campo | Tipo |
-|-------|------|
-| user_id | UUID FK → users |
-| permission_id | UUID FK → permissions |
+### Frota
 
-#### `project_users` (ProjectUser)
-| Campo | Tipo |
-|-------|------|
-| project_id | UUID FK → projects |
-| user_id | UUID FK → users |
-| access_level | String(50) default="member" |
+Veículos com custo mensal, Centro de Custo (também temporal), usos e vínculo com projetos.
 
-### 4.2 Projetos
+### Financeiro — Contas a Pagar
 
-#### `projects` (Project)
-| Campo | Tipo |
-|-------|------|
-| id | UUID PK |
-| name | String(255) |
-| code | String(50) unique |
-| description | Text nullable |
-| is_active | Boolean default=True |
-| deleted_at | DateTime(tz) nullable — soft delete |
-| closed_at | DateTime(tz) nullable |
-| cost_center | String(100) nullable |
+O CAP é montado a partir de *snapshots* por competência (`payable_snapshots`), gerados de
+várias origens: mão de obra do projeto, veículos, sistemas, custos diversos, Custos Fixos
+e Endividamento da empresa, componentes variáveis e despesas avulsas.
 
-### 4.3 Colaboradores
+Invariantes que o código protege — e que já custaram defeitos em produção:
 
-#### `employees` (Employee)
-| Campo | Tipo | Observações |
-|-------|------|------------|
-| id | UUID PK | |
-| name | String(255) | |
-| type | String(10) | "CLT" ou "PJ" |
-| is_active | Boolean | |
-| salary_base | Numeric(14,2) | Salário base CLT |
-| pix_key_type | String(32) | **DADO SENSÍVEL** |
-| pix_key | String(255) | **DADO SENSÍVEL** |
-| social_charge_rate | Numeric(6,4) | Encargos CLT |
-| inss_rate / fgts_rate / ferias_rate | Numeric | CLT costs |
-| pj_additional_cost | Numeric(14,2) | Custo extra PJ |
-| clt_extra_monthly | Numeric(14,2) | Custo adicional mensal CLT |
+- Título **pago nunca tem o valor reescrito** pela sincronização.
+- O casamento de um título existente **nunca é feito pelo nome** (o nome muda quando o
+  cadastro é corrigido; usa-se a chave do lançamento e o rótulo do componente).
+- Valor digitado na grade **sempre** vira título, mesmo que a vigência do cadastro não
+  cubra a competência.
+- A folha da competência M é paga no CAP de M+1.
 
-#### `employee_allocations`
-| Campo | Tipo |
-|-------|------|
-| employee_id | FK → employees |
-| project_id | FK → projects |
-| competencia | Date |
-| allocation_pct | Numeric(5,2) — % de alocação |
-| scenario | String — PREVISTO/REALIZADO |
+### Financeiro — Contas a Receber, NFs e Antecipações
 
-### 4.4 Financeiro
+Notas fiscais com PDF anexado, competência, status e histórico. Sobre elas operam as
+**Antecipações**: operações com instituições financeiras, com deságio e tarifa,
+liquidação parcial ou multi-origem das NFs e um **ledger de repasse** append-only
+(retiradas e movimentos, fora do Contas a Pagar).
 
-#### `revenues` (Revenue)
-| Campo | Tipo |
-|-------|------|
-| project_id | FK → projects |
-| competencia | Date |
-| amount | Numeric(14,2) |
-| description | String(255) |
-| scenario | String |
-| retention_pct | Numeric(5,2) |
+### Financeiro corporativo — Custos Fixos e Endividamento
 
-#### `invoices` (Invoice — Notas Fiscais internas)
-| Campo | Tipo |
-|-------|------|
-| project_id | FK → projects |
-| competencia | Date |
-| nf_number | String |
-| amount | Numeric(14,2) |
-| status | EMITIDA/ANTECIPADA/FINALIZADA/CANCELADA |
+Itens da empresa com vigência (`start_date`/`end_date`), que geram títulos no CAP de forma
+idempotente. Custos Fixos aceitam **vários lançamentos na mesma competência**;
+Endividamento aceita um **Cronograma Financeiro personalizado**, que passa a ser a fonte
+oficial das parcelas.
 
-#### `receivable_invoices` (NFs a receber)
-| Campo | Tipo |
-|-------|------|
-| project_id | FK → projects (nullable) |
-| nf_number | String |
-| amount | Numeric(14,2) |
-| net_value | Numeric(14,2) |
-| status | EMITIDA/ANTECIPADA/RECEBIDA/CANCELADA |
-| pdf_path | String — path relativo no disco |
+### Indicadores
 
-#### `receivable_advance_batches` (Borderôs/Factoring)
-| Campo | Tipo |
-|-------|------|
-| batch_number | String — número sequencial |
-| operation_type | String — factoring/antecipação |
-| bank | String |
-| status | ABERTO/LIQUIDADO/CANCELADO |
-| total_face_value | Numeric(14,2) |
-| discount_rate | Numeric(6,4) |
-| net_proceeds | Numeric(14,2) |
+Dashboards executivos em ECharts: **ROI Operacional** e **Evolução Financeira** — esta com
+custo total do projeto e um modo alternativo que troca a origem do custo pelos títulos do
+Contas a Pagar (visão da empresa inteira, porque a maior parte do CAP é corporativa).
 
-#### `payable_snapshots` (Snapshots mensais de obrigações)
-| Campo | Tipo |
-|-------|------|
-| project_id | FK → projects (nullable) |
-| competencia | Date |
-| type | FORNECEDOR/FUNCIONARIO/FINANCIAL/ENDIVIDAMENTO |
-| description | String |
-| amount | Numeric(14,2) |
-| amount_paid | Numeric(14,2) |
-| status | PENDENTE/PAGO/PARCIAL/ANTECIPADO |
-| cost_center | String |
+### Gestão de Ativos e EPIs
 
-#### `payable_payments` (Eventos de pagamento)
-| Campo | Tipo |
-|-------|------|
-| snapshot_id | FK → payable_snapshots |
-| amount_paid | Numeric(14,2) |
-| paid_at | Date |
-| payment_method | String |
+Patrimônio com categorias, código gerado, anexos, entregas e devoluções por colaborador,
+inspeções e vencimentos, além de um dashboard próprio. EPIs são tratados como uma faixa
+separada dos demais ativos.
 
-### 4.5 Ativos e EPIs
+### Jurídico
 
-#### `assets` (Ativo)
-| Campo | Tipo |
-|-------|------|
-| asset_type | String — EQUIPMENT/EPI |
-| code | String — gerado automaticamente |
-| category | String |
-| name | String(255) |
-| status | AVAILABLE/IN_USE/MAINTENANCE/RETIRED |
-| serial_number | String |
-| purchase_value | Numeric(14,2) |
-| tags | JSONB — array de strings |
+Workspace fechado: processos (entidade principal), pessoas, empresas e projetos do
+contencioso, dashboard, relatório próprio e importação pela **planilha oficial** — que
+inclui e atualiza registros, mas nunca exclui. As permissões são por menu e não dependem
+do módulo de Relatórios corporativo.
 
-#### `asset_assignments`
-| Campo | Tipo |
-|-------|------|
-| asset_id | FK → assets |
-| assignee_name | String(255) |
-| project_id | FK nullable |
-| assigned_at | Date |
-| returned_at | Date nullable |
+### Relatórios
 
-#### `asset_inspections`
-| Campo | Tipo |
-|-------|------|
-| asset_id | FK → assets |
-| inspection_date | Date |
-| result | APPROVED/NEEDS_REPAIR/RETIRED |
-| notes | Text |
+Catálogo único com dois motores de exportação (Excel e PDF). Cada relatório exige, além do
+acesso ao módulo de Relatórios, a permissão de leitura do **seu** módulo. Grupos
+disponíveis: Financeiro, Projetos, Patrimônio, Jurídico e Administrativo (Colaboradores,
+Folha de Pagamento, Frota, Usuários).
 
-#### `asset_attachments`
-| Campo | Tipo |
-|-------|------|
-| asset_id | FK → assets |
-| file_name | String |
-| stored_path | String — caminho relativo no disco |
-| content_type | String |
-| size_bytes | Integer |
+### Administração do sistema
 
-### 4.6 Frota
+Usuários, perfis administráveis (os perfis são presets de permissões guardados no banco),
+Configurações (encargos, percentuais e tipos de componente de pagamento), log de auditoria
+com exportação e o diagnóstico de arquivos ausentes no servidor.
 
-#### `vehicles` (Vehicle)
-| Campo | Tipo |
-|-------|------|
-| plate | String(20) unique |
-| model | String(255) |
-| brand | String(100) |
-| year | Integer |
-| is_active | Boolean |
-| monthly_fixed_cost | Numeric(14,2) |
-| deleted_at | DateTime nullable |
+### Módulos de apoio
 
-#### `vehicle_usages`
-| Campo | Tipo |
-|-------|------|
-| vehicle_id | FK → vehicles |
-| project_id | FK → projects |
-| competencia | Date |
-| km_driven | Numeric(10,2) |
-| scenario | String |
-
-### 4.7 Financeiro Corporativo
-
-#### `company_financial_items`
-| Campo | Tipo |
-|-------|------|
-| type | ENDIVIDAMENTO/CUSTO_FIXO/EMPLOYEE |
-| subtype | String — ex.: FINANCIAMENTO, LEASING |
-| description | String |
-| creditor | String |
-| contract_value | Numeric(14,2) |
-| interest_rate | Numeric(6,4) |
-| monthly_required | Numeric(14,2) |
-| is_active | Boolean |
-| cost_center | String |
-
-### 4.8 Auditoria
-
-#### `audit_logs`
-| Campo | Tipo |
-|-------|------|
-| user_id | FK → users (SET NULL on delete) |
-| user_email | String(255) — desnormalizado |
-| action | String(32) — login/create/update/delete |
-| entity | String(80) — nome da entidade |
-| entity_id | UUID |
-| field_changes | JSONB — diff antes/depois |
-| context | JSONB — metadados adicionais |
-| ip_address | String(64) |
-| user_agent | String(512) |
-
-### 4.9 Outras Entidades
-
-- **`settings`** — SystemSettings singleton: taxas de encargos, valores padrão
-- **`alerts`** — Alertas por projeto/competência
-- **`chart_of_accounts`** — Plano de contas
-- **`cost_center_aliases`** — Aliases de centros de custo para importação
-- **`payable_import_templates`** — Templates de mapeamento de colunas de importação Excel
-- **`company_staff_costs`** — Custo de pessoal corporativo por competência
-- **`employee_monthly_payroll_overrides`** — Override de salário por colaborador/mês
-- **`receivable_manual_items`** — Itens manuais de contas a receber
-- **`project_labors`**, **`project_vehicles`**, **`project_system_costs`**, **`project_operational_fixed`** — Custos operacionais por projeto/competência/cenário
-- **`dashboard`** (KPI, ProjectResult) — Cache de indicadores calculados
+`collaborators` e `hr` expõem colaboradores para seletores de outras telas com permissões
+mais baixas; `cost-centers` serve o vocabulário único de Centros de Custo; `alerts` guarda
+verificações operacionais (NFs a vencer, margem negativa) disparadas por administrador;
+`dashboard` serve os resumos operacional e de diretoria.
 
 ---
 
-## 5. BACKEND — ENDPOINTS DA API
+## 5. Autorização — o modelo de permissões
 
-Prefixo base: `/api/v1`
+Autorização é sempre por **permissão**, nunca por nome de perfil. Perfis (ADMIN, GESTOR,
+FINANCEIRO, CONSULTA, ADMINISTRATIVO, RECURSOS HUMANOS, SUPER ADMIN) são apenas conjuntos
+de permissões guardados em `role_permissions`, editáveis pela tela de Perfis.
 
-### 5.1 Autenticação (sem autenticação requerida)
+**Modelo por verbos** — cada capacidade é `recurso.ação`, com as ações
+`reference`, `list`, `read`, `create`, `update`, `delete` e `sensitive`. Um grafo de
+implicação (`PERMISSION_IMPLIES`) deriva as permissões menores das maiores, e os códigos
+legados (`recurso.view`, `recurso.edit`) continuam válidos implicando os novos — foi assim
+que a migração pôde ser feita sem quebrar quem já tinha acesso.
 
-| Método | Path | Descrição |
-|--------|------|-----------|
-| POST | `/auth/register` | Cadastro de novo usuário (ABERTO — sem autenticação) |
-| POST | `/auth/login` | Login, retorna JWT |
+**Eixo de Dados Sensíveis** — `recurso.sensitive` separa "acessar o módulo" de "ver
+valores financeiros". Sem ele, os campos monetários voltam da API redigidos (nulos), não
+apenas escondidos na tela.
 
-### 5.2 Usuários (`/users`) — requer `users.manage`
+**Workspaces** — `workspace.*.access` controla quais áreas aparecem no menu, e a navegação
+inicial leva à primeira tela permitida do workspace.
 
-| Método | Path | Permissão |
-|--------|------|-----------|
-| GET | `/users/me` | Qualquer autenticado |
-| GET | `/users/` | users.manage |
-| POST | `/users/` | users.manage |
-| PATCH | `/users/{user_id}` | users.manage |
-| DELETE | `/users/{user_id}` | users.manage |
-| PATCH | `/users/{user_id}/activate` | users.manage |
-| PATCH | `/users/{user_id}/deactivate` | users.manage |
-| POST | `/users/{user_id}/reset-password` | users.manage |
-| POST | `/users/roles` | users.manage |
-| POST | `/users/{user_id}/roles` | users.manage |
+Permissões ativas hoje, por recurso:
 
-### 5.3 Projetos (`/projects`) — requer permissões granulares
-
-| Método | Path | Permissão |
-|--------|------|-----------|
-| GET | `/projects/` | projects.view |
-| GET | `/projects/{project_id}` | projects.view |
-| POST | `/projects/` | projects.create |
-| PATCH | `/projects/{project_id}` | projects.edit |
-| DELETE | `/projects/{project_id}` | projects.delete |
-| PATCH | `/projects/{project_id}/activate` | projects.edit |
-| PATCH | `/projects/{project_id}/deactivate` | projects.edit |
-| GET | `/projects/allocations` | projects.view |
-| POST | `/projects/{project_id}/allocations` | projects.edit |
-| POST | `/projects/{project_id}/users/{user_id}` | users.manage |
-
-### 5.4 Financeiro (`/financial`)
-
-| Método | Path | Permissão |
-|--------|------|-----------|
-| GET | `/financial/receivables` | receivables.view |
-| GET | `/financial/revenues` | receivables.view |
-| POST/PATCH/DELETE | `/financial/revenues/*` | billing.view |
-| GET | `/financial/invoices` | invoices.view |
-| POST | `/financial/invoices` | invoices.edit |
-| POST | `/financial/invoices/anticipations` | invoices.edit |
-| GET | `/financial/dashboard` | (calculado) |
-| GET | `/financial/payables` | payables.view |
-| PATCH | `/financial/payables/{snapshot_id}` | costs.edit |
-| POST | `/financial/payables/{snapshot_id}/payments` | costs.edit |
-| POST | `/financial/payables/import/analyze` | costs.edit |
-| POST | `/financial/payables/import/confirm` | costs.edit |
-
-### 5.5 Contas a Pagar (`/payables`)
-
-| Método | Path | Permissão |
-|--------|------|-----------|
-| GET | `/payables` | payables.view |
-| POST | `/payables` | costs.edit |
-| PATCH | `/payables/{payable_id}` | costs.edit |
-| PATCH | `/payables/{payable_id}/pay` | costs.edit |
-| DELETE | `/payables/{payable_id}` | costs.edit |
-
-### 5.6 Notas Fiscais / Contas a Receber (`/invoices`)
-
-| Método | Path | Permissão |
-|--------|------|-----------|
-| GET | `/invoices` | invoices.view |
-| POST | `/invoices` | invoices.edit |
-| PATCH | `/invoices/{id}` | invoices.edit |
-| DELETE | `/invoices/{id}` | invoices.edit |
-| POST | `/invoices/{id}/reactivate` | invoices.reactivate (EXPLICIT) |
-| POST | `/invoices/{id}/anticipations` | invoices.edit |
-| GET | `/invoices/{id}/pdf` | invoices.view |
-| POST | `/invoices/{id}/pdf` | invoices.edit (upload) |
-| GET | `/invoices/{id}/files` | invoices.view |
-| GET | `/invoices/batches` | invoices.view |
-| POST | `/invoices/batches` | invoices.edit |
-| PATCH | `/invoices/batches/{id}` | invoices.edit |
-| DELETE | `/invoices/batches/{id}` | invoices.edit |
-
-### 5.7 Ativos (`/assets`)
-
-| Método | Path | Permissão |
-|--------|------|-----------|
-| GET | `/assets` | assets.view |
-| POST | `/assets` | assets.edit |
-| GET | `/assets/{id}` | assets.view |
-| PATCH | `/assets/{id}` | assets.edit |
-| DELETE | `/assets/{id}` | assets.edit |
-| POST | `/assets/{id}/assignments` | assets.edit |
-| POST | `/assets/{id}/assignments/{aid}/return` | assets.edit |
-| POST | `/assets/{id}/inspections` | assets.edit |
-| POST | `/assets/{id}/attachments` | assets.edit (upload) |
-| GET | `/assets/{id}/attachments/{fid}` | assets.view |
-| GET | `/assets/epis` | assets.view |
-| GET | `/assets/dashboard` | assets.view |
-
-### 5.8 Outros Endpoints
-
-| Módulo | Prefixo | Principais operações |
-|--------|---------|---------------------|
-| Empresa Financeira | `/company-finance` | CRUD itens, KPIs endividamento/custos fixos |
-| Custos | `/costs` | Custos fixos de projeto, corporativos, alocações |
-| Colaboradores | `/employees` | CRUD, upload de dados |
-| Colaboradores externos | `/collaborators` | Gestão de PJs |
-| Frota | `/vehicles` | CRUD veículos, usos |
-| Dashboard | `/dashboard` | KPIs por projeto/global |
-| Alertas | `/alerts` | Listagem de alertas |
-| Configurações | `/settings` | SystemSettings |
-| Relatórios | `/reports/generate` | POST — gera Excel/PDF |
-| Admin | `/admin/audit/export` | GET — exporta logs (AUDIT_EXPORT explícito) |
-| Indicadores | `/indicators` | ROI operacional |
-| HR | `/hr` | Gestão de RH |
-| Project Structure | `/projects` (shared) | Estrutura operacional do projeto |
-
-### 5.9 Health Checks (sem autenticação)
-
-| Método | Path | Descrição |
-|--------|------|-----------|
-| GET | `/health` | Retorna `{status: "ok"}` |
-| GET | `/health/ready` | Executa `SELECT 1` no banco |
+| Recurso | Ações |
+|---|---|
+| `alerts` | read, view |
+| `assets` | create, delete, edit, list, read, reference, sensitive, update, view |
+| `audit` | export |
+| `billing` | create, delete, list, read, update, view |
+| `company_finance` | create, delete, edit, list, read, update, view |
+| `cost_center` | reference |
+| `costs` | create, delete, edit, list, read, update, view |
+| `dashboard` | director, read, view |
+| `debts` | create, delete, edit, list, read, update, view |
+| `employees` | create, delete, edit, export, list, read, reference, sensitive, update, view |
+| `financial_dashboard` | read, sensitive |
+| `indicators` | director, read, view |
+| `invoices` | create, delete, edit, list, reactivate, read, update, view |
+| `legal_cases` | create, delete, list, read, reference, sensitive, update |
+| `legal_companies` | create, delete, list, read, update |
+| `legal_dashboard` | read |
+| `legal_imports` | create, list |
+| `legal_persons` | create, delete, list, read, reference, sensitive, update |
+| `legal_projects` | create, delete, list, read, update |
+| `legal_reports` | export, read |
+| `payable_snapshot` | reconcile |
+| `payables` | create, delete, edit, list, read, update, view |
+| `projects` | create, delete, documents.delete, documents.upload, documents.view, edit, list, read, reference, update, view, view_detail, view_list |
+| `receivables` | create, delete, edit, list, read, update, view |
+| `reports` | export, read, view |
+| `settings` | edit, read, update, view |
+| `system` | admin, all_projects |
+| `users` | manage |
+| `vehicles` | create, delete, edit, export, list, read, reference, sensitive, update, view |
+| `workspace` | assets.access, finance.access, indicators.access, legal.access, projects.access |
 
 ---
 
-## 6. BACKEND — SERVIÇOS
+## 6. Modelo de dados
 
-| Serviço | Arquivo | Responsabilidade |
-|---------|---------|-----------------|
-| AuthService | `auth_service.py` | Login, registro, rehash de senhas, audit de login |
-| AuditService | `audit_service.py` | Registro de todas ações no audit_logs com diff |
-| AuditExportService | `audit_export_service.py` | Streaming de export de audit logs em .txt |
-| ReportService | `report_service.py` | Geração de dados para relatórios |
-| ReportExportService | `report_export.py` | Renderização Excel/PDF de relatórios |
-| OperationalReportService | `operational_report_service.py` | Relatórios operacionais detalhados |
-| PayableSnapshotService | `payable_snapshot_service.py` | Geração de snapshots mensais de obrigações |
-| PayableImportService | `payable_import/` | Importação de planilhas Excel de payables |
-| UsersService | `users_service.py` | CRUD usuários, atribuição de roles/permissões |
+66 tabelas, agrupadas por domínio:
 
----
+**Alertas**
 
-## 7. BACKEND — REPOSITÓRIOS
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `alerts` | 9 | project_id, competencia, alert_type, severity, message, is_resolved |
 
-| Repositório | Arquivo | Tabelas Principais |
-|-------------|---------|-------------------|
-| UserRepository | `users.py` | users, roles, user_roles, user_permissions |
-| ProjectRepository | `projects.py` | projects, project_users |
-| FinancialRepository | `financial.py` | revenues, invoices, receivable_invoices |
-| PayablesRepository | `costs.py` | payable_snapshots, payable_payments |
-| EmployeeRepository | `employees.py` | employees, employee_allocations |
-| FleetRepository | `fleet.py` | vehicles, vehicle_usages |
-| CompanyStaffCostRepository | `company_staff_cost.py` | company_staff_costs |
-| SettingsRepository | `settings_repository.py` | settings |
-| PermissionsRepository | `permissions.py` | permissions, user_permissions |
-| ProjectOperationalRepository | `project_operational.py` | project_labors, project_vehicles, etc. |
+**Antecipações**
 
----
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `advance_institutions` | 7 | name, institution_type, operation_profile, is_active |
+| `advance_repasse_ledger` | 15 | institution_id, direction, amount, source_type, withdrawal_purpose, source_batch_id, source_movement_id, occurred_at, de |
+| `advance_settlement_events` | 13 | number, creation_source, status, institution_id, funding_source, payment_date, total_amount, invoice_count, observation, |
+| `advance_settlement_movements` | 15 | batch_item_id, batch_id, invoice_id, institution_id, amount, funding_source, settled_at, event_id, observation, reversed |
+| `invoice_anticipations` | 7 | invoice_id, anticipated_at, fee_amount, notes |
 
-## 8. AUTENTICAÇÃO E AUTORIZAÇÃO
+**Ativos e EPIs**
 
-### 8.1 Mecanismo de Autenticação
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `asset_assignments` | 15 | asset_id, employee_id, delivered_by_employee_id, received_by_employee_id, delivery_date, return_date, returned_by_employ |
+| `asset_attachments` | 10 | asset_id, file_name, file_type, stored_path, mime_type, uploaded_by_user_id, deleted_at |
+| `asset_inspections` | 12 | asset_id, inspection_type, inspection_date, expiration_months, expiration_date, responsible_company, report_attachment_i |
+| `assets` | 25 | asset_code, name, category, subcategory, tags, size, description, brand, model, serial_number, patrimony_tag, imei, ca_n |
 
-- **Tipo:** JWT Bearer Token (HS256)
-- **Armazenamento no cliente:** `localStorage["sgp_access_token"]`
-- **Expiração:** 24 horas (hardcoded `60 * 24` minutos em `create_access_token`) — **ATENÇÃO:** o `ACCESS_TOKEN_EXPIRE_MINUTES` do config (padrão 60 min) **NÃO é usado** na chamada de `create_access_token`
-- **Renovação:** não há refresh token — expirado, faz logout automático
-- **Versão de sessão:** `SESSION_VERSION = 2` — invalida sessões antigas
+**Auditoria**
 
-### 8.2 Claims do JWT
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `audit_logs` | 12 | user_id, user_email, action, entity, entity_id, field_changes, context, ip_address, user_agent |
 
-```json
-{
-  "sub": "uuid-do-usuario",
-  "session_version": 2,
-  "workspace": "projects",
-  "current_workspace": "projects",
-  "default_workspace": "projects",
-  "roles": ["ADMIN"],
-  "permissions": ["system.admin", "projects.view", ...],
-  "linked_projects": ["uuid1", "uuid2"],
-  "exp": 1234567890
-}
-```
+**Centro de Custo**
 
-### 8.3 Sistema de Permissões (RBAC)
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `cost_center_aliases` | 7 | alias_name, alias_name_normalized, target_cost_center, created_by_user_id |
 
-**Roles disponíveis:**
-- `ADMIN` — acesso total (exceto permissões EXPLICIT_GRANT_ONLY)
-- `GESTOR` — acesso de gestão completo (leitura + escrita da maioria)
-- `CONSULTA` — apenas leitura
+**Colaboradores**
 
-**Presets por role:** definidos em `permission_codes.py` como `PRESET_ADMIN`, `PRESET_GESTOR`, `PRESET_CONSULTA`
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `employee_allocations` | 11 | employee_id, project_id, scenario, start_date, end_date, allocation_percent, monthly_cost, hours_allocated |
+| `employee_assignments` | 20 | employee_id, project_id, cost_center, allocation_type, role_title, salary_base, allowance, hours_per_month, employment_t |
+| `employee_cost_center_history` | 7 | employee_id, cost_center, start_date, end_date |
+| `employee_monthly_payroll_overrides` | 9 | employee_id, competence_month, net_salary_amount, vr_amount, vacation_advance_amount, notes |
+| `employees` | 24 | full_name, email, role_title, employment_type, pix_key_type, pix_key, salary_base, additional_costs, total_cost, is_acti |
 
-**Permissões EXPLICIT_GRANT_ONLY** (nunca herdadas por role):
-- `invoices.reactivate` — reativar NF cancelada
-- `audit.export` — exportar logs de auditoria
+**Configurações**
 
-**Superusuário operacional** (bypassa todo RBAC):
-- Email hardcoded: `rafael.casagrande@meconsulting.com.br`
-- Configurável via `APP_SUPERUSER_EMAILS` no .env
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `system_settings` | 17 | tax_rate, overhead_rate, anticipation_rate, clt_charges_rate, vehicle_light_cost, vehicle_pickup_cost, vehicle_sedan_cos |
 
-### 8.4 Códigos de Permissão Completos
+**Contas a Pagar**
 
-```
-system.admin, system.all_projects
-workspace.projects.access, workspace.finance.access
-workspace.assets.access, workspace.indicators.access
-dashboard.view, dashboard.director
-indicators.view, indicators.director
-projects.view, projects.view_list, projects.view_detail
-projects.create, projects.edit, projects.delete
-employees.view, employees.edit
-vehicles.view, vehicles.edit
-billing.view
-payables.view, receivables.view
-invoices.view, invoices.edit, invoices.reactivate (explicit)
-debts.view, debts.edit
-costs.view, costs.edit
-settings.view, settings.edit
-users.manage
-reports.view, reports.export
-audit.export (explicit)
-alerts.view
-company_finance.view, company_finance.edit
-assets.view, assets.edit
-```
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `payable_import_templates` | 7 | user_id, name, header_row, column_mapping |
+| `payable_payments` | 10 | payable_snapshot_id, amount, payment_date, observation, created_by, reversed_at, reversal_reason |
+| `payable_snapshot_generations` | 2 | month |
+| `payable_snapshots` | 25 | month, type, ref_id, entry_id, project_id, origin, name, item_description, cost_center, category, amount_original, amoun |
+| `payables` | 12 | description, supplier_name, amount, due_date, payment_date, competence, chart_account_id, cost_center, project_id |
 
----
+**Contas a Receber e NFs**
 
-## 9. BANCO DE DADOS — MIGRATIONS
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `invoices` | 10 | project_id, competencia, amount, due_date, status, supplier, description |
+| `receivable_advance_batch_items` | 8 | batch_id, invoice_id, invoice_amount, advance_basis, advanced_amount |
+| `receivable_advance_batches` | 24 | sgc_number, batch_number, operation_type, operation_code, institution, institution_id, gross_amount, received_amount, ex |
+| `receivable_invoice_anticipations` | 10 | invoice_id, institution, amount_received, amount_to_repay, received_date, due_date, include_in_dashboard |
+| `receivable_invoice_files` | 8 | invoice_id, file_name, stored_path, content_type, size_bytes |
+| `receivable_invoices` | 26 | project_id, nf_number, issue_date, due_days, due_date, competence_month, gross_amount, net_amount, client_name, notes, i |
+| `receivable_manual_items` | 15 | workspace_id, descricao, cliente, numero_referencia, data_emissao, data_vencimento, valor_liquido, valor_recebido, data_ |
 
-Histórico completo de 67 migrations:
+**Custos**
 
-| # | Migration | O que criou/alterou |
-|---|-----------|---------------------|
-| 0001 | init | projects, users, roles, user_roles, project_users, revenues, invoices, employees, employee_allocations, vehicles, vehicle_usages, project_fixed_costs, corporate_costs, cost_allocations |
-| 0002 | enterprise_financial | company_financial_items (endividamento/custos fixos) |
-| 0003 | settings_and_project_operational | settings (singleton), project_labors, project_vehicles, project_system_costs, project_operational_fixed |
-| 0004 | employee_clt_cost_fields | Campos de custo CLT (inss_rate, fgts_rate, ferias_rate, etc.) |
-| 0005 | pj_additional_cost | Campo pj_additional_cost em employees |
-| 0006 | project_labor_employee_only | Refatoração de project_labors para só employee |
-| 0007 | labors_repair | Correção de colunas em project_labors |
-| 0008 | labor_alloc_pct | Campo allocation_pct em project_labors |
-| 0009 | fleet_project_vehicles | Relacionamento veículo/projeto |
-| 0010 | revenue_retention | Campo retention_pct em revenues |
-| 0011 | vehicle_monthly_cost | Campo monthly_fixed_cost em vehicles |
-| 0012 | company_financial_items | Refinamentos em company_financial_items |
-| 0013 | receivable_invoices | Tabela receivable_invoices (NFs a receber), pdf_path |
-| 0014 | rbac_three_roles | Roles ADMIN/GESTOR/CONSULTA + seed inicial |
-| 0015 | previsto_realizado_scenario | Coluna scenario (PREVISTO/REALIZADO) em todas tabelas de custos/receitas |
-| 0016 | scenario_columns_ensure | Garante coluna scenario em tabelas pendentes |
-| 0017 | proj_labor_costs | Campos de custo calculado em project_labors |
-| 0018 | company_staff_costs | Tabela company_staff_costs |
-| 0019 | project_vehicle_fuel_realized | Combustível realizado em project_vehicles |
-| 0020 | permissions_rbac | Tabela permissions + user_permissions |
-| 0021 | audit_logs_production | Tabela audit_logs com ip_address, user_agent, JSONB |
-| 0022 | projects_view_granular | Permissões projects.view_list e projects.view_detail |
-| 0023 | receivable_invoice_enhancements | Campos extras em receivable_invoices |
-| 0024 | receivable_simplified | Simplificação do modelo de receivables |
-| 0025 | payables_receivables_permissions | Permissões payables.view e receivables.view |
-| 0026 | fix_alembic_version | Correção da tabela alembic_version |
-| 0027 | chart_accounts_payables | Tabela chart_of_accounts |
-| 0028 | payable_snapshots | Tabela payable_snapshots (snapshots imutáveis mensais) |
-| 0029 | payable_snapshot_amount_paid | Campo amount_paid em payable_snapshots |
-| 0030 | receivable_anticipation_details | Detalhes de antecipação em receivable_invoices |
-| 0031 | receivable_status_recebida | Status RECEBIDA em receivable_invoices |
-| 0032 | payable_snapshot_type_financial | Tipo FINANCIAL em payable_snapshots |
-| 0033 | company_finance_debt_renegotiation | Campos de renegociação em company_financial_items |
-| 0034 | invoice_anticipations | Tabela invoice_anticipations |
-| 0035 | payable_snapshot_anticipation_unique_index | Índice único para antecipações |
-| 0036 | receivable_invoice_files | Tabela receivable_invoice_files (múltiplos anexos) |
-| 0037 | employee_pix_key | Campos pix_key_type e pix_key em employees |
-| 0038 | company_finance_item_type_employee | Tipo EMPLOYEE em company_financial_items |
-| 0039 | user_soft_delete | Campo deleted_at em users |
-| 0040 | receivable_manual_items | Tabela receivable_manual_items |
-| 0041 | project_lifecycle_soft_delete | Soft delete em projects |
-| 0042 | project_closed_deleted_timestamptz | Campos closed_at/deleted_at com timezone |
-| 0043 | vehicle_soft_delete | Soft delete em vehicles |
-| 0044 | project_cost_center | Campo cost_center em projects |
-| 0045 | normalize_revenue_competencia | Normalização de datas de competência |
-| 0046 | receivable_anticipation_received_date | Data de recebimento de antecipação |
-| 0047 | workspace_permissions | Permissões workspace.*.access |
-| 0048 | payable_snapshot_type_endividamento | Tipo ENDIVIDAMENTO em payable_snapshots |
-| 0049 | company_finance_structural_fields | Campos estruturais em company_financial_items |
-| 0050 | company_finance_cost_center_structured | Campos de centro de custo estruturados |
-| 0051 | assets_management_module | Tabelas assets, asset_assignments, asset_inspections, asset_attachments |
-| 0052 | assets_refinements | Refinamentos no módulo de ativos |
-| 0053 | asset_assignment_return_fields | Campos de devolução em asset_assignments |
-| 0054 | asset_size_field | Campo size em assets |
-| 0055 | asset_tags_field | Campo tags (JSONB) em assets |
-| 0056 | employee_monthly_payroll_overrides | Tabela employee_monthly_payroll_overrides |
-| 0057 | payable_import_templates | Tabela payable_import_templates |
-| 0058 | cost_center_aliases | Tabela cost_center_aliases |
-| 0059 | payable_payments | Tabela payable_payments (eventos de pagamento) |
-| 0060 | fix_payable_snapshot_competence | Correção de datas de competência em snapshots |
-| 0061 | payable_snapshot_competence_audit_note | Campo audit_note em payable_snapshots |
-| 0062 | receivable_advance_batches | Tabela receivable_advance_batches (borderôs) |
-| 0063 | advance_batch_operation_fields | Campos operacionais em advance_batches |
-| 0064 | include_in_dashboard | Campo include_in_dashboard em entidades |
-| 0065 | audit_export_permission | Permissão audit.export |
-| 0066 | indicators_permissions | Permissões indicators.view e indicators.director |
-| 0067 | company_finance_monthly_required | Campo monthly_required em company_financial_items |
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `chart_of_accounts` | 6 | code, name, type |
+| `cost_allocations` | 8 | corporate_cost_id, project_id, competencia, allocated_amount_real, allocated_amount_calculated |
+
+**Faturamento**
+
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `revenues` | 10 | project_id, competencia, scenario, amount, description, status, has_retention |
+
+**Financeiro Corporativo**
+
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `company_financial_items` | 30 | tipo, item_type, employee_id, percentual, nome, item_description, valor_referencia, category, cost_center, cost_center_p |
+| `company_financial_payments` | 9 | item_id, competencia, valor, due_date, descricao, schedule_seq |
+| `company_staff_costs` | 7 | employee_id, competencia, scenario, valor |
+| `corporate_costs` | 7 | competencia, name, amount_real, amount_calculated |
+
+**Frota**
+
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `vehicle_cost_center_history` | 7 | vehicle_id, cost_center, start_date, end_date |
+| `vehicle_usages` | 10 | vehicle_id, project_id, scenario, usage_date, competencia, cost_amount, notes |
+| `vehicles` | 14 | plate, model, description, vehicle_type, monthly_cost, driver_employee_id, cost_center, is_active, deleted_at, start_dat |
+
+**Indicadores**
+
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `kpis` | 7 | project_id, competencia, name, value |
+
+**Jurídico**
+
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `legal_cases` | 29 | case_number, jusbrasil_url, person_id, status, case_type, nature, uf, court, city, company, project, client, claimant_na |
+| `legal_change_logs` | 11 | entity_type, entity_id, action, field, old_value, new_value, changed_by_id, changed_by_email |
+| `legal_companies` | 7 | name, cnpj, notes, is_active |
+| `legal_import_runs` | 18 | spreadsheet_name, panel_name, rows_read, people_new, people_updated, cases_new, cases_updated, unchanged, ignored, dupli |
+| `legal_persons` | 15 | full_name, cpf, company, project, client, role, admission_date, termination_date, severance_amount, fgts_balance, notes, |
+| `legal_projects` | 7 | name, client, notes, is_active |
+
+**Pagamentos**
+
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `payment_component_types` | 8 | name, code, description, is_active, display_order |
+| `payment_variable_components` | 10 | type_id, employee_id, competencia, amount, note, project_labor_id, company_financial_item_id |
+
+**Projetos**
+
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `project_contract_additives` | 7 | project_id, additive_date, additive_value, additive_duration |
+| `project_costs` | 9 | project_id, name, cost_type, value, cost_date, category |
+| `project_documents` | 11 | project_id, category, title, original_filename, storage_path, uploaded_by, uploaded_at, is_active |
+| `project_fixed_costs` | 9 | project_id, competencia, scenario, name, amount_real, amount_calculated |
+| `project_labors` | 16 | project_id, competencia, scenario, employee_id, allocation_percentage, cost_salary_base, cost_additional_costs, cost_ext |
+| `project_operational_fixed` | 8 | project_id, competencia, scenario, name, value |
+| `project_results` | 9 | project_id, competencia, revenue_total, cost_total, profit, margin |
+| `project_system_costs` | 8 | project_id, competencia, scenario, name, value |
+| `project_users` | 6 | project_id, user_id, access_level |
+| `project_vehicles` | 11 | project_id, competencia, scenario, vehicle_id, fuel_type, km_per_month, fuel_cost_realized, monthly_cost |
+| `projects` | 20 | name, code, description, cost_center, contract_number, contract_value, contract_start_date, contract_duration, buyer_nam |
+
+**Usuários e Permissões**
+
+| Tabela | Colunas | Principais campos |
+|---|---|---|
+| `permissions` | 4 | name |
+| `role_permissions` | 5 | role_id, permission_id |
+| `roles` | 7 | name, description, is_system, is_active |
+| `user_permissions` | 6 | user_id, permission_id, granted |
+| `user_roles` | 5 | user_id, role_id |
+| `users` | 8 | email, full_name, password_hash, is_active, deleted_at |
 
 ---
 
-## 10. FRONTEND — ESTRUTURA
+## 7. API — endpoints por módulo
 
-### 10.1 Páginas (23 telas)
+Prefixo: `/api/v1`. Todos exigem autenticação por JWT, exceto `/auth/login` e os health
+checks (`/health`, `/health/ready`, fora do prefixo).
 
-| Rota | Componente | Descrição |
-|------|-----------|-----------|
-| `/login` | Login.tsx | Autenticação |
-| `/projects/dashboard` | Dashboard.tsx | Dashboard de projetos (KPIs) |
-| `/projects/list` | Projects.tsx | Listagem de projetos |
-| `/projects/list/:projectId` | ProjectDetail.tsx | Detalhe de projeto com abas |
-| `/projects/reports` | Reports.tsx | Geração de relatórios |
-| `/projects/users` | Users.tsx | Gestão de usuários |
-| `/projects/employees` | Employees.tsx | Gestão de colaboradores |
-| `/projects/vehicles` | Vehicles.tsx | Gestão de frota |
-| `/projects/revenue` | Revenue.tsx | Receitas por projeto |
-| `/finance/dashboard` | FinancialDashboard.tsx | Dashboard financeiro corporativo |
-| `/finance/payables` | Payables.tsx | Contas a pagar |
-| `/finance/receivables` | Receivables.tsx | Contas a receber |
-| `/finance/invoices` | Invoices.tsx | Notas fiscais a receber |
-| `/finance/advance-batches` | AdvanceBatches.tsx | Borderôs de antecipação |
-| `/finance/debt` | CompanyDebt.tsx | Endividamento corporativo |
-| `/finance/fixed-costs` | CompanyFixedCosts.tsx | Custos fixos corporativos |
-| `/assets/dashboard` | AssetsDashboard.tsx | Dashboard de ativos |
-| `/assets` | Assets.tsx | Listagem de ativos |
-| `/assets/:assetId` | AssetDetail.tsx | Detalhe de ativo |
-| `/epis` | Epis.tsx | EPIs |
-| `/epis/:assetId` | AssetDetail.tsx | Detalhe de EPI |
-| `/indicators/roi` | RoiOperacional.tsx | Indicador ROI operacional |
-| `/settings` | Settings.tsx | Configurações do sistema |
+#### `accounts-receivable` — 40 rotas
 
-### 10.2 Contextos React
+| Método | Caminho |
+|---|---|
+| DELETE | `/invoices/advance-batches/{batch_id}` |
+| DELETE | `/invoices/advance-batches/{batch_id}/hard` |
+| DELETE | `/invoices/advance-institutions/{institution_id}` |
+| DELETE | `/invoices/advance-settlement-movements/{movement_id}` |
+| DELETE | `/invoices/{invoice_id}` |
+| DELETE | `/invoices/{invoice_id}/anticipations/{anticipation_id}` |
+| DELETE | `/invoices/{invoice_id}/pdf` |
+| GET | `/invoices` |
+| GET | `/invoices/advance-batches` |
+| GET | `/invoices/advance-batches/eligible-invoices` |
+| GET | `/invoices/advance-batches/{batch_id}` |
+| GET | `/invoices/advance-institutions` |
+| GET | `/invoices/advance-repasse-ledger` |
+| GET | `/invoices/advance-settlement-events` |
+| GET | `/invoices/advance-settlement-events/{event_id}` |
+| GET | `/invoices/advance-settlements` |
+| GET | `/invoices/advance-settlements/history/batch/{batch_id}` |
+| GET | `/invoices/advance-settlements/history/invoice/{invoice_id}` |
+| GET | `/invoices/advance-settlements/kpis` |
+| GET | `/invoices/advance-settlements/management-summary` |
+| GET | `/invoices/advance-settlements/{batch_item_id}/timeline` |
+| GET | `/invoices/kpis` |
+| GET | `/invoices/{invoice_id}/files` |
+| GET | `/invoices/{invoice_id}/files/{file_id}` |
+| GET | `/invoices/{invoice_id}/pdf` |
+| PATCH | `/invoices/advance-batches/{batch_id}` |
+| PATCH | `/invoices/advance-institutions/{institution_id}` |
+| PATCH | `/invoices/{invoice_id}` |
+| PATCH | `/invoices/{invoice_id}/anticipations/{anticipation_id}` |
+| POST | `/invoices` |
+| POST | `/invoices/advance-batches` |
+| POST | `/invoices/advance-batches/{batch_id}/confirm` |
+| POST | `/invoices/advance-institutions` |
+| POST | `/invoices/advance-repasse-ledger/withdrawals` |
+| POST | `/invoices/advance-settlement-events` |
+| POST | `/invoices/advance-settlements` |
+| POST | `/invoices/{invoice_id}/anticipations` |
+| POST | `/invoices/{invoice_id}/pdf` |
+| POST | `/invoices/{invoice_id}/reactivate` |
+| PUT | `/invoices/advance-batches/{batch_id}` |
 
-| Contexto | Arquivo | Responsabilidade |
-|----------|---------|-----------------|
-| AuthContext | `AuthContext.tsx` | Usuário autenticado, login, logout, refreshUser |
-| WorkspaceContext | `WorkspaceContext.tsx` | Workspace atual (projects/finance/assets/indicators) |
-| ScenarioContext | `ScenarioContext.tsx` | Cenário selecionado (PREVISTO/REALIZADO) |
-| SidebarContext | `SidebarContext.tsx` | Estado do sidebar (aberto/fechado) |
+#### `admin` — 2 rotas
 
-### 10.3 Hooks Customizados
+| Método | Caminho |
+|---|---|
+| GET | `/admin/audit/export` |
+| GET | `/admin/storage/missing-files` |
 
-| Hook | Arquivo | Responsabilidade |
-|------|---------|-----------------|
-| usePermission | `usePermission.ts` | Verifica permissões do usuário logado |
-| useConsultaReadOnly | `useConsultaReadOnly.ts` | Retorna true se usuário é CONSULTA (read-only) |
-| useGestorGlobalReadOnly | `useGestorGlobalReadOnly.ts` | Controle de escrita para gestores sem visão global |
-| useTableSort | `useTableSort.ts` | Ordenação de tabelas |
+#### `alerts` — 4 rotas
 
-### 10.4 Serviços de API (22 serviços)
+| Método | Caminho |
+|---|---|
+| GET | `/alerts/` |
+| PATCH | `/alerts/{alert_id}` |
+| POST | `/alerts/checks/invoices-due` |
+| POST | `/alerts/checks/negative-margin` |
 
-Todos usam o cliente Axios configurado em `services/api.ts`:
-- `api.ts` — cliente base com interceptors (auth header, 401 redirect, no-trailing-slash)
-- `auth.ts` — login, logout, fetchMe
-- `users.ts` — CRUD usuários, roles, permissões
-- `projects.ts` — CRUD projetos, alocações
-- `employees.ts` — colaboradores
-- `vehicles.ts` — frota
-- `financial.ts` — receitas, NFs internas, dashboard financeiro
-- `payables.ts` — contas a pagar
-- `receivables.ts` — NFs a receber, upload de PDFs
-- `receivableAdvanceBatches.ts` — borderôs
-- `companyFinance.ts` — endividamento/custos fixos
-- `dashboard.ts` — dashboard de projetos
-- `financialDashboard.ts` — dashboard financeiro
-- `reports.ts` — geração de relatórios
-- `assets.ts` — ativos
-- `assetsDashboard.ts` — dashboard de ativos
-- `settings.ts` — configurações
-- `allocations.ts` — alocações de colaboradores
-- `indicators.ts` — ROI operacional
-- `audit.ts` — exportação de auditoria
-- `projectStructure.ts` — estrutura operacional do projeto
+#### `assets` — 18 rotas
 
-### 10.5 Armazenamento no localStorage
+| Método | Caminho |
+|---|---|
+| DELETE | `/assets/{asset_id}` |
+| DELETE | `/assets/{asset_id}/assignments/{assignment_id}` |
+| DELETE | `/assets/{asset_id}/assignments/{assignment_id}/return` |
+| DELETE | `/assets/{asset_id}/attachments/{attachment_id}` |
+| DELETE | `/assets/{asset_id}/inspections/{inspection_id}` |
+| GET | `/assets` |
+| GET | `/assets/dashboard` |
+| GET | `/assets/epis` |
+| GET | `/assets/meta/categories` |
+| GET | `/assets/{asset_id}` |
+| GET | `/assets/{asset_id}/attachments/{attachment_id}/download` |
+| PATCH | `/assets/{asset_id}` |
+| PATCH | `/assets/{asset_id}/assignments/{assignment_id}/return` |
+| POST | `/assets` |
+| POST | `/assets/{asset_id}/assignments` |
+| POST | `/assets/{asset_id}/assignments/{assignment_id}/return` |
+| POST | `/assets/{asset_id}/attachments` |
+| POST | `/assets/{asset_id}/inspections` |
 
-```
-sgp_access_token     — JWT de autenticação
-sgp_workspace        — Workspace atual
-sgp_permissions      — Lista de permissões (cache)
-sgp_user             — Dados do usuário logado
-sgp_user_context     — Contexto de sessão
-sgp_linked_projects  — IDs de projetos vinculados
-```
+#### `auth` — 4 rotas
+
+| Método | Caminho |
+|---|---|
+| POST | `/auth/login` |
+| POST | `/auth/login/` |
+| POST | `/auth/register` |
+| POST | `/auth/register/` |
+
+#### `collaborators` — 3 rotas
+
+| Método | Caminho |
+|---|---|
+| GET | `/collaborators` |
+| GET | `/collaborators/cost-centers` |
+| GET | `/collaborators/search` |
+
+#### `company-finance` — 15 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/company-finance/items/{item_id}` |
+| GET | `/company-finance/chart-series` |
+| GET | `/company-finance/items` |
+| GET | `/company-finance/items/{item_id}/entries` |
+| GET | `/company-finance/items/{item_id}/schedule` |
+| GET | `/company-finance/kpis/custos-fixos` |
+| GET | `/company-finance/kpis/endividamento` |
+| GET | `/company-finance/pendencias` |
+| GET | `/company-finance/pendencias/custos-fixos` |
+| PATCH | `/company-finance/items/{item_id}` |
+| POST | `/company-finance/items` |
+| POST | `/company-finance/items/{item_id}/schedule/preview` |
+| PUT | `/company-finance/items/{item_id}/entries` |
+| PUT | `/company-finance/items/{item_id}/payments` |
+| PUT | `/company-finance/items/{item_id}/schedule` |
+
+#### `cost-centers` — 1 rotas
+
+| Método | Caminho |
+|---|---|
+| GET | `/cost-centers/reference` |
+
+#### `costs` — 4 rotas
+
+| Método | Caminho |
+|---|---|
+| POST | `/costs/allocations` |
+| POST | `/costs/corporate` |
+| POST | `/costs/corporate/{corporate_cost_id}/auto-allocate` |
+| POST | `/costs/project-fixed` |
+
+#### `dashboard` — 5 rotas
+
+| Método | Caminho |
+|---|---|
+| GET | `/dashboard/director/summary` |
+| GET | `/dashboard/kpis` |
+| GET | `/dashboard/project/{project_id}` |
+| GET | `/dashboard/projects/{project_id}/summary` |
+| GET | `/dashboard/summary` |
+
+#### `employees` — 19 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/employees/staff-costs/{cost_id}` |
+| DELETE | `/employees/{employee_id}` |
+| GET | `/employees` |
+| GET | `/employees/payroll` |
+| GET | `/employees/staff-costs` |
+| GET | `/employees/{employee_id}/assignments` |
+| GET | `/employees/{employee_id}/monthly-payroll/{competence}` |
+| PATCH | `/employees/staff-costs/{cost_id}` |
+| PATCH | `/employees/{employee_id}` |
+| PATCH | `/employees/{employee_id}/assignments/{assignment_id}` |
+| POST | `/employees` |
+| POST | `/employees/preview-clt-cost` |
+| POST | `/employees/staff-costs` |
+| POST | `/employees/{employee_id}/assignments` |
+| POST | `/employees/{employee_id}/assignments/{assignment_id}/cancel` |
+| POST | `/employees/{employee_id}/assignments/{assignment_id}/close` |
+| POST | `/employees/{employee_id}/assignments/{assignment_id}/reopen` |
+| POST | `/employees/{employee_id}/monthly-payroll/{competence}` |
+| PUT | `/employees/{employee_id}/monthly-payroll/{competence}` |
+
+#### `financial` — 33 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/financial/cost-center-aliases/{alias_id}` |
+| DELETE | `/financial/payables/import/templates/{template_id}` |
+| DELETE | `/financial/payables/{snapshot_id}` |
+| DELETE | `/financial/receivables/manual/{item_id}` |
+| DELETE | `/financial/revenues/{revenue_id}` |
+| GET | `/financial/cost-center-aliases` |
+| GET | `/financial/dashboard` |
+| GET | `/financial/dashboard/breakdown` |
+| GET | `/financial/dashboard/timeseries` |
+| GET | `/financial/invoices` |
+| GET | `/financial/payables` |
+| GET | `/financial/payables/import/templates` |
+| GET | `/financial/receivables` |
+| GET | `/financial/revenues` |
+| PATCH | `/financial/payables/{snapshot_id}` |
+| PATCH | `/financial/receivables/manual/{item_id}` |
+| PATCH | `/financial/revenues/{revenue_id}` |
+| POST | `/financial/cost-center-aliases` |
+| POST | `/financial/invoices` |
+| POST | `/financial/invoices/anticipations` |
+| POST | `/financial/payables` |
+| POST | `/financial/payables/import/analyze` |
+| POST | `/financial/payables/import/confirm` |
+| POST | `/financial/payables/import/mapped/confirm` |
+| POST | `/financial/payables/import/mapped/preview` |
+| POST | `/financial/payables/import/mapped/scan-cost-centers` |
+| POST | `/financial/payables/import/preview` |
+| POST | `/financial/payables/import/templates` |
+| POST | `/financial/payables/reconcile` |
+| POST | `/financial/payables/{snapshot_id}/register-payment` |
+| POST | `/financial/payables/{snapshot_id}/reverse-payment` |
+| POST | `/financial/receivables/manual` |
+| POST | `/financial/revenues` |
+
+#### `hr` — 4 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/hr/employees/{employee_id}` |
+| GET | `/hr/employees` |
+| PATCH | `/hr/employees/{employee_id}` |
+| POST | `/hr/employees` |
+
+#### `indicators` — 7 rotas
+
+| Método | Caminho |
+|---|---|
+| GET | `/indicators/catalog` |
+| GET | `/indicators/evolucao-financeira` |
+| GET | `/indicators/filtros` |
+| GET | `/indicators/roi/consolidado` |
+| GET | `/indicators/roi/evolucao` |
+| GET | `/indicators/roi/operacional` |
+| GET | `/indicators/roi/projetos/{project_id}` |
+
+#### `legal` — 28 rotas
+
+| Método | Caminho |
+|---|---|
+| GET | `/legal/cases` |
+| GET | `/legal/cases/overview` |
+| GET | `/legal/cases/{case_id}` |
+| GET | `/legal/change-logs` |
+| GET | `/legal/companies` |
+| GET | `/legal/imports` |
+| GET | `/legal/persons` |
+| GET | `/legal/persons/facets` |
+| GET | `/legal/persons/{person_id}` |
+| GET | `/legal/projects` |
+| PATCH | `/legal/cases/{case_id}` |
+| PATCH | `/legal/companies/{company_id}` |
+| PATCH | `/legal/persons/{person_id}` |
+| PATCH | `/legal/projects/{project_id}` |
+| POST | `/legal/cases` |
+| POST | `/legal/cases/{case_id}/deactivate` |
+| POST | `/legal/cases/{case_id}/restore` |
+| POST | `/legal/companies` |
+| POST | `/legal/companies/{company_id}/deactivate` |
+| POST | `/legal/companies/{company_id}/restore` |
+| POST | `/legal/imports/confirm` |
+| POST | `/legal/imports/preview` |
+| POST | `/legal/persons` |
+| POST | `/legal/persons/{person_id}/deactivate` |
+| POST | `/legal/persons/{person_id}/restore` |
+| POST | `/legal/projects` |
+| POST | `/legal/projects/{project_id}/deactivate` |
+| POST | `/legal/projects/{project_id}/restore` |
+
+#### `payables` — 5 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/payables/{payable_id}` |
+| GET | `/payables` |
+| PATCH | `/payables/{payable_id}` |
+| PATCH | `/payables/{payable_id}/pay` |
+| POST | `/payables` |
+
+#### `payment-variable-components` — 6 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/payment-variable-components/{component_id}` |
+| GET | `/payment-variable-components` |
+| PATCH | `/payment-variable-components/{component_id}` |
+| POST | `/payment-variable-components` |
+| PUT | `/payment-variable-components/company-item/{item_id}` |
+| PUT | `/payment-variable-components/project-labor/{labor_id}` |
+
+#### `project-structure` — 20 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/projects/{project_id}/structure/fixed-operational/{fixed_id}` |
+| DELETE | `/projects/{project_id}/structure/labors/{labor_id}` |
+| DELETE | `/projects/{project_id}/structure/systems/{system_id}` |
+| DELETE | `/projects/{project_id}/structure/vehicles/{vehicle_id}` |
+| GET | `/projects/{project_id}/labor-details` |
+| GET | `/projects/{project_id}/structure/fixed-operational` |
+| GET | `/projects/{project_id}/structure/labors` |
+| GET | `/projects/{project_id}/structure/systems` |
+| GET | `/projects/{project_id}/structure/vehicles` |
+| PATCH | `/projects/{project_id}/structure/fixed-operational/{fixed_id}` |
+| PATCH | `/projects/{project_id}/structure/labors/{labor_id}` |
+| PATCH | `/projects/{project_id}/structure/systems/{system_id}` |
+| PATCH | `/projects/{project_id}/structure/vehicles/{vehicle_id}` |
+| POST | `/projects/{project_id}/structure/bulk-delete` |
+| POST | `/projects/{project_id}/structure/fixed-operational` |
+| POST | `/projects/{project_id}/structure/initialize-competencia` |
+| POST | `/projects/{project_id}/structure/labors` |
+| POST | `/projects/{project_id}/structure/labors/copy-from-previous` |
+| POST | `/projects/{project_id}/structure/systems` |
+| POST | `/projects/{project_id}/structure/vehicles` |
+
+#### `projects` — 16 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/projects/{project_id}` |
+| DELETE | `/projects/{project_id}/additives/{additive_id}` |
+| DELETE | `/projects/{project_id}/documents/{document_id}` |
+| GET | `/projects/` |
+| GET | `/projects/{project_id}` |
+| GET | `/projects/{project_id}/additives` |
+| GET | `/projects/{project_id}/documents` |
+| GET | `/projects/{project_id}/documents/{document_id}/download` |
+| PATCH | `/projects/{project_id}` |
+| PATCH | `/projects/{project_id}/activate` |
+| PATCH | `/projects/{project_id}/additives/{additive_id}` |
+| PATCH | `/projects/{project_id}/deactivate` |
+| POST | `/projects/` |
+| POST | `/projects/{project_id}/additives` |
+| POST | `/projects/{project_id}/documents` |
+| POST | `/projects/{project_id}/users/{user_id}` |
+
+#### `reports` — 1 rotas
+
+| Método | Caminho |
+|---|---|
+| POST | `/reports/generate` |
+
+#### `settings` — 6 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/settings/payment-component-types/{type_id}` |
+| GET | `/settings` |
+| GET | `/settings/payment-component-types` |
+| PATCH | `/settings/payment-component-types/{type_id}` |
+| POST | `/settings/payment-component-types` |
+| PUT | `/settings` |
+
+#### `users` — 13 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/users/roles/{role_id}` |
+| DELETE | `/users/{user_id}` |
+| GET | `/users/` |
+| GET | `/users/me` |
+| GET | `/users/roles` |
+| PATCH | `/users/roles/{role_id}` |
+| PATCH | `/users/{user_id}` |
+| PATCH | `/users/{user_id}/activate` |
+| PATCH | `/users/{user_id}/deactivate` |
+| POST | `/users/` |
+| POST | `/users/roles` |
+| POST | `/users/{user_id}/reset-password` |
+| POST | `/users/{user_id}/roles` |
+
+#### `vehicles` — 6 rotas
+
+| Método | Caminho |
+|---|---|
+| DELETE | `/vehicles/{vehicle_id}` |
+| GET | `/vehicles` |
+| GET | `/vehicles/active` |
+| PATCH | `/vehicles/{vehicle_id}` |
+| POST | `/vehicles` |
+| POST | `/vehicles/usages` |
 
 ---
 
-## 11. VARIÁVEIS DE AMBIENTE
+## 8. Frontend — telas e rotas
 
-### Backend (`.env` / `.env.local`)
+| Workspace | Rota | Tela |
+|---|---|---|
+| Projetos | `/projects/dashboard` | Dashboard operacional |
+| Projetos | `/projects/list` · `/projects/list/:id` | Lista e detalhe do projeto (contrato, documentos, custos) |
+| Projetos | `/projects/employees` | Colaboradores |
+| Projetos | `/projects/vehicles` | Frota |
+| Projetos | `/projects/revenue` | Faturamento |
+| Projetos | `/projects/users` | Usuários |
+| Projetos | `/projects/reports` | Relatórios |
+| Financeiro | `/finance/dashboard` | Dashboard financeiro |
+| Financeiro | `/finance/payables` | Contas a Pagar |
+| Financeiro | `/finance/receivables` | Contas a Receber |
+| Financeiro | `/finance/invoices` | Notas Fiscais |
+| Financeiro | `/finance/advance-batches` | Antecipações — operações |
+| Financeiro | `/finance/advance-institutions` | Instituições de antecipação |
+| Financeiro | `/finance/debt` | Endividamento |
+| Financeiro | `/finance/fixed-costs` | Custos Fixos |
+| Financeiro | `/finance/reports` | Relatórios |
+| Indicadores | `/indicators/roi` | ROI operacional |
+| Indicadores | `/indicators/evolucao-financeira` | Evolução financeira |
+| Ativos | `/assets/dashboard` · `/assets` · `/assets/:id` | Dashboard, lista e detalhe |
+| Ativos | `/epis` · `/epis/:id` | EPIs |
+| Jurídico | `/legal/dashboard` · `/legal/cases` · `/legal/persons` · `/legal/reports` · `/legal/admin` | Workspace jurídico |
+| Sistema | `/settings` | Configurações, auditoria e arquivos ausentes |
 
-| Variável | Padrão | Descrição | Obrigatório em Prod |
-|----------|--------|-----------|---------------------|
-| ENV | local | Ambiente (local/dev/production) | SIM |
-| APP_NAME | SGP Backend | Nome da aplicação | Não |
-| API_V1_PREFIX | /api/v1 | Prefixo da API | Não |
-| **JWT_SECRET_KEY** | **change-me** | **Chave de assinatura JWT** | **CRÍTICO** |
-| JWT_ALGORITHM | HS256 | Algoritmo JWT | Não |
-| ACCESS_TOKEN_EXPIRE_MINUTES | 60 | Expiração (NÃO USADO no código!) | Não |
-| AUTH_DEBUG | false | Loga tokens no console | Não — deve ser false |
-| **CORS_ORIGINS** | (vazio) | Origens CORS permitidas | **CRÍTICO** |
-| APP_SUPERUSER_EMAILS | (vazio) | E-mails superusuário | Recomendado |
-| **DATABASE_URL** | postgresql+asyncpg://postgres:postgres@localhost:5432/sgp | URL do banco | **CRÍTICO** |
-| DB_POOL_SIZE | 5 | Tamanho do pool | Recomendado |
-| DB_MAX_OVERFLOW | 15 | Overflow do pool | Recomendado |
-| DB_POOL_RECYCLE_SECONDS | 1800 | Recycle do pool | Não |
-| **STORAGE_ROOT** | (vazio) | Raiz única dos uploads em disco (ex.: `/data` = mount do volume). Quando definida, NFs, anexos de ativos e documentos de projeto derivam dela — variável específica abaixo continua vencendo. Se vazia, a raiz é deduzida da pasta que contém RECEIVABLE_UPLOAD_DIR. | **CRÍTICO em prod** |
-| RECEIVABLE_UPLOAD_DIR | var/receivable_uploads | Diretório de uploads de NFs | Prod: volume persistente |
-| RECEIVABLE_PDF_MAX_BYTES | 5MB | Limite de tamanho de PDF | Não |
-| ASSET_UPLOAD_DIR | var/asset_uploads | Diretório de uploads de ativos | Prod: volume persistente |
-| ASSET_UPLOAD_MAX_BYTES | 15MB | Limite de upload de ativos | Não |
-| PROJECT_DOCUMENT_DIR | (derivado da raiz) | Diretório dos documentos de projeto | Prod: volume persistente |
-| PROJECT_DOCUMENT_MAX_BYTES | 25MB | Limite de upload de documento de projeto | Não |
+Rotas antigas (`/projects`, `/invoices`, `/employees`…) redirecionam para os caminhos
+atuais.
 
-### Frontend (`.env`)
+---
+
+## 9. Armazenamento de arquivos
+
+Três tipos de anexo são gravados em disco: **PDFs de NF**, **anexos de ativos** e
+**documentos de projeto**. Todos derivam de uma raiz única:
+
+- `STORAGE_ROOT` quando definida (em produção, o mount do volume persistente: `/data`);
+- senão, a pasta que contém `RECEIVABLE_UPLOAD_DIR`;
+- senão, os defaults relativos (`var/…`), usados em desenvolvimento.
+
+Uma variável específica (`PROJECT_DOCUMENT_DIR`, `ASSET_UPLOAD_DIR`,
+`RECEIVABLE_UPLOAD_DIR`) sempre vence a raiz. No startup o sistema registra em log os
+diretórios em uso, alerta se em produção algum for relativo (portanto efêmero) e copia uma
+única vez o que tenha sobrado nos diretórios legados.
+
+Em Configurações há o diagnóstico **Arquivos ausentes no servidor**, que confronta os
+registros do banco com o disco e lista o que precisa ser reenviado. O mesmo relatório está
+em `GET /api/v1/admin/storage/missing-files` e em
+`python -m scripts.relatorio_arquivos_ausentes`.
+
+---
+
+## 10. Variáveis de ambiente
+
+**Backend** (`app/core/config.py`):
 
 | Variável | Padrão | Descrição |
-|----------|--------|-----------|
-| VITE_API_BASE | http://localhost:8000/api/v1 | URL base da API (embutida no build) |
+|---|---|---|
+| `ENV` | `local` | `production` ativa validações extras de segurança |
+| `DATABASE_URL` | — | **Crítica**. URL asyncpg do PostgreSQL |
+| `JWT_SECRET_KEY` | `change-me` | **Crítica**. Em produção, mínimo de 32 caracteres |
+| `JWT_ALGORITHM` · `ACCESS_TOKEN_EXPIRE_MINUTES` | `HS256` · `60` | Emissão do token |
+| `CORS_ORIGINS` | vazio | **Crítica** em produção: domínios do frontend |
+| `AUTH_DEBUG` | `false` | Proibido em produção |
+| `APP_SUPERUSER_EMAILS` | vazio | Lista de emergência |
+| `DB_POOL_SIZE` · `DB_MAX_OVERFLOW` · `DB_POOL_RECYCLE_SECONDS` | `5` · `15` · `1800` | Pool asyncpg |
+| `STORAGE_ROOT` | vazio | **Crítica em produção**: raiz dos uploads (`/data`) |
+| `RECEIVABLE_UPLOAD_DIR` · `ASSET_UPLOAD_DIR` · `PROJECT_DOCUMENT_DIR` | derivados da raiz | Diretórios por tipo de anexo |
+| `RECEIVABLE_PDF_MAX_BYTES` · `ASSET_UPLOAD_MAX_BYTES` · `PROJECT_DOCUMENT_MAX_BYTES` | 5 MB · 15 MB · 25 MB | Limites de upload |
 
-Em produção: `window.__SGP_API_BASE__` é injetado por `/sgp-runtime-config.js` via `server.js`
-
----
-
-## 12. INFRAESTRUTURA E DEPLOY
-
-### Plataforma: Railway
-
-- **Backend:** container Python/Uvicorn
-  - Startup: `run_alembic_upgrade()` + `seed_admin()` + `warn_if_scenario_schema_missing()`
-  - X-Forwarded-Proto tratado por `ForwardedProtoMiddleware`
-- **Frontend:** container Node.js com `server.js` (Express)
-  - Serve arquivos estáticos do `dist/` gerado pelo Vite
-  - Injeta URL da API em runtime via `/sgp-runtime-config.js`
-  - Trust proxy configurado (`app.set("trust proxy", 1)`)
-  - `x-powered-by` desabilitado
-
-### Banco de Dados
-
-- PostgreSQL (Railway ou local)
-- Connection pooling: asyncpg, pool_pre_ping habilitado
-- Migrations automáticas no startup (alembic upgrade head)
-
-### Armazenamento de Arquivos
-
-- **PDFs de NF:** armazenados localmente em `var/receivable_uploads/`
-- **Attachments de Ativos:** armazenados em `var/asset_uploads/`
-- **PROBLEMA:** Sem volume persistente configurado → perda de arquivos em redeploy
-
-### Backup
-
-- Script `scripts/backup_postgres.sh` — dump gzip via pg_dump
-- Rotação: mantém últimos N arquivos (padrão 12)
-- **PROBLEMA:** Backup manual/cron — não há automação documentada ou garantida
+**Frontend**: `VITE_API_BASE` (ex.: `https://…/api/v1`), lida **em tempo de build**.
 
 ---
 
-## 13. SCRIPTS E UTILITÁRIOS
+## 11. Banco de dados e migrations
 
-| Script | Localização | Descrição |
-|--------|-------------|-----------|
-| backup_postgres.sh | scripts/ | Dump + rotação do banco |
-| promote_user_admin.py | scripts/ | Promove usuário a ADMIN via ORM |
-| promote_user_admin.sql | scripts/ | SQL manual de promoção de role |
-| fix_local_db_ownership.sh | scripts/ | Corrige ownership no banco local |
-| audit_payables_may_2026.sql | scripts/ | Query de auditoria de payables |
-| manage.py | raiz | CLI: `reset_db`, `promote_admin` |
-| Makefile | raiz | `make reset-db` (DESTRUTIVO — apaga todos dados) |
+PostgreSQL, com 119 migrations Alembic (`0001` … `0119`). O `upgrade head` roda
+automaticamente no startup do backend, o que faz o deploy aplicar o schema sem passo
+manual.
 
-### Utilitários internos (`app/utils/`)
+Migrations recentes que vale conhecer:
 
-- `money.py` — formatação e operações monetárias
-- `date_utils.py` — normalização de datas/competência
-- `audit_diff.py` — geração de diffs estruturados para audit_logs
-- `json_utils.py` — serialização JSON customizada
-- `dashboard_inclusion.py` — lógica de inclusão no dashboard
-
----
-
-## 14. TESTES AUTOMATIZADOS
-
-| Arquivo | O que testa |
-|---------|-------------|
-| test_asset_epi_separation.py | Separação entre ativos e EPIs |
-| test_cost_center_alias.py | Aliases de centro de custo |
-| test_clt_monthly_payroll_override.py | Override de folha mensal CLT |
-| test_indicators_roi.py | Cálculo de ROI operacional |
-| test_advance_batch_payables.py | Borderôs e payables relacionados |
-| test_payable_snapshot_competence.py | Competência de snapshots |
-| test_asset_code_generation.py | Geração de código de ativo |
-| test_payable_payments.py | Eventos de pagamento |
-| test_company_finance_pendencias.py | Pendências de custos fixos/dívidas |
-| test_advance_batch_number.py | Numeração de borderôs |
-| test_money.py | Utilitários monetários |
-
-**Cobertura:** Testes unitários de regras de negócio específicas. Não há testes de integração HTTP ou de autenticação.
+| Revisão | O que faz |
+|---|---|
+| `0119` | `payable_snapshots.name` e `.item_description` → TEXT (nota longa derrubava a geração do mês) |
+| `0103` | Flag do Cronograma Financeiro do Endividamento |
+| `0101`/`0102` | Múltiplos lançamentos por competência em Custos Fixos (`entry_id`) |
+| `0100` | Componentes Variáveis de Pagamento |
+| `0098` | Dashboard Financeiro como recurso próprio (não vaza valores por `billing.read`) |
+| `0092` | Modelo de permissões por verbos (aditiva) |
+| `0091` | Perfis administráveis (`role_permissions`) |
+| `0090` | Isolamento de permissões por módulo |
 
 ---
 
-## 15. DOCUMENTAÇÃO FUNCIONAL DOS MÓDULOS
+## 12. Testes automatizados
 
-### 15.1 Módulo: Projetos
+48 arquivos em `tests/`, majoritariamente de regressão: cada defeito encontrado em
+produção vira um teste que trava o comportamento. As frentes com mais cobertura são
+Contas a Pagar e competências, antecipações e repasse, permissões e eixo sensível, Centro
+de Custo (incluindo o histórico temporal) e o módulo Jurídico.
 
-**Objetivo:** Gestão do ciclo de vida de projetos (obras, contratos, iniciativas)
-
-**Principais telas:** `/projects/list`, `/projects/list/:projectId`
-
-**Fluxo de dados:**
-```
-Criar Projeto → Vincular Colaboradores/Veículos → Lançar Receitas/Custos 
-→ Gerar Snapshots → Dashboard KPIs → Relatórios
+```bash
+.venv/bin/python -m pytest --ignore=tests/test_roles.py -q
 ```
 
-**Regras de negócio:**
-- Projetos têm ciclo: ativo → inativo → encerrado/deletado (soft delete)
-- Acesso por projeto controlado via `project_users`
-- Usuários ADMIN/GESTOR com `system.all_projects` enxergam todos os projetos
-- Dados separados por cenário: PREVISTO vs REALIZADO
-
-**Tabelas relacionadas:** projects, project_users, revenues, employee_allocations, vehicle_usages, project_labors, project_vehicles, project_system_costs, project_operational_fixed, project_fixed_costs
-
-### 15.2 Módulo: Financeiro (Receitas e NFs internas)
-
-**Objetivo:** Controle de receitas lançadas por projeto/competência e NFs internas
-
-**Principais telas:** `/projects/revenue`
-
-**Regras de negócio:**
-- Receitas têm retention_pct (retenção)
-- Cenários PREVISTO/REALIZADO independentes
-- Faturamento = receitas vinculadas ao projeto
-
-**Tabelas:** revenues, invoices, invoice_anticipations
-
-### 15.3 Módulo: Contas a Receber (NFs a Receber)
-
-**Objetivo:** Controle de Notas Fiscais emitidas para clientes, antecipações e borderôs
-
-**Principais telas:** `/finance/receivables`, `/finance/invoices`, `/finance/advance-batches`
-
-**Fluxo de dados:**
-```
-Emitir NF (EMITIDA) → Antecipar/Fatorar (ANTECIPADA) 
-→ Receber (RECEBIDA) | Cancelar (CANCELADA)
-```
-
-**Regras de negócio:**
-- NF pode ter múltiplos arquivos PDF anexados
-- Reativação de NF cancelada requer permissão explícita `invoices.reactivate`
-- Borderôs agrupam NFs para factoring com taxa de desconto e data de liquidação
-
-**Tabelas:** receivable_invoices, receivable_invoice_files, receivable_advance_batches, receivable_manual_items
-
-### 15.4 Módulo: Contas a Pagar
-
-**Objetivo:** Controle de obrigações financeiras com snapshots mensais imutáveis
-
-**Principais telas:** `/finance/payables`
-
-**Fluxo de dados:**
-```
-Lançar Obrigação → Gerar Snapshot Mensal (imutável) 
-→ Registrar Pagamentos → Status: PENDENTE/PARCIAL/PAGO
-```
-
-**Regras de negócio:**
-- Snapshots são gerados automaticamente por competência
-- Pagamentos são eventos que atualizam `amount_paid` no snapshot
-- Tipos: FORNECEDOR, FUNCIONARIO, FINANCIAL, ENDIVIDAMENTO
-- Importação via planilha Excel com mapeamento de colunas configurável
-- Lock de banco (`pg_advisory_xact_lock`) para evitar snapshots duplicados
-
-**Tabelas:** payables (legacy), payable_snapshots, payable_payments, payable_import_templates, cost_center_aliases
-
-### 15.5 Módulo: Endividamento Corporativo
-
-**Objetivo:** Controle do endividamento e compromissos financeiros da empresa
-
-**Principais telas:** `/finance/debt`
-
-**Regras de negócio:**
-- Itens: financiamentos, leasing, empréstimos, etc.
-- Campos: valor contratado, taxa de juros, parcela mensal obrigatória, vencimento
-- KPIs: total devido, total atrasado, projeção mensal
-
-**Tabelas:** company_financial_items (type=ENDIVIDAMENTO)
-
-### 15.6 Módulo: Custos Fixos Corporativos
-
-**Objetivo:** Controle de custos fixos operacionais da empresa (não alocados a projetos)
-
-**Principais telas:** `/finance/fixed-costs`
-
-**Regras de negócio:**
-- Itens recorrentes mensais (aluguel, energia, etc.)
-- Pendências identificadas por competência
-
-**Tabelas:** company_financial_items (type=CUSTO_FIXO)
-
-### 15.7 Módulo: Colaboradores
-
-**Objetivo:** Cadastro e gestão de colaboradores CLT e PJ com cálculo de custos
-
-**Principais telas:** `/projects/employees`
-
-**Regras de negócio:**
-- CLT: custo calculado com encargos (INSS, FGTS, férias)
-- PJ: custo base + custo adicional PJ
-- Alocação por projeto: % de tempo por competência e cenário
-- Override de salário por mês específico disponível
-
-**Dados sensíveis:** `pix_key`, `salary_base` — **ATENÇÃO: dados financeiros sensíveis**
-
-**Tabelas:** employees, employee_allocations, employee_monthly_payroll_overrides
-
-### 15.8 Módulo: Frota de Veículos
-
-**Objetivo:** Controle de veículos e uso por projeto
-
-**Principais telas:** `/projects/vehicles`
-
-**Regras de negócio:**
-- Soft delete de veículos
-- Custo mensal fixo por veículo
-- Uso por projeto: km rodados por competência/cenário
-
-**Tabelas:** vehicles, vehicle_usages
-
-### 15.9 Módulo: Gestão de Ativos e EPIs
-
-**Objetivo:** Inventário de equipamentos e EPIs com histórico de atribuição e inspeções
-
-**Principais telas:** `/assets`, `/epis`, `/assets/:id`
-
-**Fluxo:**
-```
-Criar Ativo → Atribuir a Colaborador/Projeto → Inspecionar 
-→ Devolver → AVAILABLE/IN_USE/MAINTENANCE/RETIRED
-```
-
-**Regras de negócio:**
-- EPIs e equipamentos separados pelo campo `asset_type`
-- Código automático gerado por categoria
-- Atribuições com campos de devolução (data, condição)
-- Anexos de arquivos por ativo
-- Tags livres (JSONB)
-
-**Tabelas:** assets, asset_assignments, asset_inspections, asset_attachments
-
-### 15.10 Módulo: Dashboard de Projetos
-
-**Objetivo:** KPIs consolidados por projeto e global
-
-**Principais telas:** `/projects/dashboard`
-
-**Indicadores exibidos:**
-- Receita, Custo, Resultado, Margem
-- Projeção mensal por projeto
-- Ranking de projetos por resultado
-
-**Tabelas:** dashboard (KPI, ProjectResult), revenues, employee_allocations, vehicle_usages
-
-### 15.11 Módulo: Dashboard Financeiro
-
-**Objetivo:** Visão financeira corporativa (receber × pagar × dívidas)
-
-**Principais telas:** `/finance/dashboard`
-
-**Indicadores:** NFs em aberto, recebimentos futuros, obrigações do mês, série temporal
-
-### 15.12 Módulo: Indicadores (ROI)
-
-**Objetivo:** Cálculo do ROI operacional da empresa
-
-**Principais telas:** `/indicators/roi`
-
-**Permissões especiais:** `indicators.director` para visão global
-
-### 15.13 Módulo: Relatórios
-
-**Objetivo:** Exportação de dados em Excel (.xlsx) e PDF
-
-**Principais telas:** `/projects/reports`, `/finance/reports`
-
-**Tipos de relatório disponíveis:**
-- `project_summary` — Resumo de projeto por competência
-- `company_summary` — Resumo da empresa
-- `employees` — Relatório de colaboradores
-- `vehicles` — Relatório de frota
-- `invoices` — NFs internas
-- `debt` — Endividamento
-- `fixed_costs` — Custos fixos
-- `users` — Usuários do sistema
-- `revenues` — Receitas
-- `dashboard` — Export do dashboard
-- `payables_detailed` — Contas a pagar detalhado
-- `receivables_detailed` — Contas a receber detalhado
-- `invoices_detailed` — NFs detalhado
-- `assets_inventory`, `assets_in_use`, `assets_inspections`, `assets_movements` — Ativos
-
-### 15.14 Módulo: Usuários e Permissões
-
-**Objetivo:** Gestão de usuários, roles e permissões
-
-**Principais telas:** `/projects/users`
-
-**Fluxo:**
-```
-Criar Usuário → Atribuir Role (ADMIN/GESTOR/CONSULTA) 
-→ Vincular a Projetos → Permissões granulares opcionais
-```
-
-### 15.15 Módulo: Configurações
-
-**Objetivo:** Parâmetros globais do sistema (taxas, valores padrão)
-
-**Principais telas:** `/settings`
-
-**Dados configuráveis:** taxas de encargos, consumo de combustível padrão, valores de referência
-
-### 15.16 Módulo: Auditoria
-
-**Objetivo:** Rastreabilidade de todas as ações do sistema
-
-**Acesso:** exportação via `/admin/audit/export` (permissão `audit.export` — explicit only)
-
-**Registra:** login, create, update, delete de todas entidades relevantes com diff JSON
+> **Atenção**: `tests/test_roles.py` escreve no banco de desenvolvimento (que é um clone
+> de produção) e já renomeou perfis. Rode a suíte com o `--ignore` acima.
+
+Dois testes falham hoje por questões pré-existentes de ambiente
+(`test_advance_batch_payables` e `test_users_permission_grid`), sem relação com o código
+de produção.
+
+Há ainda uma varredura estática (`test_endpoint_names_resolve.py`) que percorre **todos**
+os handlers procurando nomes usados fora de escopo — ela nasceu de um `NameError` que só
+aparecia depois do `commit`, e já encontrou um segundo caso em outro módulo.
 
 ---
 
-## 16. ANÁLISE DE SEGURANÇA
+## 13. Infraestrutura e deploy
 
-### 16.1 Pontos Positivos
+Hospedagem no **Railway**, com três serviços: PostgreSQL, backend e frontend, cada um
+implantado a partir do GitHub. O backend tem um **volume persistente montado em `/data`**,
+onde ficam todos os anexos.
 
-✅ **Autenticação JWT com bcrypt** — senhas armazenadas com bcrypt, suporte a rehash automático (migração de algoritmos legados)  
-✅ **RBAC granular** — sistema de permissões bem estruturado com presets por role  
-✅ **Permissões explicit-only** — `invoices.reactivate` e `audit.export` nunca herdadas automaticamente  
-✅ **Audit log completo** — todas ações registradas com IP, user-agent e diff  
-✅ **Session versioning** — invalidação de tokens em atualizações do sistema  
-✅ **Soft delete** — usuários, projetos e veículos não são deletados fisicamente  
-✅ **Proteção de path traversal em uploads** — uso de `.resolve()` e `relative_to()` para validar caminhos  
-✅ **Validação de tipo de arquivo** — uploads de PDF verificam content_type  
-✅ **Limites de tamanho** — PDFs (5MB) e attachments (15MB) com limites configuráveis  
-✅ **CORS configurável** — com exigência de origens explícitas em produção  
-✅ **Proxy headers tratados** — ForwardedProtoMiddleware evita HTTP downgrade  
-✅ **Validação de JWT** — erros de JWTError e ExpiredSignatureError tratados adequadamente  
-✅ **x-powered-by desabilitado** — no servidor Express do frontend  
-✅ **SQL via ORM** — uso de SQLAlchemy parametrizado, sem SQL dinâmico com f-strings  
-✅ **Sem credenciais reais em .env.local** — apenas valores padrão de desenvolvimento  
+O deploy é disparado pelo push na `main`. No startup o backend executa
+`alembic upgrade head`, verifica o schema de cenários, garante o usuário administrador e
+registra os diretórios de armazenamento.
 
-### 16.2 Vulnerabilidades Identificadas
-
-#### CRÍTICO
-
-**V-001: Endpoint de registro aberto sem autenticação**
-- Localização: `POST /api/v1/auth/register`
-- Problema: Qualquer pessoa com acesso à URL da API pode criar usuários no sistema. Não há autenticação, código de convite, ou limitação de taxa.
-- Risco: Criação massiva de contas, enumeração de usuários registrados (via 409 Conflict)
-- Evidência: `app/modules/auth/router.py:17` — sem `dependencies=[Depends(require_*)]`
-
-**V-002: JWT com expiração de 24 horas (hardcoded, ignorando configuração)**
-- Localização: `app/core/security.py:98` — `expires_delta: int = 60 * 24`
-- Problema: `create_access_token` usa o valor padrão hardcoded de 24h. A variável `ACCESS_TOKEN_EXPIRE_MINUTES` definida no `.env` e no `config.py` **nunca é passada** para `create_access_token` em `auth_service.py:79`.
-- Risco: Tokens roubados válidos por 24h sem possibilidade de revogação (não há blacklist/refresh token)
-- Evidência: `app/services/auth_service.py:79` — `create_access_token(data={"sub": str(user.id), **claims})` sem `expires_delta`
-
-**V-003: E-mail de superusuário hardcoded no código-fonte**
-- Localização: `app/api/deps.py:81-84`
-- Problema: `rafael.casagrande@meconsulting.com.br` está hardcoded como superusuário com acesso total, sem verificação de RBAC. Qualquer pessoa com acesso ao código tem essa informação.
-- Risco: Vetor de ataque direcionado — atacante que comprometa essa conta tem acesso irrestrito; código exposto em repositórios compromete permanentemente
-- Evidência: `_DEFAULT_SUPERUSER_EMAILS = frozenset({"rafael.casagrande@meconsulting.com.br"})`
-
-**V-004: Credencial padrão de admin criada no bootstrap**
-- Localização: `app/core/bootstrap.py:53-60`
-- Problema: Se não houver nenhum usuário ADMIN, o sistema cria `admin@admin.com` com senha `123456` no startup
-- Risco: Em caso de reset do banco ou nova instalação, conta padrão com credenciais conhecidas é criada automaticamente
-- Evidência: `password_hash=hash_password("123456")`
-
-#### ALTO
-
-**V-005: Ausência de rate limiting**
-- Localização: Toda a aplicação
-- Problema: Não há limitação de taxa em nenhum endpoint, especialmente em `/auth/login` e `/auth/register`
-- Risco: Ataques de força bruta a senhas, DDoS, enumeração de usuários
-
-**V-006: JWT armazenado em localStorage (XSS)**
-- Localização: `frontend/src/services/api.ts:59` — `localStorage.getItem(TOKEN_KEY)`
-- Problema: JWT armazenado em `localStorage` é acessível via JavaScript, vulnerável a ataques XSS
-- Risco: Script malicioso injetado pode roubar tokens de todos os usuários ativos
-
-**V-007: Sem rotação/revogação de tokens JWT**
-- Problema: Não há blacklist de tokens, refresh tokens ou mecanismo de logout com revogação server-side. Logout apaga apenas o token do localStorage.
-- Risco: Token roubado permanece válido até a expiração (24h). Mudança de senha não invalida sessões ativas.
-
-**V-008: Rota `/admin` fora do router protegido**
-- Localização: `app/api/router.py:51` — `api_router.include_router(admin_router, prefix="/admin")`
-- Problema: O `admin_router` é registrado **diretamente** em `api_router`, fora do bloco `protected`. A proteção depende exclusivamente do `require_permission(AUDIT_EXPORT)` dentro do endpoint. Um erro futuro pode resultar em endpoints admin sem autenticação.
-- Risco: Inconsistência arquitetural — sem camada de proteção global no router
-
-**V-009: Senha mínima de apenas 6 caracteres**
-- Localização: `app/schemas/auth.py:13`, `app/schemas/users.py:44`
-- Problema: `min_length=6` é insuficiente. Sem validação de complexidade (maiúsculas, números, símbolos).
-- Risco: Senhas fracas facilmente comprometidas por força bruta ou dicionário
-
-**V-010: Ausência de Content Security Policy (CSP)**
-- Problema: O servidor Express do frontend não define headers de segurança HTTP (CSP, X-Frame-Options, X-Content-Type-Options, etc.)
-- Risco: Vulnerabilidade a XSS, clickjacking, MIME sniffing
-
-#### MÉDIO
-
-**V-011: `AUTH_DEBUG` pode expor tokens em logs de produção**
-- Localização: `app/api/deps.py:288` — `_debug_print(f"token (parcial): {token[:24]}...")`
-- Problema: Se `AUTH_DEBUG=true` for acidentalmente ativado em produção, partes de tokens JWT são impressas nos logs
-- Risco: Vazamento de tokens em logs de aplicação
-
-**V-012: Dados bancários de colaboradores sem criptografia adicional**
-- Localização: `app/models/employee.py:21-22`
-- Problema: `pix_key` e `pix_key_type` armazenados como texto plano no banco
-- Risco: Exposição de dados PIX em case de vazamento do banco
-
-**V-013: Ausência de HTTPS enforcement no backend**
-- Problema: Não há redirect HTTP→HTTPS ou HSTS no backend FastAPI
-- Risco: Tokens podem trafegar sem criptografia em configurações incorretas
-
-**V-014: Sem validação de tipo MIME além do Content-Type no upload**
-- Localização: `app/modules/receivables/router.py:574`
-- Problema: Valida apenas `content_type` enviado pelo cliente (facilmente falsificável). Não verifica o magic number/bytes do arquivo
-- Risco: Upload de arquivos maliciosos com content_type falsificado
-
-**V-015: Arquivos de upload armazenados localmente sem volume persistente garantido**
-- Localização: `app/core/config.py:28` — `receivable_upload_dir: str = Field(default="var/receivable_uploads")`
-- Problema: Sem volume persistente configurado em produção, uploads são perdidos em redeploy
-- Risco: Perda de dados (PDFs de NFs, anexos de ativos)
+Backups do PostgreSQL: `scripts/backup_postgres.sh` (ver
+[`docs/operacao-e-backups.md`](operacao-e-backups.md)).
 
 ---
 
-## 17. RISCOS IDENTIFICADOS
+## 14. Ambiente local
 
-### 17.1 Riscos de Segurança / Vazamento de Dados
+```bash
+# Backend (porta 8000)
+.venv/bin/python -m uvicorn app.main:app --reload
 
-| ID | Risco | Severidade | Probabilidade |
-|----|-------|-----------|---------------|
-| RS-001 | Registro aberto permite cadastro não autorizado | CRÍTICO | Alta |
-| RS-002 | Credenciais admin padrão (admin@admin.com / 123456) | CRÍTICO | Média |
-| RS-003 | Email de superusuário hardcoded exposto no código | CRÍTICO | Média |
-| RS-004 | Token JWT de 24h sem revogação possível | ALTO | Média |
-| RS-005 | JWT em localStorage vulnerável a XSS | ALTO | Baixa |
-| RS-006 | Dados PIX de colaboradores sem criptografia | MÉDIO | Baixa |
-| RS-007 | Sem CSP — vulnerável a injeção de scripts | MÉDIO | Baixa |
-| RS-008 | AUTH_DEBUG pode vazar tokens em logs | MÉDIO | Baixa |
+# Frontend (porta 3000)
+npm run dev --prefix frontend
+```
 
-### 17.2 Riscos Financeiros
-
-| ID | Risco | Severidade |
-|----|-------|-----------|
-| RF-001 | Conta admin padrão pode ser usada para manipular dados financeiros | CRÍTICO |
-| RF-002 | Registro aberto + escalação de privilégios → acesso a dados financeiros sensíveis | ALTO |
-| RF-003 | Sem rate limiting → ataques de força bruta à conta financeira | ALTO |
-| RF-004 | Perda de PDFs de NF por ausência de volume persistente | MÉDIO |
-| RF-005 | Token de 24h: janela longa para uso indevido após comprometimento | MÉDIO |
-
-### 17.3 Riscos de Vazamento de Dados
-
-| ID | Risco | Dado em Risco |
-|----|-------|--------------|
-| RD-001 | Registro aberto: enumerar usuários via 409 Conflict | Emails cadastrados |
-| RD-002 | Dados PIX sem criptografia | Chaves PIX de colaboradores |
-| RD-003 | Salary_base em texto plano no banco | Salários de colaboradores |
-| RD-004 | Audit logs sem criptografia e com dados sensíveis em JSONB | Histórico completo de operações |
-| RD-005 | JWT com payload de permissões e projetos decodificável (apenas assinado, não criptografado) | Estrutura organizacional |
-
-### 17.4 Riscos de Manutenção
-
-| ID | Risco | Impacto |
-|----|-------|---------|
-| RM-001 | `ACCESS_TOKEN_EXPIRE_MINUTES` ignorado no código | Confusão operacional, segurança falsa |
-| RM-002 | Email hardcoded de superusuário — difícil de remover sem acesso ao código | Acoplamento indevido |
-| RM-003 | 67 migrations sem downgrade (`down_revision` apenas) — rollback impossível | Operacional |
-| RM-004 | Sem testes de integração HTTP ou de autenticação | Regressões silenciosas |
-| RM-005 | `bcrypt<4.0.0` fixado por incompatibilidade com passlib — dívida técnica | Segurança futura |
-| RM-006 | Uploads em disco local sem backup automatizado | Perda de dados |
-| RM-007 | Dois sistemas de permissões sobrepostos (role presets + user_permissions) — lógica complexa | Bugs de autorização |
-| RM-008 | `get_db` sem timeout de transação — queries longas bloqueiam pool | Performance/disponibilidade |
-
-### 17.5 Riscos de Disponibilidade
-
-| ID | Risco |
-|----|-------|
-| RD-001 | Sem rate limiting — DDoS/flooding de requests |
-| RD-002 | Migrations automáticas no startup podem travar em banco com lock |
-| RD-003 | Pool de conexões com configurações padrão (5 conexões) pode ser insuficiente em produção |
+O banco local é um **clone de produção** (`sgp_local_test`), sem qualquer conexão com o
+Railway — o procedimento está em
+[`docs/LOCAL_PRODUCTION_CLONE_SETUP.md`](LOCAL_PRODUCTION_CLONE_SETUP.md). Os arquivos de
+anexo **não** vêm no clone: os registros existem no banco, mas o download falha com
+"arquivo não encontrado", o que é esperado fora de produção.
 
 ---
 
-## 18. RECOMENDAÇÕES PRIORIZADAS
+## 15. Documentos complementares
 
-### PRIORIDADE 1 — CRÍTICO (corrigir imediatamente)
+| Documento | Assunto |
+|---|---|
+| [`CHANGELOG.md`](../CHANGELOG.md) | Histórico de mudanças por mês |
+| [`SGC_HANDOFF_TECNICO.md`](../SGC_HANDOFF_TECNICO.md) | Migração do modelo de permissões |
+| [`SGC_DADOS_SENSIVEIS_HANDOFF.md`](../SGC_DADOS_SENSIVEIS_HANDOFF.md) | Eixo de Dados Sensíveis |
+| [`PERMISSOES_MODELO_VERBOS.md`](PERMISSOES_MODELO_VERBOS.md) | Modelo por verbos e rollout |
+| [`ETAPA0_LIQUIDACAO_ANTECIPACOES.md`](ETAPA0_LIQUIDACAO_ANTECIPACOES.md) | Liquidação de NFs e ledger de repasse |
+| [`ETAPA0_EDICAO_ANTECIPACOES.md`](ETAPA0_EDICAO_ANTECIPACOES.md) | Edição de operações de antecipação |
+| [`ETAPA0_CRONOGRAMA_ENDIVIDAMENTO.md`](ETAPA0_CRONOGRAMA_ENDIVIDAMENTO.md) | Cronograma Financeiro personalizado |
+| [`CUSTOS_FIXOS_MULTIPLOS_LANCAMENTOS.md`](CUSTOS_FIXOS_MULTIPLOS_LANCAMENTOS.md) | Vários lançamentos por competência |
+| [`JURIDICO_IMPORTACAO_PLANILHA.md`](JURIDICO_IMPORTACAO_PLANILHA.md) · [`JURIDICO_RUNBOOK_DEPLOY.md`](JURIDICO_RUNBOOK_DEPLOY.md) | Workspace Jurídico |
+| [`SGC_AUDITORIA_SEGURANCA_PRIVACIDADE_FINANCEIRO.md`](SGC_AUDITORIA_SEGURANCA_PRIVACIDADE_FINANCEIRO.md) | Auditoria de segurança e privacidade |
+| [`operacao-e-backups.md`](operacao-e-backups.md) | Rotina de backup |
+| [`LOCAL_PRODUCTION_CLONE_SETUP.md`](LOCAL_PRODUCTION_CLONE_SETUP.md) | Clone local de produção |
 
-**R-001: Fechar endpoint de registro ou protegê-lo**
-- Opção A (recomendada): Remover `POST /auth/register` e usar apenas criação de usuário via `POST /users/` (requer `users.manage`)
-- Opção B: Adicionar autenticação ao register (require_permission ou token de convite)
-- Impacto: Elimina cadastro não autorizado e enumeração de usuários
-
-**R-002: Remover credencial admin padrão do bootstrap**
-- Remover a criação automática de `admin@admin.com / 123456` do `bootstrap.py`
-- Substituir por processo de configuração explícita (variáveis de ambiente ou CLI interativo)
-- Impacto: Elimina conta de acesso universal conhecida publicamente
-
-**R-003: Remover email hardcoded de superusuário**
-- Mover `rafael.casagrande@meconsulting.com.br` para variável de ambiente `APP_SUPERUSER_EMAILS`
-- Atualizar código para usar **apenas** a variável de ambiente, sem fallback hardcoded
-- Impacto: Remove vetor de ataque direcionado e informação pessoal do código-fonte
-
-**R-004: Corrigir expiração do token JWT**
-- Passar `settings.access_token_expire_minutes` para `create_access_token` em `auth_service.py`
-- Reduzir para 1h em produção (já é o valor padrão da config, mas não está sendo usado)
-- Impacto: Elimina confusão, reduz janela de tokens comprometidos de 24h para 1h
-
-### PRIORIDADE 2 — ALTO (corrigir em 30 dias)
-
-**R-005: Implementar rate limiting**
-- Adicionar SlowAPI ou similar no FastAPI
-- Limites sugeridos: login (5/min), register (3/min), geral (100/min por IP)
-
-**R-006: Adicionar headers de segurança HTTP no frontend**
-- Configurar no `server.js`: CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, HSTS
-- Biblioteca: `helmet` para Express
-
-**R-007: Implementar mecanismo de invalidação de tokens**
-- Opção A: Refresh token de curta duração + access token curto
-- Opção B: Blacklist de tokens revogados em Redis/banco
-- Mínimo: mudança de senha deve invalidar todas as sessões ativas
-
-**R-008: Validar magic bytes de arquivos nos uploads**
-- Verificar bytes iniciais do arquivo para confirmar que é PDF real
-- Não confiar apenas no `content_type` do cliente
-
-**R-009: Configurar volume persistente para uploads**
-- Garantir que `RECEIVABLE_UPLOAD_DIR` e `ASSET_UPLOAD_DIR` apontam para volumes persistentes no Railway
-- Documentar procedimento de backup desses diretórios
-
-### PRIORIDADE 3 — MÉDIO (corrigir em 90 dias)
-
-**R-010: Aumentar requisito mínimo de senha**
-- Aumentar para min_length=8
-- Adicionar validação de complexidade (ao menos 1 maiúscula, 1 número)
-
-**R-011: Criptografar dados sensíveis de colaboradores**
-- `pix_key`, `salary_base` — considerar criptografia em nível de aplicação
-
-**R-012: Implementar backup automatizado**
-- Configurar cron job no Railway para `backup_postgres.sh`
-- Definir destino remoto (S3, GCS) para os backups
-
-**R-013: Mover admin_router para dentro de protected**
-- Arquitetura defensiva: toda rota deve herdar proteção do router pai
-
-**R-014: Adicionar testes de integração para auth**
-- Testar fluxos: login válido/inválido, permissões, 401/403
-
----
-
-## 19. PLANO DE CORREÇÃO
-
-### Fase 1 — Segurança Imediata (Sprint 1-2, ~1-2 semanas)
-
-| Tarefa | Arquivo(s) | Estimativa |
-|--------|-----------|-----------|
-| 1.1 Remover/proteger endpoint `/auth/register` | `app/modules/auth/router.py` | 1h |
-| 1.2 Remover email hardcoded de superusuário | `app/api/deps.py:81-84` | 30min |
-| 1.3 Corrigir expiração do JWT | `app/services/auth_service.py:79` | 30min |
-| 1.4 Remover credencial admin padrão do bootstrap | `app/core/bootstrap.py:53-60` | 2h |
-| 1.5 Definir `JWT_SECRET_KEY` forte em produção | `.env` de produção (Railway) | 15min |
-| 1.6 Verificar/definir `APP_SUPERUSER_EMAILS` em prod | `.env` de produção | 15min |
-| **Total Fase 1** | | **~5 horas** |
-
-### Fase 2 — Hardening (Sprint 3-4, ~2-4 semanas)
-
-| Tarefa | Arquivo(s) | Estimativa |
-|--------|-----------|-----------|
-| 2.1 Implementar rate limiting (SlowAPI) | `app/main.py`, routers de auth | 4h |
-| 2.2 Adicionar headers de segurança no frontend | `frontend/server.js` | 2h |
-| 2.3 Configurar volumes persistentes no Railway | Deploy config | 2h |
-| 2.4 Implementar backup automatizado com destino remoto | `scripts/backup_postgres.sh` + Railway cron | 4h |
-| 2.5 Validação de magic bytes em uploads | `app/modules/receivables/router.py`, `app/modules/assets/router.py` | 3h |
-| 2.6 Mover admin_router para dentro de protected | `app/api/router.py` | 30min |
-| **Total Fase 2** | | **~16 horas** |
-
-### Fase 3 — Melhoria Contínua (Sprint 5-8, ~1-2 meses)
-
-| Tarefa | Estimativa |
-|--------|-----------|
-| 3.1 Implementar invalidação de tokens (logout server-side) | 8h |
-| 3.2 Aumentar requisito mínimo de senha + validação de complexidade | 2h |
-| 3.3 Criptografia de campos sensíveis (PIX, salário) | 8h |
-| 3.4 Testes de integração para autenticação e RBAC | 16h |
-| 3.5 Documentar procedimentos operacionais (deploy, backup, rotação de chaves) | 4h |
-| 3.6 Atualizar bcrypt para ≥4.0 (quando passlib suportar) | 2h |
-| **Total Fase 3** | **~40 horas** |
-
----
-
-## SUMÁRIO EXECUTIVO
-
-O SGC é um sistema funcional e bem estruturado, com arquitetura clara e código de qualidade razoável. O sistema possui autenticação JWT, RBAC granular, audit log completo e boa separação de camadas.
-
-**Pontos fortes:** RBAC bem implementado, audit trail completo, código Python limpo e tipado, React moderno com TypeScript.
-
-**Principais riscos a endereçar:**
-
-1. **CRÍTICO — Registro público aberto:** Qualquer pessoa pode criar usuário no sistema
-2. **CRÍTICO — Credenciais default:** `admin@admin.com / 123456` criadas automaticamente no bootstrap
-3. **CRÍTICO — Email hardcoded:** Superusuário com email pessoal no código-fonte
-4. **CRÍTICO — JWT ignorando configuração:** Token de 24h hardcoded, config de 60min ignorada
-5. **ALTO — Sem rate limiting:** Vulnerável a força bruta e flooding
-
-Com as correções da Fase 1 (~5 horas de trabalho), o sistema estará em nível de segurança aceitável para produção. As fases 2 e 3 elevam o padrão para produção robusta.
-
----
-
-*Documento gerado automaticamente via análise estática do código-fonte. Não substitui um pentest profissional.*
+Documentos anteriores mantidos por referência histórica, já desatualizados em relação ao
+código: `SGC_ARQUITETURA_PERMISSOES_FUTURAS.md`, `SGC_MATRIZ_PERMISSOES_DEFINITIVA.md` e
+`SGC_RELATORIO_EXECUTIVO.md` (todos de 12/06/2026).
