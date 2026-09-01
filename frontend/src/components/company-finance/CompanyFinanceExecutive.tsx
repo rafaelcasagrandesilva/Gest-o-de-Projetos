@@ -29,6 +29,7 @@ import {
   type RenegotiationType,
   type TipoFinanceiro,
 } from "@/services/companyFinance";
+import { Link } from "react-router-dom";
 import { listEmployees, type Employee } from "@/services/employees";
 import { listProjects, type Project } from "@/services/projects";
 import { SortableTh } from "@/components/table";
@@ -2016,7 +2017,9 @@ function FinanceItemCard({
             ...(structureDebtType === "MANUAL" ? { nome } : {}),
           }
         : { nome }),
-      valor_referencia: parseBRLInput(structureRef),
+      // Colaborador da matriz não tem valor próprio: enviá-lo gravaria na coluna um número que
+      // nenhuma leitura usa, deixando o banco divergente da tela.
+      ...(isMatrixCollaborator ? {} : { valor_referencia: parseBRLInput(structureRef) }),
       category: structureCategory.trim() || defaultCategory(tipo),
       cost_center_ref: structureCostCenterRef,
       description: structureDescription.trim() || null,
@@ -2337,13 +2340,31 @@ function FinanceItemCard({
                 )}
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="text-slate-600">Valor base</span>
+                  {/* Colaborador da matriz: o valor vem do cadastro (salário/custo PJ × percentual)
+                      e é recalculado a cada competência — display, KPI, pendências e Contas a
+                      Pagar leem de lá, nunca desta coluna. Editar aqui não teria efeito nenhum,
+                      então o campo não se oferece como editável. */}
                   <input
                     value={structureRef}
                     onChange={(e) => setStructureRef(e.target.value)}
-                    className="rounded border border-slate-300 px-2 py-1.5"
+                    className={`rounded border px-2 py-1.5 ${
+                      isMatrixCollaborator
+                        ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500"
+                        : "border-slate-300"
+                    }`}
                     inputMode="decimal"
-                    disabled={readOnly || structureSaving}
+                    readOnly={isMatrixCollaborator}
+                    disabled={readOnly || structureSaving || isMatrixCollaborator}
                   />
+                  {isMatrixCollaborator && (
+                    <span className="text-[11px] leading-tight text-slate-500">
+                      Definido pelo cadastro do colaborador.{" "}
+                      <Link to="/projects/employees" className="text-indigo-700 underline">
+                        Alterar em Colaboradores
+                      </Link>
+                      .
+                    </span>
+                  )}
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="text-slate-600">Categoria</span>
