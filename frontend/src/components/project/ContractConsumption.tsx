@@ -2,7 +2,7 @@ import { formatCurrencyOrDash, formatCurrencyShortOrDash } from "@/utils/currenc
 import type { Project } from "@/services/projects";
 
 /**
- * Consumo do contrato — quanto do valor contratado já foi faturado.
+ * Consumo do saldo contratual — quanto do valor contratado já virou nota fiscal.
  *
  * REGRA DO NEGÓCIO: entra apenas **NF faturada** (não cancelada). Pré-faturadas ficam de fora,
  * mesmo quando representam valor relevante — decisão registrada em 01/09/2026.
@@ -53,7 +53,7 @@ export function ContractConsumptionPanel({ project }: { project: Project }) {
     <section className="rounded-lg border border-slate-200 bg-slate-50/60 p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h4 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-          Consumo do contrato
+          Consumo do saldo contratual
         </h4>
         <span className="text-[11px] text-slate-400">somente NFs faturadas</span>
       </div>

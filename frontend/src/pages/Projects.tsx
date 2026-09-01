@@ -213,9 +213,14 @@ export function Projects() {
                 <SortableTh label="Nome" column="name" variant="standard" {...headerSort} />
                 <SortableTh label="Status" column="status" variant="standard" className="w-32" {...headerSort} />
                 <SortableTh label="Descrição" column="description" variant="standard" {...headerSort} />
-                <th className="px-4 py-3 font-medium text-slate-600 w-36">Vigência</th>
-                <th className="px-4 py-3 font-medium text-slate-600 w-28">Consumo</th>
-                <th className="px-4 py-3 font-medium text-slate-600 w-[260px]" />
+                <th className="w-36 px-4 py-2 align-middle font-medium text-slate-600">Vigência</th>
+                <th
+                  className="w-40 px-4 py-2 align-middle font-medium text-slate-600"
+                  title="Quanto do contrato (com aditivos) já foi faturado — somente NFs faturadas"
+                >
+                  Consumo do saldo contratual
+                </th>
+                <th className="w-[260px] px-4 py-2 align-middle" />
               </tr>
             </thead>
             <tbody>
@@ -231,7 +236,7 @@ export function Projects() {
                     <td className="min-w-0 max-w-[300px] px-4 py-3 align-middle font-medium text-slate-900">
                       <TruncatedCell value={p.name} maxWidthClass="max-w-[300px]" />
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 align-middle">
                       <span
                         className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${statusLabel(p).cls}`}
                       >
@@ -241,7 +246,7 @@ export function Projects() {
                     <td className="min-w-0 max-w-[360px] px-4 py-3 align-middle text-slate-600">
                       <TruncatedCell value={p.description} empty="—" maxWidthClass="max-w-[360px]" />
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-left align-top">
+                    <td className="whitespace-nowrap px-4 py-3 text-left align-middle">
                       {(() => {
                         const v = contractValidityInfo(p.current_validity_date);
                         if (v.days == null) return <span className="text-slate-400">—</span>;
@@ -260,7 +265,7 @@ export function Projects() {
                     <td className="px-4 py-3 align-middle">
                       <ContractConsumptionBar project={p} />
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 align-middle">
                       <div className="flex flex-col items-end gap-1.5">
                         <div className="flex flex-wrap justify-end gap-2">
                           <button
