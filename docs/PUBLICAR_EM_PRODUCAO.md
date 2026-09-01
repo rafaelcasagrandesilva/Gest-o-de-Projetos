@@ -23,13 +23,37 @@ nada muda para a equipe — pode testar à vontade.
 
 ## Preparação (só na primeira vez)
 
-Conectar o Railway à sua máquina, para conseguir fazer o backup dos arquivos:
+Três coisas, uma única vez. Depois disso, todas as publicações seguem direto para a Parte 1.
+
+**1. Entrar na sua conta do Railway** — abre o navegador para você autenticar:
 
 ```bash
 railway login
 ```
 
-Abre o navegador para você entrar com a sua conta. Feito uma vez, vale por muito tempo.
+**2. Criar uma chave de acesso** — é o que permite copiar os arquivos do servidor. Se você já
+tiver uma, ele avisa e não sobrescreve:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+```
+
+**3. Conectar esta pasta ao projeto** — responda às perguntas com as setas e Enter:
+
+```bash
+railway link
+```
+
+| Pergunta | Resposta |
+|---|---|
+| Workspace | a sua conta |
+| Project | **bountiful-spirit** |
+| Environment | **production** |
+| Service | **celebrated-nature** |
+
+Na primeira vez que rodar o backup dos arquivos, ainda aparecerão duas perguntas: autorizar a
+chave (**Y**) e confiar no servidor `ssh.railway.com` (digite **`yes`**, a palavra inteira). Não
+voltam a aparecer.
 
 ---
 
@@ -83,18 +107,32 @@ Um arquivo com 0 bytes significa que algo falhou — não prossiga.
 
 ## 1.2 · Backup dos arquivos (o volume)
 
-**Caminho mais simples — pelo painel:** no Railway, clique no volume ligado ao serviço
-`celebrated-nature` → aba **Backups** → criar backup. É o mesmo recurso que o volume do Postgres
-oferece.
-
-**Alternativa pela linha de comando**, se preferir ter o arquivo na sua máquina:
+O volume de arquivos **não tem backup automático** no Railway — essa aba existe só no volume do
+banco de dados. A cópia é feita por este comando, que compacta a pasta do servidor e traz para a
+sua máquina:
 
 ```bash
 railway ssh --service celebrated-nature "tar czf - /data" > ~/sgc-backups/arquivos_$(date +%Y%m%d_%H%M%S).tar.gz
 ```
 
-**Como saber que deu certo:** o arquivo `.tar.gz` tem tamanho compatível com os anexos (vários
-MB, não alguns KB).
+Durante a execução aparece `tar: Removing leading '/' from member names`. **Isso não é erro** — é
+o servidor avisando que guardou os caminhos sem a barra inicial.
+
+**Conferir é obrigatório**, porque um arquivo corrompido não dá erro na hora:
+
+```bash
+tar tzf "$(ls -t ~/sgc-backups/arquivos_*.tar.gz | head -1)" | head -10
+```
+
+Deve listar caminhos como `data/receivable_uploads/…`. Se der erro de formato, o backup não
+presta — me chame antes de publicar.
+
+> **Se alguma tentativa falhar**, ela deixa para trás um arquivo vazio com nome de backup — o que
+> é perigoso, porque parece proteção e não é. Limpe os inúteis com:
+>
+> ```bash
+> find ~/sgc-backups -name "arquivos_*.tar.gz" -size -10k -delete
+> ```
 
 ## 1.3 · Anote a versão que está no ar hoje
 
@@ -198,9 +236,13 @@ pg_restore --dbname="COLE_AQUI_A_URL_PUBLICA" --clean --if-exists --no-owner ~/s
 
 ## 4.3 · Arquivos (PDFs, anexos) sumiram
 
-Restaure o backup do volume pelo painel do Railway (aba **Backups** do volume). Para descobrir
-exatamente o que está faltando, o próprio sistema tem o diagnóstico:
-**Configurações → Arquivos ausentes no servidor**.
+Primeiro descubra o tamanho do problema: o próprio sistema tem o diagnóstico em
+**Configurações → Arquivos ausentes no servidor**, que lista o que existe no cadastro mas não
+está no disco.
+
+Para repor a partir do seu backup, me chame — a restauração devolve os arquivos ao servidor e
+convém fazer junto, conferindo caso a caso. O seu `.tar.gz` tem tudo o que é preciso; o que não
+existe é um botão de "restaurar volume" no painel do Railway.
 
 ---
 
@@ -210,6 +252,14 @@ Quando estiver acostumado, é isto:
 
 ```bash
 mkdir -p ~/sgc-backups && pg_dump --dbname="DATABASE_PUBLIC_URL_SEM_O_ASYNCPG" --format=custom --file="$HOME/sgc-backups/backup_producao_$(date +%Y%m%d_%H%M%S).dump"
+```
+
+```bash
+railway ssh --service celebrated-nature "tar czf - /data" > ~/sgc-backups/arquivos_$(date +%Y%m%d_%H%M%S).tar.gz
+```
+
+```bash
+tar tzf "$(ls -t ~/sgc-backups/arquivos_*.tar.gz | head -1)" | head -5
 ```
 
 ```bash
@@ -228,15 +278,15 @@ git add -A && git commit -m "o que está subindo"
 git push origin main
 ```
 
-Depois: backup do volume pelo painel, acompanhar o deploy e testar.
+Depois: acompanhar o deploy no Railway e testar o sistema.
 
 ---
 
 # Perguntas frequentes
 
 **Preciso fazer backup toda vez?**
-Do banco, sim — é rápido e é o que permite voltar atrás. Do volume, sempre que a publicação mexer
-em anexos ou documentos; nas demais, o backup do painel do Railway já cobre.
+Sim, dos dois — são dois comandos e menos de dois minutos. O do banco é o que permite voltar
+atrás; o dos arquivos é o único que existe, já que o volume não tem backup automático no Railway.
 
 **Posso publicar sem testar antes?**
 Pode, mas não deve. O teste é o que separa "melhoria" de "problema descoberto pela equipe".
