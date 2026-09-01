@@ -314,7 +314,6 @@ class CompetenciaInitializationService:
                 employee_id=pr.employee_id,
                 allocation_percentage=pct,
                 cost_salary_base=pr.cost_salary_base,
-                cost_additional_costs=pr.cost_additional_costs,
                 cost_extra_hours_50=pr.cost_extra_hours_50,
                 cost_extra_hours_70=pr.cost_extra_hours_70,
                 cost_extra_hours_100=pr.cost_extra_hours_100,

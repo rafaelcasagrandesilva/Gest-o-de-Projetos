@@ -20,7 +20,6 @@ export interface ProjectLabor {
   monthly_cost: number | null;
   cost_base_source?: string;
   cost_salary_base?: number | null;
-  cost_additional_costs?: number | null;
   cost_extra_hours_50?: number | null;
   cost_extra_hours_70?: number | null;
   cost_extra_hours_100?: number | null;
@@ -58,7 +57,6 @@ export interface ProjectLaborDetail {
   uses_cost_total_override?: boolean;
   cost_base_source?: string;
   cost_salary_base?: number | null;
-  cost_additional_costs?: number | null;
   cost_extra_hours_50?: number | null;
   cost_extra_hours_70?: number | null;
   cost_extra_hours_100?: number | null;
@@ -69,7 +67,6 @@ export interface ProjectLaborDetail {
 
 export type LaborCostPatch = {
   cost_salary_base?: number | null;
-  cost_additional_costs?: number | null;
   cost_extra_hours_50?: number | null;
   cost_extra_hours_70?: number | null;
   cost_extra_hours_100?: number | null;

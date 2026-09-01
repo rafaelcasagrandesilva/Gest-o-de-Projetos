@@ -27,6 +27,9 @@ class EmployeeMonthlyPayrollOverride(TimestampUUIDMixin, Base):
     competence_month: Mapped[str] = mapped_column(String(7), nullable=False)
     net_salary_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     vr_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # Vale Transporte (opcional). Mesmo ciclo de vida do VR: gera um lançamento
+    # independente "Vale Transporte CLT" no Contas a Pagar; não é somado ao VR.
+    vt_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     # Adiantamento de férias (opcional). Gera um lançamento independente "Férias CLT" no
     # Contas a Pagar; NÃO é somado ao salário nem altera o custo gerencial do projeto.
     vacation_advance_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)

@@ -209,7 +209,6 @@ class ProjectStructureService:
                     allocation_percentage=pct,
                     scenario=pr.scenario,
                     cost_salary_base=pr.cost_salary_base,
-                    cost_additional_costs=pr.cost_additional_costs,
                     cost_extra_hours_50=pr.cost_extra_hours_50,
                     cost_extra_hours_70=pr.cost_extra_hours_70,
                     cost_extra_hours_100=pr.cost_extra_hours_100,
@@ -279,7 +278,6 @@ class ProjectStructureService:
 
         return {
             "cost_salary_base": f(row.cost_salary_base),
-            "cost_additional_costs": f(row.cost_additional_costs),
             "cost_extra_hours_50": f(row.cost_extra_hours_50),
             "cost_extra_hours_70": f(row.cost_extra_hours_70),
             "cost_extra_hours_100": f(row.cost_extra_hours_100),

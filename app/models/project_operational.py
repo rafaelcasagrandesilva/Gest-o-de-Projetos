@@ -33,7 +33,6 @@ class ProjectLabor(TimestampUUIDMixin, Base):
 
     # Overrides de custo para este projeto × competência × cenário (null = usar cadastro do colaborador)
     cost_salary_base: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
-    cost_additional_costs: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     cost_extra_hours_50: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     cost_extra_hours_70: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     cost_extra_hours_100: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)

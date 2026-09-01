@@ -220,6 +220,7 @@ function MonthlyPayrollSection({
 }) {
   const [netSalary, setNetSalary] = useState("");
   const [vrAmount, setVrAmount] = useState("");
+  const [vtAmount, setVtAmount] = useState("");
   const [vacationAmount, setVacationAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
@@ -236,6 +237,7 @@ function MonthlyPayrollSection({
         if (cancelled) return;
         setNetSalary(row?.net_salary_amount != null ? String(row.net_salary_amount) : "");
         setVrAmount(row?.vr_amount != null ? String(row.vr_amount) : "");
+        setVtAmount(row?.vt_amount != null ? String(row.vt_amount) : "");
         setVacationAmount(
           row?.vacation_advance_amount != null ? String(row.vacation_advance_amount) : "",
         );
@@ -265,6 +267,7 @@ function MonthlyPayrollSection({
       await saveMonthlyPayroll(employeeId, competenceMonth, {
         net_salary_amount: parseNum(netSalary),
         vr_amount: parseNum(vrAmount),
+        vt_amount: parseNum(vtAmount),
         vacation_advance_amount: parseNum(vacationAmount),
         notes: notes.trim() || null,
       });
@@ -325,6 +328,21 @@ function MonthlyPayrollSection({
                 className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
                 placeholder="Ex.: 672.00"
               />
+            </label>
+            <label className="block text-xs text-slate-600">
+              VT real
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                value={vtAmount}
+                onChange={(e) => setVtAmount(e.target.value)}
+                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+                placeholder="Ex.: 220.00"
+              />
+              <span className="mt-1 block text-[11px] text-slate-500">
+                Gera lançamento "Vale Transporte CLT" no Contas a Pagar. Não é somado ao VR.
+              </span>
             </label>
             <label className="block text-xs text-slate-600">
               Férias (adiantamento)
@@ -388,7 +406,6 @@ function LaborCostEditor({
   const [salary, setSalary] = useState(() =>
     strOverrideOrCadastro(detail.cost_salary_base, cadastroSalaryBase),
   );
-  const [add, setAdd] = useState(() => strOrEmpty(detail.cost_additional_costs));
   const [h50, setH50] = useState(() => strOrEmpty(detail.cost_extra_hours_50));
   const [h70, setH70] = useState(() => strOrEmpty(detail.cost_extra_hours_70));
   const [h100, setH100] = useState(() => strOrEmpty(detail.cost_extra_hours_100));
@@ -402,7 +419,6 @@ function LaborCostEditor({
 
   useEffect(() => {
     setSalary(strOverrideOrCadastro(detail.cost_salary_base, cadastroSalaryBase));
-    setAdd(strOrEmpty(detail.cost_additional_costs));
     setH50(strOrEmpty(detail.cost_extra_hours_50));
     setH70(strOrEmpty(detail.cost_extra_hours_70));
     setH100(strOrEmpty(detail.cost_extra_hours_100));
@@ -529,17 +545,6 @@ function LaborCostEditor({
                 className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
               />
             </label>
-            <label className="block text-xs text-slate-600 sm:col-span-2">
-              Custos adicionais (R$)
-              <input
-                type="number"
-                step="0.01"
-                min={0}
-                value={add}
-                onChange={(e) => setAdd(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
-              />
-            </label>
           </>
         ) : (
           <>
@@ -578,7 +583,6 @@ function LaborCostEditor({
             saveAll({
               cost_total_override: parseNum(totalOv),
               cost_salary_base: parseSalaryOrPjHoursOverride(salary, cadastroSalaryBase),
-              cost_additional_costs: parseNum(add),
               cost_extra_hours_50: parseNum(h50),
               cost_extra_hours_70: parseNum(h70),
               cost_extra_hours_100: parseNum(h100),
@@ -595,7 +599,6 @@ function LaborCostEditor({
           onClick={() =>
             submit({
               cost_salary_base: null,
-              cost_additional_costs: null,
               cost_extra_hours_50: null,
               cost_extra_hours_70: null,
               cost_extra_hours_100: null,

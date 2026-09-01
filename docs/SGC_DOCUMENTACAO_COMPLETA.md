@@ -438,7 +438,7 @@ Permissões ativas hoje, por recurso:
 | `project_costs` | 9 | project_id, name, cost_type, value, cost_date, category |
 | `project_documents` | 11 | project_id, category, title, original_filename, storage_path, uploaded_by, uploaded_at, is_active |
 | `project_fixed_costs` | 9 | project_id, competencia, scenario, name, amount_real, amount_calculated |
-| `project_labors` | 16 | project_id, competencia, scenario, employee_id, allocation_percentage, cost_salary_base, cost_additional_costs, cost_ext |
+| `project_labors` | 15 | project_id, competencia, scenario, employee_id, allocation_percentage, cost_salary_base, cost_extra_hours_50, cost_ext |
 | `project_operational_fixed` | 8 | project_id, competencia, scenario, name, value |
 | `project_results` | 9 | project_id, competencia, revenue_total, cost_total, profit, margin |
 | `project_system_costs` | 8 | project_id, competencia, scenario, name, value |

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from app.services.employee_cost_service import (
     CLT_PAYABLE_LABEL_BENEFIT,
     CLT_PAYABLE_LABEL_SALARY,
+    CLT_PAYABLE_LABEL_TRANSPORT,
     CLT_PAYABLE_LABEL_VACATION,
     clt_payable_components_from_monthly_override,
     project_labor_payable_snapshot_components,
@@ -81,3 +82,52 @@ def test_missing_vacation_attr_is_backward_compatible():
     override = SimpleNamespace(net_salary_amount=5000.0, vr_amount=None)
     lines = clt_payable_components_from_monthly_override(override)
     assert lines == [(CLT_PAYABLE_LABEL_SALARY, 5000.0)]
+
+
+def test_vt_adds_independent_component_after_vr():
+    """VT preenchido gera linha independente "Vale Transporte CLT" (não somada ao VR)."""
+    override = SimpleNamespace(
+        net_salary_amount=4137.40, vr_amount=672.00, vt_amount=220.00,
+        vacation_advance_amount=None,
+    )
+    lines = clt_payable_components_from_monthly_override(override)
+    assert lines == [
+        (CLT_PAYABLE_LABEL_SALARY, 4137.40),
+        (CLT_PAYABLE_LABEL_BENEFIT, 672.00),
+        (CLT_PAYABLE_LABEL_TRANSPORT, 220.00),
+    ]
+
+    components = project_labor_payable_snapshot_components(
+        _Emp(), None, date(2026, 5, 1), None, payroll_override=override
+    )
+    assert components == lines
+
+
+def test_vt_only_generates_single_component():
+    override = SimpleNamespace(
+        net_salary_amount=None, vr_amount=None, vt_amount=180.00,
+        vacation_advance_amount=None,
+    )
+    lines = clt_payable_components_from_monthly_override(override)
+    assert lines == [(CLT_PAYABLE_LABEL_TRANSPORT, 180.00)]
+
+
+def test_empty_vt_generates_no_transport_component():
+    """Campo de VT vazio (None ou 0) → nenhum lançamento de vale transporte."""
+    for value in (None, 0, 0.0):
+        override = SimpleNamespace(
+            net_salary_amount=4137.40, vr_amount=None, vt_amount=value,
+            vacation_advance_amount=None,
+        )
+        lines = clt_payable_components_from_monthly_override(override)
+        assert lines == [(CLT_PAYABLE_LABEL_SALARY, 4137.40)]
+
+
+def test_missing_vt_attr_is_backward_compatible():
+    """Override legado sem o atributo de VT não quebra (getattr → None)."""
+    override = SimpleNamespace(net_salary_amount=5000.0, vr_amount=672.00)
+    lines = clt_payable_components_from_monthly_override(override)
+    assert lines == [
+        (CLT_PAYABLE_LABEL_SALARY, 5000.0),
+        (CLT_PAYABLE_LABEL_BENEFIT, 672.00),
+    ]

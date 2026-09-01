@@ -165,9 +165,10 @@ def clt_cost_breakdown_with_labor_overrides(
     payroll = salary_base + peric + dirigida + horas_extras
     rate = float(getattr(settings, "clt_charges_rate", 0) or 0)
     encargos = payroll * rate
-    additional = _labor_num(labor_row, "cost_additional_costs")
-    if additional is None:
-        additional = float(getattr(employee, "additional_costs", 0) or 0)
+    # Sem override por projeto: custos adicionais vêm SÓ do cadastro RH. O antigo override
+    # `cost_additional_costs` foi removido — valores avulsos por projeto/mês agora são
+    # lançados como Componentes Variáveis de Pagamento (valor de face, e alcançam o CAP).
+    additional = float(getattr(employee, "additional_costs", 0) or 0)
     total = payroll + encargos + vr_total + additional
     return {
         "salary_base": salary_base,
@@ -258,6 +259,7 @@ def project_labor_full_monthly_cost(
 
 CLT_PAYABLE_LABEL_SALARY = "Salário CLT"
 CLT_PAYABLE_LABEL_BENEFIT = "Benefício CLT"
+CLT_PAYABLE_LABEL_TRANSPORT = "Vale Transporte CLT"
 CLT_PAYABLE_LABEL_VACATION = "Férias CLT"
 
 
@@ -283,6 +285,11 @@ def clt_payable_components_from_monthly_override(payroll_override: Any | None) -
         v = float(vr)
         if v > 0:
             lines.append((CLT_PAYABLE_LABEL_BENEFIT, v))
+    vt = getattr(payroll_override, "vt_amount", None)
+    if vt is not None:
+        v = float(vt)
+        if v > 0:
+            lines.append((CLT_PAYABLE_LABEL_TRANSPORT, v))
     vacation = getattr(payroll_override, "vacation_advance_amount", None)
     if vacation is not None:
         v = float(vacation)

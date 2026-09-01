@@ -23,7 +23,6 @@ class ProjectLaborRead(UUIDTimestampRead):
     monthly_cost: float | None = None
     cost_base_source: str = "CADASTRO"
     cost_salary_base: float | None = None
-    cost_additional_costs: float | None = None
     cost_extra_hours_50: float | None = None
     cost_extra_hours_70: float | None = None
     cost_extra_hours_100: float | None = None
@@ -133,7 +132,6 @@ class ProjectLaborCostUpdate(BaseModel):
     """Atualização de custos mensais no vínculo (não altera o cadastro global do colaborador)."""
 
     cost_salary_base: float | None = None
-    cost_additional_costs: float | None = None
     cost_extra_hours_50: float | None = None
     cost_extra_hours_70: float | None = None
     cost_extra_hours_100: float | None = None
@@ -143,7 +141,6 @@ class ProjectLaborCostUpdate(BaseModel):
 
     @field_validator(
         "cost_salary_base",
-        "cost_additional_costs",
         "cost_extra_hours_50",
         "cost_extra_hours_70",
         "cost_extra_hours_100",
@@ -184,7 +181,6 @@ class ProjectLaborDetailItem(BaseModel):
     uses_cost_total_override: bool = False
     cost_base_source: str = "CADASTRO"
     cost_salary_base: float | None = None
-    cost_additional_costs: float | None = None
     cost_extra_hours_50: float | None = None
     cost_extra_hours_70: float | None = None
     cost_extra_hours_100: float | None = None

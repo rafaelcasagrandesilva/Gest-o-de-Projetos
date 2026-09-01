@@ -148,7 +148,7 @@ BILLING_INVOICE_ANTICIPATION_SENSITIVE_FIELDS: tuple[str, ...] = ("fee_amount",)
 PROJECT_CONTRACT_SENSITIVE_FIELDS: tuple[str, ...] = ("contract_value", "additive_value")
 PROJECT_LABOR_SENSITIVE_FIELDS: tuple[str, ...] = (
     "monthly_cost", "full_cost", "allocated_cost", "variable_components_total", "total_cost",
-    "cost_salary_base", "cost_additional_costs", "cost_extra_hours_50",
+    "cost_salary_base", "cost_extra_hours_50",
     "cost_extra_hours_70", "cost_extra_hours_100", "cost_pj_hours_per_month",
     "cost_pj_additional_cost", "cost_total_override",
 )
