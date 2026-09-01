@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, Request, status
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -113,6 +113,56 @@ class ProjectsService:
             return {}
         rows = (await self.session.execute(select(User.id, User.full_name).where(User.id.in_(ids)))).all()
         return {r.id: r.full_name for r in rows}
+
+    async def contract_consumption_map(self, project_ids) -> dict[UUID, dict[str, float]]:
+        """Consumo do contrato por projeto: aditivos somados e total já FATURADO.
+
+        Regra do negócio (definida em 01/09/2026): entra no consumo **somente NF faturada** —
+        as pré-faturadas ficam de fora, mesmo representando valor relevante. Nota cancelada
+        também não conta. `EMITIDA` e `ANTECIPADA` contam igual: antecipar não desfaz o
+        faturamento.
+
+        Devolve os dois números crus; o percentual e o saldo são derivados no schema, para não
+        haver duas fórmulas do mesmo indicador.
+        """
+        ids = list(project_ids or [])
+        if not ids:
+            return {}
+        from app.models.project_contract import ProjectContractAdditive  # local: evita ciclo
+        from app.models.receivable import ReceivableInvoice  # local: evita ciclo
+
+        aditivos = (
+            await self.session.execute(
+                select(
+                    ProjectContractAdditive.project_id,
+                    func.coalesce(func.sum(ProjectContractAdditive.additive_value), 0),
+                )
+                .where(ProjectContractAdditive.project_id.in_(ids))
+                .group_by(ProjectContractAdditive.project_id)
+            )
+        ).all()
+
+        faturado = (
+            await self.session.execute(
+                select(
+                    ReceivableInvoice.project_id,
+                    func.coalesce(func.sum(ReceivableInvoice.gross_amount), 0),
+                )
+                .where(
+                    ReceivableInvoice.project_id.in_(ids),
+                    ReceivableInvoice.is_official.is_(True),
+                    ReceivableInvoice.invoice_status != "CANCELADA",
+                )
+                .group_by(ReceivableInvoice.project_id)
+            )
+        ).all()
+
+        out: dict[UUID, dict[str, float]] = {}
+        for project_id, valor in aditivos:
+            out.setdefault(project_id, {})["additive_value_total"] = float(valor or 0)
+        for project_id, valor in faturado:
+            out.setdefault(project_id, {})["invoiced_total"] = float(valor or 0)
+        return out
 
     async def additive_months_map(self, project_ids) -> dict[UUID, int]:
         """Σ dos prazos adicionais (meses) por projeto. Base da 'Vigência atual' (derivada)."""

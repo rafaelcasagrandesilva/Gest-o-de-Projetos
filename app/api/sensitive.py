@@ -145,7 +145,13 @@ BILLING_INVOICE_SENSITIVE_FIELDS: tuple[str, ...] = ("amount",)
 BILLING_INVOICE_ANTICIPATION_SENSITIVE_FIELDS: tuple[str, ...] = ("fee_amount",)
 
 # --- Projetos (custos do projeto: mão de obra, veículos, sistemas, contrato) ---
-PROJECT_CONTRACT_SENSITIVE_FIELDS: tuple[str, ...] = ("contract_value", "additive_value")
+PROJECT_CONTRACT_SENSITIVE_FIELDS: tuple[str, ...] = (
+    "contract_value", "additive_value",
+    # Base do "consumo do contrato". Só campos DECLARADOS entram aqui: a redação não alcança
+    # campo calculado. Os derivados (contract_total_value, contract_balance,
+    # contract_consumed_pct) devolvem None sozinhos quando a base vem redigida.
+    "additive_value_total", "invoiced_total",
+)
 PROJECT_LABOR_SENSITIVE_FIELDS: tuple[str, ...] = (
     "monthly_cost", "full_cost", "allocated_cost", "variable_components_total", "total_cost",
     "cost_salary_base", "cost_extra_hours_50",

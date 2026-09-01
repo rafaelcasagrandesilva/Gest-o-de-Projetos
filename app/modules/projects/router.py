@@ -59,10 +59,15 @@ async def list_projects(
     else:
         rows = await svc.list_projects_for_user(user_id=user.id, offset=offset, limit=limit, status_filter=status_filter)
     months = await svc.additive_months_map([p.id for p in rows])
+    # Consumo do contrato: uma consulta agregada para a página inteira, não uma por linha.
+    consumo = await svc.contract_consumption_map([p.id for p in rows])
     out: list[ProjectRead] = []
     for p in rows:
         r = ProjectRead.model_validate(p)
         r.additive_months_total = months.get(p.id, 0)
+        numeros = consumo.get(p.id, {})
+        r.additive_value_total = numeros.get("additive_value_total", 0.0)
+        r.invoiced_total = numeros.get("invoiced_total", 0.0)
         out.append(r)
     return [redact_for("project", _m, user) for _m in out]
 
@@ -85,6 +90,9 @@ async def get_project(
     read.additive_months_total = sum(
         int("".join(ch for ch in str(a.additive_duration or "") if ch.isdigit()) or 0) for a in proj.additives
     )
+    numeros = (await ProjectsService(db).contract_consumption_map([project_id])).get(project_id, {})
+    read.additive_value_total = numeros.get("additive_value_total", 0.0)
+    read.invoiced_total = numeros.get("invoiced_total", 0.0)
     return redact_for("project", read, user)
 
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { isAxiosError } from "axios";
+import { ContractConsumptionPanel } from "@/components/project/ContractConsumption";
 import {
   activateProject,
   contractValidityInfo,
@@ -16,6 +17,7 @@ import {
   uploadProjectDocument,
   PROJECT_DOCUMENT_CATEGORIES,
   type ProjectContractAdditive,
+  type ProjectDetail,
   type ProjectDocument,
   type ProjectDocumentCategory,
 } from "@/services/projects";
@@ -92,6 +94,8 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
   const [error, setError] = useState<string | null>(null);
 
   // Aba Geral (editável).
+  // Detalhe cru do backend: os valores derivados (consumo do contrato) vêm prontos dele.
+  const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [projName, setProjName] = useState("");
   const [projDescription, setProjDescription] = useState("");
   const [projCostCenter, setProjCostCenter] = useState("");
@@ -130,6 +134,7 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
     setError(null);
     try {
       const d = await getProjectDetail(projectId);
+      setDetail(d);
       setProjName(d.name ?? "");
       setProjDescription(d.description ?? "");
       setProjCostCenter(d.cost_center ?? "");
@@ -586,6 +591,9 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
                   </p>
                 ) : null}
               </div>
+
+              {/* Consumo do contrato — quanto do valor contratado já virou NF faturada. */}
+              {detail && <ContractConsumptionPanel project={detail} />}
             </section>
 
             {/* Comprador */}

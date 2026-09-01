@@ -91,6 +91,43 @@ class ProjectRead(UUIDTimestampRead):
     # Soma dos prazos adicionais (meses) de todos os aditivos — injetada pelo router.
     # Base do cálculo da "Vigência atual" (derivada; não armazenada no banco).
     additive_months_total: int = 0
+    # Consumo do contrato (derivado; injetado pelo router). `invoiced_total` conta SOMENTE NF
+    # faturada e não cancelada — pré-faturada fica de fora por regra do negócio.
+    # Opcionais porque são valores financeiros: sem Dados Sensíveis, a redação os anula.
+    additive_value_total: float | None = 0
+    invoiced_total: float | None = 0
+
+    # Os três campos abaixo são DERIVADOS dos crus acima. A redação de Dados Sensíveis zera
+    # apenas campos declarados — um campo calculado não é alcançado por ela. Por isso cada um
+    # verifica se a base foi redigida (`None`) e, nesse caso, também devolve `None`: sem essa
+    # checagem, quem não tem permissão veria "0%" em vez de "—".
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def contract_total_value(self) -> float | None:
+        """Valor do contrato somado aos aditivos — a base do consumo."""
+        if self.contract_value is None or self.additive_value_total is None:
+            return None
+        return float(self.contract_value) + float(self.additive_value_total)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def contract_balance(self) -> float | None:
+        """Saldo ainda não faturado. Negativo significa contrato estourado."""
+        total = self.contract_total_value
+        if total is None or self.invoiced_total is None:
+            return None
+        return total - float(self.invoiced_total)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def contract_consumed_pct(self) -> float | None:
+        """Percentual do contrato já faturado. `None` quando não há valor de contrato — a tela
+        mostra "não informado" em vez de um número inventado (M13)."""
+        total = self.contract_total_value
+        if not total or self.invoiced_total is None:
+            return None
+        return round(float(self.invoiced_total) / total * 100, 1)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

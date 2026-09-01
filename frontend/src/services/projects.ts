@@ -20,6 +20,12 @@ export interface Project {
   current_validity_date?: string | null;
   /** Σ dos prazos adicionais (meses) dos aditivos. */
   additive_months_total?: number;
+  /** Consumo do contrato — derivado no backend. Só NF FATURADA entra no `invoiced_total`. */
+  additive_value_total?: number | null;
+  invoiced_total?: number | null;
+  contract_total_value?: number | null;
+  contract_balance?: number | null;
+  contract_consumed_pct?: number | null;
   buyer_name?: string | null;
   buyer_phone?: string | null;
   buyer_email?: string | null;

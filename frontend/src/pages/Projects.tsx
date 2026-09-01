@@ -15,6 +15,7 @@ import { fetchCostCenters } from "@/services/employees";
 import { CostCenterCombo } from "@/components/CostCenterCombo";
 import { isAxiosError } from "axios";
 import { TruncatedCell } from "@/components/TruncatedText";
+import { ContractConsumptionBar } from "@/components/project/ContractConsumption";
 import { ProjectDetailsModal } from "@/components/ProjectDetailsModal";
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
@@ -213,13 +214,14 @@ export function Projects() {
                 <SortableTh label="Status" column="status" variant="standard" className="w-32" {...headerSort} />
                 <SortableTh label="Descrição" column="description" variant="standard" {...headerSort} />
                 <th className="px-4 py-3 font-medium text-slate-600 w-36">Vigência</th>
+                <th className="px-4 py-3 font-medium text-slate-600 w-28">Consumo</th>
                 <th className="px-4 py-3 font-medium text-slate-600 w-[260px]" />
               </tr>
             </thead>
             <tbody>
               {sortedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
                     Nenhum projeto encontrado.
                   </td>
                 </tr>
@@ -254,6 +256,9 @@ export function Projects() {
                           </div>
                         );
                       })()}
+                    </td>
+                    <td className="px-4 py-3 align-middle">
+                      <ContractConsumptionBar project={p} />
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col items-end gap-1.5">
