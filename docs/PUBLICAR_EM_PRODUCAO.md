@@ -47,7 +47,17 @@ Restaurar só o banco traria os *registros* dos documentos, mas os arquivos apar
 ## 1.1 · Backup do banco
 
 Primeiro, pegue o endereço do banco de produção: no Railway, abra o serviço **Postgres** → aba
-**Variables** → copie o valor de `DATABASE_URL`.
+**Variables** → copie o valor de **`DATABASE_PUBLIC_URL`**.
+
+> **Tem que ser a PÚBLICA.** A variável `DATABASE_URL` aponta para
+> `postgres.railway.internal`, endereço que só existe dentro da rede do Railway — da sua máquina
+> ele não é alcançável, e o `pg_dump` falha dizendo que não conseguiu conectar.
+> Se `DATABASE_PUBLIC_URL` não aparecer na lista, habilite em
+> **Settings → Networking → Public Network**.
+>
+> **Se o endereço começar com `postgresql+asyncpg://`, apague o `+asyncpg`.** Esse pedaço é uma
+> instrução interna do nosso backend; o `pg_dump` não entende e tenta usar a linha inteira como
+> nome do banco. Tem que começar com `postgresql://`.
 
 Depois rode, colando o endereço no lugar indicado:
 
@@ -67,8 +77,9 @@ ls -lh ~/sgc-backups/ | tail -3
 Você deve ver um arquivo `backup_producao_<data>_<hora>.dump` com algumas centenas de KB.
 Um arquivo com 0 bytes significa que algo falhou — não prossiga.
 
-> **Cuidado:** a `DATABASE_URL` é a senha do banco. Não cole em e-mail, chat ou documento
-> compartilhado.
+> **Cuidado:** esse endereço contém a **senha do banco de produção**. Não cole em e-mail, chat,
+> ticket ou documento compartilhado. Se acontecer sem querer, troque a senha no Railway (serviço
+> Postgres → rotacionar credenciais) e faça um redeploy dos serviços.
 
 ## 1.2 · Backup dos arquivos (o volume)
 
@@ -198,7 +209,7 @@ exatamente o que está faltando, o próprio sistema tem o diagnóstico:
 Quando estiver acostumado, é isto:
 
 ```bash
-mkdir -p ~/sgc-backups && pg_dump --dbname="URL_DO_BANCO" --format=custom --file="$HOME/sgc-backups/backup_producao_$(date +%Y%m%d_%H%M%S).dump"
+mkdir -p ~/sgc-backups && pg_dump --dbname="DATABASE_PUBLIC_URL_SEM_O_ASYNCPG" --format=custom --file="$HOME/sgc-backups/backup_producao_$(date +%Y%m%d_%H%M%S).dump"
 ```
 
 ```bash
