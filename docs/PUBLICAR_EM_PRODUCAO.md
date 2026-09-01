@@ -62,7 +62,7 @@ Primeiro, pegue o endereço do banco de produção: no Railway, abra o serviço 
 Depois rode, colando o endereço no lugar indicado:
 
 ```bash
-mkdir -p ~/sgc-backups && pg_dump --dbname="COLE_AQUI_A_DATABASE_URL" --format=custom --file="$HOME/sgc-backups/backup_producao_$(date +%Y%m%d_%H%M%S).dump"
+mkdir -p ~/sgc-backups && pg_dump --dbname="COLE_AQUI_A_URL_PUBLICA" --format=custom --file="$HOME/sgc-backups/backup_producao_$(date +%Y%m%d_%H%M%S).dump"
 ```
 
 **O que ele faz:** copia o banco inteiro de produção para um arquivo na sua pasta pessoal.
@@ -193,7 +193,7 @@ desde o backup**. Antes de rodar, avise quem estiver usando o sistema. Se tiver 
 me chame antes:
 
 ```bash
-pg_restore --dbname="COLE_AQUI_A_DATABASE_URL" --clean --if-exists --no-owner ~/sgc-backups/backup_producao_ARQUIVO.dump
+pg_restore --dbname="COLE_AQUI_A_URL_PUBLICA" --clean --if-exists --no-owner ~/sgc-backups/backup_producao_ARQUIVO.dump
 ```
 
 ## 4.3 · Arquivos (PDFs, anexos) sumiram
