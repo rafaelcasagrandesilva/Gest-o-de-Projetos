@@ -67,3 +67,105 @@ Copie periodicamente o diretório `RECEIVABLE_UPLOAD_DIR` (ex.: `rsync`, snapsho
 - Logs da aplicação (stdout/stderr no provedor).
 - Alertas no banco: espaço em disco, conexões, CPU.
 - Opcional: integrar Sentry ou similar para erros 500 não tratados.
+
+---
+
+# Política de backup — o que fazer e com que frequência
+
+> Escrita em 01/09/2026, com os números reais do sistema em produção. Revisar quando o volume
+> mudar de ordem de grandeza.
+
+## O tamanho real do problema
+
+| | Hoje | Implicação |
+|---|---|---|
+| Banco de dados | **20 MB** (dump comprimido: ~850 KB) | Copiar é questão de segundos |
+| Arquivos (volume) | **5,7 MB** — 83 PDFs de NF | Idem |
+| Crescimento | ~1.000 registros/mês, acelerando | Um backup completo custa ~7 MB |
+| Dado sensível | **151 CPFs**, **68 salários**, dados de processos | LGPD se aplica à cópia |
+
+Guardar **30 backups completos ocupa cerca de 200 MB**. Em outras palavras: no tamanho atual,
+não existe razão de custo para fazer backup com pouca frequência ou guardar pouco tempo.
+
+## Os riscos reais, em ordem de probabilidade
+
+1. **Erro humano** — alguém apaga ou altera dados por engano. É de longe a causa mais comum de
+   perda em sistemas deste porte. Mitigação: backup diário e o fato de o sistema já não excluir
+   fisicamente (exclusão é lógica, com trilha em `audit_logs`).
+2. **Backup que existe mas não presta** — arquivo vazio ou corrompido, descoberto na hora do
+   desespero. Mitigação: verificação automática (o `backup_completo.sh` aborta se o dump não
+   abrir) e teste de restauração periódico.
+3. **Perda da máquina** — o notebook quebra, é roubado ou sofre ransomware. Hoje **as duas
+   metades do backup vivem só nele**: é o ponto mais frágil da situação atual. Mitigação: cópia
+   fora da máquina.
+4. **Perda do provedor** — conta suspensa, região fora do ar. Mitigação: a cópia local, que já
+   existe.
+
+## A rotina recomendada
+
+| Quando | O que | Como |
+|---|---|---|
+| **A cada publicação** | Backup completo | `PROD_DB_URL="…" ./scripts/backup_completo.sh` |
+| **Toda sexta-feira** | Backup completo | Mesmo comando — protege a semana de trabalho, não só os dias de deploy |
+| **Todo dia** | Backup do banco pelo provedor | Ative os backups automáticos do Postgres no painel do Railway |
+| **Todo mês** | Guardar um "selo" | Copie o backup da última sexta do mês para uma pasta `mensais/` |
+| **A cada trimestre** | **Teste de restauração** | Restaure o dump no banco local e abra o sistema |
+
+O ponto mais importante da tabela é a linha da sexta-feira. Hoje o backup só acontece quando há
+publicação — se uma semana inteira de lançamentos financeiros for feita sem deploy, ela está
+desprotegida nesse intervalo.
+
+## Onde guardar — a regra das três cópias
+
+Três cópias, em dois lugares diferentes, sendo uma fora do escritório:
+
+1. **Produção** (o dado vivo, no Railway) — não conta como backup, mas é a primeira cópia.
+2. **Sua máquina** — `~/sgc-backups`, que é o que o script mantém, com rotação de 30.
+3. **Fora da máquina** — uma pasta sincronizada (Google Drive, iCloud, OneDrive) **ou** um HD
+   externo atualizado mensalmente.
+
+A terceira é a que falta hoje, e é a que resolve o cenário mais provável de perda total.
+
+## Dado sensível: a cópia fora da máquina precisa de proteção
+
+O backup contém CPF, salários e informações de processos trabalhistas. Numa pasta de nuvem
+pessoal, isso é dado pessoal sob a LGPD. Duas formas simples de proteger, em ordem de preferência:
+
+**Criptografar antes de subir** (pede uma senha, que você guarda no gerenciador de senhas):
+
+```bash
+gpg -c ~/sgc-backups/backup_producao_ARQUIVO.dump
+```
+
+Gera um `.gpg` que só abre com a senha. Suba o `.gpg`, não o original.
+
+**Ou** manter a pasta de nuvem privada, sem compartilhamento com ninguém e com verificação em
+duas etapas ativada na conta.
+
+## O que o backup NÃO cobre
+
+- **Variáveis de ambiente e segredos** (`JWT_SECRET_KEY`, `CORS_ORIGINS`, as URLs de banco).
+  Sem elas, reconstruir o ambiente do zero é adivinhação. **Guarde uma cópia no gerenciador de
+  senhas**, não no repositório.
+- **A configuração do Railway** — serviços, volume, domínios. Anotar em um documento simples já
+  resolve.
+
+## Teste de restauração — o passo que quase todo mundo pula
+
+Backup nunca restaurado é esperança, não é backup. A cada trimestre:
+
+1. Restaure o dump mais recente no banco local (`sgp_local_test`), que é exatamente o
+   procedimento de clone que já existe;
+2. Suba o sistema apontando para ele;
+3. Abra três telas: um projeto, o Contas a Pagar e um processo do Jurídico;
+4. Anote a data do teste.
+
+Se o teste falhar, você descobre num trimestre qualquer — e não no dia em que precisar.
+
+## Quando esta política deve mudar
+
+- **Arquivos passarem de ~1 GB**: mover os anexos para armazenamento de objetos (S3, Cloudflare
+  R2) com versionamento. Aí o backup de arquivos deixa de ser um `tar` manual.
+- **Banco passar de ~5 GB**: o dump completo deixa de ser instantâneo; avaliar backup incremental
+  ou *point-in-time recovery* do provedor.
+- **Entrar mais gente lançando dados**: aumentar a frequência de diária para contínua (PITR).
