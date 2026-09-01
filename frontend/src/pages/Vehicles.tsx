@@ -68,6 +68,9 @@ function currentMonthYYYYMM(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/** Mesmas três opções da tela de Colaboradores — o vocabulário do cadastro não muda por módulo. */
+type StatusFilter = "ATIVOS" | "INATIVOS" | "TODOS";
+
 type FormState = {
   plate: string;
   model: string;
@@ -141,6 +144,9 @@ export function Vehicles() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [referenceCompetencia] = useState(monthStartIso);
   // Filtro por Centro de Custo (server-side, igualdade estrita). "" = Todos.
+  // Situação: mesmo filtro (e mesmo padrão "Ativos") da tela de Colaboradores — quem abre o
+  // cadastro quer a frota em uso; veículo devolvido só aparece quando se pede.
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ATIVOS");
   const [costCenterFilter, setCostCenterFilter] = useState("");
   // Opções do filtro: derivadas dos Centros de Custo presentes na frota, capturadas no load "Todos"
   // (permanecem estáveis quando um filtro está aplicado). Não exige cost_center.reference.
@@ -199,7 +205,15 @@ export function Vehicles() {
     return { totalVehicles: active.length, totalCost, byKey };
   }, [items]);
 
-  const { sortedRows, headerSort } = useTableSort(items, FLEET_VEHICLE_SORT_COLUMNS, {
+  // O "Resumo da frota" acima continua contando SÓ os ativos (ele diz isso no subtítulo): é um
+  // indicador da frota em uso, não um espelho da tabela.
+  const visibleItems = useMemo(() => {
+    if (statusFilter === "TODOS") return items;
+    const ativo = statusFilter === "ATIVOS";
+    return items.filter((v) => Boolean(v.active) === ativo);
+  }, [items, statusFilter]);
+
+  const { sortedRows, headerSort } = useTableSort(visibleItems, FLEET_VEHICLE_SORT_COLUMNS, {
     defaultCompare: defaultFleetVehicleSort,
   });
 
@@ -363,6 +377,18 @@ export function Vehicles() {
 
       {/* Filtro por Centro de Custo (topo) + botão de cadastro — filtro filtra a frota no servidor. */}
       <div className="flex flex-wrap items-end gap-4">
+        <div className="min-w-[10rem]">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Situação</label>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+          >
+            <option value="ATIVOS">Ativos</option>
+            <option value="INATIVOS">Não ativos</option>
+            <option value="TODOS">Todos</option>
+          </select>
+        </div>
         <div className="min-w-[14rem]">
           <label className="mb-1 block text-xs font-medium text-slate-600">Centro de Custo (filtro)</label>
           <select
