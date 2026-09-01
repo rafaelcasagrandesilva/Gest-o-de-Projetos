@@ -30,7 +30,7 @@
 
 ### Banco de dados (PostgreSQL)
 
-- **Frequência recomendada**: backup **automático diário** no provedor (RDS, Supabase, Neon, Railway Postgres, etc.) + cópia **mensal** mantida por mais tempo (muitos provedores já oferecem “point in time recovery” — PITR).
+- **Frequência recomendada**: backup **automático diário** no provedor (RDS, Supabase, Neon, Railway Postgres, etc.) + cópia **mensal** mantida por mais tempo (muitos provedores já oferecem “point in time recovery” — PITR). ⚠️ No nosso caso isso **não está disponível** — o Railway exige o plano Pro; veja "Por que não há backup automático do provedor".
 - **Dump lógico próprio**: use o script `scripts/backup_postgres.sh`, que gera um `.sql.gz` e mantém os últimos `RETENTION` arquivos (padrão 12).
 
 Exemplo manual:
@@ -107,13 +107,38 @@ não existe razão de custo para fazer backup com pouca frequência ou guardar p
 |---|---|---|
 | **A cada publicação** | Backup completo | `PROD_DB_URL="…" ./scripts/backup_completo.sh` |
 | **Toda sexta-feira** | Backup completo | Mesmo comando — protege a semana de trabalho, não só os dias de deploy |
-| **Todo dia** | Backup do banco pelo provedor | Ative os backups automáticos do Postgres no painel do Railway |
+| ~~Todo dia~~ | ~~Backup do banco pelo provedor~~ | **Indisponível no plano atual** — veja abaixo |
 | **Todo mês** | Guardar um "selo" | Copie o backup da última sexta do mês para uma pasta `mensais/` |
 | **A cada trimestre** | **Teste de restauração** | Restaure o dump no banco local e abra o sistema |
 
 O ponto mais importante da tabela é a linha da sexta-feira. Hoje o backup só acontece quando há
 publicação — se uma semana inteira de lançamentos financeiros for feita sem deploy, ela está
 desprotegida nesse intervalo.
+
+### Por que não há backup automático do provedor (verificado em 01/09/2026)
+
+A linha riscada acima era uma recomendação que **não se aplica ao nosso projeto**. O Railway
+libera backup agendado e PITR (recuperação para um minuto específico) **apenas no plano Pro**;
+`bountiful-spirit` está no **Hobby**, e a aba *Backups* do serviço Postgres exibe a mensagem
+"Backups and point-in-time recovery (PITR) are only available for customers on the Pro plan",
+sem oferecer as opções Daily/Weekly/Monthly. Não é configuração escondida: o recurso está
+bloqueado. A CLI também não tem comando de backup — é recurso exclusivo do painel.
+
+Aparecem ali dois itens chamados **"Pre-Security-Patch Backup"**. São cópias que o próprio
+Railway tira antes de aplicar patches na infraestrutura dele. São restauráveis, mas acontecem
+quando *ele* precisa, não quando *nós* precisamos — não contam como estratégia.
+
+**Consequência prática:** enquanto o plano for Hobby, o `backup_completo.sh` rodado à mão é a
+ÚNICA proteção do sistema. A linha da sexta-feira deixa de ser um reforço e passa a ser a
+defesa principal. As duas saídas para automatizar, quando fizer sentido:
+
+- **Upgrade para o Pro** — US$ 20/mês por workspace (não por usuário), com o valor vindo como
+  crédito de uso. Libera o agendamento e o PITR, roda no servidor e não depende de máquina
+  ligada. Cobre só o **banco**: os anexos do volume `/data` continuam por nossa conta.
+- **Agendar o `backup_completo.sh` no macOS** — grátis, cobre banco **e** arquivos, e a senha
+  fica no Chaveiro em vez de escrita em arquivo. Só roda com o Mac ligado.
+
+Decisão de 01/09/2026: seguir manual por enquanto.
 
 ## Onde guardar — a regra das três cópias
 
