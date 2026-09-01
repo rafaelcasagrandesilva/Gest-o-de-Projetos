@@ -59,82 +59,41 @@ voltam a aparecer.
 
 # PARTE 1 · Backup — a sua rede de segurança
 
-O sistema tem **duas coisas** que precisam de cópia, e uma não substitui a outra:
+## 1.1 · Um comando só
 
-- **O banco de dados** — processos, notas fiscais, colaboradores, lançamentos. Todo o dado.
-- **Os arquivos** — PDFs de NF, anexos de ativos e documentos de projeto. Eles não estão no
-  banco: ficam num disco à parte (o "volume").
-
-Restaurar só o banco traria os *registros* dos documentos, mas os arquivos apareceriam como
-"não encontrado". Por isso os dois passos.
-
-## 1.1 · Backup do banco
-
-Primeiro, pegue o endereço do banco de produção: no Railway, abra o serviço **Postgres** → aba
-**Variables** → copie o valor de **`DATABASE_PUBLIC_URL`**.
-
-> **Tem que ser a PÚBLICA.** A variável `DATABASE_URL` aponta para
-> `postgres.railway.internal`, endereço que só existe dentro da rede do Railway — da sua máquina
-> ele não é alcançável, e o `pg_dump` falha dizendo que não conseguiu conectar.
-> Se `DATABASE_PUBLIC_URL` não aparecer na lista, habilite em
-> **Settings → Networking → Public Network**.
->
-> **Se o endereço começar com `postgresql+asyncpg://`, apague o `+asyncpg`.** Esse pedaço é uma
-> instrução interna do nosso backend; o `pg_dump` não entende e tenta usar a linha inteira como
-> nome do banco. Tem que começar com `postgresql://`.
-
-Depois rode, colando o endereço no lugar indicado:
+Cole a URL pública do banco no lugar indicado e rode:
 
 ```bash
-mkdir -p ~/sgc-backups && pg_dump --dbname="COLE_AQUI_A_URL_PUBLICA" --format=custom --file="$HOME/sgc-backups/backup_producao_$(date +%Y%m%d_%H%M%S).dump"
+PROD_DB_URL="COLE_AQUI_A_URL_PUBLICA" ./scripts/backup_completo.sh
 ```
 
-**O que ele faz:** copia o banco inteiro de produção para um arquivo na sua pasta pessoal.
-Não altera nada em produção — só lê.
+Ele copia **as duas metades** do sistema — o banco e os arquivos —, confere se ficaram íntegras e
+mantém os 30 backups mais recentes em `~/sgc-backups`.
 
-**Como saber que deu certo:** o comando termina sem mensagem de erro e o arquivo aparece:
+**Onde pegar a URL:** no Railway, serviço **Postgres** → aba **Variables** → copie
+**`DATABASE_PUBLIC_URL`** (a pública, não a `DATABASE_URL`). Se ela começar com
+`postgresql+asyncpg://`, tudo bem: o script converte sozinho.
 
-```bash
-ls -lh ~/sgc-backups/ | tail -3
+**O que você deve ver no fim:**
+
+```
+✅ BACKUP COMPLETO — 01/09/2026 07:20
+   Banco:    backup_producao_20260901_072015.dump
+   Arquivos: arquivos_20260901_072015.tar.gz
 ```
 
-Você deve ver um arquivo `backup_producao_<data>_<hora>.dump` com algumas centenas de KB.
-Um arquivo com 0 bytes significa que algo falhou — não prossiga.
+**Se aparecer `❌ BACKUP INCOMPLETO`, pare.** A mensagem diz o motivo, e o script já verificou
+que o arquivo gerado não presta — publicar sem rede de segurança é o risco que estamos evitando.
+Nesse caso, me chame.
 
-> **Cuidado:** esse endereço contém a **senha do banco de produção**. Não cole em e-mail, chat,
-> ticket ou documento compartilhado. Se acontecer sem querer, troque a senha no Railway (serviço
-> Postgres → rotacionar credenciais) e faça um redeploy dos serviços.
+> **Por que as duas metades:** o banco guarda os *registros*; os PDFs e documentos ficam num
+> disco à parte, o "volume". Restaurar só o banco devolveria os cadastros com os arquivos
+> aparecendo como "não encontrado".
 
-## 1.2 · Backup dos arquivos (o volume)
+> **Cuidado:** a URL contém a **senha do banco de produção**. Não cole em e-mail, chat, ticket ou
+> documento compartilhado. Se acontecer sem querer, troque a senha no Railway e faça um redeploy.
 
-O volume de arquivos **não tem backup automático** no Railway — essa aba existe só no volume do
-banco de dados. A cópia é feita por este comando, que compacta a pasta do servidor e traz para a
-sua máquina:
-
-```bash
-railway ssh --service celebrated-nature "tar czf - /data" > ~/sgc-backups/arquivos_$(date +%Y%m%d_%H%M%S).tar.gz
-```
-
-Durante a execução aparece `tar: Removing leading '/' from member names`. **Isso não é erro** — é
-o servidor avisando que guardou os caminhos sem a barra inicial.
-
-**Conferir é obrigatório**, porque um arquivo corrompido não dá erro na hora:
-
-```bash
-tar tzf "$(ls -t ~/sgc-backups/arquivos_*.tar.gz | head -1)" | head -10
-```
-
-Deve listar caminhos como `data/receivable_uploads/…`. Se der erro de formato, o backup não
-presta — me chame antes de publicar.
-
-> **Se alguma tentativa falhar**, ela deixa para trás um arquivo vazio com nome de backup — o que
-> é perigoso, porque parece proteção e não é. Limpe os inúteis com:
->
-> ```bash
-> find ~/sgc-backups -name "arquivos_*.tar.gz" -size -10k -delete
-> ```
-
-## 1.3 · Anote a versão que está no ar hoje
+## 1.2 · Anote a versão que está no ar hoje
 
 Isto é o que permite voltar atrás depois:
 
@@ -144,8 +103,6 @@ git ls-remote origin main | cut -c1-7
 
 Ele imprime sete letras e números (exemplo: `21f4c07`). **Anote.** É o "endereço" da versão que
 está funcionando agora.
-
----
 
 # PARTE 2 · Publicar
 
@@ -251,15 +208,7 @@ existe é um botão de "restaurar volume" no painel do Railway.
 Quando estiver acostumado, é isto:
 
 ```bash
-mkdir -p ~/sgc-backups && pg_dump --dbname="DATABASE_PUBLIC_URL_SEM_O_ASYNCPG" --format=custom --file="$HOME/sgc-backups/backup_producao_$(date +%Y%m%d_%H%M%S).dump"
-```
-
-```bash
-railway ssh --service celebrated-nature "tar czf - /data" > ~/sgc-backups/arquivos_$(date +%Y%m%d_%H%M%S).tar.gz
-```
-
-```bash
-tar tzf "$(ls -t ~/sgc-backups/arquivos_*.tar.gz | head -1)" | head -5
+PROD_DB_URL="COLE_AQUI_A_URL_PUBLICA" ./scripts/backup_completo.sh
 ```
 
 ```bash
@@ -285,8 +234,9 @@ Depois: acompanhar o deploy no Railway e testar o sistema.
 # Perguntas frequentes
 
 **Preciso fazer backup toda vez?**
-Sim, dos dois — são dois comandos e menos de dois minutos. O do banco é o que permite voltar
-atrás; o dos arquivos é o único que existe, já que o volume não tem backup automático no Railway.
+Sim — é um comando e menos de dois minutos. E não só ao publicar: faça também **toda sexta-feira**,
+para proteger a semana de trabalho. A política completa está em
+[`operacao-e-backups.md`](operacao-e-backups.md).
 
 **Posso publicar sem testar antes?**
 Pode, mas não deve. O teste é o que separa "melhoria" de "problema descoberto pela equipe".
@@ -300,3 +250,33 @@ Os arquivos ficam na sua pasta `~/sgc-backups` até você apagar. Vale manter pe
 
 **O sistema fica fora do ar durante a publicação?**
 Por alguns segundos, na troca de versão. Evite publicar em horário de pico.
+
+---
+
+# Apêndice · Backup na mão (só se o script falhar)
+
+O `backup_completo.sh` faz estes dois passos. Se precisar executá-los separadamente:
+
+**Banco:**
+
+```bash
+mkdir -p ~/sgc-backups && pg_dump --dbname="COLE_AQUI_A_URL_PUBLICA" --format=custom --file="$HOME/sgc-backups/backup_producao_$(date +%Y%m%d_%H%M%S).dump"
+```
+
+**Arquivos** (a mensagem `Removing leading '/' from member names` é normal):
+
+```bash
+railway ssh --service celebrated-nature "tar czf - /data" > ~/sgc-backups/arquivos_$(date +%Y%m%d_%H%M%S).tar.gz
+```
+
+**Conferência** — obrigatória, porque arquivo corrompido não dá erro na hora:
+
+```bash
+tar tzf "$(ls -t ~/sgc-backups/arquivos_*.tar.gz | head -1)" | head -5
+```
+
+**Limpeza** dos arquivos vazios que tentativas falhas deixam para trás:
+
+```bash
+find ~/sgc-backups -name "arquivos_*.tar.gz" -size -10k -delete
+```
