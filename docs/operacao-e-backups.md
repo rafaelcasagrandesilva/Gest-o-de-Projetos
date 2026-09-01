@@ -1,5 +1,9 @@
 # Operação em produção e backups
 
+> **Para publicar melhorias no dia a dia**, use o passo a passo em
+> [`PUBLICAR_EM_PRODUCAO.md`](PUBLICAR_EM_PRODUCAO.md) — este documento aqui descreve a
+> estratégia e as opções; aquele descreve o procedimento.
+
 ## Checklist antes de publicar
 
 1. **Variáveis de ambiente** (ver `.env.example`):
