@@ -1460,15 +1460,23 @@ class PayableSnapshotService:
         item_value: float | None = None,
     ) -> int:
         """
-        Sincroniza custo diverso ou sistema no mesmo mês da competência do projeto (REALIZADO).
+        Sincroniza custo diverso ou sistema do projeto no CAP do mês SEGUINTE (REALIZADO).
 
-        Diferente da folha CLT: não usa mês seguinte. Com `item_name`/`item_value` None,
-        remove snapshots automáticos abertos do `source_id`.
+        Mesma regra da folha e do gerador do snapshot: competência M → título em M+1. O custo é
+        lançado no fim do mês em que ocorreu e pago no mês seguinte, então o mês do CAP (que é
+        fluxo de CAIXA) é o do pagamento, não o da competência.
+
+        Antes esta função gravava no mesmo mês, contrariando o gerador em massa
+        (`_generate_for_month`, que lê os itens de `previous_competencia(payment_month)`). Os dois
+        caminhos produziam meses diferentes para o MESMO custo, dependendo de o título ter nascido
+        do lançamento (aqui) ou de uma regeneração do snapshot.
+
+        Com `item_name`/`item_value` None, remove snapshots automáticos abertos do `source_id`.
         """
         if coerce_scenario(scenario) != Scenario.REALIZADO:
             return 0
 
-        payable_month = normalize_competencia(labor_competencia)
+        payable_month = next_competencia(normalize_competencia(labor_competencia))
         is_misc = source_kind == "misc"
         category = CATEGORY_PROJECT_MISC if is_misc else CATEGORY_PROJECT_SYSTEM
         source_tag = SOURCE_TAG_PROJECT_MISC if is_misc else SOURCE_TAG_PROJECT_SYSTEM

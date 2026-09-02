@@ -285,9 +285,15 @@ class TituloPagoNuncaVoltaTests(unittest.IsolatedAsyncioTestCase):
 
         pid = await self._projeto(s)
         svc = PayableSnapshotService(s)
-        if not await svc.is_generated(month=comp):
-            s.add(PayableSnapshotGeneration(month=comp, created_at=datetime.now(timezone.utc)))
-            await s.flush()
+        # O título de um custo de projeto nasce no mês do PAGAMENTO (competência + 1), então é
+        # esse o mês que precisa estar gerado — marcar só a competência fazia o sync devolver 0
+        # e o teste se pular sozinho, desligando em silêncio a guarda que ele existe para vigiar.
+        from app.utils.date_utils import next_competencia
+
+        for mes in (comp, next_competencia(comp)):
+            if not await svc.is_generated(month=mes):
+                s.add(PayableSnapshotGeneration(month=mes, created_at=datetime.now(timezone.utc)))
+                await s.flush()
 
         item = Model(
             project_id=pid, competencia=comp, scenario="REALIZADO",
