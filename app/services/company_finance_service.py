@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment, RenegotiationType
 from app.models.company_finance import CompanyFinancialItemType
 from app.models.employee import Employee
+from app.models.legal import LegalPerson
 from app.models.payable_payment import PayablePayment
 from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.schemas.company_finance import PagamentoMes
@@ -77,18 +78,29 @@ _debt_base_amount = debt_base_amount
 
 
 def debt_nome_for(
-    *, employee_full_name: str | None, nome: str | None, item_description: str | None
+    *,
+    employee_full_name: str | None,
+    nome: str | None,
+    item_description: str | None,
+    legal_person_full_name: str | None = None,
 ) -> str:
     """Nome de um Endividamento (mesmo padrão do Custos Fixos).
 
     - Tipo Colaborador (colaborador vinculado) → nome = colaborador;
+    - Tipo Desligado (pessoa do Jurídico) → nome = ex-colaborador;
     - Tipo Manual → nome informado pelo usuário;
     - Fallback de compatibilidade (registros/API sem nome) → a descrição.
     O nome NÃO embute mais a descrição (que passa a ser apenas complementar).
+
+    Colaborador e Desligado são excludentes (o schema garante), então a ordem entre os dois
+    aqui é indiferente — o que importa é que ambos vêm antes do nome digitado.
     """
     emp = (employee_full_name or "").strip()
     if emp:
         return emp
+    desligado = (legal_person_full_name or "").strip()
+    if desligado:
+        return desligado
     name = (nome or "").strip()
     if name:
         return name
@@ -284,6 +296,12 @@ class CompanyFinanceService:
         emp = await self.db.get(Employee, employee_id)
         return getattr(emp, "full_name", None) if emp is not None else None
 
+    async def _legal_person_full_name(self, legal_person_id: UUID | None) -> str | None:
+        if legal_person_id is None:
+            return None
+        person = await self.db.get(LegalPerson, legal_person_id)
+        return getattr(person, "full_name", None) if person is not None else None
+
     async def _employee_base_value(self, emp: Employee, *, competencia: date) -> float:
         settings = await SettingsService(self.db).get_or_create()
         if (emp.employment_type or "").upper() == "CLT":
@@ -333,6 +351,9 @@ class CompanyFinanceService:
         percentual = float(getattr(it, "percentual", 0) or 0) if getattr(it, "percentual", None) is not None else None
         emp = getattr(it, "employee", None)
         employee_name = getattr(emp, "full_name", None) if emp is not None else None
+        # Ex-colaborador do Jurídico: só endividamento usa, e é apenas identificação.
+        legal_person_id = getattr(it, "legal_person_id", None)
+        legal_person_name = await self._legal_person_full_name(legal_person_id)
         employee_employment_type = getattr(emp, "employment_type", None) if emp is not None else None
 
         # Para COLABORADOR_MATRIZ: valor_referencia é calculado a partir do custo do colaborador no mês.
@@ -391,6 +412,8 @@ class CompanyFinanceService:
                 "employee_id": employee_id,
                 "employee_name": employee_name,
                 "employee_employment_type": employee_employment_type,
+                "legal_person_id": legal_person_id,
+                "legal_person_name": legal_person_name,
                 "percentual": percentual,
                 "nome": it.nome,
                 "item_description": getattr(it, "item_description", None),
@@ -436,6 +459,8 @@ class CompanyFinanceService:
             "employee_id": employee_id,
             "employee_name": employee_name,
             "employee_employment_type": employee_employment_type,
+            "legal_person_id": legal_person_id,
+            "legal_person_name": legal_person_name,
             "percentual": percentual,
             "nome": it.nome,
             "item_description": getattr(it, "item_description", None),
@@ -492,8 +517,10 @@ class CompanyFinanceService:
             item_type = CompanyFinancialItemType.MANUAL
             percentual = None
             emp_name = await self._employee_full_name(employee_id)
+            legal_name = await self._legal_person_full_name(data.get("legal_person_id"))
             nome = debt_nome_for(
                 employee_full_name=emp_name,
+                legal_person_full_name=legal_name,
                 nome=data.get("nome"),
                 item_description=item_description,
             )
@@ -514,6 +541,8 @@ class CompanyFinanceService:
             recurrence=(data.get("recurrence") or _default_recurrence(data["tipo"])).strip(),
             item_type=item_type,
             employee_id=employee_id,
+            # Só endividamento carrega este vínculo; o schema já zera nos demais tipos.
+            legal_person_id=data.get("legal_person_id"),
             percentual=percentual,
             is_monthly_required=bool(data.get("is_monthly_required") or False),
             has_legal_process=bool(data.get("has_legal_process") or False),
@@ -547,6 +576,8 @@ class CompanyFinanceService:
             row.item_type = CompanyFinancialItemType(data["item_type"])
         if "employee_id" in data:
             row.employee_id = data.get("employee_id")
+        if "legal_person_id" in data:
+            row.legal_person_id = data.get("legal_person_id")
         if "percentual" in data:
             row.percentual = data.get("percentual")
         if data.get("nome") is not None:
@@ -625,14 +656,18 @@ class CompanyFinanceService:
             # Colaborador → nome = colaborador; Manual → nome informado (já aplicado acima
             # a partir de data["nome"], se enviado). Descrição é apenas complementar.
             emp_name = await self._employee_full_name(row.employee_id)
+            legal_name = await self._legal_person_full_name(row.legal_person_id)
             row.nome = debt_nome_for(
                 employee_full_name=emp_name,
+                legal_person_full_name=legal_name,
                 nome=row.nome,
                 item_description=row.item_description,
             ) or row.nome
-        elif row.item_type != CompanyFinancialItemType.COLABORADOR_MATRIZ:
-            row.employee_id = None
-            row.percentual = None
+        else:
+            row.legal_person_id = None
+            if row.item_type != CompanyFinancialItemType.COLABORADOR_MATRIZ:
+                row.employee_id = None
+                row.percentual = None
 
         if row.tipo == "endividamento" and not row.has_renegotiation:
             row.renegotiated_amount = None

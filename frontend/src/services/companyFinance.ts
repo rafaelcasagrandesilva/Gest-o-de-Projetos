@@ -18,6 +18,9 @@ export interface CompanyFinancialItem {
   employee_id?: string | null;
   employee_name?: string | null;
   employee_employment_type?: string | null;
+  /** Endividamento de ex-colaborador: pessoa do cadastro do Jurídico (`legal_persons`). */
+  legal_person_id?: string | null;
+  legal_person_name?: string | null;
   percentual?: number | null;
   nome: string;
   /** Descrição própria do item (identificador da dívida em Endividamento). */
@@ -128,6 +131,8 @@ export async function createCompanyFinanceItem(payload: {
   recurrence?: string | null;
   item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
   employee_id?: string | null;
+  /** Só Endividamento: vínculo com um desligado do Jurídico. Excludente com `employee_id`. */
+  legal_person_id?: string | null;
   percentual?: number | null;
   is_monthly_required?: boolean;
   has_legal_process?: boolean;
@@ -162,6 +167,7 @@ export async function updateCompanyFinanceItem(
     recurrence?: string | null;
     item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
     employee_id?: string | null;
+    legal_person_id?: string | null;
     percentual?: number | null;
     is_monthly_required?: boolean;
     has_legal_process?: boolean;

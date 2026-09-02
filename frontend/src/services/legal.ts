@@ -187,6 +187,29 @@ export async function listLegalPersons(filters: LegalPersonFilters = {}): Promis
   return data;
 }
 
+/** Item mínimo de referência de um desligado, para combos de OUTROS módulos. */
+export type LegalPersonRef = {
+  id: string;
+  name: string;
+  company: string | null;
+  termination_date: string | null;
+};
+
+/**
+ * Busca enxuta de desligados para vincular em outros módulos (hoje: Endividamento).
+ *
+ * Usa `/legal/persons/search`, que exige apenas `legal_persons.reference` — quem cria um
+ * endividamento não precisa de acesso ao workspace Jurídico. Nunca devolve CPF nem valores.
+ */
+export async function searchLegalPersonsReference(q: string, limit = 20): Promise<LegalPersonRef[]> {
+  const term = q.trim();
+  if (!term) return [];
+  const { data } = await api.get<LegalPersonRef[]>("/legal/persons/search", {
+    params: { q: term, limit },
+  });
+  return data;
+}
+
 export async function fetchLegalPersonFacets(): Promise<LegalFacets> {
   const { data } = await api.get<LegalFacets>("/legal/persons/facets");
   return data;

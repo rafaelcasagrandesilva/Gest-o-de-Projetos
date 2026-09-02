@@ -38,6 +38,13 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     employee_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Ex-colaborador do Jurídico (`legal_persons`), cadastro próprio e praticamente disjunto de
+    # `employees`. Só ENDIVIDAMENTO usa: um passivo trabalhista costuma ser com quem já saiu.
+    # Como `employee_id` no endividamento, é apenas identificação — define o nome do item e não
+    # entra em cálculo nenhum. Excludente com `employee_id` (validado no schema).
+    legal_person_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("legal_persons.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     percentual: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
     nome: Mapped[str] = mapped_column(String(255), nullable=False)
     # Descrição própria do item (ex.: "Acordo de Remuneração"), separada do `nome`.

@@ -51,6 +51,7 @@ from app.core.permission_codes import (
     LEGAL_PERSONS_DELETE,
     LEGAL_PERSONS_LIST,
     LEGAL_PERSONS_READ,
+    LEGAL_PERSONS_REFERENCE,
     LEGAL_PERSONS_UPDATE,
     LEGAL_PROJECTS_CREATE,
     LEGAL_PROJECTS_DELETE,
@@ -398,6 +399,44 @@ async def list_persons(
 @router.get("/persons/facets", response_model=LegalFacets, dependencies=_persons_list + _workspace)
 async def persons_facets(db: AsyncSession = Depends(get_db)) -> LegalFacets:
     return await LegalService(db).person_facets()
+
+
+@router.get(
+    "/persons/search",
+    response_model=list[dict],
+    dependencies=[Depends(require_permission(LEGAL_PERSONS_REFERENCE))],
+)
+async def search_persons(
+    db: AsyncSession = Depends(get_db),
+    q: str | None = Query(default=None, max_length=255),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> list[dict]:
+    """Endpoint leve de REFERÊNCIA de ex-colaboradores, para selects de OUTROS módulos.
+
+    Existe para o Endividamento (Financeiro) poder vincular um passivo à pessoa certa sem exigir
+    acesso ao workspace Jurídico: pede apenas `legal_persons.reference`, e NÃO o combo
+    `legal_persons.list` + acesso ao workspace que a listagem completa exige.
+
+    Devolve o MÍNIMO para identificar alguém num combo — nunca CPF, valor de rescisão, FGTS ou
+    dado de processo. `company` e `termination_date` entram porque homônimo é comum numa lista de
+    159 pessoas, e sem eles não há como saber qual é qual.
+
+    Declarado antes de `/persons/{person_id}`: fosse depois, "search" seria lido como um id.
+    """
+    term = (q or "").strip()
+    if not term:
+        return []
+    rows = await LegalService(db).search_persons_reference(term=term, limit=limit)
+    return [
+        {
+            "id": str(r.id),
+            "name": r.full_name,
+            "company": r.company,
+            "termination_date": r.termination_date.isoformat() if r.termination_date else None,
+        }
+        for r in rows
+        if getattr(r, "full_name", None)
+    ]
 
 
 @router.get(

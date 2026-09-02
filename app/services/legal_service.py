@@ -448,6 +448,20 @@ class LegalService:
             .subquery()
         )
 
+    async def search_persons_reference(self, *, term: str, limit: int = 20) -> list[LegalPerson]:
+        """Busca enxuta por nome, para combos de outros módulos (ver `/persons/search`).
+
+        Só pessoas ATIVAS no cadastro: uma pessoa desativada foi removida da relação de
+        desligados e não deve reaparecer como opção num vínculo novo.
+        """
+        stmt = (
+            select(LegalPerson)
+            .where(LegalPerson.is_active.is_(True), LegalPerson.full_name.ilike(f"%{term}%"))
+            .order_by(LegalPerson.full_name)
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def list_persons(self, filters: PersonFilters) -> list[tuple[LegalPerson, dict]]:
         """Pessoas + agregados derivados dos seus processos (0 quando não tem processo)."""
         agg = self._person_aggregates()

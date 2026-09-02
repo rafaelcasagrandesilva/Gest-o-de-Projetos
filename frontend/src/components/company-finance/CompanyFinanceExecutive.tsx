@@ -31,6 +31,8 @@ import {
 } from "@/services/companyFinance";
 import { Link } from "react-router-dom";
 import { listEmployees, type Employee } from "@/services/employees";
+import { searchLegalPersonsReference, type LegalPersonRef } from "@/services/legal";
+import { formatDateBR } from "@/components/legal/LegalPanelPieces";
 import { listProjects, type Project } from "@/services/projects";
 import { SortableTh } from "@/components/table";
 import { useTableSort } from "@/hooks/useTableSort";
@@ -87,6 +89,37 @@ const MONTH_SHORT = [
 
 /** Null-safe: valor redigido (null) → "—" (não R$ 0,00). */
 const formatBRL = formatCurrencyOrDash;
+
+/** Rótulos de uma opção do seletor de colaborador.
+ *
+ * A busca SEMPRE trouxe os desligados — um endividamento trabalhista costuma ser justamente com
+ * quem já saiu. O que faltava era dizer isso: sem a marca, quem escolhe não tem como distinguir
+ * um homônimo ativo de um desligado, e a lista parecia não conter os desligados.
+ */
+function EmployeeOptionBadges({ employee }: { employee: Employee }) {
+  return (
+    <span className="ml-2 flex shrink-0 items-center gap-1">
+      {!employee.is_active && (
+        <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+          Desligado
+        </span>
+      )}
+      <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+        {employee.employment_type}
+      </span>
+    </span>
+  );
+}
+
+/** Opções do combo "Tipo" ao criar/editar um item.
+ *
+ * `DESLIGADO` só existe em ENDIVIDAMENTO e é uma escolha de INTERFACE, não um item_type do
+ * banco: o item continua gravado como MANUAL, e o que muda é qual vínculo vai junto —
+ * `employee_id` (cadastro operacional) ou `legal_person_id` (cadastro do Jurídico). Os dois
+ * cadastros são praticamente disjuntos: um passivo trabalhista costuma ser com quem já saiu, e
+ * essa pessoa quase nunca está em Colaboradores.
+ */
+type DraftItemType = "MANUAL" | "COLABORADOR_MATRIZ" | "DESLIGADO";
 
 function parseBRLInput(raw: string): number {
   return normalizeCurrencyForApi(raw);
@@ -223,7 +256,13 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   // Endividamento: descrição própria do item (identificador da dívida) — obrigatória.
   const [draftItemDescription, setDraftItemDescription] = useState("");
   const [draftRecurrence, setDraftRecurrence] = useState(() => defaultRecurrence(tipo));
-  const [draftItemType, setDraftItemType] = useState<"MANUAL" | "COLABORADOR_MATRIZ">("MANUAL");
+  const [draftItemType, setDraftItemType] = useState<DraftItemType>("MANUAL");
+  // Desligado (pessoa do Jurídico). Cadastro à parte de `employees` — ver DraftItemType.
+  const [draftLegalPersonId, setDraftLegalPersonId] = useState("");
+  const [draftLegalPersonQuery, setDraftLegalPersonQuery] = useState("");
+  const [draftLegalPersonOptions, setDraftLegalPersonOptions] = useState<LegalPersonRef[]>([]);
+  const [draftLegalPersonOpen, setDraftLegalPersonOpen] = useState(false);
+  const [draftLegalPersonLoading, setDraftLegalPersonLoading] = useState(false);
   const [draftEmployeeQuery, setDraftEmployeeQuery] = useState("");
   const [draftEmployeeOptions, setDraftEmployeeOptions] = useState<Employee[]>([]);
   const [draftEmployeeOpen, setDraftEmployeeOpen] = useState(false);
@@ -378,6 +417,23 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     }, 300);
     return () => window.clearTimeout(t);
   }, [draftEmployeeQuery, draftEmployeeOpen, loadEmployeeOptions]);
+
+  useEffect(() => {
+    if (!draftLegalPersonOpen) return;
+    const t = window.setTimeout(() => {
+      setDraftLegalPersonLoading(true);
+      void searchLegalPersonsReference(draftLegalPersonQuery)
+        .catch(() => [])
+        .then((rows) => setDraftLegalPersonOptions(rows))
+        .finally(() => setDraftLegalPersonLoading(false));
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [draftLegalPersonQuery, draftLegalPersonOpen]);
+
+  const selectedLegalPerson = useMemo(
+    () => draftLegalPersonOptions.find((p) => p.id === draftLegalPersonId) ?? null,
+    [draftLegalPersonOptions, draftLegalPersonId],
+  );
 
   const loadAll = useCallback(async () => {
     setError(null);
@@ -577,6 +633,10 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         setError("Selecione um colaborador.");
         return;
       }
+      if (draftItemType === "DESLIGADO" && !draftLegalPersonId) {
+        setError("Selecione um desligado.");
+        return;
+      }
     } else if (!nome) {
       return;
     }
@@ -621,8 +681,10 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         cost_center_ref: draftCostCenterRef || defaultCostCenterRef(tipo),
         description: draftDescription.trim() || null,
         recurrence: draftRecurrence.trim() || defaultRecurrence(tipo),
-        // Endividamento sempre persiste item_type=MANUAL (o "Colaborador" é só identificação).
-        item_type: tipo === "custo_fixo" ? draftItemType : "MANUAL",
+        // Endividamento sempre persiste item_type=MANUAL (o "Colaborador" e o "Desligado" são só
+        // identificação). DESLIGADO nunca chega ao banco como item_type — é escolha de interface.
+        item_type:
+          tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? "COLABORADOR_MATRIZ" : "MANUAL",
         employee_id:
           tipo === "endividamento"
             ? draftItemType === "COLABORADOR_MATRIZ"
@@ -631,6 +693,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             : tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ"
               ? draftEmployeeId
               : null,
+        // Desligado: o nome sai do cadastro do Jurídico, no backend (mesmo caminho do Colaborador).
+        legal_person_id:
+          tipo === "endividamento" && draftItemType === "DESLIGADO" ? draftLegalPersonId || null : null,
         percentual: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? percentualN : null,
         is_monthly_required: draftIsMonthlyRequired,
         has_legal_process: tipo === "endividamento" ? draftHasLegalProcess : false,
@@ -1108,12 +1173,14 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             <span className="text-slate-600">Tipo</span>
             <select
               value={draftItemType}
-              onChange={(e) => setDraftItemType(e.target.value as "MANUAL" | "COLABORADOR_MATRIZ")}
+              onChange={(e) => setDraftItemType(e.target.value as DraftItemType)}
               className="rounded-lg border border-slate-300 bg-white px-3 py-2"
               disabled={financeReadOnly}
             >
               <option value="MANUAL">Manual</option>
               <option value="COLABORADOR_MATRIZ">Colaborador</option>
+              {/* Só Endividamento: um custo fixo recorrente não é de quem já saiu da empresa. */}
+              {tipo === "endividamento" && <option value="DESLIGADO">Desligado (Jurídico)</option>}
             </select>
           </label>
 
@@ -1134,6 +1201,78 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
           )}
           {tipo === "endividamento" && (
             <>
+              {draftItemType === "DESLIGADO" && (
+              <label className="flex w-full min-w-[200px] flex-col gap-1 text-sm sm:w-72">
+                <span className="text-slate-600">Desligado *</span>
+                <div className="relative">
+                  <input
+                    value={draftLegalPersonQuery}
+                    onChange={(e) => {
+                      setDraftLegalPersonQuery(e.target.value);
+                      setDraftLegalPersonOpen(true);
+                    }}
+                    onFocus={() => setDraftLegalPersonOpen(true)}
+                    onBlur={() => window.setTimeout(() => setDraftLegalPersonOpen(false), 150)}
+                    placeholder={selectedLegalPerson ? selectedLegalPerson.name : "Digite o nome para buscar…"}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    disabled={financeReadOnly}
+                  />
+                  {draftLegalPersonOpen ? (
+                    <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                      <div className="px-3 py-2 text-xs text-slate-500">
+                        {draftLegalPersonLoading
+                          ? "Buscando…"
+                          : !draftLegalPersonQuery.trim()
+                            ? "Digite parte do nome."
+                            : draftLegalPersonOptions.length === 0
+                              ? "Nenhum desligado encontrado."
+                              : "Selecione um desligado"}
+                      </div>
+                      <div className="max-h-56 overflow-auto">
+                        {draftLegalPersonOptions.map((pessoa) => (
+                          <button
+                            key={pessoa.id}
+                            type="button"
+                            onMouseDown={(ev) => {
+                              ev.preventDefault();
+                              setDraftLegalPersonId(pessoa.id);
+                              setDraftLegalPersonQuery("");
+                              setDraftLegalPersonOpen(false);
+                            }}
+                            className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                          >
+                            <span className="truncate text-slate-900">{pessoa.name}</span>
+                            {/* Homônimo é comum numa lista de 159 pessoas: empresa e data de
+                                desligamento são o que permite saber qual é qual. */}
+                            <span className="truncate text-[11px] text-slate-500">
+                              {[pessoa.company, pessoa.termination_date ? `desligado em ${formatDateBR(pessoa.termination_date)}` : null]
+                                .filter(Boolean)
+                                .join(" · ") || "sem empresa informada"}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                {selectedLegalPerson ? (
+                  <p className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                    <span className="font-medium text-slate-700">{selectedLegalPerson.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraftLegalPersonId("");
+                        setDraftLegalPersonQuery("");
+                      }}
+                      className="text-indigo-600 hover:underline"
+                      disabled={financeReadOnly}
+                    >
+                      remover
+                    </button>
+                  </p>
+                ) : null}
+              </label>
+              )}
               {draftItemType === "COLABORADOR_MATRIZ" && (
               <label className="flex w-full min-w-[200px] flex-col gap-1 text-sm sm:w-64">
                 <span className="text-slate-600">Colaborador *</span>
@@ -1173,9 +1312,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                             className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50"
                           >
                             <span className="truncate text-slate-900">{em.full_name}</span>
-                            <span className="ml-2 shrink-0 rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
-                              {em.employment_type}
-                            </span>
+                            <EmployeeOptionBadges employee={em} />
                           </button>
                         ))}
                       </div>
@@ -1185,6 +1322,13 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                 {selectedEmployee ? (
                   <p className="mt-1 flex items-center gap-2 text-xs text-slate-500">
                     <span className="font-medium text-slate-700">{selectedEmployee.full_name}</span>
+                    {/* Repetido aqui de propósito: é no confirmado, não na lista, que o erro de
+                        homônimo passaria batido. */}
+                    {!selectedEmployee.is_active && (
+                      <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                        Desligado
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -1341,9 +1485,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                             className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50"
                           >
                             <span className="truncate text-slate-900">{em.full_name}</span>
-                            <span className="ml-2 shrink-0 rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
-                              {em.employment_type}
-                            </span>
+                            <EmployeeOptionBadges employee={em} />
                           </button>
                         ))}
                       </div>
@@ -1788,9 +1930,12 @@ function FinanceItemCard({
   const [structureItemDescription, setStructureItemDescription] = useState(item.item_description ?? "");
   const [structureEmployeeId, setStructureEmployeeId] = useState(item.employee_id ?? "");
   // Endividamento: Tipo Manual/Colaborador (derivado da presença de colaborador).
-  const [structureDebtType, setStructureDebtType] = useState<"MANUAL" | "COLABORADOR_MATRIZ">(
-    item.employee_id ? "COLABORADOR_MATRIZ" : "MANUAL",
+  const [structureDebtType, setStructureDebtType] = useState<DraftItemType>(
+    item.employee_id ? "COLABORADOR_MATRIZ" : item.legal_person_id ? "DESLIGADO" : "MANUAL",
   );
+  // Trocar a pessoa vinculada é raro e arriscado (o nome do título muda junto); aqui o vínculo é
+  // só EXIBIDO. Para trocar, o caminho é criar o item certo — como já vale para o Colaborador.
+  const [structureLegalPersonName] = useState(item.legal_person_name ?? "");
   const [structureEmployeeName, setStructureEmployeeName] = useState(item.employee_name ?? "");
   const [structureEmployeeQuery, setStructureEmployeeQuery] = useState("");
   const [structureEmployeeOptions, setStructureEmployeeOptions] = useState<Employee[]>([]);
@@ -1999,6 +2144,10 @@ function FinanceItemCard({
         setStructureError("Selecione um colaborador.");
         return;
       }
+      if (structureDebtType === "DESLIGADO" && !item.legal_person_id) {
+        setStructureError("Vínculo com o desligado não encontrado.");
+        return;
+      }
     } else if (!nome) {
       setStructureError("Informe o nome do item.");
       return;
@@ -2014,6 +2163,10 @@ function FinanceItemCard({
         ? {
             item_description: itemDescription || null,
             employee_id: structureDebtType === "COLABORADOR_MATRIZ" ? structureEmployeeId || null : null,
+            // Explícito nos dois sentidos: um título que deixou de ser de desligado não pode
+            // continuar com o vínculo antigo derivando o nome por trás da tela.
+            legal_person_id:
+              structureDebtType === "DESLIGADO" ? item.legal_person_id ?? null : null,
             ...(structureDebtType === "MANUAL" ? { nome } : {}),
           }
         : { nome }),
@@ -2227,17 +2380,33 @@ function FinanceItemCard({
                       <span className="text-slate-600">Tipo</span>
                       <select
                         value={structureDebtType}
-                        onChange={(e) =>
-                          setStructureDebtType(e.target.value as "MANUAL" | "COLABORADOR_MATRIZ")
-                        }
+                        onChange={(e) => setStructureDebtType(e.target.value as DraftItemType)}
                         className="rounded border border-slate-300 bg-white px-2 py-1.5"
-                        disabled={readOnly || structureSaving}
+                        disabled={readOnly || structureSaving || structureDebtType === "DESLIGADO"}
                       >
                         <option value="MANUAL">Manual</option>
                         <option value="COLABORADOR_MATRIZ">Colaborador</option>
+                        {/* Só aparece no item que JÁ é de um desligado: converter um título
+                            existente em outro tipo trocaria o nome de um passivo em aberto. */}
+                        {structureDebtType === "DESLIGADO" && (
+                          <option value="DESLIGADO">Desligado (Jurídico)</option>
+                        )}
                       </select>
                     </label>
-                    {structureDebtType === "MANUAL" ? (
+                    {structureDebtType === "DESLIGADO" ? (
+                      <label className="flex flex-col gap-1 text-sm">
+                        <span className="text-slate-600">Desligado</span>
+                        <input
+                          value={structureLegalPersonName || item.nome}
+                          readOnly
+                          tabIndex={-1}
+                          className="cursor-not-allowed rounded border border-slate-200 bg-slate-100 px-2 py-1.5 text-slate-500"
+                        />
+                        <span className="text-[11px] leading-tight text-slate-500">
+                          Vem do cadastro de Desligados, no Jurídico.
+                        </span>
+                      </label>
+                    ) : structureDebtType === "MANUAL" ? (
                       <label className="flex flex-col gap-1 text-sm">
                         <span className="text-slate-600">Nome</span>
                         <input
@@ -2288,9 +2457,7 @@ function FinanceItemCard({
                                   className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50"
                                 >
                                   <span className="truncate text-slate-900">{em.full_name}</span>
-                                  <span className="ml-2 shrink-0 rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
-                                    {em.employment_type}
-                                  </span>
+                                  <EmployeeOptionBadges employee={em} />
                                 </button>
                               ))}
                             </div>

@@ -60,6 +60,7 @@ class CompanyFinancialItemCreate(BaseModel):
     recurrence: str | None = Field(None, max_length=32)
     item_type: CompanyFinancialItemType = "MANUAL"
     employee_id: UUID | None = None
+    legal_person_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
     is_monthly_required: bool = False
     # Ciclo de vida — início obrigatório em novos cadastros; encerramento opcional.
@@ -119,6 +120,7 @@ class CompanyFinancialItemCreate(BaseModel):
         else:
             self.employee_id = None
             self.percentual = None
+        self.legal_person_id = None  # vínculo exclusivo de Endividamento
         return self
 
     @model_validator(mode="after")
@@ -131,10 +133,14 @@ class CompanyFinancialItemCreate(BaseModel):
             return self
         self.item_type = "MANUAL"
         self.percentual = None
+        # Colaborador (cadastro operacional) e Desligado (cadastro do Jurídico) são cadastros
+        # distintos e o item aponta para UM. Aceitar os dois deixaria o nome ambíguo.
+        if self.employee_id is not None and self.legal_person_id is not None:
+            raise ValueError("Selecione um Colaborador OU um Desligado, não os dois.")
         has_nome = bool(self.nome and self.nome.strip())
         has_desc = bool(self.item_description and self.item_description.strip())
-        if self.employee_id is None and not has_nome and not has_desc:
-            raise ValueError("Informe o Nome (Manual) ou selecione um Colaborador.")
+        if self.employee_id is None and self.legal_person_id is None and not has_nome and not has_desc:
+            raise ValueError("Informe o Nome (Manual), um Colaborador ou um Desligado.")
         return self
 
 
@@ -153,6 +159,7 @@ class CompanyFinancialItemUpdate(BaseModel):
     recurrence: str | None = Field(None, max_length=32)
     item_type: CompanyFinancialItemType | None = None
     employee_id: UUID | None = None
+    legal_person_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
     is_monthly_required: bool | None = None
     # Ciclo de vida — invariante (inativo exige end_date) aplicada no serviço.
@@ -231,6 +238,9 @@ class CompanyFinancialItemUpdate(BaseModel):
                 raise ValueError("employee_id é obrigatório para item COLABORADOR_MATRIZ.")
             if self.percentual is None:
                 raise ValueError("percentual é obrigatório para item COLABORADOR_MATRIZ.")
+        # Mesma exclusividade da criação: o item aponta para UM cadastro de pessoa.
+        if self.employee_id is not None and self.legal_person_id is not None:
+            raise ValueError("Selecione um Colaborador OU um Desligado, não os dois.")
         return self
 
 
@@ -258,8 +268,10 @@ class CompanyFinancialItemRead(BaseModel):
     tipo: str
     item_type: CompanyFinancialItemType | None = None
     employee_id: UUID | None = None
+    legal_person_id: UUID | None = None
     employee_name: str | None = None
     employee_employment_type: str | None = None
+    legal_person_name: str | None = None
     percentual: float | None = None
     nome: str
     item_description: str | None = None
