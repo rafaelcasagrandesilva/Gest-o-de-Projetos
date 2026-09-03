@@ -17,9 +17,10 @@ ASSINATURA DO PAR (mesmo colaborador, mês e projeto)
     - ABERTA → nome SEM rótulo, sem nenhum pagamento       (é a fantasma)
 
 REPARO
-    Apaga a fantasma e renomeia a paga para o nome sem rótulo — exatamente o desfecho que
-    a sincronização corrigida produz sozinha na próxima vez que rodar. Fazer aqui evita
-    que o nome mude sozinho depois, sem ninguém entender por quê.
+    Apaga APENAS a fantasma. O título pago fica intacto, inclusive o rótulo do componente —
+    é a descrição do que foi efetivamente pago, e reescrevê-la seria alterar histórico sem
+    necessidade. A sincronização corrigida adota esse título nas próximas rodadas sem
+    renomeá-lo, então o resultado é estável: nenhuma linha volta a duplicar.
 
 SEGURANÇA
     Nunca toca em título com qualquer pagamento (nem parcial), em título protegido
@@ -105,17 +106,13 @@ async def reparar_fantasmas(session, *, apply: bool, competencia: date | None = 
                 )
                 continue
 
-            print(f"  [apagar]   {mes} {fantasma.name!r} R$ {_money(fantasma.amount_final)} (em aberto)")
+            print(
+                f"  [apagar]  {mes} {fantasma.name!r} R$ {_money(fantasma.amount_final)} (em aberto)"
+                f"  — mantém {paga.name!r} R$ {_money(paga.amount_paid)} (paga, intacta)"
+            )
             if apply:
                 await session.delete(fantasma)
             apagados += 1
-
-            novo_nome = str(fantasma.name)
-            if paga.name != novo_nome:
-                print(f"  [renomear] {mes} {paga.name!r} → {novo_nome!r} (paga, R$ {_money(paga.amount_paid)})")
-                if apply:
-                    paga.name = novo_nome
-                renomeados += 1
 
     return {"apagados": apagados, "renomeados": renomeados, "revisar": revisar}
 
