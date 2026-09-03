@@ -9,7 +9,10 @@ from sqlalchemy import func, select
 
 from app.models.company_finance import CompanyFinancialItem
 from app.models.employee import Employee, EmployeeAllocation
+from app.models.employee_assignment import EmployeeAssignment
 from app.models.fleet import Vehicle
+from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
+from app.models.project_operational import ProjectLabor
 from app.models.user import User
 from app.repositories.employees import EmployeeRepository
 from app.schemas.employees import EmployeeRead
@@ -397,10 +400,32 @@ class EmployeesService:
     async def _has_movement(self, employee_id) -> bool:
         """True se o colaborador possui movimentação vinculada (impede exclusão física).
 
-        Considera: alocações em projetos, itens de custo-matriz (COLABORADOR_MATRIZ) e
-        vínculo como motorista de veículo. Basta uma referência para preservar o histórico.
+        Considera: FOLHA por competência (`project_labors`), títulos de Mão de obra já
+        gerados no Contas a Pagar, ALOCAÇÕES (`employee_assignments`), itens de custo-matriz
+        (COLABORADOR_MATRIZ) e vínculo como motorista de veículo. Basta uma referência para
+        preservar o histórico — o caminho correto nesses casos é INATIVAR o cadastro.
+
+        `employee_allocations` continua na lista só por compatibilidade: a tabela em uso é
+        `employee_assignments` (a seção "Alocações" da tela). A antiga estava vazia, então
+        a checagem existia mas nunca podia barrar nada.
+
+        `project_labors` é o item mais importante desta lista e faltava. A FK
+        `project_labors.employee_id` é ON DELETE CASCADE: sem esta checagem, excluir o
+        cadastro apagava silenciosamente todas as competências de folha do colaborador —
+        e, com elas, a origem dos títulos do Contas a Pagar, que passavam a acusar
+        "resíduo" na reconciliação sem que ninguém tivesse mexido no projeto.
         """
         for stmt in (
+            select(func.count()).select_from(ProjectLabor).where(
+                ProjectLabor.employee_id == employee_id
+            ),
+            select(func.count()).select_from(PayableSnapshot).where(
+                PayableSnapshot.ref_id == employee_id,
+                PayableSnapshot.type == PayableSnapshotType.COLLABORATOR,
+            ),
+            select(func.count()).select_from(EmployeeAssignment).where(
+                EmployeeAssignment.employee_id == employee_id
+            ),
             select(func.count()).select_from(EmployeeAllocation).where(
                 EmployeeAllocation.employee_id == employee_id
             ),

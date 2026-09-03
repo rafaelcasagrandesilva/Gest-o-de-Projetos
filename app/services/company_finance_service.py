@@ -612,7 +612,10 @@ class CompanyFinanceService:
             row.end_date = data.get("end_date")
         # Invariante (só quando status/encerramento é tocado): inativo exige end_date;
         # ativo limpa o encerramento (reativar reabre o ciclo de vida).
-        if ("is_active" in data and data.get("is_active") is not None) or ("end_date" in data):
+        lifecycle_touched = ("is_active" in data and data.get("is_active") is not None) or (
+            "end_date" in data
+        )
+        if lifecycle_touched:
             row.end_date = normalize_lifecycle(is_active=bool(row.is_active), end_date=row.end_date)
         if data.get("has_legal_process") is not None:
             row.has_legal_process = bool(data["has_legal_process"])
@@ -683,6 +686,18 @@ class CompanyFinanceService:
         await self.db.flush()
         await self.db.refresh(row)
         await self._sync_payables_metadata_for_company_finance_item(item_id=item_id)
+        # ENCERRAR precisa matar as obrigações automáticas ABERTAS do mês do encerramento
+        # em diante. Sem isto o cadastro ficava inativo mas as parcelas seguiam vivas no
+        # Contas a Pagar, inclusive em competências futuras — e como excluir o item é
+        # bloqueado quando há movimentação, não havia saída pela tela.
+        #
+        # SÓ roda quando o ciclo de vida foi tocado NESTA edição. Rodar em toda edição faria
+        # uma troca de nome ou de centro de custo num item encerrado meses atrás apagar
+        # títulos abertos sem ninguém ter pedido.
+        if lifecycle_touched:
+            await PayableSnapshotService(self.db).close_company_finance_item_payables(
+                item_id=item_id
+            )
         return row
 
     async def delete_item(self, *, item_id: UUID) -> bool:
@@ -708,7 +723,9 @@ class CompanyFinanceService:
         await self.db.flush()
         return True
 
-    async def replace_payments(self, *, item_id: UUID, pagamentos: list[dict]) -> CompanyFinancialItem | None:
+    async def replace_payments(
+        self, *, item_id: UUID, pagamentos: list[dict], zero_explicito: bool = False
+    ) -> CompanyFinancialItem | None:
         logger.info(
             "company_finance.replace_payments service START item_id=%s pagamentos=%s",
             item_id,
@@ -728,11 +745,20 @@ class CompanyFinanceService:
             await CompanyFinanceCostCenterService(self.db).migrate_legacy_row(item)
             logger.info("company_finance.replace_payments service AFTER migrate_legacy_row item_id=%s", item_id)
 
-            incoming: dict[date, float] = {}
+            # `None` = caixa ESVAZIADA (o mês volta ao valor de REFERÊNCIA);
+            # `0` = zero DECLARADO ("neste mês não se paga nada", sem título no CAP).
+            # Achatar os dois em 0, como antes, tornava impossível declarar zero: digitar
+            # 0,00 apagava o lançamento e o título renascia com o valor de referência.
+            incoming: dict[date, float | None] = {}
             for p in pagamentos:
                 mes = p["mes"]
                 comp = parse_month(mes)
-                val = max(0.0, float(p.get("valor") or 0))
+                raw = p.get("valor")
+                val = None if raw is None else max(0.0, float(raw))
+                # Cliente sem o opt-in (JS antigo em cache) manda 0 tanto para caixa vazia
+                # quanto para zero digitado: mantém o comportamento antigo (0 = limpar).
+                if val == 0.0 and not zero_explicito:
+                    val = None
                 incoming[comp] = val
 
             if not incoming:
@@ -745,7 +771,9 @@ class CompanyFinanceService:
             if not bool(getattr(item, "is_active", True)):
                 existing_months = await self._payment_months_for_item(item_id=item_id)
                 new_positive = [
-                    comp for comp, val in incoming.items() if val > 0 and comp not in existing_months
+                    comp
+                    for comp, val in incoming.items()
+                    if (val or 0) > 0 and comp not in existing_months
                 ]
                 if new_positive:
                     meses = ", ".join(month_key(c) for c in sorted(new_positive))
@@ -780,7 +808,10 @@ class CompanyFinanceService:
                         len(existing),
                     )
                     continue
-                if val > 0:
+                if val is None:
+                    for e in existing:  # esvaziar a caixa remove o lançamento → volta à referência
+                        await self.db.delete(e)
+                elif val > 0:
                     if existing:
                         existing[0].valor = val  # in-place: mantém id/vencimento/descrição
                     else:
@@ -795,8 +826,22 @@ class CompanyFinanceService:
                         )
                         inserted += 1
                 else:
-                    for e in existing:  # limpar a caixa remove o lançamento único da competência
-                        await self.db.delete(e)
+                    # Zero DECLARADO: o lançamento é PERSISTIDO com 0 — é o que impede a
+                    # referência de ser materializada outra vez. O reconciliador do CAP
+                    # remove o título aberto da competência.
+                    if existing:
+                        existing[0].valor = 0
+                    else:
+                        self.db.add(
+                            CompanyFinancialPayment(
+                                item_id=item_id,
+                                competencia=comp,
+                                valor=0,
+                                due_date=_default_entry_due(comp),
+                                descricao=None,
+                            )
+                        )
+                        inserted += 1
             logger.info(
                 "company_finance.replace_payments service upsert item_id=%s inserted=%d",
                 item_id,

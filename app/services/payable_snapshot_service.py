@@ -934,6 +934,22 @@ class PayableSnapshotService:
                 _sync_legacy_paid_fields(row)
                 continue
 
+            # Lançamento declarado ZERO ("neste mês não se paga nada"): o título ABERTO deixa
+            # de existir. Zero explícito é diferente de caixa vazia — a vazia volta ao valor de
+            # referência, o zero suprime a obrigação do mês. Título com pagamento já saiu acima.
+            if new_amount <= 0:
+                logger.info(
+                    "payables entry zero removed snapshot_id=%s name=%s month=%s item_id=%s",
+                    row.id,
+                    row.name,
+                    comp,
+                    item.id,
+                )
+                linked.pop(entry.id, None)
+                await self.session.delete(row)
+                result["synced"] += 1
+                continue
+
             changed = False
             if _money2(row.amount_final) != new_amount or _money2(row.amount_original) != new_amount:
                 before_o, before_f, before_p = (
@@ -1334,19 +1350,41 @@ class PayableSnapshotService:
                 ),
                 None,
             )
-            if row is None and component_label:
-                # Título legado sem rótulo (formato antigo: 1 linha por colaborador) → adota.
-                row = next(
-                    (
-                        r
-                        for r in existing
-                        if r.id not in matched_ids and not _collaborator_payable_component_label(r.name)
-                    ),
-                    None,
+            if row is None:
+                # ADOÇÃO ENTRE FORMATOS (nos DOIS sentidos). O rótulo do componente não muda
+                # quando o colaborador é renomeado, mas MUDA quando a folha muda de forma:
+                # zerar a ajuda de custo de um PJ funde duas linhas rotuladas ("Salário Base
+                # PJ" + "Ajuda de Custo PJ") em uma única linha SEM rótulo, e um override de
+                # custo total faz o mesmo. Sem adotar o título que já existe, a sincronização
+                # concluiria que ele sumiu e criaria um segundo título EM ABERTO ao lado do
+                # que já foi PAGO — que a limpeza de órfãos, corretamente, nunca apaga.
+                candidatos = [r for r in existing if r.id not in matched_ids]
+                if component_label:
+                    # Formato com rótulo adota o título legado sem rótulo (1 linha por colaborador).
+                    candidatos = [
+                        c for c in candidatos if not _collaborator_payable_component_label(c.name)
+                    ]
+                # Formato consolidado (sem rótulo) adota um título rotulado do mesmo colaborador.
+                # Preferência: mesmo valor primeiro, depois o que carrega pagamento, depois o maior.
+                candidatos.sort(
+                    key=lambda c: (
+                        _money2(c.amount_final) != new_amt,
+                        _money2(c.amount_paid) <= 0,
+                        -float(c.amount_final or 0),
+                    )
                 )
-            if row is not None and row.name != snapshot_name:
-                # Nome do cadastro mudou: renomeia o título existente em vez de criar outro.
-                row.name = snapshot_name
+                row = candidatos[0] if candidatos else None
+            if row is not None:
+                # Renomeia SOMENTE a parte do NOME (correção de cadastro), preservando o
+                # rótulo do componente que o título já carrega. Trocar o rótulo de um título
+                # PAGO reescreveria a descrição do que foi efetivamente pago — e, num mês de
+                # fechamento, faria 29 títulos pagos mudarem de nome sem ninguém pedir.
+                # A adoção entre formatos já evita a duplicata; o rótulo não precisa mudar.
+                alvo = _collaborator_payable_snapshot_name(
+                    display_name, _collaborator_payable_component_label(row.name)
+                )
+                if row.name != alvo:
+                    row.name = alvo
             if row is None:
                 if new_amt <= 0 or not month_generated:
                     continue
@@ -1918,6 +1956,88 @@ class PayableSnapshotService:
 
         await self.session.flush()
         return changed
+
+    def _company_finance_item_out_of_lifecycle_for(
+        self, *, item: CompanyFinancialItem, comp: date
+    ) -> bool:
+        """A competência caiu fora do ciclo de vida do cadastro corporativo?
+
+        ENCERRAR mata o mês do encerramento EM DIANTE. A data informada é quando o
+        cadastro deixou de ser usado, então a competência dela já não deve carregar
+        obrigação — se aquele mês ainda tem valor a pagar, o caminho é encerrar na
+        competência seguinte.
+
+        Diferente de `_company_finance_item_eligible_for_comp`, aqui só se avalia o
+        CICLO DE VIDA: nada de "obrigatório mensal" nem piso de implantação, que são
+        regras de geração e não dizem nada sobre um título que já existe.
+        """
+        if not bool(getattr(item, "is_active", True)):
+            end = getattr(item, "end_date", None)
+            if end is None:
+                return True
+            return comp >= normalize_competencia(end)
+        start = getattr(item, "start_date", None)
+        if start is not None and normalize_competencia(start) > comp:
+            return True
+        end = getattr(item, "end_date", None)
+        if end is not None and normalize_competencia(end) < comp:
+            return True
+        return False
+
+    async def close_company_finance_item_payables(self, *, item_id: UUID) -> dict:
+        """Cadastro corporativo ENCERRADO: apaga as obrigações automáticas ABERTAS do mês
+        do encerramento em diante.
+
+        Espelha `preserve_or_remove_deleted_company_finance_item` (item excluído), que já
+        apagava as abertas e preservava as pagas. Faltava o equivalente para o item
+        ENCERRADO — e como excluir é bloqueado quando existe movimentação, o usuário
+        ficava sem nenhuma saída: as parcelas seguiam vivas em meses futuros.
+
+        NUNCA toca em título com pagamento (nem parcial) nem em título protegido (valor
+        editado à mão, conciliado, ajuste manual); esses são reportados para o usuário
+        decidir. Meses ANTERIORES ao encerramento ficam intactos: são dívida real.
+
+        Retorna {"removed": int, "preserved": list[str]}.
+        """
+        item = await self._get_company_financial_item(item_id)
+        if item is None or bool(getattr(item, "is_active", True)):
+            return {"removed": 0, "preserved": []}
+
+        end = getattr(item, "end_date", None)
+        comp_fim = normalize_competencia(end) if end is not None else None
+
+        stmt = select(PayableSnapshot).where(
+            PayableSnapshot.ref_id == item_id,
+            PayableSnapshot.type.in_((PayableSnapshotType.FIXED_COST, *PAYABLE_DEBT_TYPES)),
+        )
+        if comp_fim is not None:
+            stmt = stmt.where(PayableSnapshot.month >= comp_fim)
+        rows = list((await self.session.execute(stmt)).scalars().all())
+
+        removed = 0
+        preserved: list[str] = []
+        for row in rows:
+            if _money2(row.amount_paid) > 0 or await _has_active_payments(
+                self.session, snapshot_id=row.id
+            ):
+                preserved.append(f"{row.month:%m/%Y} (tem pagamento)")
+                continue
+            if _payable_row_is_dynamic_sync_protected(row):
+                preserved.append(f"{row.month:%m/%Y} (valor editado/conciliado)")
+                continue
+            logger.info(
+                "payables close item removed snapshot_id=%s name=%s month=%s item_id=%s",
+                row.id,
+                row.name,
+                row.month,
+                item_id,
+            )
+            await self.session.delete(row)
+            removed += 1
+
+        if removed or preserved:
+            await self.session.flush()
+        return {"removed": removed, "preserved": preserved}
 
     async def preserve_or_remove_deleted_company_finance_item(self, *, item_id: UUID) -> int:
         """
@@ -2934,6 +3054,9 @@ class PayableSnapshotService:
                 src = await self._get_company_financial_item(row.ref_id)
                 if src is None or str(getattr(src, "tipo", "")).strip() != "custo_fixo":
                     return True
+                # Mesma regra do endividamento: cadastro encerrado mata a competência.
+                if self._company_finance_item_out_of_lifecycle_for(item=src, comp=row.month):
+                    return True
                 # Múltiplos lançamentos: a origem precisa é o LANÇAMENTO (entry_id). Título
                 # cujo lançamento foi removido é resíduo. Legado sem vínculo (entry_id NULL)
                 # segue regido pela existência do ITEM (compatibilidade).
@@ -2951,6 +3074,11 @@ class PayableSnapshotService:
         if row.type in PAYABLE_DEBT_TYPES:  # ENDIVIDAMENTO, FINANCIAL
             src = await self._get_company_financial_item(row.ref_id)
             if src is None:
+                return True
+            # Cadastro encerrado (ou fora da vigência) na competência do título: é resíduo.
+            # Antes a regra só perguntava se o item EXISTIA, então encerrar não bastava —
+            # as parcelas seguiam vivas, inclusive em meses futuros.
+            if self._company_finance_item_out_of_lifecycle_for(item=src, comp=row.month):
                 return True
             # Endividamento permanece single-lançamento; quando vinculado, órfão = lançamento
             # removido (mantém coerência com Custos Fixos sem alterar a UI/renegociação).
@@ -2974,7 +3102,7 @@ class PayableSnapshotService:
                 return "Custo diverso do projeto removido da origem."
             return "Custo fixo removido da origem."
         if row.type in PAYABLE_DEBT_TYPES:
-            return "Endividamento removido da origem."
+            return "Endividamento removido da origem ou encerrado nesta competência."
         return "Origem removida."
 
     async def reconcile_snapshot(self, *, month: date, user_id: UUID | None) -> dict:
@@ -3077,9 +3205,13 @@ class PayableSnapshotService:
         - não pode ser ANTECIPACAO
         - não pode estar pago (status derivado != PAGO)
         - amount_paid ativo atual == 0 (pagamentos ativos inexistentes)
-        - deve estar órfã (fonte removida) — usa a regra única `origin_is_missing`,
-          que cobre COLLABORATOR (colaborador removido), FIXED_COST e
-          ENDIVIDAMENTO/FINANCIAL.
+        - e uma das duas condições de "sobra":
+          * ÓRFÃ — a fonte foi removida (regra única `origin_is_missing`, que cobre
+            COLLABORATOR, FIXED_COST e ENDIVIDAMENTO/FINANCIAL); ou
+          * DUPLICATA — a fonte existe, mas há OUTRA linha para a mesma obrigação
+            (`_has_duplicate_sibling`). Sem isto a tela não tem saída para remover a
+            linha sobrando: duplicata não é órfã, então a exclusão ficava barrada e
+            só um script resolvia.
         """
         if row.type == PayableSnapshotType.ANTECIPACAO:
             return False
@@ -3097,7 +3229,40 @@ class PayableSnapshotService:
         if _money2(row.amount_paid) > 0:
             return False
 
-        return await self.origin_is_missing(row=row) is True
+        if await self.origin_is_missing(row=row) is True:
+            return True
+        return await self._has_duplicate_sibling(row=row)
+
+    async def _has_duplicate_sibling(self, *, row: PayableSnapshot) -> bool:
+        """Existe OUTRA linha para a MESMA obrigação (tipo, mês, origem, projeto e valor)?
+
+        É a assinatura de uma duplicata: dois títulos para uma obrigação só, que a
+        renomeação de um cadastro ou a mudança de formato dos componentes da folha
+        deixaram para trás. Exigir o MESMO valor é o que impede confundir duplicata
+        com componente legítimo — "Salário Base PJ" e "Ajuda de Custo PJ" dividem
+        tipo, mês, colaborador e projeto, mas nunca o valor.
+        """
+        if row.ref_id is None:
+            return False
+        stmt = (
+            select(func.count())
+            .select_from(PayableSnapshot)
+            .where(
+                PayableSnapshot.id != row.id,
+                PayableSnapshot.type == row.type,
+                PayableSnapshot.month == row.month,
+                PayableSnapshot.ref_id == row.ref_id,
+                PayableSnapshot.amount_final == row.amount_final,
+                PayableSnapshot.is_obsolete.is_(False),
+            )
+        )
+        # project_id nulo não casa com "=" em SQL; compara explicitamente.
+        if row.project_id is None:
+            stmt = stmt.where(PayableSnapshot.project_id.is_(None))
+        else:
+            stmt = stmt.where(PayableSnapshot.project_id == row.project_id)
+        cnt = (await self.session.execute(stmt)).scalar_one()
+        return int(cnt or 0) > 0
 
     async def delete_row(self, *, row: PayableSnapshot) -> None:
         await self.session.delete(row)

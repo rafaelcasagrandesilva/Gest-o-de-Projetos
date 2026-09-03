@@ -327,6 +327,11 @@ class CompanyFinancialItemRead(BaseModel):
 
 class PagamentosReplace(BaseModel):
     pagamentos: list[PagamentoMes] = Field(default_factory=list)
+    # Opt-in do cliente novo: só quando `true` o servidor distingue caixa VAZIA (valor null,
+    # volta ao valor de referência) de ZERO DECLARADO (valor 0, sem título no CAP). Cliente
+    # antigo (JS em cache) não envia a flag e manda 0 para os dois casos — sem este opt-in,
+    # esvaziar uma caixa apagaria o título em vez de voltar à referência.
+    zero_explicito: bool = False
 
 
 class LancamentoCompetenciaIn(BaseModel):

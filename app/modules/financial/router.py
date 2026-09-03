@@ -1256,8 +1256,10 @@ async def delete_payables_snapshot(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Exclusão não permitida. "
-                    "Somente itens MANUAL ou linhas órfãs/extornadas sem pagamentos ativos podem ser excluídas."
+                    "Exclusão não permitida. Pode excluir: itens MANUAL, linhas órfãs "
+                    "(cuja origem foi removida) e duplicatas (quando há outra linha para a "
+                    "mesma obrigação) — em todos os casos, sem pagamentos ativos. "
+                    "Se houver pagamento, estorne primeiro."
                 ),
             )
     await _ensure_payable_snapshot_edit_access(row=row, user=user, db=db)

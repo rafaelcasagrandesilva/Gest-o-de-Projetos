@@ -212,7 +212,10 @@ export async function replaceCompanyFinancePayments(
   }
   const { data } = await api.put<CompanyFinancialItem>(
     `/company-finance/items/${id}/payments`,
-    { pagamentos },
+    // `zero_explicito` diz ao servidor que este cliente distingue caixa vazia (null) de
+    // zero digitado (0). Sem a flag, o servidor mantém o comportamento antigo (0 = limpar)
+    // — é o que protege quem estiver com o JS anterior em cache.
+    { pagamentos, zero_explicito: true },
     { params: { competencia } },
   );
   if (CF_STRUCTURE_DEBUG) {

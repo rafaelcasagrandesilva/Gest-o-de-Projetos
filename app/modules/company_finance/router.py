@@ -244,7 +244,9 @@ async def replace_payments(
     )
     try:
         svc = CompanyFinanceService(db)
-        row = await svc.replace_payments(item_id=item_id, pagamentos=pags)
+        row = await svc.replace_payments(
+            item_id=item_id, pagamentos=pags, zero_explicito=payload.zero_explicito
+        )
         if row is None:
             raise HTTPException(status_code=404, detail="Item não encontrado")
 

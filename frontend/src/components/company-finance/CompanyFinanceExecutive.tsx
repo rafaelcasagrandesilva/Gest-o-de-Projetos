@@ -130,18 +130,20 @@ function buildPagamentosPayload(
   monthKeys: string[],
   localPayments: Record<string, string>,
   originalPagamentos: { mes: string; valor: number | null }[],
-): { mes: string; valor: number }[] {
+): { mes: string; valor: number | null }[] {
   const originalByMes = new Map(originalPagamentos.map((p) => [p.mes, p.valor ?? 0]));
   return monthKeys
-    .map((mes) => ({
-      mes,
-      valor: parseBRLInput(localPayments[mes] ?? ""),
-    }))
+    .map((mes) => {
+      const texto = (localPayments[mes] ?? "").trim();
+      // Caixa VAZIA manda `null` — o mês volta ao valor de referência. Um zero DIGITADO
+      // manda 0 e significa "neste mês não se paga nada" (sem título no Contas a Pagar).
+      // Achatar os dois em 0, como antes, tornava impossível declarar zero.
+      return { mes, valor: texto.length > 0 ? parseBRLInput(texto) : null };
+    })
     .filter(({ mes, valor }) => {
-      const prev = originalByMes.get(mes) ?? 0;
-      if (valor > 0) return true;
-      if (prev > 0) return true;
-      return (localPayments[mes] ?? "").trim().length > 0;
+      if (valor !== null) return true;
+      // Esvaziou uma caixa que tinha valor: manda `null` para limpar o lançamento.
+      return (originalByMes.get(mes) ?? 0) > 0;
     });
 }
 
@@ -2095,7 +2097,9 @@ function FinanceItemCard({
       const saved = await replaceCompanyFinancePayments(item.id, pagamentos, competencia);
       const m: Record<string, string> = {};
       for (const p of saved.pagamentos) {
-        m[p.mes] = p.valor != null && p.valor > 0 ? formatCurrencyInputFromApi(p.valor) : "";
+        // Zero salvo é valor DECLARADO: precisa voltar como "0,00" na caixa, senão o
+        // usuário digita zero, salva e vê o campo em branco de novo.
+        m[p.mes] = p.valor != null ? formatCurrencyInputFromApi(p.valor) : "";
       }
       setLocalPayments(m);
       await onSaved();
