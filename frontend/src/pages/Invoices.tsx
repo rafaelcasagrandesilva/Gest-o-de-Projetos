@@ -626,8 +626,8 @@ export function Invoices() {
       )}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <Kpi label="Total Líquido a receber" value={kpis ? formatCurrencyOrDash(kpis.total_a_receber) : "—"} />
         <Kpi label="Total Bruto a receber" value={kpis ? formatCurrencyOrDash(kpis.total_bruto_a_receber) : "—"} />
+        <Kpi label="Total Líquido a receber" value={kpis ? formatCurrencyOrDash(kpis.total_a_receber) : "—"} />
         <Kpi
           label={periodMode === "ALL" ? "Recebido (total)" : "Recebido no mês"}
           value={kpis ? formatCurrencyOrDash(kpis.recebido_no_mes) : "—"}
