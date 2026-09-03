@@ -316,3 +316,29 @@ class ReceivableManualItemRead(UUIDTimestampRead):
     observacao: str | None = None
     include_in_dashboard: bool = True
     status: ReceivableViewStatus
+
+
+DEFAULT_PDF_DUE_DAYS = 90
+
+
+class NfsePdfParseRead(BaseModel):
+    """Sugestão de preenchimento extraída do PDF da NFS-e. Nada é gravado até o usuário confirmar."""
+
+    number: str | None = None
+    issue_date: date | None = None
+    competence_month: date | None = None
+    gross_amount: float | None = None
+    net_amount: float | None = None
+    declared_net_amount: float | None = None
+    client_name: str | None = None
+    client_document: str | None = None
+    contract_number: str | None = None
+    description: str | None = None
+    # Prazo sugerido; o usuário pode trocar antes de confirmar.
+    due_days: int = DEFAULT_PDF_DUE_DAYS
+    # Projeto casado por projects.contract_number (None quando não houve match único).
+    project_id: UUID | None = None
+    project_name: str | None = None
+    # Já existe NF com esse número no projeto casado.
+    duplicate_invoice_id: UUID | None = None
+    warnings: list[str] = Field(default_factory=list)

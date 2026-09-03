@@ -33,6 +33,8 @@ from app.schemas.receivable import (
     ReceivableInvoiceUpdate,
     ReceivableKpisRead,
     ReceivableInvoiceFileRead,
+    NfsePdfParseRead,
+    DEFAULT_PDF_DUE_DAYS,
 )
 from app.schemas.receivable_advance_batch import (
     AdvanceBatchCreate,
@@ -66,7 +68,14 @@ from app.services.advance_repasse_ledger_service import AdvanceRepasseLedgerServ
 from app.services.advance_settlement_service import AdvanceSettlementService
 from app.services.receivable_advance_batch_service import ReceivableAdvanceBatchService
 from app.services.receivable_service import ReceivableService
-from app.models.receivable import ReceivableInvoiceFile
+from app.models.receivable import ReceivableInvoice, ReceivableInvoiceFile
+from app.models.project import Project
+from app.services.nfse_parser import NfseParseError, parse_nfse_pdf
+
+
+def _normalize_contract(value: str) -> str:
+    """Compara números de contrato ignorando pontuação e caixa."""
+    return "".join(ch for ch in value if ch.isalnum()).upper()
 
 
 def _actor_email(user: User) -> str:
@@ -863,6 +872,101 @@ async def create_advance_repasse_withdrawal(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.commit()
     return RepasseLedgerEntryRead.model_validate(entry)
+
+
+@invoices_router.post(
+    "/parse-pdf",
+    response_model=NfsePdfParseRead,
+    dependencies=[Depends(require_permission(INVOICES_CREATE))],
+)
+async def parse_invoice_pdf(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> NfsePdfParseRead:
+    """Lê o PDF da NFS-e e devolve os campos para pré-preencher o formulário de NF.
+
+    NÃO grava nada. O usuário confere os valores, ajusta o prazo se quiser e confirma;
+    só então o cadastro acontece pelo POST /invoices e o PDF sobe por /invoices/{id}/pdf.
+    """
+    if file.content_type not in ("application/pdf", "application/x-pdf"):
+        raise HTTPException(status_code=400, detail="Envie apenas arquivo PDF.")
+    body = await file.read()
+    if len(body) > settings.receivable_pdf_max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF excede o limite de {settings.receivable_pdf_max_bytes // (1024 * 1024)} MB.",
+        )
+    if not body.startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="O arquivo não parece ser um PDF válido.")
+
+    try:
+        parsed = parse_nfse_pdf(body)
+    except NfseParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    out = NfsePdfParseRead(
+        number=parsed.nf_number,
+        issue_date=parsed.issue_date,
+        competence_month=parsed.competence_month,
+        gross_amount=float(parsed.gross_amount) if parsed.gross_amount is not None else None,
+        net_amount=float(parsed.net_amount) if parsed.net_amount is not None else None,
+        declared_net_amount=(
+            float(parsed.declared_net_amount) if parsed.declared_net_amount is not None else None
+        ),
+        client_name=parsed.client_name,
+        client_document=parsed.client_document,
+        contract_number=parsed.contract_number,
+        description=parsed.description,
+        due_days=DEFAULT_PDF_DUE_DAYS,
+        warnings=list(parsed.warnings),
+    )
+
+    # Casa a NF com o projeto pelo número do contrato, respeitando o acesso do usuário.
+    # A comparação ignora pontuação porque o cadastro e a nota nem sempre formatam igual.
+    if parsed.contract_number:
+        stmt = select(Project.id, Project.name, Project.contract_number).where(
+            Project.contract_number.is_not(None)
+        )
+        if not user_sees_all_projects(user):
+            allowed = await get_accessible_project_ids(user, db)
+            if not allowed:
+                allowed = [uuid4()]  # nenhum projeto acessível: força resultado vazio
+            stmt = stmt.where(Project.id.in_(allowed))
+        wanted = _normalize_contract(parsed.contract_number)
+        matches = [
+            (pid, pname)
+            for pid, pname, pcontract in (await db.execute(stmt)).all()
+            if _normalize_contract(pcontract or "") == wanted
+        ]
+        if len(matches) == 1:
+            out.project_id, out.project_name = matches[0]
+        elif len(matches) > 1:
+            out.warnings.append(
+                f"Mais de um projeto usa o contrato {parsed.contract_number}. Escolha o projeto."
+            )
+        else:
+            out.warnings.append(
+                f"Nenhum projeto cadastrado com o contrato {parsed.contract_number}. Escolha o projeto."
+            )
+    else:
+        out.warnings.append("A nota não traz número de contrato. Escolha o projeto.")
+
+    # Avisa (sem bloquear) se essa NF já foi lançada no projeto.
+    if out.project_id is not None and out.number:
+        dup = (
+            await db.execute(
+                select(ReceivableInvoice.id).where(
+                    ReceivableInvoice.project_id == out.project_id,
+                    ReceivableInvoice.nf_number == out.number,
+                )
+            )
+        ).scalars().first()
+        if dup is not None:
+            out.duplicate_invoice_id = dup
+            out.warnings.append(f"A NF {out.number} já está cadastrada neste projeto.")
+
+    return out
 
 
 @invoices_router.post("", response_model=ReceivableInvoiceRead, dependencies=[Depends(require_permission(INVOICES_CREATE))])

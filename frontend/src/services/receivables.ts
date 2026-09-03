@@ -309,3 +309,29 @@ export function openPdfBlobInNewTab(blob: Blob): void {
   window.open(url, "_blank", "noopener,noreferrer");
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
+
+/** Sugestão de preenchimento extraída do PDF da NFS-e. Nada é gravado no servidor. */
+export type NfsePdfParse = {
+  number: string | null;
+  issue_date: string | null;
+  competence_month: string | null;
+  gross_amount: number | null;
+  net_amount: number | null;
+  declared_net_amount: number | null;
+  client_name: string | null;
+  client_document: string | null;
+  contract_number: string | null;
+  description: string | null;
+  due_days: number;
+  project_id: string | null;
+  project_name: string | null;
+  duplicate_invoice_id: string | null;
+  warnings: string[];
+};
+
+export async function parseInvoicePdf(file: File): Promise<NfsePdfParse> {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await api.post<NfsePdfParse>("/invoices/parse-pdf/", form);
+  return data;
+}

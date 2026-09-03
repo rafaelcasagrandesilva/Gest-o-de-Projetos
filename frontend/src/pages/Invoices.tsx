@@ -7,6 +7,7 @@ import {
   fetchReceivableInvoices,
   fetchReceivableKpis,
   openPdfBlobInNewTab,
+  parseInvoicePdf,
   reactivateReceivableInvoice,
   updateReceivableInvoice,
   uploadInvoicePdf,
@@ -218,6 +219,12 @@ export function Invoices() {
     include_in_dashboard: true,
   });
 
+  // Fluxo "cadastrar por PDF": o arquivo lido fica retido aqui e só é anexado
+  // depois que a NF é criada, para não deixar PDF órfão se o cadastro falhar.
+  const [pdfDraftFile, setPdfDraftFile] = useState<File | null>(null);
+  const [parsingPdf, setParsingPdf] = useState(false);
+  const [parseWarnings, setParseWarnings] = useState<string[]>([]);
+
   const { sortedRows, headerSort } = useTableSort(rows, INVOICE_SORT_COLUMNS, {
     defaultCompare: defaultInvoiceSort,
   });
@@ -304,6 +311,40 @@ export function Invoices() {
     });
   }, [expandedId, rows]);
 
+  /** Lê o PDF da NFS-e e pré-preenche o formulário. Nada é gravado até "Cadastrar NF". */
+  async function handleParsePdf(file: File | null) {
+    if (!file || !canEditInvoices) return;
+    if (file.type !== "application/pdf") {
+      setError("Selecione um arquivo PDF.");
+      return;
+    }
+    setParsingPdf(true);
+    setError(null);
+    setParseWarnings([]);
+    try {
+      const parsed = await parseInvoicePdf(file);
+      setForm((f) => ({
+        ...f,
+        project_id: parsed.project_id ?? f.project_id,
+        number: parsed.number ?? "",
+        issue_date: parsed.issue_date ? parsed.issue_date.slice(0, 10) : "",
+        competence: parsed.competence_month ? parsed.competence_month.slice(0, 7) : "",
+        due_days: ([30, 60, 90].includes(parsed.due_days) ? parsed.due_days : 90) as DueChoice,
+        gross_amount: formatCurrencyInputFromApi(parsed.gross_amount),
+        net_amount: formatCurrencyInputFromApi(parsed.net_amount),
+        client_name: parsed.client_name ?? "",
+        notes: parsed.description ?? "",
+      }));
+      setPdfDraftFile(file);
+      setParseWarnings(parsed.warnings ?? []);
+      setShowForm(true);
+    } catch (e) {
+      setError(formatAxiosDetail(e));
+    } finally {
+      setParsingPdf(false);
+    }
+  }
+
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!canEditInvoices) return;
@@ -320,7 +361,7 @@ export function Invoices() {
     setSaving(true);
     setError(null);
     try {
-      await createReceivableInvoice({
+      const created = await createReceivableInvoice({
         project_id: form.project_id,
         number: form.number.trim(),
         issue_date: form.issue_date,
@@ -333,7 +374,17 @@ export function Invoices() {
         is_official: form.is_official,
         include_in_dashboard: form.include_in_dashboard,
       });
+      // O PDF que originou o preenchimento vai junto, anexado à NF recém-criada.
+      if (pdfDraftFile) {
+        try {
+          await uploadInvoicePdf(created.id, pdfDraftFile);
+        } catch (e) {
+          setError(`NF cadastrada, mas o PDF não pôde ser anexado: ${formatAxiosDetail(e)}`);
+        }
+      }
       setShowForm(false);
+      setPdfDraftFile(null);
+      setParseWarnings([]);
       setForm({
         project_id: "",
         number: "",
@@ -619,10 +670,39 @@ export function Invoices() {
         >
           Nova antecipação
         </button>
+        <label
+          className={`rounded-lg border border-indigo-200 bg-white px-4 py-2 text-sm font-medium text-indigo-800 shadow-sm ${
+            canEditInvoices && !parsingPdf
+              ? "cursor-pointer hover:bg-indigo-50"
+              : "cursor-not-allowed opacity-50"
+          }`}
+          title="Leia o PDF da NFS-e para preencher o formulário automaticamente"
+        >
+          {parsingPdf ? "Lendo PDF…" : "Cadastrar por PDF"}
+          <input
+            type="file"
+            accept="application/pdf"
+            className="hidden"
+            disabled={!canEditInvoices || parsingPdf}
+            onChange={(e) => {
+              const picked = e.target.files?.[0] ?? null;
+              e.target.value = "";
+              void handleParsePdf(picked);
+            }}
+          />
+        </label>
         <button
           type="button"
           disabled={!canEditInvoices}
-          onClick={() => setShowForm((s) => !s)}
+          onClick={() =>
+            setShowForm((s) => {
+              if (s) {
+                setPdfDraftFile(null);
+                setParseWarnings([]);
+              }
+              return !s;
+            })
+          }
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {showForm ? "Fechar formulário" : "+ Nova NF"}
@@ -634,6 +714,30 @@ export function Invoices() {
           onSubmit={handleCreate}
           className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50/80 p-4 sm:grid-cols-2 lg:grid-cols-3"
         >
+          {(pdfDraftFile || parseWarnings.length > 0) && (
+            <div className="sm:col-span-2 lg:col-span-3 space-y-1 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm">
+              {pdfDraftFile && (
+                <p className="flex flex-wrap items-center gap-2 text-indigo-900">
+                  <span>
+                    Campos preenchidos a partir de <strong>{pdfDraftFile.name}</strong> — confira os
+                    valores e o prazo. O PDF será anexado à NF ao cadastrar.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPdfDraftFile(null)}
+                    className="text-indigo-700 underline hover:text-indigo-900"
+                  >
+                    não anexar
+                  </button>
+                </p>
+              )}
+              {parseWarnings.map((w) => (
+                <p key={w} className="text-amber-800">
+                  ⚠ {w}
+                </p>
+              ))}
+            </div>
+          )}
           <Field label="Projeto *">
             <select
               required
