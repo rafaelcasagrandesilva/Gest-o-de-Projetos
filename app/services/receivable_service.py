@@ -455,6 +455,11 @@ class ReceivableService:
         total_a_receber = 0.0
         total_bruto_a_receber = 0.0
         em_atraso_valor = 0.0
+        # NF pré-faturada (is_official=False) ainda não é recebível firme: fica de fora
+        # dos totais a receber E do valor em atraso — os três cards falam da mesma
+        # carteira. Exceção: quando o usuário filtra explicitamente por pré-faturadas,
+        # os cards mostram justamente o que ele pediu para ver.
+        conta_pre_faturada = official == "unofficial"
         for inv in rows:
             if inv.invoice_status == "CANCELADA":
                 continue
@@ -462,13 +467,18 @@ class ReceivableService:
             net = _f(inv.net_amount)
             recv = _f(inv.received_amount)
             saldo = max(0.0, net - recv)
-            if saldo > CENT_TOL:
+            if saldo > CENT_TOL and (inv.is_official or conta_pre_faturada):
                 total_a_receber += saldo
                 if net > CENT_TOL:
                     total_bruto_a_receber += gross * (saldo / net)
                 else:
                     total_bruto_a_receber += gross
-            if inv.due_date < today and recv < net - CENT_TOL and inv.invoice_status != "CANCELADA":
+            if (
+                inv.due_date < today
+                and recv < net - CENT_TOL
+                and inv.invoice_status != "CANCELADA"
+                and (inv.is_official or conta_pre_faturada)
+            ):
                 em_atraso_valor += saldo
 
         # "Recebido no mês": segue o período selecionado.
