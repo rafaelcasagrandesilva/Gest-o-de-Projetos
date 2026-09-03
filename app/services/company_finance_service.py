@@ -34,6 +34,8 @@ from app.services.payable_snapshot_service import PayableSnapshotService, payabl
 from app.services.settings_service import SettingsService
 from app.utils.lifecycle import DELETE_WITH_MOVEMENT_MSG, normalize_lifecycle
 
+from app.utils.date_utils import next_competencia  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 
@@ -1392,6 +1394,55 @@ class CompanyFinanceService:
             bucket = out.setdefault(ref_id, {})
             bucket[m] = bucket.get(m, 0.0) + _f(amount)
         return out
+
+    async def auto_close_settled_schedule(self, *, item_id: UUID) -> bool:
+        """Cronograma QUITADO → inativa o cadastro, com encerramento no MÊS SEGUINTE.
+
+        Dívida paga até a última parcela não deveria continuar na lista de ativos: ela não gera
+        mais título (Modo 2 só gera onde há parcela), mas polui a tela de quem procura o que
+        ainda está em curso.
+
+        O encerramento é datado no PRIMEIRO DIA DO MÊS SEGUINTE — nunca no mês corrente. Isso
+        preserva duas coisas ao mesmo tempo: a competência atual segue dentro da vigência (então
+        nenhum título dela vira resíduo), e o item continua visível no filtro "Ativos" até a
+        virada, quando some sozinho.
+
+        Não faz nada quando: o item não está em Modo 2, já está inativo, ainda tem saldo, ou não
+        tem nenhuma parcela. Idempotente — chamar de novo não muda nada.
+        """
+        item = (
+            await self.db.execute(
+                select(CompanyFinancialItem)
+                .options(selectinload(CompanyFinancialItem.payments))
+                .where(CompanyFinancialItem.id == item_id)
+            )
+        ).scalar_one_or_none()
+        if item is None:
+            return False
+        if not bool(getattr(item, "uses_custom_schedule", False)):
+            return False
+        if not bool(getattr(item, "is_active", True)):
+            return False
+        if not item.payments:
+            return False
+
+        pbe = await self._cap_paid_by_entry([item.id])
+        ind = self._schedule_execution(item, pbe)
+        if float(ind.saldo_restante) > 0.005 or int(ind.parcelas_restantes) > 0:
+            return False
+
+        hoje = date.today()
+        item.is_active = False
+        item.end_date = next_competencia(first_of_month(hoje))
+        item.updated_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        logger.info(
+            "company_finance auto-close settled schedule item_id=%s nome=%s end_date=%s",
+            item.id,
+            item.nome,
+            item.end_date,
+        )
+        return True
 
     def _schedule_execution(self, it: CompanyFinancialItem, paid_by_entry: dict[UUID, float]):
         """CÁLCULO OFICIAL ÚNICO da execução da dívida em Modo 2.

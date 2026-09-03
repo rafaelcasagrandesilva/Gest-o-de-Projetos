@@ -73,8 +73,9 @@ from app.schemas.payables import (
 )
 from app.services.payable_import import MAX_IMPORT_BYTES, PayableManualImportService
 from app.services.financial_crud_service import FinancialCrudService
+from app.services.company_finance_service import CompanyFinanceService
 from app.services.finance_service import FinanceService
-from app.services.payable_snapshot_service import payable_snapshot_derived_fields
+from app.services.payable_snapshot_service import PAYABLE_DEBT_TYPES, payable_snapshot_derived_fields
 from app.services.receivable_service import ReceivableService
 from app.services.receivable_manual_service import ReceivableManualService
 from app.utils.date_utils import normalize_competencia, previous_competencia
@@ -916,6 +917,10 @@ async def register_payables_payment(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    # Foi a última parcela? Cronograma quitado inativa o cadastro, com encerramento no mês
+    # SEGUINTE — o item segue visível (e a competência atual intacta) até a virada.
+    if updated.type in PAYABLE_DEBT_TYPES and updated.ref_id is not None:
+        await CompanyFinanceService(db).auto_close_settled_schedule(item_id=updated.ref_id)
     await db.commit()
     dates = await svc.last_payment_dates_by_snapshot_ids([updated.id])
     return redact_for("payables", _snapshot_to_read(updated, last_payment_date=dates.get(updated.id)), user)

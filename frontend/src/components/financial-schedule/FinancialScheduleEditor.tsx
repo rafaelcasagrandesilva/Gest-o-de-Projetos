@@ -67,6 +67,24 @@ function toDraft(l: ScheduleRead["lines"][number]): LineDraft {
   };
 }
 
+/** Atribui posição 1..N às parcelas sem sequência, respeitando as que já têm. */
+function numerarParcelasSemSequencia(drafts: LineDraft[]): LineDraft[] {
+  if (drafts.every((d) => d.seq > 0)) return drafts;
+  const porVencimento = [...drafts].sort((a, b) =>
+    (a.vencimento || "").localeCompare(b.vencimento || ""),
+  );
+  const usadas = new Set(drafts.filter((d) => d.seq > 0).map((d) => d.seq));
+  let proxima = 1;
+  const atribuida = new Map<string, number>();
+  for (const d of porVencimento) {
+    if (d.seq > 0) continue;
+    while (usadas.has(proxima)) proxima += 1;
+    usadas.add(proxima);
+    atribuida.set(d.key, proxima);
+  }
+  return drafts.map((d) => (atribuida.has(d.key) ? { ...d, seq: atribuida.get(d.key)! } : d));
+}
+
 export function FinancialScheduleEditor({
   title,
   subtitle,
@@ -113,7 +131,11 @@ export function FinancialScheduleEditor({
       const data = await load();
       const anyRedacted = data.lines.some((l) => l.valor == null);
       setRedacted(anyRedacted);
-      const drafts = data.lines.map(toDraft);
+      // Parcela vinda da grade comum (Modo 1) não tem `schedule_seq` no banco. Sem numerá-la
+      // aqui, ela chegava ao editor com seq 0 — exibida como "—" e recusada ao salvar, porque
+      // o servidor exige seq >= 1. A posição é atribuída por VENCIMENTO, que é a ordem em que
+      // as parcelas realmente acontecem; quem já tem seq mantém o seu.
+      const drafts = numerarParcelasSemSequencia(data.lines.map(toDraft));
       setLines(drafts);
       setLoadedPaid(new Map(drafts.filter((d) => d.hasPayment).map((d) => [d.seq, d])));
     } catch {

@@ -204,12 +204,26 @@ type Props = {
   subtitle: string;
 };
 
-type DebtCreditorFilter =
-  | "ALL"
-  | "HAS_LEGAL_PROCESS"
-  | "NO_LEGAL_PROCESS"
-  | "HAS_RENEGOTIATION"
-  | "NO_RENEGOTIATION";
+/** Em vigor = ativo, OU inativado com encerramento em mês FUTURO.
+ *
+ *  Quitar um cronograma inativa o cadastro com encerramento no primeiro dia do mês seguinte.
+ *  Sem esta segunda condição o item sumiria da tela no instante do último pagamento — e o
+ *  combinado é que ele fique visível até a virada do mês, para não atrapalhar quem ainda está
+ *  fechando a competência corrente.
+ */
+function emVigor(it: { is_active?: boolean | null; end_date?: string | null }): boolean {
+  if (it.is_active ?? true) return true;
+  const fim = (it.end_date ?? "").slice(0, 7);
+  if (!fim) return false;
+  const hoje = new Date();
+  const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+  return fim > mesAtual;
+}
+
+/** Situação do CADASTRO. Mesmas três opções (e mesmo padrão "Ativos") de Colaboradores e
+ *  Veículos — o cadastro não deveria falar uma língua diferente em cada módulo. Não confundir
+ *  com o filtro "Status", que é o andamento do PAGAMENTO (Em aberto/Parcial/Quitado). */
+type SituacaoFilter = "ATIVOS" | "INATIVOS" | "TODOS";
 
 /** Tooltip de campo bloqueado por FALTA DE PERMISSÃO (não mais por perfil). */
 const FINANCE_EDIT_NO_PERM = "Sem permissão para editar (finanças da empresa).";
@@ -239,12 +253,13 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   // Modal "Lançamentos da Competência" aberto pelo Extrato Analítico (célula Valor Mensal).
   const [entriesFor, setEntriesFor] = useState<CompanyFinancialItem | null>(null);
   const [showCharts, setShowCharts] = useState(false);
-  const [creditorFilter, setCreditorFilter] = useState<DebtCreditorFilter>("ALL");
   // Filtros globais da tela (Tipo/Status): aplicados à Visão Executiva e ao Extrato Analítico.
   const [requiredFilter, setRequiredFilter] = useState<RequiredFilter>("ALL");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   // Status consolidado (Custos Fixos) — filtro de VISUALIZAÇÃO das listas (não altera os cards).
   const [fixedStatusFilter, setFixedStatusFilter] = useState<FixedCostStatusFilter>("ALL");
+  // Encerrado não some do sistema, some da VISTA: quem abre o cadastro quer o que está em uso.
+  const [situacaoFilter, setSituacaoFilter] = useState<SituacaoFilter>("ATIVOS");
   // Filtro por Centro de Custo (somente Custos Fixos) — escopo da PÁGINA (cards, pendências e listas).
   // Guarda o rótulo do centro (mesmo exibido/cadastrado); "" = Todos (comportamento atual).
   const [costCenterFilter, setCostCenterFilter] = useState<string>("");
@@ -522,25 +537,6 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     if (costCenterFilter) {
       list = list.filter((it) => (it.cost_center ?? "") === costCenterFilter);
     }
-    if (tipo === "endividamento") {
-      list = list.filter((it) => {
-        const hasLegal = Boolean(it.has_legal_process);
-        const hasReneg = Boolean(it.has_renegotiation);
-        switch (creditorFilter) {
-          case "HAS_LEGAL_PROCESS":
-            return hasLegal;
-          case "NO_LEGAL_PROCESS":
-            return !hasLegal;
-          case "HAS_RENEGOTIATION":
-            return hasReneg;
-          case "NO_RENEGOTIATION":
-            return !hasReneg;
-          case "ALL":
-          default:
-            return true;
-        }
-      });
-    }
     // Tipo (Todos / Obrigatórios / Pendentes) — filtro global; aplica a ambos os tipos.
     if (requiredFilter !== "ALL") {
       list =
@@ -556,16 +552,26 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       list = list.filter((it) => itemMatchesSearch(it, itemSearch, projectOptions, tipo));
     }
     return list;
-  }, [tipo, items, costCenterFilter, creditorFilter, requiredFilter, statusFilter, pendingItemIds, itemSearch, projectOptions]);
+  }, [tipo, items, costCenterFilter, requiredFilter, statusFilter, pendingItemIds, itemSearch, projectOptions]);
 
   // Filtro de VISUALIZAÇÃO por Status consolidado (Custos Fixos): narra apenas as LISTAS
   // (Extrato Analítico, Visão Executiva, lista de Pendências). NÃO afeta os cards do topo
   // (Total esperado/pago, Itens cadastrados, Cobertura), que representam o mês inteiro.
   // Reutiliza EXATAMENTE o status da coluna STATUS (sem recálculo no frontend).
   const displayItems = useMemo(() => {
-    if (tipo !== "custo_fixo" || fixedStatusFilter === "ALL") return filteredItems;
-    return filteredItems.filter((it) => matchesFixedCostStatus(it, fixedStatusFilter));
-  }, [tipo, filteredItems, fixedStatusFilter]);
+    let list = filteredItems;
+    // Situação do cadastro: filtro de VISUALIZAÇÃO, como o de Status. Os cards continuam
+    // derivando de `filteredItems` e representando o mês inteiro — esconder um encerrado da
+    // lista não pode mudar o Total esperado/pago do mês.
+    if (situacaoFilter !== "TODOS") {
+      const querAtivos = situacaoFilter === "ATIVOS";
+      list = list.filter((it) => emVigor(it) === querAtivos);
+    }
+    if (tipo === "custo_fixo" && fixedStatusFilter !== "ALL") {
+      list = list.filter((it) => matchesFixedCostStatus(it, fixedStatusFilter));
+    }
+    return list;
+  }, [tipo, filteredItems, fixedStatusFilter, situacaoFilter]);
 
   // Cards de Custos Fixos (Total esperado/pago, Itens, Cobertura): FONTE ÚNICA idêntica ao
   // Extrato Analítico — consomem as MESMAS funções por item (`valorMensalOf` = coluna Valor
@@ -837,22 +843,6 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
 
         {/* Filtros globais da tela — aplicados igualmente à Visão Executiva e ao Extrato Analítico. */}
         <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
-          {tipo === "endividamento" && (
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="font-medium text-slate-700">Credor</span>
-              <select
-                value={creditorFilter}
-                onChange={(e) => setCreditorFilter(e.target.value as DebtCreditorFilter)}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm"
-              >
-                <option value="ALL">Todos</option>
-                <option value="HAS_LEGAL_PROCESS">Com processo</option>
-                <option value="NO_LEGAL_PROCESS">Sem processo</option>
-                <option value="HAS_RENEGOTIATION">Renegociados</option>
-                <option value="NO_RENEGOTIATION">Não renegociados</option>
-              </select>
-            </label>
-          )}
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium text-slate-700">Competência</span>
             <input
@@ -893,6 +883,18 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               </select>
             </label>
           )}
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-slate-700">Situação</span>
+            <select
+              value={situacaoFilter}
+              onChange={(e) => setSituacaoFilter(e.target.value as SituacaoFilter)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm"
+            >
+              <option value="ATIVOS">Ativos</option>
+              <option value="INATIVOS">Não ativos</option>
+              <option value="TODOS">Todos</option>
+            </select>
+          </label>
           {tipo === "custo_fixo" && (
             <label className="flex flex-col gap-1 text-sm">
               <span className="font-medium text-slate-700">Status</span>
