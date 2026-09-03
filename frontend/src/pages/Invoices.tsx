@@ -224,6 +224,8 @@ export function Invoices() {
   const [pdfDraftFile, setPdfDraftFile] = useState<File | null>(null);
   const [parsingPdf, setParsingPdf] = useState(false);
   const [parseWarnings, setParseWarnings] = useState<string[]>([]);
+  const [pdfDraftNotice, setPdfDraftNotice] = useState<string | null>(null);
+  const [pdfDragActive, setPdfDragActive] = useState(false);
 
   const { sortedRows, headerSort } = useTableSort(rows, INVOICE_SORT_COLUMNS, {
     defaultCompare: defaultInvoiceSort,
@@ -337,9 +339,68 @@ export function Invoices() {
       }));
       setPdfDraftFile(file);
       setParseWarnings(parsed.warnings ?? []);
+      setPdfDraftNotice(
+        `Campos preenchidos a partir de ${file.name}. Confira os valores e o prazo.`,
+      );
       setShowForm(true);
     } catch (e) {
       setError(formatAxiosDetail(e));
+    } finally {
+      setParsingPdf(false);
+    }
+  }
+
+  /** Anexa um PDF ao cadastro em andamento, sem precisar criar a NF antes.
+   *
+   * Vale para os dois casos, porque de fora não dá para saber qual é: se o PDF for
+   * legível, aproveita os dados para preencher o que ainda está VAZIO (nunca sobrescreve
+   * o que foi digitado); se for imagem da nota, apenas anexa e o preenchimento fica manual.
+   */
+  async function attachPdfToForm(file: File | null) {
+    if (!file || !canEditInvoices) return;
+    if (file.type !== "application/pdf") {
+      setError("Selecione um arquivo PDF.");
+      return;
+    }
+    setPdfDraftFile(file);
+    setError(null);
+    setParseWarnings([]);
+    setPdfDraftNotice(null);
+    setParsingPdf(true);
+    // Formulário ainda em branco: o PDF pode ditar todos os campos, inclusive o prazo.
+    const pristine = !form.number && !form.gross_amount && !form.issue_date;
+    try {
+      const parsed = await parseInvoicePdf(file);
+      setForm((f) => ({
+        ...f,
+        project_id: f.project_id || (parsed.project_id ?? ""),
+        number: f.number || (parsed.number ?? ""),
+        issue_date: f.issue_date || (parsed.issue_date ? parsed.issue_date.slice(0, 10) : ""),
+        competence:
+          f.competence || (parsed.competence_month ? parsed.competence_month.slice(0, 7) : ""),
+        due_days: pristine
+          ? (([30, 60, 90].includes(parsed.due_days) ? parsed.due_days : 90) as DueChoice)
+          : f.due_days,
+        // Bruto e líquido andam juntos: aproveitar o líquido do PDF sobre um bruto
+        // digitado à mão produziria um par incoerente (valores de notas diferentes).
+        gross_amount: f.gross_amount || formatCurrencyInputFromApi(parsed.gross_amount),
+        net_amount: f.gross_amount
+          ? f.net_amount
+          : f.net_amount || formatCurrencyInputFromApi(parsed.net_amount),
+        client_name: f.client_name || (parsed.client_name ?? ""),
+        notes: f.notes || (parsed.description ?? ""),
+      }));
+      setParseWarnings(parsed.warnings ?? []);
+      setPdfDraftNotice(
+        pristine
+          ? `Campos preenchidos a partir de ${file.name}. Confira os valores e o prazo.`
+          : `${file.name} anexado. Os campos que estavam vazios foram preenchidos com os dados do PDF.`,
+      );
+    } catch {
+      // PDF só-imagem (ou de outro layout): anexar continua valendo, só o preenchimento não rola.
+      setPdfDraftNotice(
+        `${file.name} anexado. Não deu para ler os dados deste PDF — preencha os campos à mão.`,
+      );
     } finally {
       setParsingPdf(false);
     }
@@ -385,6 +446,7 @@ export function Invoices() {
       setShowForm(false);
       setPdfDraftFile(null);
       setParseWarnings([]);
+      setPdfDraftNotice(null);
       setForm({
         project_id: "",
         number: "",
@@ -699,6 +761,7 @@ export function Invoices() {
               if (s) {
                 setPdfDraftFile(null);
                 setParseWarnings([]);
+                setPdfDraftNotice(null);
               }
               return !s;
             })
@@ -714,23 +777,9 @@ export function Invoices() {
           onSubmit={handleCreate}
           className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50/80 p-4 sm:grid-cols-2 lg:grid-cols-3"
         >
-          {(pdfDraftFile || parseWarnings.length > 0) && (
+          {(pdfDraftNotice || parseWarnings.length > 0) && (
             <div className="sm:col-span-2 lg:col-span-3 space-y-1 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm">
-              {pdfDraftFile && (
-                <p className="flex flex-wrap items-center gap-2 text-indigo-900">
-                  <span>
-                    Campos preenchidos a partir de <strong>{pdfDraftFile.name}</strong> — confira os
-                    valores e o prazo. O PDF será anexado à NF ao cadastrar.
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setPdfDraftFile(null)}
-                    className="text-indigo-700 underline hover:text-indigo-900"
-                  >
-                    não anexar
-                  </button>
-                </p>
-              )}
+              {pdfDraftNotice && <p className="text-indigo-900">{pdfDraftNotice}</p>}
               {parseWarnings.map((w) => (
                 <p key={w} className="text-amber-800">
                   ⚠ {w}
@@ -850,6 +899,72 @@ export function Invoices() {
             />
             <span className="text-slate-700">Considerar no Dashboard Financeiro</span>
           </label>
+          {/* Anexo do PDF durante o cadastro: evita ter que criar a NF e anexar depois.
+              Aceita clique e arrastar-e-soltar. */}
+          <div className="sm:col-span-2 lg:col-span-3">
+            <label
+              onDragOver={(e) => {
+                e.preventDefault();
+                setPdfDragActive(true);
+              }}
+              onDragLeave={() => setPdfDragActive(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setPdfDragActive(false);
+                void attachPdfToForm(e.dataTransfer.files?.[0] ?? null);
+              }}
+              className={`flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed px-4 py-5 text-center text-sm transition ${
+                pdfDragActive
+                  ? "border-indigo-500 bg-indigo-50 text-indigo-900"
+                  : "border-slate-300 bg-white text-slate-600 hover:border-indigo-400 hover:bg-slate-50"
+              }`}
+            >
+              {parsingPdf ? (
+                <span className="pointer-events-none">Lendo PDF…</span>
+              ) : pdfDraftFile ? (
+                <>
+                  <span className="pointer-events-none font-medium text-indigo-900">
+                    📎 {pdfDraftFile.name}
+                  </span>
+                  <span className="pointer-events-none text-xs text-slate-500">
+                    Será anexado à NF ao cadastrar. Clique ou arraste outro para trocar.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="pointer-events-none font-medium">
+                    Arraste o PDF da NF aqui, ou clique para escolher
+                  </span>
+                  <span className="pointer-events-none text-xs text-slate-500">
+                    Opcional. Se o PDF for legível, os campos vazios são preenchidos sozinhos.
+                  </span>
+                </>
+              )}
+              <input
+                type="file"
+                accept="application/pdf"
+                className="hidden"
+                disabled={parsingPdf}
+                onChange={(e) => {
+                  const picked = e.target.files?.[0] ?? null;
+                  e.target.value = "";
+                  void attachPdfToForm(picked);
+                }}
+              />
+            </label>
+            {pdfDraftFile && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPdfDraftFile(null);
+                  setPdfDraftNotice(null);
+                }}
+                className="mt-1 text-xs text-slate-600 underline hover:text-slate-900"
+              >
+                remover anexo
+              </button>
+            )}
+          </div>
           <div className="sm:col-span-2 lg:col-span-3">
             <button
               type="submit"
