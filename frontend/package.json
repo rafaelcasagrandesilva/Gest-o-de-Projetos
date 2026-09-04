@@ -12,7 +12,8 @@
     "test:currency": "node scripts/test-currency.mjs",
     "test:chart-cost": "node scripts/test-chart-cost-total.mjs",
     "test:workspace-landing": "node scripts/test-workspace-landing.mjs",
-    "test:person-name": "node scripts/test-person-name.mjs"
+    "test:person-name": "node scripts/test-person-name.mjs",
+    "test:advance-rates": "node scripts/test-advance-rates.mjs"
   },
   "dependencies": {
     "axios": "^1.7.9",

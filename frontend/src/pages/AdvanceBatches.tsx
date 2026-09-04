@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { isAxiosError } from "axios";
 import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
+import { AdvanceRateCards } from "@/components/AdvanceRateCards";
 import { AdvanceSettlementsTab } from "@/components/AdvanceSettlementsTab";
 import { Money } from "@/components/Money";
 import { PeriodFilter, type PeriodMode } from "@/components/PeriodFilter";
@@ -51,6 +52,8 @@ export function AdvanceBatches() {
   // Período por Data da Operação (receive_date). Default "ALL" preserva a lista completa.
   const [periodMode, setPeriodMode] = useState<PeriodMode>("ALL");
   const [period, setPeriod] = useState("");
+  // Instituição (""= todas). Filtro client-side, como o de período.
+  const [institution, setInstitution] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -69,11 +72,28 @@ export function AdvanceBatches() {
     void load();
   }, [load]);
 
-  // Filtro por período (mês) sobre a Data da Operação. Modo "Todos" mantém tudo.
+  // Opções do filtro de instituição: derivadas dos próprios dados (nenhuma lista fixa —
+  // instituições novas aparecem sozinhas). Vem de `rows`, não do recorte, para a lista
+  // não mudar de tamanho a cada troca de mês.
+  const institutionOptions = useMemo(
+    () =>
+      [...new Set(rows.map((b) => b.institution?.trim()).filter((n): n is string => !!n))].sort((a, b) =>
+        a.localeCompare(b, "pt-BR"),
+      ),
+    [rows],
+  );
+
+  // Filtros por período (mês, sobre a Data da Operação) e por instituição. "Todos" mantém tudo.
   const filteredRows = useMemo(() => {
-    if (periodMode !== "MONTH" || !period) return rows;
-    return rows.filter((b) => (b.receive_date || "").slice(0, 7) === period);
-  }, [rows, periodMode, period]);
+    let out = rows;
+    if (periodMode === "MONTH" && period) {
+      out = out.filter((b) => (b.receive_date || "").slice(0, 7) === period);
+    }
+    if (institution) {
+      out = out.filter((b) => (b.institution?.trim() || "") === institution);
+    }
+    return out;
+  }, [rows, periodMode, period, institution]);
 
   const { sortedRows: sorted, headerSort } = useTableSort(filteredRows, ADVANCE_BATCH_SORT_COLUMNS, {
     defaultCompare: defaultAdvanceBatchSort,
@@ -240,13 +260,35 @@ export function AdvanceBatches() {
       )}
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <PeriodFilter
-          label="Período (Operação)"
-          mode={periodMode}
-          value={period}
-          onModeChange={setPeriodMode}
-          onChange={setPeriod}
-        />
+        <div className="flex flex-wrap gap-3">
+          <PeriodFilter
+            label="Período (Operação)"
+            mode={periodMode}
+            value={period}
+            onModeChange={setPeriodMode}
+            onChange={setPeriod}
+          />
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-slate-700">Instituição</span>
+            <select
+              value={institution}
+              onChange={(e) => setInstitution(e.target.value)}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="">Todas</option>
+              {institutionOptions.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {/* Indicadores na MESMA barra dos filtros, ocupando o espaço livre à direita:
+              mostrar a taxa efetiva não pode custar altura da tabela de operações. */}
+          <AdvanceRateCards batches={filteredRows} />
+        </div>
       </section>
 
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
