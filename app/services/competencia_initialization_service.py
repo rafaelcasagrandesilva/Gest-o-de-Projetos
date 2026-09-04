@@ -84,15 +84,33 @@ CATEGORY_LABELS: dict[CostCategory, str] = {
 
 
 class InitializationOrigin(str, enum.Enum):
-    """Origem dos dados escolhida no modal (define fonte e cenário de destino)."""
+    """DE ONDE os dados vêm. O destino é escolhido à parte — ver `legacy_target_scenario`."""
 
-    PREVIOUS_REALIZADO = "previous_realizado"  # Realizado da competência anterior → Realizado
-    CURRENT_PREVISTO = "current_previsto"  # Previsto da competência atual → Realizado
-    PREVIOUS_PREVISTO = "previous_previsto"  # Previsto da competência anterior → Previsto
+    PREVIOUS_REALIZADO = "previous_realizado"  # Realizado da competência anterior
+    CURRENT_PREVISTO = "current_previsto"  # Previsto da competência atual
+    PREVIOUS_PREVISTO = "previous_previsto"  # Previsto da competência anterior
 
     @property
-    def target_scenario(self) -> Scenario:
+    def legacy_target_scenario(self) -> Scenario:
+        """Destino que a origem IMPLICAVA antes de fonte e destino serem separados.
+
+        A origem ditava o cenário de destino, então "Realizado da competência anterior"
+        gravava sempre em REALIZADO — mesmo com o usuário trabalhando em PREVISTO, que é
+        justamente quem quer o realizado do mês anterior como base da previsão. Era um bug:
+        o dado ia parar no cenário errado, silenciosamente.
+
+        Mantido só como padrão para chamadas que não informam o destino; quem informa manda.
+        """
         return Scenario.PREVISTO if self is InitializationOrigin.PREVIOUS_PREVISTO else Scenario.REALIZADO
+
+    def source_ref(self, project_id: UUID, target_comp: date) -> "CompetenciaRef":
+        """Referência de ORIGEM para uma competência de destino."""
+        prev = previous_competencia(target_comp)
+        if self is InitializationOrigin.PREVIOUS_REALIZADO:
+            return CompetenciaRef(project_id, prev, Scenario.REALIZADO)
+        if self is InitializationOrigin.CURRENT_PREVISTO:
+            return CompetenciaRef(project_id, target_comp, Scenario.PREVISTO)
+        return CompetenciaRef(project_id, prev, Scenario.PREVISTO)
 
 
 @dataclass(frozen=True)
@@ -145,24 +163,36 @@ class CompetenciaInitializationService:
         competencia: date,
         origin: InitializationOrigin,
         categories: list[CostCategory] | set[CostCategory],
+        target_scenario: Scenario | None = None,
     ) -> InitializationOutcome:
-        """Inicializa a competência de destino a partir de uma das 3 origens padrão."""
+        """Copia de uma das origens padrão para a competência, no cenário de destino pedido.
+
+        `target_scenario` é o cenário em que o usuário está trabalhando. Omitir cai no destino
+        que a origem implicava antes da separação (ver `legacy_target_scenario`), só para não
+        quebrar chamadas antigas — a tela sempre informa.
+        """
         target_comp = normalize_competencia(competencia)
-        source, target = self._resolve_refs(project_id, target_comp, origin)
+        source, target = self.resolve_refs(project_id, target_comp, origin, target_scenario)
         return await self.copy_categories(source=source, target=target, categories=categories)
 
     @staticmethod
-    def _resolve_refs(
-        project_id: UUID, target_comp: date, origin: InitializationOrigin
+    def resolve_refs(
+        project_id: UUID,
+        target_comp: date,
+        origin: InitializationOrigin,
+        target_scenario: Scenario | None = None,
     ) -> tuple[CompetenciaRef, CompetenciaRef]:
-        prev = previous_competencia(target_comp)
-        if origin is InitializationOrigin.PREVIOUS_REALIZADO:
-            src = CompetenciaRef(project_id, prev, Scenario.REALIZADO)
-        elif origin is InitializationOrigin.CURRENT_PREVISTO:
-            src = CompetenciaRef(project_id, target_comp, Scenario.PREVISTO)
-        else:  # PREVIOUS_PREVISTO
-            src = CompetenciaRef(project_id, prev, Scenario.PREVISTO)
-        tgt = CompetenciaRef(project_id, target_comp, origin.target_scenario)
+        """Resolve origem e destino. Levanta ValueError se apontarem para o mesmo conjunto."""
+        src = origin.source_ref(project_id, target_comp)
+        tgt = CompetenciaRef(
+            project_id, target_comp, target_scenario or origin.legacy_target_scenario
+        )
+        if src.competencia == tgt.competencia and src.scenario is tgt.scenario:
+            # Ex.: "Previsto da competência atual" tendo PREVISTO como destino — apagaria as
+            # linhas de destino (a cópia substitui) e as recopiaria de si mesmas.
+            raise ValueError(
+                "Origem e destino são o mesmo conjunto de dados; escolha outra origem."
+            )
         return src, tgt
 
     # ---- Núcleo reutilizável -----------------------------------------------

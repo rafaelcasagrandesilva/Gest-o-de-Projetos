@@ -194,7 +194,13 @@ export interface InitializeCompetenciaResult {
 
 export async function initializeCompetencia(
   projectId: string,
-  body: { competencia: string; origin: InitializeOrigin; categories: CostCategory[] },
+  body: {
+    competencia: string;
+    origin: InitializeOrigin;
+    /** Cenário de DESTINO — onde a cópia é gravada. A origem só diz de onde os dados vêm. */
+    target_scenario: "PREVISTO" | "REALIZADO";
+    categories: CostCategory[];
+  },
 ): Promise<InitializeCompetenciaResult> {
   const { data } = await api.post<InitializeCompetenciaResult>(
     `/projects/${projectId}/structure/initialize-competencia/`,

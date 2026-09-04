@@ -69,6 +69,10 @@ class InitializeCompetenciaBody(BaseModel):
 
     competencia: date
     origin: Literal["previous_realizado", "current_previsto", "previous_previsto"]
+    # Cenário em que o usuário está trabalhando — é ELE que decide onde a cópia é gravada.
+    # A origem diz apenas de onde os dados vêm. Omitir mantém o destino que a origem
+    # implicava antes dessa separação (compatibilidade com chamadas antigas).
+    target_scenario: Literal["PREVISTO", "REALIZADO"] | None = None
     categories: list[Literal["labor", "vehicles", "systems", "misc"]] = Field(min_length=1)
 
     @field_validator("categories")

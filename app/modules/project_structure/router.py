@@ -143,21 +143,34 @@ async def initialize_competencia(
 ) -> InitializeCompetenciaResult:
     """Copia (substituindo) as categorias selecionadas de uma origem para a competência.
 
-    O cenário de destino é definido pela origem escolhida (Realizado/Previsto).
+    O destino é o cenário em que o usuário está trabalhando (`target_scenario`); a origem diz
+    apenas DE ONDE os dados vêm. Antes o destino era deduzido da origem, e por isso "Realizado
+    da competência anterior" gravava sempre em Realizado — mesmo para quem estava montando o
+    Previsto a partir do realizado do mês anterior.
+
     Reutiliza CompetenciaInitializationService (backend centraliza a lógica).
     """
     origin = InitializationOrigin(payload.origin)
     categories = [CostCategory(c) for c in payload.categories]
-    # Cenário de destino vem da origem → valida a permissão de escrita nesse cenário.
+    target_scenario = (
+        coerce_scenario(payload.target_scenario)
+        if payload.target_scenario
+        else origin.legacy_target_scenario
+    )
+    # Valida a permissão de escrita no cenário que será REALMENTE gravado.
     await assert_may_write_scenario(
-        user=actor, scenario=origin.target_scenario, db=db, project_id=project_id
+        user=actor, scenario=target_scenario, db=db, project_id=project_id
     )
-    outcome = await CompetenciaInitializationService(db).initialize_from_origin(
-        project_id=project_id,
-        competencia=payload.competencia,
-        origin=origin,
-        categories=categories,
-    )
+    try:
+        outcome = await CompetenciaInitializationService(db).initialize_from_origin(
+            project_id=project_id,
+            competencia=payload.competencia,
+            origin=origin,
+            categories=categories,
+            target_scenario=target_scenario,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return InitializeCompetenciaResult(
         source_competencia=outcome.source.competencia,
         source_scenario=outcome.source.scenario.value,

@@ -36,6 +36,7 @@ export function InitializeCompetenciaModal({
   onClose,
   projectId,
   competencia,
+  targetScenario,
   onDone,
 }: {
   open: boolean;
@@ -43,6 +44,9 @@ export function InitializeCompetenciaModal({
   projectId: string;
   /** competência destino "YYYY-MM-DD" (mês atual da tela) */
   competencia: string;
+  /** Cenário em que o usuário está trabalhando — é ONDE a cópia será gravada.
+   *  A origem diz apenas de onde os dados vêm. */
+  targetScenario: "PREVISTO" | "REALIZADO";
   onDone: (result: InitializeCompetenciaResult) => void;
 }) {
   const [origin, setOrigin] = useState<InitializeOrigin>("previous_realizado");
@@ -72,10 +76,18 @@ export function InitializeCompetenciaModal({
   const curLabel = useMemo(() => monthLabel(competencia), [competencia]);
   const prevLabel = useMemo(() => monthLabel(competencia, true), [competencia]);
 
+  const targetLabel = targetScenario === "PREVISTO" ? "Previsto" : "Realizado";
+  const destino = `${curLabel} (${targetLabel})`;
+
+  // Todas as origens levam ao cenário em que o usuário está. A única combinação inválida é
+  // "Previsto da competência atual" tendo o Previsto como destino: seria copiar o conjunto
+  // sobre si mesmo e, como a cópia SUBSTITUI, apagaria tudo antes de recopiar.
   const origins: { id: InitializeOrigin; title: string; from: string; to: string }[] = [
-    { id: "previous_realizado", title: "Realizado da competência anterior", from: `${prevLabel} (Realizado)`, to: `${curLabel} (Realizado)` },
-    { id: "current_previsto", title: "Previsto da competência atual", from: `${curLabel} (Previsto)`, to: `${curLabel} (Realizado)` },
-    { id: "previous_previsto", title: "Previsto da competência anterior", from: `${prevLabel} (Previsto)`, to: `${curLabel} (Previsto)` },
+    { id: "previous_realizado", title: "Realizado da competência anterior", from: `${prevLabel} (Realizado)`, to: destino },
+    ...(targetScenario === "REALIZADO"
+      ? [{ id: "current_previsto" as InitializeOrigin, title: "Previsto da competência atual", from: `${curLabel} (Previsto)`, to: destino }]
+      : []),
+    { id: "previous_previsto", title: "Previsto da competência anterior", from: `${prevLabel} (Previsto)`, to: destino },
   ];
 
   function toggle(id: CostCategory) {
@@ -95,6 +107,7 @@ export function InitializeCompetenciaModal({
       const result = await initializeCompetencia(projectId, {
         competencia,
         origin,
+        target_scenario: targetScenario,
         categories: CATEGORIES.map((c) => c.id).filter((id) => selected.has(id)),
       });
       onDone(result);

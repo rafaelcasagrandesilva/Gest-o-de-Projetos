@@ -839,9 +839,11 @@ export function ProjectDetail() {
         onClose={() => setInitOpen(false)}
         projectId={projectId}
         competencia={competencia}
+        targetScenario={editScenario === "PREVISTO" ? "PREVISTO" : "REALIZADO"}
         onDone={(result) => {
           setInitResult(result);
-          // O cenário de destino é definido pela origem escolhida → alinha a visão.
+          // Redundante hoje (o destino JÁ é o cenário da tela), mas mantém a visão alinhada
+          // caso o backend decida outro destino — ex.: chamada legada sem target_scenario.
           setEditScenario(result.target_scenario === "PREVISTO" ? "PREVISTO" : "REALIZADO");
           void reloadTab();
         }}
