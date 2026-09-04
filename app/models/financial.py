@@ -26,6 +26,13 @@ class Revenue(TimestampUUIDMixin, Base):
     description: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(20), default="recebido", nullable=False, index=True)
     has_retention: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Fonte do valor NESTA competência: False usa `amount` (digitado pelo gestor), True usa a
+    # soma das NFs faturadas do mês. `amount` nunca é sobrescrito — desligar volta ao original.
+    # No máximo uma linha marcada por projeto+competência+cenário (índice parcial, migration 0124),
+    # senão a soma das NFs entraria em dobro na receita.
+    use_nf_amount: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
 
     project: Mapped["Project"] = relationship(back_populates="revenues")
 

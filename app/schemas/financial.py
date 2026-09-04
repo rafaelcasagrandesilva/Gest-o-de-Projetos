@@ -19,15 +19,32 @@ class RevenueRead(UUIDTimestampRead):
     description: str | None = None
     status: str
     has_retention: bool
+    # Quando ligado, o cálculo usa `nf_amount` no lugar de `amount`. O valor manual nunca é
+    # sobrescrito: desligar devolve exatamente o número que o gestor informou.
+    use_nf_amount: bool = False
+    # Soma do BRUTO das NFs FATURADAS da mesma competência do projeto (pré-faturada e
+    # cancelada ficam de fora). NÃO vem do banco — é preenchido pelo endpoint de listagem,
+    # que consulta as notas. `None` = não conferido (ou redigido por Dados sensíveis).
+    nf_amount: float | None = None
+
+    @computed_field
+    @property
+    def effective_amount(self) -> float | None:
+        """O valor que o Dashboard realmente usa nesta linha."""
+        if self.use_nf_amount and self.nf_amount is not None:
+            return self.nf_amount
+        return self.amount
 
     @computed_field
     @property
     def retention_value(self) -> float | None:
-        # Null-safe: quando `amount` é redigido (None), a retenção também fica oculta (None).
-        # Para quem tem sensitive, o valor é idêntico ao anterior (cálculo inalterado).
-        if self.amount is None:
+        # Null-safe: quando o valor é redigido (None), a retenção também fica oculta (None).
+        # A base acompanha a fonte escolhida — em modo NF os 10% incidem sobre a soma faturada,
+        # e não sobre o valor manual, senão receita e retenção viriam de origens diferentes.
+        base = self.effective_amount
+        if base is None:
             return None
-        return revenue_retention_value(amount=self.amount, has_retention=self.has_retention)
+        return revenue_retention_value(amount=base, has_retention=self.has_retention)
 
 
 class RevenueCreate(BaseModel):
@@ -37,6 +54,7 @@ class RevenueCreate(BaseModel):
     description: str | None = Field(default=None, max_length=255)
     status: Literal["previsto", "recebido"] = "recebido"
     has_retention: bool = False
+    use_nf_amount: bool = False
     scenario: str | None = Field(default=None, description="PREVISTO ou REALIZADO")
 
 
@@ -46,6 +64,7 @@ class RevenueUpdate(BaseModel):
     competencia: date | None = None
     status: Literal["previsto", "recebido"] | None = None
     has_retention: bool | None = None
+    use_nf_amount: bool | None = None
 
 
 class InvoiceRead(UUIDTimestampRead):

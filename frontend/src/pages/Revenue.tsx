@@ -2,7 +2,14 @@ import { useEffect, useState } from "react";
 import { usePermission } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { listProjects, type Project } from "@/services/projects";
-import { createRevenue, deleteRevenue, listRevenues, type Revenue } from "@/services/financial";
+import {
+  createRevenue,
+  deleteRevenue,
+  listRevenues,
+  updateRevenue,
+  type Revenue,
+} from "@/services/financial";
+import { RevenueNfCell } from "@/components/finance/RevenueNfMatch";
 import { normalizeCurrencyForApi, sanitizeCurrencyTyping } from "@/utils/currency";
 import { isAxiosError } from "axios";
 import { Money } from "@/components/Money";
@@ -21,6 +28,7 @@ export function RevenuePage() {
   // permissões próprias, não de "billing.read" (que apenas dá acesso de leitura à tela).
   const canCreateBilling = usePermission("billing.create");
   const canDeleteBilling = usePermission("billing.delete");
+  const canUpdateBilling = usePermission("billing.update");
   const { globalScenario } = useScenario();
   /** Cenário dos lançamentos nesta tela (independente do seletor global do header). */
   const [pageScenario, setPageScenario] = useState<ScenarioKind>(globalScenario);
@@ -35,6 +43,8 @@ export function RevenuePage() {
   const [status, setStatus] = useState<"previsto" | "recebido">("recebido");
   const [description, setDescription] = useState("");
   const [hasRetention, setHasRetention] = useState(false);
+  /** Lançamento em edição; null = o formulário está criando. */
+  const [editing, setEditing] = useState<Revenue | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -106,6 +116,57 @@ export function RevenuePage() {
       setItems(await listRevenues(projectId, pageScenario));
     } catch {
       setError("Não foi possível lançar a receita.");
+    }
+  }
+
+  function startEdit(r: Revenue) {
+    if (!canUpdateBilling) return;
+    setEditing(r);
+    // O valor pode vir redigido (Dados sensíveis): nesse caso o campo abre vazio e quem não
+    // pode ver o número também não o sobrescreve sem digitar um novo.
+    setAmount(r.amount == null ? "" : String(r.amount).replace(".", ","));
+    setCompetencia(r.competencia.slice(0, 7));
+    setStatus(r.status === "previsto" ? "previsto" : "recebido");
+    setDescription(r.description ?? "");
+    setHasRetention(r.has_retention);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+    setAmount("");
+    setDescription("");
+    setHasRetention(false);
+  }
+
+  async function handleUpdate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canUpdateBilling || !editing) return;
+    setError(null);
+    try {
+      await updateRevenue(editing.id, {
+        competencia: `${competencia}-01`,
+        amount: normalizeCurrencyForApi(amount),
+        description: description.trim() || null,
+        status,
+        has_retention: hasRetention,
+      });
+      cancelEdit();
+      if (projectId) setItems(await listRevenues(projectId, pageScenario));
+    } catch {
+      setError("Não foi possível salvar as alterações.");
+    }
+  }
+
+  /** Alterna a fonte do valor DESTA competência entre o manual e a soma das NFs. */
+  async function toggleNfSource(r: Revenue) {
+    if (!canUpdateBilling) return;
+    setError(null);
+    try {
+      await updateRevenue(r.id, { use_nf_amount: !r.use_nf_amount });
+      if (projectId) setItems(await listRevenues(projectId, pageScenario));
+    } catch {
+      setError("Não foi possível alterar a fonte do valor.");
     }
   }
 
@@ -208,7 +269,7 @@ export function RevenuePage() {
       {projectId && (
         <>
           <form
-            onSubmit={handleCreate}
+            onSubmit={editing ? handleUpdate : handleCreate}
             className={`max-w-2xl space-y-3 rounded-xl border-2 bg-white p-6 shadow-sm ${
               isPrevisto ? "border-blue-200" : "border-emerald-200"
             }`}
@@ -283,15 +344,28 @@ export function RevenuePage() {
                 </label>
               </div>
             </div>
-            <button
-              type="submit"
-              disabled={!canCreateBilling}
-              className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50 ${
-                isPrevisto ? "bg-blue-600 hover:bg-blue-500" : "bg-emerald-600 hover:bg-emerald-500"
-              }`}
-            >
-              Lançar ({scenarioLabel(pageScenario)})
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="submit"
+                disabled={editing ? !canUpdateBilling : !canCreateBilling}
+                className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+                  isPrevisto ? "bg-blue-600 hover:bg-blue-500" : "bg-emerald-600 hover:bg-emerald-500"
+                }`}
+              >
+                {editing
+                  ? `Salvar alterações (${scenarioLabel(pageScenario)})`
+                  : `Lançar (${scenarioLabel(pageScenario)})`}
+              </button>
+              {editing && (
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancelar edição
+                </button>
+              )}
+            </div>
           </form>
 
           <div
@@ -312,6 +386,18 @@ export function RevenuePage() {
                 <tr>
                   <th className="px-4 py-3 font-medium text-slate-600">Competência</th>
                   <th className="px-4 py-3 text-right font-medium text-slate-600">Valor</th>
+                  <th
+                    className="px-4 py-3 text-right font-medium text-slate-600"
+                    title="Soma do BRUTO das NFs faturadas desta competência. Pré-faturadas e canceladas não entram."
+                  >
+                    Soma das NFs
+                  </th>
+                  <th
+                    className="px-4 py-3 text-center font-medium text-slate-600"
+                    title="Qual valor o Dashboard usa nesta competência."
+                  >
+                    Usar NFs
+                  </th>
                   <th className="px-4 py-3 text-right font-medium text-slate-600">Retenção (R$)</th>
                   <th className="px-4 py-3 font-medium text-slate-600">Status</th>
                   <th className="px-4 py-3 font-medium text-slate-600">Descrição</th>
@@ -322,10 +408,34 @@ export function RevenuePage() {
                 {items
                   .filter((r) => r.project_id === projectId)
                   .map((r) => (
-                    <tr key={r.id} className="border-b border-slate-50">
+                    <tr
+                      key={r.id}
+                      className={`border-b border-slate-50 ${
+                        editing?.id === r.id ? "bg-indigo-50/70" : ""
+                      }`}
+                    >
                       <td className="px-4 py-3">{r.competencia}</td>
-                      <td className="px-4 py-3">
+                      <td className={`px-4 py-3 ${r.use_nf_amount ? "text-slate-400 line-through" : ""}`}>
                         <Money value={r.amount} />
+                      </td>
+                      <td className={`px-4 py-3 ${r.use_nf_amount ? "font-semibold text-slate-900" : "text-slate-600"}`}>
+                        <RevenueNfCell revenue={r} />
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={r.use_nf_amount}
+                          disabled={!canUpdateBilling || r.nf_amount == null}
+                          onChange={() => void toggleNfSource(r)}
+                          className="h-4 w-4 rounded border-slate-300 disabled:cursor-not-allowed disabled:opacity-40"
+                          title={
+                            r.nf_amount == null
+                              ? "Sem NF faturada nesta competência — nada para usar."
+                              : r.use_nf_amount
+                                ? "O Dashboard está usando a soma das NFs. Desmarque para voltar ao valor manual."
+                                : "O Dashboard está usando o valor manual. Marque para usar a soma das NFs."
+                          }
+                        />
                       </td>
                       <td className="px-4 py-3 text-slate-600">
                         <Money value={r.retention_value} />
@@ -333,14 +443,24 @@ export function RevenuePage() {
                       <td className="px-4 py-3">{r.status}</td>
                       <td className="px-4 py-3 text-slate-600">{r.description ?? "—"}</td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          type="button"
-                          disabled={!canDeleteBilling}
-                          onClick={() => handleDelete(r.id)}
-                          className="text-sm text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          Excluir
-                        </button>
+                        <div className="flex items-center justify-end gap-3">
+                          <button
+                            type="button"
+                            disabled={!canUpdateBilling}
+                            onClick={() => startEdit(r)}
+                            className="text-sm text-indigo-600 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canDeleteBilling}
+                            onClick={() => handleDelete(r.id)}
+                            className="text-sm text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Excluir
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

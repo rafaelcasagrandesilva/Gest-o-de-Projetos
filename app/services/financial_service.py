@@ -12,6 +12,7 @@ from app.core.scenario import DEFAULT_SCENARIO, Scenario, coerce_scenario, scena
 from app.models.costs import ProjectCost, ProjectFixedCost
 from app.models.financial import Revenue
 from app.models.project_operational import ProjectLabor, ProjectOperationalFixed, ProjectSystemCost, ProjectVehicle
+from app.services.invoice_billing import billed_totals_by_competencia
 from app.services.employee_cost_service import project_labor_full_monthly_cost
 from app.utils.date_utils import normalize_competencia
 
@@ -46,36 +47,67 @@ class FinancialService:
             )
         _legacy_project_costs_warning_done = True
 
-    async def calcular_receita_total(
-        self, *, project_id: UUID | None, competencia: date, scenario: str | Scenario = DEFAULT_SCENARIO
-    ) -> float:
-        sc = coerce_scenario(scenario)
-        logger.debug("DEBUG SCENARIO TYPE: %s %s", type(scenario), scenario)
-        comp = normalize_competencia(competencia)
-        stmt = select(func.coalesce(func.sum(Revenue.amount), 0)).where(
-            Revenue.competencia == comp,
-            Revenue.scenario == scenario_pg_rhs(sc),
-        )
-        if project_id:
-            stmt = stmt.where(Revenue.project_id == project_id)
-        res = await self.session.execute(stmt)
-        return float(res.scalar_one())
+    async def _revenue_rows_efetivos(
+        self, *, project_id: UUID | None, competencia: date, scenario: str | Scenario
+    ) -> list[tuple[float, bool]]:
+        """Lançamentos da competência como (valor efetivo, has_retention).
 
-    async def calcular_total_retencao(
-        self, *, project_id: UUID | None, competencia: date, scenario: str | Scenario = DEFAULT_SCENARIO
-    ) -> float:
-        """Soma 10% do valor bruto por lançamento com has_retention (alinhado a revenue_retention_value)."""
+        "Efetivo" = o valor manual, ou a soma das NFs faturadas do mês quando o lançamento
+        está marcado com `use_nf_amount` (migration 0124). O manual nunca é sobrescrito no
+        banco — a troca acontece só aqui, no cálculo, então desmarcar devolve o original.
+
+        Fonte única de receita E de retenção: as duas saem desta mesma lista, para que a
+        retenção não possa incidir sobre uma base diferente da receita.
+        """
         sc = coerce_scenario(scenario)
         comp = normalize_competencia(competencia)
-        retention_line = case((Revenue.has_retention.is_(True), Revenue.amount * 0.10), else_=0)
-        stmt = select(func.coalesce(func.sum(retention_line), 0)).where(
+        stmt = select(Revenue).where(
             Revenue.competencia == comp,
             Revenue.scenario == scenario_pg_rhs(sc),
         )
         if project_id is not None:
             stmt = stmt.where(Revenue.project_id == project_id)
-        res = await self.session.execute(stmt)
-        return round(float(res.scalar_one()), 2)
+        rows = list((await self.session.execute(stmt)).scalars())
+        if not rows:
+            return []
+
+        # A soma faturada só é consultada quando alguma linha realmente pede por ela.
+        billed: dict[tuple[UUID, date], float] = {}
+        if any(r.use_nf_amount for r in rows):
+            billed = await billed_totals_by_competencia(
+                self.session,
+                project_ids=list({r.project_id for r in rows if r.use_nf_amount}),
+                competencias=[comp],
+            )
+
+        out: list[tuple[float, bool]] = []
+        for r in rows:
+            if r.use_nf_amount:
+                # Sem NF faturada no mês o valor efetivo é zero, e não o manual: a marcação é
+                # uma escolha explícita do gestor por "usar o que foi faturado", e cair de
+                # volta no manual esconderia dele que não há nota nenhuma naquela competência.
+                amount = billed.get((r.project_id, comp), 0.0)
+            else:
+                amount = float(r.amount or 0)
+            out.append((amount, bool(r.has_retention)))
+        return out
+
+    async def calcular_receita_total(
+        self, *, project_id: UUID | None, competencia: date, scenario: str | Scenario = DEFAULT_SCENARIO
+    ) -> float:
+        rows = await self._revenue_rows_efetivos(
+            project_id=project_id, competencia=competencia, scenario=scenario
+        )
+        return round(float(sum(amount for amount, _ in rows)), 2)
+
+    async def calcular_total_retencao(
+        self, *, project_id: UUID | None, competencia: date, scenario: str | Scenario = DEFAULT_SCENARIO
+    ) -> float:
+        """Soma 10% do valor efetivo por lançamento com has_retention (alinhado a revenue_retention_value)."""
+        rows = await self._revenue_rows_efetivos(
+            project_id=project_id, competencia=competencia, scenario=scenario
+        )
+        return round(float(sum(amount * 0.10 for amount, has_ret in rows if has_ret)), 2)
 
     async def calcular_lucro(
         self, *, project_id: UUID | None, competencia: date, scenario: str | Scenario = DEFAULT_SCENARIO

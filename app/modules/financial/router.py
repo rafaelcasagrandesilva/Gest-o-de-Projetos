@@ -72,6 +72,7 @@ from app.schemas.payables import (
     PayableSnapshotUpdate,
 )
 from app.services.payable_import import MAX_IMPORT_BYTES, PayableManualImportService
+from app.services.invoice_billing import billed_totals_by_competencia
 from app.services.financial_crud_service import FinancialCrudService
 from app.services.company_finance_service import CompanyFinanceService
 from app.services.finance_service import FinanceService
@@ -468,7 +469,21 @@ async def list_revenues(
             )
     else:
         rows = await svc.list_revenues(offset=offset, limit=limit, project_id=project_id, scenario=sc)
-    return [redact_for("billing_revenue", RevenueRead.model_validate(r), user) for r in rows]
+
+    # Conciliação: a soma faturada de cada (projeto, competência) numa consulta agrupada só,
+    # e não uma por linha. A redação de Dados sensíveis vem DEPOIS de preencher `nf_amount`,
+    # para que ele seja ocultado junto com `amount` (ambos em REVENUE_SENSITIVE_FIELDS).
+    billed = await billed_totals_by_competencia(
+        db,
+        project_ids=list({r.project_id for r in rows}),
+        competencias=list({r.competencia for r in rows}),
+    )
+    out: list[RevenueRead] = []
+    for r in rows:
+        item = RevenueRead.model_validate(r)
+        item.nf_amount = billed.get((r.project_id, r.competencia))
+        out.append(redact_for("billing_revenue", item, user))
+    return out
 
 
 @router.post("/revenues", response_model=RevenueRead, dependencies=[Depends(require_permission(BILLING_CREATE))])
