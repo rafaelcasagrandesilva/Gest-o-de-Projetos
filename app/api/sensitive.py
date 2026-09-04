@@ -140,7 +140,9 @@ ADVANCE_OPERATION_HISTORY_SENSITIVE_FIELDS: tuple[str, ...] = ("advanced_amount"
 
 # Faturamento (Revenue). `retention_value` é campo calculado a partir de `amount` — fica
 # null-safe (None quando `amount` é omitido). Nota fiscal simples do financeiro: `amount`.
-REVENUE_SENSITIVE_FIELDS: tuple[str, ...] = ("amount",)
+# `nf_amount` é a soma faturada do mês: mesmo tipo de valor que `amount` e, portanto, sob o
+# mesmo gate — sem isso a coluna de conciliação exporia a receita a quem não pode vê-la.
+REVENUE_SENSITIVE_FIELDS: tuple[str, ...] = ("amount", "nf_amount")
 BILLING_INVOICE_SENSITIVE_FIELDS: tuple[str, ...] = ("amount",)
 BILLING_INVOICE_ANTICIPATION_SENSITIVE_FIELDS: tuple[str, ...] = ("fee_amount",)
 

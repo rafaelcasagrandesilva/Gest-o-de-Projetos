@@ -15,6 +15,13 @@ export interface Revenue {
   status: string;
   has_retention: boolean;
   retention_value: number | null;
+  /** Fonte do valor NESTA competência: false = valor manual, true = soma das NFs faturadas. */
+  use_nf_amount: boolean;
+  /** Soma do BRUTO das NFs FATURADAS da mesma competência (pré-faturada e cancelada fora).
+   *  `null` = sem NF no mês, ou redigido por falta de "Dados sensíveis". */
+  nf_amount: number | null;
+  /** O valor que o Dashboard realmente usa: manual ou soma das NFs, conforme a marcação. */
+  effective_amount: number | null;
 }
 
 export interface RevenueCreate {
@@ -47,6 +54,7 @@ export async function updateRevenue(
     competencia: string;
     status: "previsto" | "recebido";
     has_retention: boolean;
+    use_nf_amount: boolean;
   }>
 ): Promise<Revenue> {
   const { data } = await api.patch<Revenue>(`/financial/revenues/${id}/`, payload);
