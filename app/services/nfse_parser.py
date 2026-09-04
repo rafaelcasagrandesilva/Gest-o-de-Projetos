@@ -49,6 +49,33 @@ _MONTHS = {
 # Traços usados entre mês e ano na discriminação: hífen, en-dash e em-dash.
 _DASHES = r"[-–—]"
 
+# Abreviações vistas em campo ("jul/2026"). Só entram nos padrões COM rótulo — numa linha
+# solta, três letras dariam falso positivo fácil demais.
+_MONTH_ABBR = {
+    "jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6,
+    "jul": 7, "ago": 8, "set": 9, "out": 10, "nov": 11, "dez": 12,
+}
+_MONTH_TOKENS = {**_MONTHS, **_MONTH_ABBR}
+# Alternação com os nomes longos primeiro, senão "junho" casaria só o "jun".
+_MONTH_RE = "|".join(sorted(_MONTH_TOKENS, key=len, reverse=True))
+
+# Separador entre rótulo, mês e ano: barra, dois-pontos ou traço. O hífen fica por ÚLTIMO
+# dentro da classe — no meio ele vira operador de intervalo e deixa de casar a si mesmo.
+_SEP = r"[/:–—-]"
+
+# Formas de escrever a competência, em ordem de tentativa. Cada contrato usa a sua, e a
+# nota não tem campo próprio para isso — é texto livre na discriminação.
+_COMPETENCE_PATTERNS = (
+    # "Julho – 2026" numa linha isolada (só nome completo: linha solta é frágil demais
+    # para aceitar abreviação).
+    rf"(?im)^\s*({'|'.join(_MONTHS)})\s*{_DASHES}\s*(\d{{4}})\s*$",
+    # "Referência: Dezembro/25" e a forma abreviada "Ref.: Novembro/2025"
+    rf"(?i)\bRef(?:er[êe]ncia)?\.?\s*:?\s*\b({_MONTH_RE})\b\s*{_SEP}\s*(\d{{2,4}})",
+    # "Medição de Serviços - jul/2026"
+    rf"(?i)Medi[çc][ãa]o\s+de\s+Servi[çc]os\s*{_SEP}?\s*"
+    rf"\b({_MONTH_RE})\b\s*{_SEP}\s*(\d{{2,4}})",
+)
+
 
 class NfseParseError(Exception):
     """PDF não pôde ser interpretado como NFS-e de São Paulo."""
@@ -151,17 +178,28 @@ def parse_nfse_text(text: str) -> ParsedNfse:
         out.declared_net_amount = _parse_money(m.group(1))
 
     # Contrato: usado para casar a NF com o projeto (projects.contract_number).
-    m = re.search(r"Contrato\s*n[ºo°]?\.?\s*([\w./-]+)", text)
-    if m:
-        out.contract_number = m.group(1).strip().rstrip(".")
-
-    # Competência: linha isolada "Julho – 2026" dentro da discriminação.
+    # Cada contrato escreve a discriminação do seu jeito. Três formas vistas em campo:
+    #   "Contrato nº 4600003861" · "Contrato: 4600004321" · "Medição Contratual 4600004321"
+    # O "nº" e os dois-pontos são opcionais; o valor precisa começar por dígito para não
+    # capturar o próprio "nº" quando o separador falta. "Pedido: ..." NÃO entra aqui — é
+    # outro número, e casá-lo como contrato apontaria a NF para o projeto errado.
     m = re.search(
-        rf"(?im)^\s*({'|'.join(_MONTHS)})\s*{_DASHES}\s*(\d{{4}})\s*$",
+        r"(?:Contrato\s*(?:n[ºo°.]?\s*)?:?|Medi[çc][ãa]o\s+Contratual\s*:?)\s*([0-9][\w./-]*)",
         text,
     )
     if m:
-        out.competence_month = date(int(m.group(2)), _MONTHS[m.group(1).lower()], 1)
+        out.contract_number = m.group(1).strip().rstrip(".")
+
+    # Competência: tentada em ordem pelas formas conhecidas (ver _COMPETENCE_PATTERNS).
+    for padrao in _COMPETENCE_PATTERNS:
+        m = re.search(padrao, text)
+        if m is None:
+            continue
+        ano = int(m.group(2))
+        if ano < 100:  # "Dezembro/25" → 2025
+            ano += 2000
+        out.competence_month = date(ano, _MONTH_TOKENS[m.group(1).lower()], 1)
+        break
 
     # Descrição: primeira linha da discriminação, sem o rótulo opcional.
     m = re.search(r"DISCRIMINAÇÃO DE SERVIÇOS\s*\n\s*(.+)", text)

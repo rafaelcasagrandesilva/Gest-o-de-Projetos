@@ -137,3 +137,65 @@ def test_pdf_sem_camada_de_texto_e_recusado_com_mensagem_clara() -> None:
     with pytest.raises(NfseParseError) as exc:
         parse_nfse_pdf(_pdf_sem_texto())
     assert "manualmente" in str(exc.value)
+
+
+# --------------------------------------------------------------------------- #
+# Variações de escrita da discriminação entre contratos
+#
+# A discriminação é texto livre: cada contrato escreve contrato e competência do
+# seu jeito. Os recortes abaixo são de notas reais dos contratos 4600004317
+# (Fiscalização AT) e 4600004321 (Cadastro Rede Subterrânea).
+# --------------------------------------------------------------------------- #
+
+
+def _discriminacao(corpo: str) -> str:
+    """Envelopa um trecho de discriminação no mínimo que o parser precisa."""
+    return (
+        "DISCRIMINAÇÃO DE SERVIÇOS\n"
+        f"{corpo}\n"
+        "VALOR TOTAL DO SERVIÇO = R$ 17.760,00\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "corpo, esperado",
+    [
+        ("Contrato nº 4600003861", "4600003861"),
+        ("Contrato: 4600004321", "4600004321"),
+        ("Contrato 4600004317", "4600004317"),
+        ("Medição Contratual 4600004321", "4600004321"),
+        ("Medicao Contratual 4600004321", "4600004321"),
+    ],
+)
+def test_contrato_nas_tres_formas_de_escrita(corpo, esperado):
+    assert parse_nfse_text(_discriminacao(corpo)).contract_number == esperado
+
+
+def test_pedido_nao_e_confundido_com_contrato():
+    """"Pedido" é outro número: casá-lo apontaria a NF para o projeto errado."""
+    texto = _discriminacao("Medição Contratual 4600004317\nPedido nº: 4400176092")
+    assert parse_nfse_text(texto).contract_number == "4600004317"
+
+
+@pytest.mark.parametrize(
+    "corpo, ano, mes",
+    [
+        ("Julho – 2026", 2026, 7),
+        ("Referência: Dezembro/25", 2025, 12),
+        ("Referência: Março/26", 2026, 3),
+        ("Referência: junho/26", 2026, 6),
+        ("Ref.: Novembro/2025", 2025, 11),
+        ("Medição de Serviços - junho/2026", 2026, 6),
+        ("Medição de Serviços - jul/2026", 2026, 7),
+    ],
+)
+def test_competencia_nas_formas_conhecidas(corpo, ano, mes):
+    assert parse_nfse_text(_discriminacao(corpo)).competence_month == date(ano, mes, 1)
+
+
+def test_competencia_ambigua_fica_vazia():
+    """Duas competências no mesmo texto: o parser não escolhe por conta própria."""
+    texto = _discriminacao(
+        "Serviços de suporte referentes ao meses de novembro e dezembro/2025"
+    )
+    assert parse_nfse_text(texto).competence_month is None
