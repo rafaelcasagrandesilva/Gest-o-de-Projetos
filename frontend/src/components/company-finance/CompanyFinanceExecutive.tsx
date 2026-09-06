@@ -45,6 +45,7 @@ import {
 import { CostCenterSelect } from "@/components/company-finance/CostCenterSelect";
 import {
   capPaidOf,
+  isIndirectLaborItem,
   CompanyFinanceAnalyticTable,
   FIXED_COST_STATUS_FILTER_OPTIONS,
   isRedacted,
@@ -263,6 +264,18 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   // Filtro por Centro de Custo (somente Custos Fixos) — escopo da PÁGINA (cards, pendências e listas).
   // Guarda o rótulo do centro (mesmo exibido/cadastrado); "" = Todos (comportamento atual).
   const [costCenterFilter, setCostCenterFilter] = useState<string>("");
+  // Natureza da despesa (só Custos Fixos): mão de obra indireta × fornecedores e outros.
+  // Entra no MESMO pipeline do Centro de custo, então filtra a lista e os cards juntos —
+  // é assim que a tela responde "quanto é fornecedor neste mês" com a relação ao lado.
+  const [natureFilter, setNatureFilter] = useState<"ALL" | "LABOR" | "SUPPLIER">("ALL");
+  // Inativação: o cadastro só encerra COM data, então ela é pedida num diálogo com campo de
+  // data de verdade. Antes era um window.prompt esperando "AAAA-MM-DD" — cancelar não dizia
+  // nada e um formato brasileiro era recusado pelo servidor, com o aviso no topo da página,
+  // longe do item; dava para achar que o item tinha sido inativado sem ter sido.
+  const [inactivateTarget, setInactivateTarget] = useState<CompanyFinancialItem | null>(null);
+  const [inactivateDate, setInactivateDate] = useState<string>("");
+  const [inactivateBusy, setInactivateBusy] = useState(false);
+  const [inactivateError, setInactivateError] = useState<string | null>(null);
   const [view, setView] = useState<"executive" | "analytic">("executive");
   const [draftName, setDraftName] = useState("");
   const [draftRef, setDraftRef] = useState("");
@@ -537,6 +550,11 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     if (costCenterFilter) {
       list = list.filter((it) => (it.cost_center ?? "") === costCenterFilter);
     }
+    // Natureza (Custos Fixos): colaborador da matriz × fornecedores/demais despesas.
+    if (tipo === "custo_fixo" && natureFilter !== "ALL") {
+      const querMaoDeObra = natureFilter === "LABOR";
+      list = list.filter((it) => isIndirectLaborItem(it) === querMaoDeObra);
+    }
     // Tipo (Todos / Obrigatórios / Pendentes) — filtro global; aplica a ambos os tipos.
     if (requiredFilter !== "ALL") {
       list =
@@ -552,7 +570,17 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       list = list.filter((it) => itemMatchesSearch(it, itemSearch, projectOptions, tipo));
     }
     return list;
-  }, [tipo, items, costCenterFilter, requiredFilter, statusFilter, pendingItemIds, itemSearch, projectOptions]);
+  }, [
+    tipo,
+    items,
+    costCenterFilter,
+    natureFilter,
+    requiredFilter,
+    statusFilter,
+    pendingItemIds,
+    itemSearch,
+    projectOptions,
+  ]);
 
   // Filtro de VISUALIZAÇÃO por Status consolidado (Custos Fixos): narra apenas as LISTAS
   // (Extrato Analítico, Visão Executiva, lista de Pendências). NÃO afeta os cards do topo
@@ -583,12 +611,25 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     if (tipo !== "custo_fixo") return null;
     const money = filteredItems;
     const redacted = money.length > 0 && isRedacted(money[0]);
+    // Quebra por natureza da despesa: mão de obra indireta (colaborador da matriz) ×
+    // fornecedores e demais despesas. É PARTIÇÃO do mesmo universo dos cards — cada item cai
+    // em exatamente um lado e as duas parcelas somam o total, por construção.
+    const laborItems = money.filter(isIndirectLaborItem);
+    const supplierItems = money.filter((it) => !isIndirectLaborItem(it));
+    const somaMensal = (list: CompanyFinancialItem[]) =>
+      redacted ? null : list.reduce((s, it) => s + (valorMensalOf(it, competencia) ?? 0), 0);
+    const somaPaga = (list: CompanyFinancialItem[]) =>
+      redacted ? null : list.reduce((s, it) => s + (capPaidOf(it) ?? 0), 0);
     return {
-      total_esperado_mes: redacted
-        ? null
-        : money.reduce((s, it) => s + (valorMensalOf(it, competencia) ?? 0), 0),
-      total_pago_mes: redacted ? null : money.reduce((s, it) => s + (capPaidOf(it) ?? 0), 0),
+      total_esperado_mes: somaMensal(money),
+      total_pago_mes: somaPaga(money),
       quantidade_itens: money.length,
+      esperado_mao_obra: somaMensal(laborItems),
+      esperado_fornecedores: somaMensal(supplierItems),
+      pago_mao_obra: somaPaga(laborItems),
+      pago_fornecedores: somaPaga(supplierItems),
+      itens_mao_obra: laborItems.length,
+      itens_fornecedores: supplierItems.length,
     };
   }, [tipo, filteredItems, competencia]);
 
@@ -762,19 +803,14 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   /** Ativa/inativa um cadastro. Inativar exige a data de encerramento (ciclo de vida). */
   async function handleToggleActive(item: CompanyFinancialItem) {
     if (financeReadOnly) return;
-    const isActive = item.is_active ?? true;
+    if (item.is_active ?? true) {
+      setInactivateTarget(item);
+      setInactivateDate(item.end_date ?? new Date().toISOString().slice(0, 10));
+      setInactivateError(null);
+      return;
+    }
     try {
-      if (isActive) {
-        const today = new Date().toISOString().slice(0, 10);
-        const end = window.prompt(
-          "Informe a data em que este cadastro deixou de ser utilizado (AAAA-MM-DD):",
-          item.end_date ?? today,
-        );
-        if (!end) return;
-        await updateCompanyFinanceItem(item.id, { is_active: false, end_date: end }, competencia);
-      } else {
-        await updateCompanyFinanceItem(item.id, { is_active: true }, competencia);
-      }
+      await updateCompanyFinanceItem(item.id, { is_active: true }, competencia);
       await loadAll();
     } catch (err) {
       if (isAxiosError(err) && typeof err.response?.data?.detail === "string") {
@@ -782,6 +818,34 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       } else {
         setError("Não foi possível atualizar o status.");
       }
+    }
+  }
+
+  /** Confirma o encerramento com a data escolhida. Erro fica NO diálogo, ao lado da ação. */
+  async function confirmInactivate() {
+    if (inactivateTarget === null) return;
+    if (!inactivateDate) {
+      setInactivateError("Informe a data em que o cadastro deixou de ser utilizado.");
+      return;
+    }
+    setInactivateBusy(true);
+    setInactivateError(null);
+    try {
+      await updateCompanyFinanceItem(
+        inactivateTarget.id,
+        { is_active: false, end_date: inactivateDate },
+        competencia,
+      );
+      setInactivateTarget(null);
+      await loadAll();
+    } catch (err) {
+      setInactivateError(
+        isAxiosError(err) && typeof err.response?.data?.detail === "string"
+          ? err.response.data.detail
+          : "Não foi possível inativar o cadastro.",
+      );
+    } finally {
+      setInactivateBusy(false);
     }
   }
 
@@ -866,6 +930,20 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               ))}
             </select>
           </label>
+          {tipo === "custo_fixo" && (
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-slate-700">Natureza</span>
+              <select
+                value={natureFilter}
+                onChange={(e) => setNatureFilter(e.target.value as typeof natureFilter)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm"
+              >
+                <option value="ALL">Todas</option>
+                <option value="LABOR">Mão de obra indireta</option>
+                <option value="SUPPLIER">Fornecedores e outros</option>
+              </select>
+            </label>
+          )}
           {tipo === "custo_fixo" && (
             <label className="flex flex-col gap-1 text-sm">
               <span className="font-medium text-slate-700">Centro de custo</span>
@@ -956,9 +1034,30 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         )}
         {tipo === "custo_fixo" && fixedKpi && !(loading && items.length === 0) && (
           <>
-            <KpiCard label="Total esperado no mês" value={formatCurrencyOrDash(fixedKpi.total_esperado_mes)} />
-            <KpiCard label="Total pago no mês" value={formatCurrencyOrDash(fixedKpi.total_pago_mes)} />
-            <KpiCard label="Itens cadastrados" value={String(fixedKpi.quantidade_itens)} />
+            <KpiCard
+              label="Total esperado no mês"
+              value={formatCurrencyOrDash(fixedKpi.total_esperado_mes)}
+              breakdown={[
+                { label: "Mão de obra indireta", value: formatCurrencyOrDash(fixedKpi.esperado_mao_obra) },
+                { label: "Fornecedores e outros", value: formatCurrencyOrDash(fixedKpi.esperado_fornecedores) },
+              ]}
+            />
+            <KpiCard
+              label="Total pago no mês"
+              value={formatCurrencyOrDash(fixedKpi.total_pago_mes)}
+              breakdown={[
+                { label: "Mão de obra indireta", value: formatCurrencyOrDash(fixedKpi.pago_mao_obra) },
+                { label: "Fornecedores e outros", value: formatCurrencyOrDash(fixedKpi.pago_fornecedores) },
+              ]}
+            />
+            <KpiCard
+              label="Itens cadastrados"
+              value={String(fixedKpi.quantidade_itens)}
+              breakdown={[
+                { label: "Mão de obra indireta", value: String(fixedKpi.itens_mao_obra) },
+                { label: "Fornecedores e outros", value: String(fixedKpi.itens_fornecedores) },
+              ]}
+            />
             <KpiCard
               label="Cobertura do mês"
               value={
@@ -974,16 +1073,23 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         )}
       </section>
 
-      {/* Pendências de Lançamento (custos fixos e endividamento) — controle operacional */}
-      <PendingEntriesSection
-        pendencias={shownPendencias}
-        competencia={competencia}
-        readOnly={financeReadOnly}
-        readOnlyTitle={financeReadOnlyTitle}
-        onPreencher={handlePreencherValor}
-        totalPrevisto={shownPendTotals.previsto}
-        totalPago={shownPendTotals.pago}
-      />
+      {/* Pendências de Lançamento — só ENDIVIDAMENTO.
+          Em Custos Fixos o painel perdeu a função: desde a geração automática, todo item do
+          cadastro vira título no Contas a Pagar na competência (com o valor de referência
+          quando o mês ainda não foi lançado), então "sem valor lançado" não significa mais
+          "fora do CAP". O que falta lançar continua visível na grade e no filtro Tipo →
+          Pendentes; o espaço foi devolvido aos cards. */}
+      {tipo !== "custo_fixo" && (
+        <PendingEntriesSection
+          pendencias={shownPendencias}
+          competencia={competencia}
+          readOnly={financeReadOnly}
+          readOnlyTitle={financeReadOnlyTitle}
+          onPreencher={handlePreencherValor}
+          totalPrevisto={shownPendTotals.previsto}
+          totalPago={shownPendTotals.pago}
+        />
+      )}
 
       {/* Seletor de visão (logo abaixo dos cards principais) */}
       <ViewModeToggle
@@ -1708,23 +1814,122 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       </section>
         </>
       )}
+
+      <InactivateItemDialog
+        item={inactivateTarget}
+        date={inactivateDate}
+        busy={inactivateBusy}
+        error={inactivateError}
+        onDateChange={setInactivateDate}
+        onCancel={() => setInactivateTarget(null)}
+        onConfirm={() => void confirmInactivate()}
+      />
     </div>
   );
 }
 
+/**
+ * Encerramento de um cadastro: pede a data em um campo de data, com o efeito escrito na
+ * tela. A data não é detalhe burocrático — ela define o mês a partir do qual o item para de
+ * gerar título no Contas a Pagar, e os títulos automáticos ainda ABERTOS desse mês em diante
+ * são removidos (o que já foi pago permanece, sempre).
+ */
+function InactivateItemDialog({
+  item,
+  date,
+  busy,
+  error,
+  onDateChange,
+  onCancel,
+  onConfirm,
+}: {
+  item: CompanyFinancialItem | null;
+  date: string;
+  busy: boolean;
+  error: string | null;
+  onDateChange: (value: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (item === null) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <h3 className="text-lg font-semibold text-slate-900">Inativar cadastro</h3>
+        <p className="mt-1 text-sm text-slate-600">{item.employee_name || item.nome}</p>
+
+        <label className="mt-4 flex flex-col gap-1 text-sm">
+          <span className="font-medium text-slate-700">Deixou de ser utilizado em</span>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => onDateChange(e.target.value)}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-slate-900 shadow-sm"
+          />
+        </label>
+
+        <p className="mt-3 text-xs text-slate-500">
+          A partir da competência dessa data o item sai da relação de ativos e deixa de gerar
+          título no Contas a Pagar; os títulos automáticos ainda em aberto desse mês em diante
+          são removidos. Pagamentos já registrados são preservados. Se o mês da data ainda tem
+          valor a pagar, encerre na competência seguinte.
+        </p>
+
+        {error && <p className="mt-3 text-xs text-red-700">{error}</p>}
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy || !date}
+            className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          >
+            {busy ? "Inativando…" : "Inativar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Card de indicador. O `breakdown` opcional abre o número principal nas suas parcelas
+ * (ex.: mão de obra indireta × fornecedores) sem criar mais cards: o total continua sendo
+ * a leitura de primeira, e a composição fica logo abaixo, em texto miúdo.
+ */
 function KpiCard({
   label,
   value,
   accent,
+  breakdown,
 }: {
   label: string;
   value: string;
   accent?: string;
+  breakdown?: { label: string; value: string }[];
 }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
       <p className={`mt-2 text-xl font-semibold tabular-nums text-slate-900 ${accent ?? ""}`}>{value}</p>
+      {breakdown && breakdown.length > 0 && (
+        <dl className="mt-2 space-y-0.5 border-t border-slate-100 pt-2">
+          {breakdown.map((b) => (
+            <div key={b.label} className="flex items-baseline justify-between gap-2">
+              <dt className="text-[11px] text-slate-500">{b.label}</dt>
+              <dd className="text-[11px] font-medium tabular-nums text-slate-700">{b.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </div>
   );
 }

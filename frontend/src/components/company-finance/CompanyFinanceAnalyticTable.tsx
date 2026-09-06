@@ -70,6 +70,17 @@ function valorAnualOf(item: CompanyFinancialItem, competencia: string): number |
   return total;
 }
 
+/**
+ * Mão de obra indireta: item de Custo Fixo vinculado a um COLABORADOR.
+ *
+ * Mesma regra que já governa a coluna "Componentes" (`employee_id`), e não a categoria
+ * escrita à mão — categoria é texto livre e divergiria da tela. Tudo o que não tem
+ * colaborador vinculado é fornecedor/despesa da matriz.
+ */
+export function isIndirectLaborItem(item: CompanyFinancialItem): boolean {
+  return Boolean(item.employee_id);
+}
+
 /** Pago no mês — espelho do CAP (amount_paid); null quando redigido, 0 quando sem lançamento. */
 export function capPaidOf(item: CompanyFinancialItem): number | null {
   if (isRedacted(item)) return null;
