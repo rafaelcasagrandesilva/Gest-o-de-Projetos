@@ -9,6 +9,7 @@ import {
   deleteProjectAdditive,
   deleteProjectDocument,
   downloadProjectDocument,
+  viewProjectDocument,
   getProjectDetail,
   listProjectDocuments,
   updateProjectAdditive,
@@ -25,6 +26,7 @@ import { fetchCostCenters } from "@/services/employees";
 import { CostCenterCombo } from "@/components/CostCenterCombo";
 import { usePermission } from "@/hooks/usePermission";
 import { formatApiError } from "@/utils/apiError";
+import { canPreviewInBrowser } from "@/utils/fileView";
 import { formatCurrencyField, formatCurrencyOrDash, normalizeCurrencyForApi } from "@/utils/currency";
 
 type DetailTab = "geral" | "contrato" | "documentos" | "historico";
@@ -222,6 +224,18 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
       setError(isAxiosError(e) ? (e.response?.data?.detail ?? "Não foi possível enviar o documento.") : "Erro no upload.");
     } finally {
       setUploadingDoc(false);
+    }
+  }
+
+  async function handleViewDocument(doc: ProjectDocument) {
+    setBusyDocId(doc.id);
+    setError(null);
+    try {
+      await viewProjectDocument(doc);
+    } catch (e) {
+      setError(`Não foi possível abrir o documento: ${formatApiError(e)}`);
+    } finally {
+      setBusyDocId(null);
     }
   }
 
@@ -845,13 +859,23 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
                               {new Date(doc.uploaded_at).toLocaleDateString("pt-BR")}
                             </td>
                             <td className="whitespace-nowrap px-3 py-2 text-right">
+                              {canPreviewInBrowser(null, doc.original_filename) ? (
+                                <button
+                                  type="button"
+                                  disabled={busyDocId === doc.id}
+                                  onClick={() => void handleViewDocument(doc)}
+                                  className="rounded px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                                >
+                                  Ver
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 disabled={busyDocId === doc.id}
                                 onClick={() => void handleDownloadDocument(doc)}
-                                className="rounded px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                                className="rounded px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
                               >
-                                Download
+                                Baixar
                               </button>
                               {canDeleteDocs ? (
                                 <button

@@ -6,16 +6,17 @@ import {
   downloadInvoicePdfBlob,
   fetchReceivableInvoices,
   fetchReceivableKpis,
-  openPdfBlobInNewTab,
   parseInvoicePdf,
   reactivateReceivableInvoice,
   updateReceivableInvoice,
   uploadInvoicePdf,
+  viewInvoicePdf,
   type InvoiceStatus,
   type OfficialFilter,
   type PeriodField,
   type ReceivableInvoice,
 } from "@/services/receivables";
+import { saveBlobAsFile } from "@/utils/fileView";
 import { usePermission } from "@/hooks/usePermission";
 import { listProjects, type Project } from "@/services/projects";
 import { isAxiosError } from "axios";
@@ -579,8 +580,7 @@ export function Invoices() {
   async function handlePdfView(invoiceId: string) {
     setError(null);
     try {
-      const blob = await downloadInvoicePdfBlob(invoiceId);
-      openPdfBlobInNewTab(blob);
+      await viewInvoicePdf(invoiceId);
     } catch {
       setError("Não foi possível abrir o PDF.");
     }
@@ -590,12 +590,7 @@ export function Invoices() {
     setError(null);
     try {
       const blob = await downloadInvoicePdfBlob(invoiceId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `NF-${numeroNf.replace(/\//g, "-")}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveBlobAsFile(blob, `NF-${numeroNf.replace(/\//g, "-")}.pdf`);
     } catch {
       setError("Não foi possível baixar o PDF.");
     }

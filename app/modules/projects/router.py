@@ -40,6 +40,7 @@ from app.schemas.projects import (
     ProjectUpdate,
 )
 from app.services.projects_service import ProjectsService
+from app.utils.media_type import resolve_media_type
 
 
 router = APIRouter()
@@ -248,7 +249,11 @@ async def download_project_document(
             status_code=404,
             detail="Arquivo não encontrado no armazenamento do servidor. Reenvie o documento.",
         )
-    return FileResponse(path, filename=doc.original_filename)
+    return FileResponse(
+        path,
+        media_type=resolve_media_type(None, doc.original_filename),
+        filename=doc.original_filename,
+    )
 
 
 @router.delete(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -18,6 +18,9 @@ class PaymentVariableComponentRead(UUIDTimestampRead):
     note: str | None
     project_labor_id: UUID | None
     company_financial_item_id: UUID | None
+    # Quantos comprovantes o lançamento tem. A lista de arquivos é buscada à parte, só
+    # quando o usuário abre o painel de anexos da linha.
+    attachment_count: int = 0
 
 
 class PaymentVariableComponentCreate(BaseModel):
@@ -50,3 +53,16 @@ class VariableComponentReplace(BaseModel):
     """Conjunto DESEJADO de componentes de um contexto — reconciliado em 1 transação."""
 
     items: list[VariableComponentItem] = Field(default_factory=list)
+
+
+class PaymentComponentAttachmentRead(BaseModel):
+    """Comprovante anexado a um lançamento variável (reembolso, ajuda de custo, …)."""
+
+    id: UUID
+    component_id: UUID
+    file_name: str
+    mime_type: str | None
+    size_bytes: int
+    created_at: datetime
+    # Relativo à base da API — o front concatena, como já faz com documentos e ativos.
+    download_url: str

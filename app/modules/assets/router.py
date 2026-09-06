@@ -39,6 +39,7 @@ from app.schemas.assets import (
 from app.schemas.assets_dashboard import AssetDashboardRead
 from app.services.assets_dashboard_service import AssetsDashboardService
 from app.services.assets_service import AssetsService
+from app.utils.media_type import resolve_media_type
 
 router = APIRouter()
 
@@ -397,7 +398,7 @@ async def download_attachment(
     path = svc.attachment_disk_path(row)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Arquivo não encontrado no servidor.")
-    media = row.mime_type or "application/octet-stream"
+    media = resolve_media_type(row.mime_type, row.file_name)
     return FileResponse(path, media_type=media, filename=row.file_name)
 
 

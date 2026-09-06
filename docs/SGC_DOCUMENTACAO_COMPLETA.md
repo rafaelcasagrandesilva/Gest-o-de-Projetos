@@ -165,7 +165,10 @@ Recursos ligados ao colaborador:
   o centro que valia à época.
 - **Override mensal da folha**: valores reais do holerite por competência.
 - **Componentes Variáveis de Pagamento**: benefícios e ajudas de custo que seguem um
-  pipeline único até o Contas a Pagar e o relatório de folha.
+  pipeline único até o Contas a Pagar e o relatório de folha. Cada lançamento aceita
+  **comprovantes** (PDF, foto ou XML da nota) pelo clipe da linha, nas duas telas em que
+  é lançado — Custos do Projeto e Custos Fixos. O anexo é opcional: a tela sinaliza
+  quantos lançamentos estão sem comprovante, mas nunca impede o salvamento.
 
 ### Frota
 
@@ -875,17 +878,24 @@ atuais.
 
 ## 9. Armazenamento de arquivos
 
-Três tipos de anexo são gravados em disco: **PDFs de NF**, **anexos de ativos** e
-**documentos de projeto**. Todos derivam de uma raiz única:
+Quatro tipos de anexo são gravados em disco: **PDFs de NF**, **anexos de ativos**,
+**documentos de projeto** e **comprovantes de pagamento variável** (reembolso, ajuda de
+custo). Todos derivam de uma raiz única:
 
 - `STORAGE_ROOT` quando definida (em produção, o mount do volume persistente: `/data`);
 - senão, a pasta que contém `RECEIVABLE_UPLOAD_DIR`;
 - senão, os defaults relativos (`var/…`), usados em desenvolvimento.
 
 Uma variável específica (`PROJECT_DOCUMENT_DIR`, `ASSET_UPLOAD_DIR`,
-`RECEIVABLE_UPLOAD_DIR`) sempre vence a raiz. No startup o sistema registra em log os
+`RECEIVABLE_UPLOAD_DIR`, `PAYMENT_COMPONENT_ATTACHMENT_DIR`) sempre vence a raiz. No startup o sistema registra em log os
 diretórios em uso, alerta se em produção algum for relativo (portanto efêmero) e copia uma
 única vez o que tenha sobrado nos diretórios legados.
+
+Todo anexo tem **Ver** (abre numa aba, sem baixar) quando o navegador exibe o formato — PDF,
+imagem, texto/XML — e **Baixar** sempre. A abertura é a mesma em todas as telas
+(`frontend/src/utils/fileView.ts`): a aba é aberta no clique e só depois recebe o arquivo,
+para o navegador não tratá-la como pop-up. No servidor, `app/utils/media_type.py` deduz o
+tipo pelo nome quando o upload não declarou um — sem isso o navegador baixa em vez de exibir.
 
 Em Configurações há o diagnóstico **Arquivos ausentes no servidor**, que confronta os
 registros do banco com o disco e lista o que precisa ser reenviado. O mesmo relatório está
@@ -909,8 +919,8 @@ em `GET /api/v1/admin/storage/missing-files` e em
 | `APP_SUPERUSER_EMAILS` | vazio | Lista de emergência |
 | `DB_POOL_SIZE` · `DB_MAX_OVERFLOW` · `DB_POOL_RECYCLE_SECONDS` | `5` · `15` · `1800` | Pool asyncpg |
 | `STORAGE_ROOT` | vazio | **Crítica em produção**: raiz dos uploads (`/data`) |
-| `RECEIVABLE_UPLOAD_DIR` · `ASSET_UPLOAD_DIR` · `PROJECT_DOCUMENT_DIR` | derivados da raiz | Diretórios por tipo de anexo |
-| `RECEIVABLE_PDF_MAX_BYTES` · `ASSET_UPLOAD_MAX_BYTES` · `PROJECT_DOCUMENT_MAX_BYTES` | 5 MB · 15 MB · 25 MB | Limites de upload |
+| `RECEIVABLE_UPLOAD_DIR` · `ASSET_UPLOAD_DIR` · `PROJECT_DOCUMENT_DIR` · `PAYMENT_COMPONENT_ATTACHMENT_DIR` | derivados da raiz | Diretórios por tipo de anexo |
+| `RECEIVABLE_PDF_MAX_BYTES` · `ASSET_UPLOAD_MAX_BYTES` · `PROJECT_DOCUMENT_MAX_BYTES` · `PAYMENT_COMPONENT_ATTACHMENT_MAX_BYTES` | 5 MB · 15 MB · 25 MB · 10 MB | Limites de upload |
 
 **Frontend**: `VITE_API_BASE` (ex.: `https://…/api/v1`), lida **em tempo de build**.
 
@@ -926,6 +936,7 @@ Migrations recentes que vale conhecer:
 
 | Revisão | O que faz |
 |---|---|
+| `0125` | Comprovantes dos Componentes Variáveis de Pagamento |
 | `0119` | `payable_snapshots.name` e `.item_description` → TEXT (nota longa derrubava a geração do mês) |
 | `0103` | Flag do Cronograma Financeiro do Endividamento |
 | `0101`/`0102` | Múltiplos lançamentos por competência em Custos Fixos (`entry_id`) |

@@ -11,10 +11,11 @@ import {
 } from "@/services/paymentComponentTypes";
 import {
   VariableComponentsList,
-  nextComponentRowKey,
+  emptyComponentRow,
+  rowFromComponent,
   type ComponentRow,
 } from "@/components/project/VariableComponentsList";
-import { rowsToItems } from "@/components/project/VariablePaymentComponentsEditor";
+import { persistRowsWithAttachments } from "@/components/project/VariablePaymentComponentsEditor";
 
 /**
  * Modal de Componentes Variáveis para Custo Fixo (F4). Mantém a grade mensal intacta:
@@ -55,15 +56,7 @@ export function VariableComponentsModal({
         fetchCompanyItemComponents(itemId, competencia),
       ]);
       setTypes(typeList);
-      setRows(
-        components.map((c) => ({
-          key: nextComponentRowKey(),
-          id: c.id,
-          typeId: c.type_id,
-          amount: String(c.amount),
-          note: c.note ?? "",
-        })),
-      );
+      setRows(components.map(rowFromComponent));
     } catch {
       setError("Não foi possível carregar os componentes.");
     } finally {
@@ -79,8 +72,18 @@ export function VariableComponentsModal({
     setSaving(true);
     setError(null);
     try {
-      await replaceCompanyItemComponents(itemId, competencia, rowsToItems(rows));
+      // Salva os lançamentos e sobe os comprovantes que ficaram na fila das linhas novas.
+      const { rows: next, attachmentError } = await persistRowsWithAttachments(rows, (items) =>
+        replaceCompanyItemComponents(itemId, competencia, items),
+      );
+      setRows(next);
       await Promise.resolve(onSaved());
+      // Anexo que falhou mantém o modal aberto (com as linhas já salvas) para reenviar;
+      // sem falha, fecha como antes.
+      if (attachmentError) {
+        setError(attachmentError);
+        return;
+      }
       onClose();
     } catch (e) {
       setError(isAxiosError(e) ? formatApiError(e) : "Não foi possível salvar os componentes.");
@@ -119,12 +122,7 @@ export function VariableComponentsModal({
               rows={rows}
               types={types}
               readOnly={readOnly}
-              onAdd={() =>
-                setRows((r) => [
-                  ...r,
-                  { key: nextComponentRowKey(), id: null, typeId: firstActive?.id ?? "", amount: "", note: "" },
-                ])
-              }
+              onAdd={() => setRows((r) => [...r, emptyComponentRow(firstActive?.id ?? "")])}
               onUpdate={(key, patch) =>
                 setRows((r) => r.map((x) => (x.key === key ? { ...x, ...patch } : x)))
               }

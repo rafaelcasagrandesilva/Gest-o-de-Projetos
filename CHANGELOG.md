@@ -13,6 +13,40 @@ Formato: agrupado por mês, com o tipo da mudança em destaque
 
 ---
 
+## Setembro/2026
+
+### Reembolsos com comprovante (05/09)
+
+- **Novo — comprovante anexado ao lançamento variável**. Reembolso, ajuda de custo, diária
+  e afins passam a aceitar arquivos (PDF, foto do recibo ou XML da nota, até 10 MB cada).
+  O anexo vale nas duas telas onde esses lançamentos são feitos — **Custos do Projeto**
+  (mão de obra direta) e **Custos Fixos** (colaborador da indireta) —, porque as duas
+  gravam a mesma entidade e usam a mesma lista.
+- Para não crescer a tela de quem lança dezenas de reembolsos, os arquivos ficam atrás de
+  um **clipe com o número de anexos** no fim da linha; o painel de arquivos abre só na
+  linha clicada, aceita arrastar vários de uma vez e some ao fechar. O clipe em âmbar
+  marca o lançamento sem comprovante, e um resumo abaixo da lista diz quantos estão nessa
+  situação — **o comprovante é opcional e não bloqueia o salvamento**.
+- Numa linha ainda não salva, os arquivos ficam numa fila e sobem junto com o salvamento
+  do conjunto (não é preciso salvar antes para depois anexar).
+- Excluir o lançamento apaga também os arquivos no servidor; os comprovantes entram no
+  diagnóstico **Arquivos ausentes no servidor** como os demais anexos.
+
+### "Ver" em todo anexo do sistema (05/09)
+
+- **Novo — abrir o anexo no navegador, sem baixar**. O botão **Ver**, que só existia no PDF
+  da NF, passa a aparecer também nos **comprovantes de pagamento variável**, nos **anexos de
+  ativo** e nos **documentos de projeto**. Ele aparece quando o navegador consegue exibir o
+  arquivo (PDF, imagem, texto/XML); para planilha e documento do Word continua só **Baixar**.
+- **Correção — anexo enviado sem tipo declarado baixava em vez de abrir**. O servidor agora
+  deduz o tipo pelo nome do arquivo quando o upload não informou um (caso comum em foto de
+  celular, inclusive HEIC).
+- **Interno** — a abertura passou a ser feita por uma regra única
+  (`frontend/src/utils/fileView.ts`), que abre a aba no clique e só depois busca o arquivo:
+  é o que evita o bloqueio de pop-up que atingia a abertura do PDF da NF.
+
+---
+
 ## Agosto/2026
 
 ### Colaboradores, Relatórios e Indicadores (29/08 e 28/08)

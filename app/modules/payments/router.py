@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_permission, user_has_any_permission
@@ -16,11 +17,14 @@ from app.core.permission_codes import (
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.payment_variable_component import (
+    PaymentComponentAttachmentRead,
     PaymentVariableComponentCreate,
     PaymentVariableComponentRead,
     PaymentVariableComponentUpdate,
     VariableComponentReplace,
 )
+from app.services.payment_component_attachment_service import PaymentComponentAttachmentService
+from app.utils.media_type import resolve_media_type
 from app.services.payment_variable_component_service import PaymentVariableComponentService
 
 router = APIRouter()
@@ -154,4 +158,105 @@ async def delete_variable_component(
     else:
         _require_fixed_ctx(user)
     await svc.delete(component_id)
+    await db.commit()
+
+
+# ---------------------------------------------------------------- comprovantes
+#
+# Anexos do lançamento (nota do reembolso, recibo, cupom). Ficam presos ao COMPONENTE,
+# então as duas telas de lançamento — Custos do Projeto e Custos Fixos — usam os mesmos
+# endpoints; quem decide a permissão é o contexto do componente, como no CRUD acima.
+#
+# Anexar/remover comprovante é permitido mesmo depois do lançamento pago: o comprovante
+# costuma chegar DEPOIS do pagamento e não altera valor nem identidade do título.
+
+
+async def _require_ctx_permission(svc: PaymentVariableComponentService, component_id: UUID, user: User):
+    current = await svc.get(component_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Componente não encontrado.")
+    if current.project_labor_id is not None:
+        _require_project_ctx(user)
+    else:
+        _require_fixed_ctx(user)
+    return current
+
+
+@router.get(
+    "/{component_id}/attachments",
+    response_model=list[PaymentComponentAttachmentRead],
+    dependencies=_READ_ANY,
+)
+async def list_attachments(
+    component_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> list[PaymentComponentAttachmentRead]:
+    svc = PaymentVariableComponentService(db)
+    if await svc.get(component_id) is None:
+        raise HTTPException(status_code=404, detail="Componente não encontrado.")
+    rows = await PaymentComponentAttachmentService(db).list_for_component(component_id)
+    return [PaymentComponentAttachmentRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/{component_id}/attachments",
+    response_model=list[PaymentComponentAttachmentRead],
+    dependencies=_EDIT_ANY,
+)
+async def upload_attachments(
+    component_id: UUID,
+    files: list[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[PaymentComponentAttachmentRead]:
+    """Recebe VÁRIOS arquivos de uma vez (o painel da tela permite soltar um lote).
+
+    Tudo ou nada: se um arquivo for recusado (formato/tamanho), nenhum é gravado — o
+    usuário corrige e reenvia o lote, em vez de descobrir depois que faltou um.
+    """
+    svc = PaymentVariableComponentService(db)
+    await _require_ctx_permission(svc, component_id, user)
+    uploads = [
+        ((f.filename or "comprovante"), await f.read(), f.content_type) for f in files
+    ]
+    out = await PaymentComponentAttachmentService(db).save_many(
+        component_id, uploads=uploads, uploaded_by_user_id=user.id
+    )
+    await db.commit()
+    return [PaymentComponentAttachmentRead.model_validate(r) for r in out]
+
+
+@router.get("/{component_id}/attachments/{attachment_id}/download", dependencies=_READ_ANY)
+async def download_attachment(
+    component_id: UUID,
+    attachment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    attachments = PaymentComponentAttachmentService(db)
+    row = await attachments.get(component_id, attachment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Comprovante não encontrado.")
+    path = attachments.disk_path(row)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado no servidor.")
+    # O mime é resolvido pelo nome quando o upload não trouxe um específico — sem isso o
+    # navegador baixaria o arquivo em vez de exibi-lo no "Ver".
+    return FileResponse(
+        path, media_type=resolve_media_type(row.mime_type, row.file_name), filename=row.file_name
+    )
+
+
+@router.delete(
+    "/{component_id}/attachments/{attachment_id}", status_code=204, dependencies=_EDIT_ANY
+)
+async def delete_attachment(
+    component_id: UUID,
+    attachment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    svc = PaymentVariableComponentService(db)
+    await _require_ctx_permission(svc, component_id, user)
+    if not await PaymentComponentAttachmentService(db).delete(component_id, attachment_id):
+        raise HTTPException(status_code=404, detail="Comprovante não encontrado.")
     await db.commit()

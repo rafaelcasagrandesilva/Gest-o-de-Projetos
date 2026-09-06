@@ -1,3 +1,5 @@
+import { viewFileInNewTab } from "@/utils/fileView";
+
 import { api } from "./api";
 
 export type InvoiceStatus = "EMITIDA" | "ANTECIPADA" | "RECEBIDA" | "CANCELADA";
@@ -304,10 +306,9 @@ export async function downloadInvoicePdfBlob(invoiceId: string): Promise<Blob> {
   return data;
 }
 
-export function openPdfBlobInNewTab(blob: Blob): void {
-  const url = URL.createObjectURL(blob);
-  window.open(url, "_blank", "noopener,noreferrer");
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+/** Abre o PDF da NF numa nova aba (regra comum a todo anexo — ver `utils/fileView`). */
+export async function viewInvoicePdf(invoiceId: string): Promise<void> {
+  await viewFileInNewTab(() => downloadInvoicePdfBlob(invoiceId));
 }
 
 /** Sugestão de preenchimento extraída do PDF da NFS-e. Nada é gravado no servidor. */
