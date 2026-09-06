@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     project_document_dir: str = Field(default="var/project_documents", alias="PROJECT_DOCUMENT_DIR")
     project_document_max_bytes: int = Field(default=25 * 1024 * 1024, alias="PROJECT_DOCUMENT_MAX_BYTES")
 
+    # Comprovantes dos Componentes Variáveis de Pagamento (reembolso, ajuda de custo, …).
+    # Limite menor que o dos documentos de projeto: são fotos de recibo e PDFs de nota.
+    payment_component_attachment_dir: str = Field(
+        default="var/payment_component_attachments", alias="PAYMENT_COMPONENT_ATTACHMENT_DIR"
+    )
+    payment_component_attachment_max_bytes: int = Field(
+        default=10 * 1024 * 1024, alias="PAYMENT_COMPONENT_ATTACHMENT_MAX_BYTES"
+    )
+
     @field_validator("jwt_secret_key", "jwt_algorithm", mode="before")
     @classmethod
     def strip_secrets(cls, v: str) -> str:
@@ -106,6 +115,7 @@ class Settings(BaseSettings):
             "receivable_upload_dir": "receivable_uploads",
             "asset_upload_dir": "asset_uploads",
             "project_document_dir": "project_documents",
+            "payment_component_attachment_dir": "payment_component_attachments",
         }
         for field, subdir in derived.items():
             if field not in self.model_fields_set:
@@ -130,6 +140,7 @@ class Settings(BaseSettings):
             "RECEIVABLE_UPLOAD_DIR": Path(self.receivable_upload_dir),
             "ASSET_UPLOAD_DIR": Path(self.asset_upload_dir),
             "PROJECT_DOCUMENT_DIR": Path(self.project_document_dir),
+            "PAYMENT_COMPONENT_ATTACHMENT_DIR": Path(self.payment_component_attachment_dir),
         }
 
     def is_production(self) -> bool:

@@ -1,4 +1,5 @@
 import { hydrateBlobError } from "@/utils/apiError";
+import { saveBlobAsFile, viewFileInNewTab } from "@/utils/fileView";
 
 import { api } from "./api";
 
@@ -235,25 +236,26 @@ export async function uploadProjectDocument(
   return data;
 }
 
-/** Baixa o documento (blob autenticado) e dispara o download no navegador. */
-export async function downloadProjectDocument(doc: ProjectDocument): Promise<void> {
-  let data: Blob;
+/** Busca o documento (blob autenticado) — base do "Ver" e do "Baixar". */
+async function fetchProjectDocumentBlob(doc: ProjectDocument): Promise<Blob> {
   try {
     const resp = await api.get<Blob>(`/projects/${doc.project_id}/documents/${doc.id}/download`, {
       responseType: "blob",
     });
-    data = resp.data;
+    return resp.data;
   } catch (e) {
     throw await hydrateBlobError(e);
   }
-  const url = URL.createObjectURL(data);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = doc.original_filename || doc.title;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+}
+
+/** Abre o documento numa nova aba (sem baixar). */
+export async function viewProjectDocument(doc: ProjectDocument): Promise<void> {
+  await viewFileInNewTab(() => fetchProjectDocumentBlob(doc));
+}
+
+/** Baixa o documento e salva com o nome original. */
+export async function downloadProjectDocument(doc: ProjectDocument): Promise<void> {
+  saveBlobAsFile(await fetchProjectDocumentBlob(doc), doc.original_filename || doc.title);
 }
 
 export async function deleteProjectDocument(projectId: string, documentId: string): Promise<void> {

@@ -57,6 +57,18 @@ _SOURCES: dict[str, tuple[str, str]] = {
          ORDER BY at.created_at
         """,
     ),
+    "Comprovante de pagamento variável": (
+        "payment_component_attachment_dir",
+        """
+        SELECT e.name || ' — ' || t.name AS onde, c.competencia::text AS titulo,
+               a.file_name AS arquivo, a.stored_path AS caminho, a.created_at AS enviado_em
+          FROM payment_component_attachments a
+          JOIN payment_variable_components c ON c.id = a.component_id
+          JOIN payment_component_types t ON t.id = c.type_id
+          JOIN employees e ON e.id = c.employee_id
+         ORDER BY a.created_at
+        """,
+    ),
     "PDF de NF": (
         "receivable_upload_dir",
         """

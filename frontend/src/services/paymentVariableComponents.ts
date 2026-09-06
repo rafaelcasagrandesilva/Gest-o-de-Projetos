@@ -13,6 +13,8 @@ export interface PaymentVariableComponent {
   note: string | null;
   project_labor_id: string | null;
   company_financial_item_id: string | null;
+  /** Quantos comprovantes o lançamento tem (a lista de arquivos é buscada sob demanda). */
+  attachment_count: number;
 }
 
 /** Item enviado no salvamento em lote (sem id = novo). */

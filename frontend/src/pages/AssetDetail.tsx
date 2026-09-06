@@ -53,6 +53,7 @@ import {
 import { type Project } from "@/services/projects";
 import { listCostCenterRefs, costCenterRefsAsProjects } from "@/services/costCenters";
 import { formatApiError, hydrateBlobError } from "@/utils/apiError";
+import { canPreviewInBrowser, saveBlobAsFile, viewFileInNewTab } from "@/utils/fileView";
 
 function todayIsoLocal(): string {
   const t = new Date();
@@ -367,15 +368,22 @@ export function AssetDetailPage() {
     }
   }
 
+  async function fetchAttachmentBlob(path: string): Promise<Blob> {
+    const { data } = await api.get<Blob>(path, { responseType: "blob" });
+    return data;
+  }
+
+  async function handleView(path: string) {
+    try {
+      await viewFileInNewTab(() => fetchAttachmentBlob(path));
+    } catch (e) {
+      setError(`Não foi possível abrir o arquivo: ${formatApiError(await hydrateBlobError(e))}`);
+    }
+  }
+
   async function handleDownload(path: string, fileName: string) {
     try {
-      const { data } = await api.get<Blob>(path, { responseType: "blob" });
-      const url = URL.createObjectURL(data);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveBlobAsFile(await fetchAttachmentBlob(path), fileName);
     } catch (e) {
       setError(`Não foi possível baixar o arquivo: ${formatApiError(await hydrateBlobError(e))}`);
     }
@@ -1016,11 +1024,20 @@ export function AssetDetailPage() {
                     {a.file_name} <span className="text-xs text-slate-400">({a.file_type})</span>
                   </span>
                   <div className="flex gap-2">
+                    {a.download_url && canPreviewInBrowser(a.mime_type, a.file_name) ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleView(a.download_url!)}
+                        className="text-indigo-600 hover:underline"
+                      >
+                        Ver
+                      </button>
+                    ) : null}
                     {a.download_url ? (
                       <button
                         type="button"
                         onClick={() => void handleDownload(a.download_url!, a.file_name)}
-                        className="text-indigo-600 hover:underline"
+                        className="text-slate-600 hover:underline"
                       >
                         Baixar
                       </button>

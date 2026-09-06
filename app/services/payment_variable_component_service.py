@@ -11,6 +11,7 @@ from app.models.company_finance import CompanyFinancialItem
 from app.models.payment_component import PaymentComponentType, PaymentVariableComponent
 from app.models.project_operational import ProjectLabor
 from app.services.payable_snapshot_service import PayableSnapshotService
+from app.services.payment_component_attachment_service import PaymentComponentAttachmentService
 from app.utils.date_utils import normalize_competencia
 
 
@@ -27,8 +28,9 @@ class PaymentVariableComponentService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.snapshots = PayableSnapshotService(db)
+        self.attachments = PaymentComponentAttachmentService(db)
 
-    def _to_read_row(self, row: PaymentVariableComponent) -> dict:
+    def _to_read_row(self, row: PaymentVariableComponent, attachment_count: int = 0) -> dict:
         return {
             "id": row.id,
             "created_at": row.created_at,
@@ -42,6 +44,9 @@ class PaymentVariableComponentService:
             "note": row.note,
             "project_labor_id": row.project_labor_id,
             "company_financial_item_id": row.company_financial_item_id,
+            # Só a CONTAGEM viaja na listagem: a tela mostra o clipe com o número e só
+            # busca a lista de arquivos quando o usuário abre o painel daquela linha.
+            "attachment_count": attachment_count,
         }
 
     async def list_for_project_labor(self, labor_id: UUID) -> list[dict]:
@@ -52,7 +57,7 @@ class PaymentVariableComponentService:
                 .order_by(PaymentVariableComponent.created_at.asc())
             )
         ).scalars().all()
-        return [self._to_read_row(r) for r in rows]
+        return await self._with_attachment_counts(rows)
 
     async def sum_amount_by_project_labor(self, labor_ids: list[UUID]) -> dict[UUID, float]:
         """Soma dos componentes variáveis (valor de FACE) por vínculo de mão de obra.
@@ -87,7 +92,11 @@ class PaymentVariableComponentService:
                 .order_by(PaymentVariableComponent.created_at.asc())
             )
         ).scalars().all()
-        return [self._to_read_row(r) for r in rows]
+        return await self._with_attachment_counts(rows)
+
+    async def _with_attachment_counts(self, rows: list[PaymentVariableComponent]) -> list[dict]:
+        counts = await self.attachments.count_by_component([r.id for r in rows])
+        return [self._to_read_row(r, counts.get(r.id, 0)) for r in rows]
 
     async def _require_active_type(self, type_id: UUID) -> PaymentComponentType:
         t = await self.db.get(PaymentComponentType, type_id)
@@ -175,7 +184,8 @@ class PaymentVariableComponentService:
         await self.db.refresh(row)
         # Mesma transação: reconstrói o snapshot.
         await self.snapshots.apply_variable_component(component=row)
-        return self._to_read_row(row)
+        counts = await self.attachments.count_by_component([row.id])
+        return self._to_read_row(row, counts.get(row.id, 0))
 
     async def replace_for_project_labor(self, labor_id: UUID, items: list[dict]) -> list[dict]:
         """Reconcilia (create/update/delete) o conjunto de componentes de um vínculo de
@@ -270,5 +280,7 @@ class PaymentVariableComponentService:
                 status_code=400,
                 detail="Componente com pagamento registrado não pode ser excluído.",
             )
+        # Os arquivos saem do disco aqui: o CASCADE do banco limparia só os registros.
+        await self.attachments.purge_for_component(component_id)
         await self.db.delete(row)
         await self.db.flush()

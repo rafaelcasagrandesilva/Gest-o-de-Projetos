@@ -87,3 +87,31 @@ class PaymentVariableComponent(TimestampUUIDMixin, Base):
     )
 
     type: Mapped["PaymentComponentType"] = relationship("PaymentComponentType", lazy="joined")
+
+
+class PaymentComponentAttachment(TimestampUUIDMixin, Base):
+    """Comprovante de um Componente Variável de Pagamento (nota do reembolso, recibo, cupom).
+
+    N arquivos por lançamento. O vínculo é com o COMPONENTE, não com o contexto: o mesmo
+    anexo aparece no lançamento seja ele de Projeto ou de Custo Fixo, porque o componente
+    já carrega o contexto. Excluir o componente leva os anexos junto (CASCADE no banco;
+    os arquivos em disco são apagados pelo service antes do delete).
+
+    O arquivo mora em disco sob a raiz única de storage (`Settings.resolved_storage_root`),
+    como os PDFs de NF e os anexos de ativo — nunca no banco.
+    """
+
+    __tablename__ = "payment_component_attachments"
+
+    component_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("payment_variable_components.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Caminho RELATIVO à raiz dos anexos (o absoluto muda entre ambientes/deploys).
+    stored_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    uploaded_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)

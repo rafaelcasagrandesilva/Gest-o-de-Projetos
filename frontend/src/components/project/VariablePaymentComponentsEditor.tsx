@@ -9,15 +9,18 @@ import {
 import {
   fetchProjectLaborComponents,
   replaceProjectLaborComponents,
+  type PaymentVariableComponent,
   type VariableComponentItem,
 } from "@/services/paymentVariableComponents";
+import { uploadComponentAttachments } from "@/services/paymentComponentAttachments";
 import {
   fetchPaymentComponentTypes,
   type PaymentComponentType,
 } from "@/services/paymentComponentTypes";
 import {
   VariableComponentsList,
-  nextComponentRowKey,
+  emptyComponentRow,
+  rowFromComponent,
   type ComponentRow,
 } from "@/components/project/VariableComponentsList";
 
@@ -26,20 +29,59 @@ export interface VariablePaymentComponentsHandle {
   persist: () => Promise<void>;
 }
 
+/** Linhas que viram lançamento — a ordem é a MESMA enviada e devolvida pelo backend. */
+export function validComponentRows(rows: ComponentRow[]): ComponentRow[] {
+  return rows.filter((row) => {
+    const amount = Number(row.amount);
+    return Boolean(row.typeId) && Number.isFinite(amount) && amount > 0;
+  });
+}
+
 /** Constrói os itens do payload a partir das linhas (descarta linhas inválidas). */
 export function rowsToItems(rows: ComponentRow[]): VariableComponentItem[] {
-  return rows
-    .map((row) => {
-      const amount = Number(row.amount);
-      if (!row.typeId || !Number.isFinite(amount) || amount <= 0) return null;
-      return {
-        ...(row.id ? { id: row.id } : {}),
-        type_id: row.typeId,
-        amount,
-        note: row.note.trim() || null,
-      } as VariableComponentItem;
-    })
-    .filter((x): x is VariableComponentItem => x !== null);
+  return validComponentRows(rows).map((row) => ({
+    ...(row.id ? { id: row.id } : {}),
+    type_id: row.typeId,
+    amount: Number(row.amount),
+    note: row.note.trim() || null,
+  }));
+}
+
+/**
+ * Salva os lançamentos e, em seguida, sobe os comprovantes que estavam na fila das linhas
+ * novas — só depois do salvamento existe o id ao qual o arquivo se prende.
+ *
+ * O casamento é POSICIONAL e seguro: `validComponentRows` e o backend percorrem a mesma
+ * lista na mesma ordem, então `saved[i]` é o lançamento de `enviadas[i]`.
+ *
+ * A falha do upload NÃO desfaz o salvamento (o lançamento é o dado financeiro; o
+ * comprovante é anexo): devolve as linhas já salvas + a mensagem, para o usuário reenviar
+ * o arquivo sem redigitar nada.
+ */
+export async function persistRowsWithAttachments(
+  rows: ComponentRow[],
+  save: (items: VariableComponentItem[]) => Promise<PaymentVariableComponent[]>,
+): Promise<{ rows: ComponentRow[]; attachmentError: string | null }> {
+  const enviadas = validComponentRows(rows);
+  const saved = await save(rowsToItems(rows));
+
+  let attachmentError: string | null = null;
+  const next = await Promise.all(
+    saved.map(async (component, i) => {
+      const row = rowFromComponent(component);
+      const pending = enviadas[i]?.pendingFiles ?? [];
+      if (pending.length === 0) return row;
+      try {
+        const uploaded = await uploadComponentAttachments(component.id, pending);
+        return { ...row, attachmentCount: row.attachmentCount + uploaded.length };
+      } catch {
+        attachmentError =
+          "Os lançamentos foram salvos, mas houve falha ao enviar algum comprovante. Abra o clipe da linha e reenvie.";
+        return row;
+      }
+    }),
+  );
+  return { rows: next, attachmentError };
 }
 
 export const VariablePaymentComponentsEditor = forwardRef<
@@ -62,15 +104,7 @@ export const VariablePaymentComponentsEditor = forwardRef<
         fetchProjectLaborComponents(laborId),
       ]);
       setTypes(typeList);
-      setRows(
-        components.map((c) => ({
-          key: nextComponentRowKey(),
-          id: c.id,
-          typeId: c.type_id,
-          amount: String(c.amount),
-          note: c.note ?? "",
-        })),
-      );
+      setRows(components.map(rowFromComponent));
     } catch {
       setError("Não foi possível carregar os componentes variáveis.");
     } finally {
@@ -85,26 +119,19 @@ export const VariablePaymentComponentsEditor = forwardRef<
   const firstActive = types.filter((t) => t.is_active).sort((a, b) => a.display_order - b.display_order)[0];
 
   function addRow() {
-    setRows((r) => [
-      ...r,
-      { key: nextComponentRowKey(), id: null, typeId: firstActive?.id ?? "", amount: "", note: "" },
-    ]);
+    setRows((r) => [...r, emptyComponentRow(firstActive?.id ?? "")]);
   }
 
   useImperativeHandle(
     ref,
     () => ({
       async persist() {
-        const saved = await replaceProjectLaborComponents(laborId, rowsToItems(rowsRef.current));
-        setRows(
-          saved.map((c) => ({
-            key: nextComponentRowKey(),
-            id: c.id,
-            typeId: c.type_id,
-            amount: String(c.amount),
-            note: c.note ?? "",
-          })),
+        const { rows: next, attachmentError } = await persistRowsWithAttachments(
+          rowsRef.current,
+          (items) => replaceProjectLaborComponents(laborId, items),
         );
+        setRows(next);
+        setError(attachmentError);
       },
     }),
     [laborId],
@@ -127,7 +154,8 @@ export const VariablePaymentComponentsEditor = forwardRef<
       )}
       {!readOnly && !loading && (
         <p className="mt-2 text-[11px] text-slate-500">
-          As alterações são gravadas ao clicar em <strong>Salvar custos do mês</strong>.
+          As alterações são gravadas ao clicar em <strong>Salvar custos do mês</strong> — inclusive
+          os comprovantes anexados numa linha nova.
         </p>
       )}
     </div>
