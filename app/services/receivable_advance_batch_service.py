@@ -1081,14 +1081,16 @@ class ReceivableAdvanceBatchService:
         disc = float(batch.discount_amount or 0)
         discount_percent = round((disc / gross) * 100.0, 2) if gross > 0.005 else None
         items_out: list[dict] = []
-        invoices_net_total = 0.0
+        advanced_total = 0.0
+        has_advanced = False
         for item in batch.items or []:
             try:
                 inv = item.invoice
             except MissingGreenlet:
                 inv = None
-            if inv is not None:
-                invoices_net_total += float(inv.net_amount or 0)
+            if getattr(item, "advanced_amount", None) is not None:
+                advanced_total += float(item.advanced_amount or 0)
+                has_advanced = True
             items_out.append(
                 {
                     "id": item.id,
@@ -1125,23 +1127,32 @@ class ReceivableAdvanceBatchService:
                 }
             )
         # Indicador operacional (apenas informativo): custo efetivo de antecipar as NFs.
-        # Compara o total líquido original das NFs com o valor efetivamente recebido
-        # (received_amount = realizado se informado, senão previsto). Não altera nenhuma
-        # regra financeira — é só um percentual para leitura no detalhe da operação.
-        invoices_net_total = round(invoices_net_total, 2)
+        # Compara o VALOR CEDIDO nesta operação (Σ advanced_amount) com o valor
+        # efetivamente recebido (received_amount = realizado se informado, senão previsto).
+        #
+        # A base NUNCA é o líquido integral das NFs: a NF pode entrar parcialmente na
+        # operação — retenção contratual (líquido − 10%) ou a mesma NF dividida entre duas
+        # operações — e o que não foi cedido continua a receber, não é custo financeiro.
+        # Usar o líquido integral inflava a taxa (ex.: 16,41% no lugar dos 6,44% reais).
+        # É a mesma base dos cards de taxa efetiva (frontend/src/utils/advanceRates.ts);
+        # o fallback abaixo espelha o de lá, para operações antigas sem advanced_amount.
+        advanced_total = round(
+            advanced_total
+            if has_advanced
+            else float(batch.received_amount or 0) + float(batch.discount_amount or 0) + float(batch.fee_amount or 0),
+            2,
+        )
         valor_recebido = float(batch.received_amount or 0)
-        finance_cost_amount = round(invoices_net_total - valor_recebido, 2) if invoices_net_total > 0.005 else None
+        finance_cost_amount = round(advanced_total - valor_recebido, 2) if advanced_total > 0.005 else None
         finance_cost_percent = (
-            round((invoices_net_total - valor_recebido) / invoices_net_total * 100.0, 2)
-            if invoices_net_total > 0.005
-            else None
+            round((advanced_total - valor_recebido) / advanced_total * 100.0, 2) if advanced_total > 0.005 else None
         )
         return {
             "id": batch.id,
             "created_at": batch.created_at,
             "updated_at": batch.updated_at,
             "sgc_number": int(batch.sgc_number),
-            "invoices_net_total": invoices_net_total,
+            "advanced_total": advanced_total,
             "finance_cost_amount": finance_cost_amount,
             "finance_cost_percent": finance_cost_percent,
             "batch_number": batch.batch_number,

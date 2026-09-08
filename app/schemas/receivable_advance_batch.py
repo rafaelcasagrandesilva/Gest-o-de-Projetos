@@ -105,7 +105,8 @@ class AdvanceBatchRead(UUIDTimestampRead):
     invoice_count: int = 0
     discount_percent: float | None = None
     # Indicador informativo do custo efetivo da antecipação (não afeta CAR/CAP/Dashboard).
-    invoices_net_total: float | None = None
+    # Base = valor cedido na operação (Σ advanced_amount), não o líquido integral das NFs.
+    advanced_total: float | None = None
     finance_cost_amount: float | None = None
     finance_cost_percent: float | None = None
 

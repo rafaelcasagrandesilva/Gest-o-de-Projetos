@@ -82,7 +82,7 @@ export interface AdvanceBatch {
   items: AdvanceBatchItem[];
   invoice_count: number;
   discount_percent: number | null;
-  invoices_net_total?: number | null;
+  advanced_total?: number | null;
   finance_cost_amount?: number | null;
   finance_cost_percent?: number | null;
   created_at: string;
