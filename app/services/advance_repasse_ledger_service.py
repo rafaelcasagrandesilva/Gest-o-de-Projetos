@@ -20,6 +20,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.company_finance import CompanyFinancialItem
 from app.models.advance_repasse_ledger import (
     AdvanceRepasseLedgerEntry,
     RepasseLedgerDirection,
@@ -297,3 +298,31 @@ class AdvanceRepasseLedgerService:
         if entries:
             await self.db.flush()
         return len(entries)
+
+    async def set_debt_link(
+        self, *, entry_id: UUID, debt_item_id: UUID | None
+    ) -> AdvanceRepasseLedgerEntry:
+        """Vincula (ou desvincula) uma RETIRADA à dívida que ela abate.
+
+        Único campo editável de um lançamento do Ledger, e de propósito: `debt_item_id` é
+        METADADO de destino, não valor. Alterá-lo não muda direção, valor, data nem estorno —
+        ou seja, não move o saldo do Repasse; muda apenas em qual dívida aquele dinheiro
+        aparece como pagamento.
+
+        Existe porque o vínculo passou a ser gravado depois de o Ledger já estar em uso: as
+        retiradas anteriores nasceram sem ele, e a alternativa (estornar e relançar) sujaria o
+        extrato com dois lançamentos por correção — exatamente o que a limpeza de 08/09/2026
+        tirou de lá.
+        """
+        entry = await self.db.get(AdvanceRepasseLedgerEntry, entry_id)
+        if entry is None:
+            raise ValueError("Lançamento não encontrado.")
+        if entry.source_type != RepasseLedgerSource.WITHDRAWAL:
+            raise ValueError("Só uma Retirada de Repasse pode abater dívida.")
+        if debt_item_id is not None:
+            item = await self.db.get(CompanyFinancialItem, debt_item_id)
+            if item is None or item.tipo != "endividamento":
+                raise ValueError("Dívida não encontrada no Endividamento.")
+        entry.debt_item_id = debt_item_id
+        await self.db.flush()
+        return entry
