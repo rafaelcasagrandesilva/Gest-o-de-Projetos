@@ -855,7 +855,12 @@ async def create_advance_repasse_withdrawal(
     actor: User = Depends(get_current_user),
 ) -> RepasseLedgerEntryRead:
     """Registra uma Retirada de Repasse (DÉBITO append-only). Não é liquidação de NF; apenas reduz
-    o saldo do Repasse. Totalmente desacoplada (sem integração com Endividamento nesta fase)."""
+    o saldo do Repasse.
+
+    Quando a retirada abate uma dívida (`purpose=DEBT_REDUCTION` + `debt_item_id`), ela passa a
+    contar como PAGAMENTO daquela dívida na competência em que ocorreu — **sem gerar título no
+    Contas a Pagar**, porque o dinheiro já estava retido na instituição e nunca vai sair do caixa
+    da empresa."""
     from app.models.advance_repasse_ledger import RepasseWithdrawalPurpose
 
     ledger = AdvanceRepasseLedgerService(db)
@@ -866,6 +871,7 @@ async def create_advance_repasse_withdrawal(
             purpose=RepasseWithdrawalPurpose(payload.purpose),
             occurred_at=payload.occurred_at,
             description=(payload.description or None),
+            debt_item_id=payload.debt_item_id,
             created_by_id=actor.id,
         )
     except ValueError as exc:

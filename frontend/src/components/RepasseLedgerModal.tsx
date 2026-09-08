@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { listCompanyFinanceItems } from "@/services/companyFinance";
 import { isAxiosError } from "axios";
 import {
   createRepasseWithdrawal,
@@ -220,9 +221,26 @@ function WithdrawalModal({
   const [occurredAt, setOccurredAt] = useState(todayIso());
   const [amount, setAmount] = useState("");
   const [purpose, setPurpose] = useState<WithdrawalPurpose>("DEBT_REDUCTION");
+  // Dívidas do módulo de Endividamento, para amarrar a retirada à que ela abate. Sem esse
+  // vínculo a retirada só reduz o saldo do repasse e não abate dívida nenhuma.
+  const [debts, setDebts] = useState<{ id: string; nome: string }[]>([]);
+  const [debtId, setDebtId] = useState<string>("");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    void listCompanyFinanceItems("endividamento", todayIso().slice(0, 7))
+      .then((rows) => {
+        if (!vivo) return;
+        setDebts(rows.filter((r) => r.status !== "quitado").map((r) => ({ id: r.id, nome: r.nome })));
+      })
+      .catch(() => setDebts([]));
+    return () => {
+      vivo = false;
+    };
+  }, []);
 
   async function submit() {
     setErr(null);
@@ -239,6 +257,7 @@ function WithdrawalModal({
         occurred_at: occurredAt || todayIso(),
         purpose,
         description: description.trim() || null,
+        debt_item_id: purpose === "DEBT_REDUCTION" && debtId ? debtId : null,
       });
       onSaved();
     } catch (e) {
@@ -296,6 +315,27 @@ function WithdrawalModal({
                 />
                 {WITHDRAWAL_PURPOSE_LABELS.DEBT_REDUCTION}
               </label>
+              {purpose === "DEBT_REDUCTION" ? (
+                <div className="ml-6">
+                  <select
+                    value={debtId}
+                    onChange={(e) => setDebtId(e.target.value)}
+                    className="block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm font-normal"
+                  >
+                    <option value="">Não vincular a uma dívida</option>
+                    {debts.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.nome}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-[11px] font-normal text-slate-500">
+                    Vinculando, a retirada vira <strong>pagamento</strong> dessa dívida no mês em
+                    que ocorreu — e <strong>não gera título no Contas a Pagar</strong>, porque o
+                    dinheiro já estava retido na instituição.
+                  </p>
+                </div>
+              ) : null}
               <label className="inline-flex items-center gap-2 font-normal text-slate-700">
                 <input
                   type="radio"
