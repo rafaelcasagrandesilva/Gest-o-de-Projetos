@@ -6,7 +6,8 @@ import { AdvanceRateCards } from "@/components/AdvanceRateCards";
 import { AdvanceSettlementsTab } from "@/components/AdvanceSettlementsTab";
 import { Money } from "@/components/Money";
 import { PeriodFilter, type PeriodMode } from "@/components/PeriodFilter";
-import { SortableTh } from "@/components/table";
+import { PageSizeSelect, SortableTh, TablePager } from "@/components/table";
+import { usePagination } from "@/hooks/usePagination";
 import { useTableSort } from "@/hooks/useTableSort";
 import { ADVANCE_BATCH_SORT_COLUMNS, defaultAdvanceBatchSort } from "@/tableSort/advanceBatches";
 import {
@@ -98,6 +99,11 @@ export function AdvanceBatches() {
   const { sortedRows: sorted, headerSort } = useTableSort(filteredRows, ADVANCE_BATCH_SORT_COLUMNS, {
     defaultCompare: defaultAdvanceBatchSort,
   });
+
+  // Paginação DEPOIS da ordenação: a página 1 é o topo da tabela como ela está ordenada.
+  // Os cards de taxa continuam lendo `filteredRows` (o recorte inteiro) — paginar é
+  // recorte de leitura, não de cálculo.
+  const pagination = usePagination(sorted);
 
   const operationLabel = (b: AdvanceBatch) => {
     // Identificador operacional oficial = número interno do SGC.
@@ -285,6 +291,8 @@ export function AdvanceBatches() {
             </select>
           </label>
 
+          <PageSizeSelect value={pagination.pageSize} onChange={pagination.setPageSize} />
+
           {/* Indicadores na MESMA barra dos filtros, ocupando o espaço livre à direita:
               mostrar a taxa efetiva não pode custar altura da tabela de operações. */}
           <AdvanceRateCards batches={filteredRows} />
@@ -322,7 +330,7 @@ export function AdvanceBatches() {
                 </td>
               </tr>
             ) : (
-              sorted.map((b) => (
+              pagination.pageRows.map((b) => (
                 <tr key={b.id} className="hover:bg-slate-50/80">
                   <td className="whitespace-nowrap px-2 py-1.5 font-semibold text-slate-900">{operationLabel(b)}</td>
                   <td className="max-w-[160px] truncate px-2 py-1.5 text-slate-600" title={b.operation_code ?? undefined}>
@@ -379,6 +387,7 @@ export function AdvanceBatches() {
             )}
           </tbody>
         </table>
+        {loading ? null : <TablePager pagination={pagination} itemLabel="operações" />}
       </div>
 
       <AdvanceBatchModal
