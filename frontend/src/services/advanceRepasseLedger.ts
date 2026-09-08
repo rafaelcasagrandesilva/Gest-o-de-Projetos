@@ -76,3 +76,20 @@ export async function createRepasseWithdrawal(input: WithdrawalInput): Promise<L
   );
   return data;
 }
+
+/**
+ * Aponta uma Retirada de Repasse para a dívida que ela abate (ou desfaz o vínculo).
+ *
+ * Único campo editável de um lançamento do Ledger — metadado de destino, não valor. Não move o
+ * saldo do Repasse; muda apenas em qual dívida aquele dinheiro aparece como pagamento.
+ */
+export async function setRepasseEntryDebtLink(
+  entryId: string,
+  debtItemId: string | null,
+): Promise<LedgerEntry> {
+  const { data } = await api.patch<LedgerEntry>(
+    `/invoices/advance-repasse-ledger/entries/${entryId}/debt-link`,
+    { debt_item_id: debtItemId },
+  );
+  return data;
+}

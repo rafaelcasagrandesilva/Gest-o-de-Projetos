@@ -4,6 +4,7 @@ import { isAxiosError } from "axios";
 import {
   createRepasseWithdrawal,
   fetchRepasseLedger,
+  setRepasseEntryDebtLink,
   DIRECTION_LABELS,
   SOURCE_LABELS,
   WITHDRAWAL_PURPOSE_LABELS,
@@ -41,6 +42,34 @@ export function RepasseLedgerModal({
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [withdrawOpen, setWithdrawOpen] = useState(false);
+  // Dívidas ativas, para amarrar uma retirada à que ela abate direto no extrato.
+  const [debts, setDebts] = useState<{ id: string; nome: string }[]>([]);
+  const [linking, setLinking] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void listCompanyFinanceItems("endividamento", new Date().toISOString().slice(0, 7))
+      .then((rows) => {
+        if (alive) setDebts(rows.map((r) => ({ id: r.id, nome: r.nome })));
+      })
+      .catch(() => setDebts([]));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function vincularDivida(entryId: string, debtItemId: string | null) {
+    setLinking(entryId);
+    setError(null);
+    try {
+      await setRepasseEntryDebtLink(entryId, debtItemId);
+      setRefresh((n) => n + 1);
+    } catch (e) {
+      setError(isAxiosError(e) ? formatApiError(e) : "Não foi possível vincular a dívida.");
+    } finally {
+      setLinking(null);
+    }
+  }
 
   useEffect(() => {
     let alive = true;
@@ -147,6 +176,7 @@ export function RepasseLedgerModal({
                 entries.map((e) => {
                   const isIn = e.direction === "CREDIT";
                   const reversed = Boolean(e.reversed_at);
+                  const isWithdrawal = e.source_type === "WITHDRAWAL";
                   const purposeLabel = e.withdrawal_purpose
                     ? WITHDRAWAL_PURPOSE_LABELS[e.withdrawal_purpose]
                     : null;
@@ -173,6 +203,31 @@ export function RepasseLedgerModal({
                               {purposeLabel}
                             </span>
                           )}
+                          {/* Vínculo com a dívida: único campo editável de um lançamento do
+                              Ledger. É metadado de destino, não valor — não move o saldo do
+                              Repasse, só define em qual dívida o dinheiro aparece como
+                              pagamento. Existe porque as retiradas anteriores ao recurso
+                              nasceram sem vínculo, e estornar/relançar sujaria o extrato. */}
+                          {isWithdrawal && !reversed ? (
+                            <select
+                              value={e.debt_item_id ?? ""}
+                              onChange={(ev) => void vincularDivida(e.id, ev.target.value || null)}
+                              disabled={linking === e.id}
+                              title="Dívida abatida por esta retirada"
+                              className={`shrink-0 rounded border px-1 py-0.5 text-[10px] ${
+                                e.debt_item_id
+                                  ? "border-violet-200 bg-violet-50 text-violet-800"
+                                  : "border-slate-200 bg-white text-slate-500"
+                              }`}
+                            >
+                              <option value="">sem dívida vinculada</option>
+                              {debts.map((d) => (
+                                <option key={d.id} value={d.id}>
+                                  {d.nome}
+                                </option>
+                              ))}
+                            </select>
+                          ) : null}
                           <span className="truncate" title={e.description || undefined}>
                             {e.description || (purposeLabel ? "" : "—")}
                           </span>

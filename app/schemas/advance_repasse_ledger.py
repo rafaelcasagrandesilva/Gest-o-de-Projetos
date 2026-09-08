@@ -44,3 +44,9 @@ class RepasseWithdrawalCreate(BaseModel):
     #: retirada apenas reduz o saldo do repasse, sem virar pagamento de dívida nenhuma.
     debt_item_id: UUID | None = None
     description: str | None = None
+
+
+class RepasseDebtLinkIn(BaseModel):
+    """Vincula/desvincula uma retirada à dívida que ela abate. `null` desvincula."""
+
+    debt_item_id: UUID | None = None

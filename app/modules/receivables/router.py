@@ -61,6 +61,7 @@ from app.schemas.advance_settlement import (
 from app.schemas.advance_repasse_ledger import (
     RepasseLedgerEntryRead,
     RepasseLedgerStatementRead,
+    RepasseDebtLinkIn,
     RepasseWithdrawalCreate,
 )
 from app.services.advance_institution_service import AdvanceInstitutionService
@@ -1290,3 +1291,29 @@ async def delete_invoice_pdf(
         raise HTTPException(status_code=404, detail="NF não encontrada")
     prefix = settings.api_v1_prefix.rstrip("/")
     return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix, actor)
+
+
+@invoices_router.patch(
+    "/advance-repasse-ledger/entries/{entry_id}/debt-link",
+    response_model=RepasseLedgerEntryRead,
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
+)
+async def set_repasse_entry_debt_link(
+    entry_id: UUID,
+    payload: RepasseDebtLinkIn,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> RepasseLedgerEntryRead:
+    """Aponta uma Retirada de Repasse para a dívida que ela abate (ou desfaz o vínculo).
+
+    É o ÚNICO campo editável de um lançamento do Ledger: metadado de destino, não valor. Não
+    move o saldo do Repasse — muda apenas em qual dívida aquele dinheiro aparece como pagamento.
+    Sem isto, corrigir um vínculo exigiria estornar e relançar, sujando o extrato.
+    """
+    ledger = AdvanceRepasseLedgerService(db)
+    try:
+        entry = await ledger.set_debt_link(entry_id=entry_id, debt_item_id=payload.debt_item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return RepasseLedgerEntryRead.model_validate(entry)
