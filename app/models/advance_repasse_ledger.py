@@ -83,6 +83,15 @@ class AdvanceRepasseLedgerEntry(TimestampUUIDMixin, Base):
     withdrawal_purpose: Mapped[RepasseWithdrawalPurpose | None] = mapped_column(
         REPASSE_WITHDRAWAL_PURPOSE_DB, nullable=True, index=True
     )
+    # A dívida que esta retirada abate (só em WITHDRAWAL com purpose=DEBT_REDUCTION). É o elo
+    # que faz a retirada virar PAGAMENTO na Evolução da dívida — sem passar pelo Contas a Pagar,
+    # porque o dinheiro já estava retido na instituição e nunca vai sair do caixa da empresa.
+    debt_item_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("company_financial_items.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # Origem rastreável (opcional): operação (CREDIT) ou movimentação de liquidação (DEBIT).
     source_batch_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),

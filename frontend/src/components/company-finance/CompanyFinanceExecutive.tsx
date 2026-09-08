@@ -43,6 +43,7 @@ import {
   itemCostCenterRef,
 } from "@/components/company-finance/costCenter";
 import { CostCenterSelect } from "@/components/company-finance/CostCenterSelect";
+import { DebtLedgerPanel } from "@/components/company-finance/DebtLedgerPanel";
 import {
   capPaidOf,
   isIndirectLaborItem,
@@ -2258,6 +2259,9 @@ function FinanceItemCard({
     return () => window.clearTimeout(t);
   }, [tipo, structureEmployeeOpen, structureEmployeeQuery, competencia]);
 
+  // Bump depois de cada gravação da grade: o razão do Endividamento é DERIVADO dos
+  // pagamentos, então precisa ser recalculado quando eles mudam.
+  const [ledgerRefresh, setLedgerRefresh] = useState(0);
   const [paymentsError, setPaymentsError] = useState<string | null>(null);
   const [paymentsSuccess, setPaymentsSuccess] = useState<string | null>(null);
   const [paymentsSaving, setPaymentsSaving] = useState(false);
@@ -2317,6 +2321,7 @@ function FinanceItemCard({
       } else {
         setPaymentsSuccess("Pagamentos salvos. Contas a Pagar atualizado conforme a grade do mês.");
       }
+      setLedgerRefresh((n) => n + 1);
       if (import.meta.env.DEV) {
         console.info("[company-finance] Salvar agora OK", saved);
       }
@@ -3076,6 +3081,23 @@ function FinanceItemCard({
           )}
           {!item.uses_custom_schedule && (
           <>
+          {/* Endividamento sem cronograma: a grade de caixas soltas dá lugar ao RAZÃO — o saldo
+              mês a mês, no formato da planilha que o financeiro já usava. A caixa de pagamento
+              continua sendo a mesma (mesmo estado, mesmo "Salvar agora", mesmo caminho para o
+              Contas a Pagar); ela só passa a ser lida dentro da linha do mês. Custos Fixos, que
+              não tem saldo nem encargo, permanece exatamente na grade de sempre. */}
+          {tipo === "endividamento" ? (
+            <DebtLedgerPanel
+              itemId={item.id}
+              titulo={item.nome}
+              subtitulo={item.item_description}
+              readOnly={readOnly}
+              readOnlyMessage={FINANCE_EDIT_NO_PERM}
+              onSaved={onSaved}
+              refreshKey={ledgerRefresh}
+            />
+          ) : (
+          <>
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Pagamentos por mês (12 meses)</p>
             {hasPending ? (
@@ -3152,6 +3174,8 @@ function FinanceItemCard({
               );
             })}
           </div>
+          </>
+          )}
           {(paymentsError || paymentsSuccess) && (
             <div className="mt-3 text-sm">
               {paymentsError ? <p className="text-red-700">{paymentsError}</p> : null}
@@ -3161,7 +3185,10 @@ function FinanceItemCard({
           </>
           )}
           <div className="mt-4 flex flex-wrap gap-2">
-            {!item.uses_custom_schedule && (
+            {/* O Endividamento salva pelo próprio painel do razão (que alcança competências
+                fora da janela de 12 meses); manter aqui um segundo "Salvar agora" só criaria
+                dois botões concorrentes para a mesma coisa. */}
+            {!item.uses_custom_schedule && tipo !== "endividamento" && (
             <button
               type="button"
               onClick={() => {

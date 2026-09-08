@@ -16,6 +16,8 @@ class RepasseLedgerEntryRead(ORMModel):
     amount: float
     source_type: str  # OPERATION | SETTLEMENT | WITHDRAWAL | ADJUSTMENT
     withdrawal_purpose: str | None = None  # DEBT_REDUCTION | OTHER (só em WITHDRAWAL)
+    #: Dívida abatida por esta retirada (só em DEBT_REDUCTION). Vira pagamento na Evolução.
+    debt_item_id: UUID | None = None
     source_batch_id: UUID | None = None
     source_movement_id: UUID | None = None
     occurred_at: date
@@ -38,4 +40,7 @@ class RepasseWithdrawalCreate(BaseModel):
     amount: float = Field(gt=0)
     occurred_at: date
     purpose: Literal["DEBT_REDUCTION", "OTHER"]
+    #: Qual dívida a retirada abate. Só faz sentido com purpose=DEBT_REDUCTION; sem ele a
+    #: retirada apenas reduz o saldo do repasse, sem virar pagamento de dívida nenhuma.
+    debt_item_id: UUID | None = None
     description: str | None = None

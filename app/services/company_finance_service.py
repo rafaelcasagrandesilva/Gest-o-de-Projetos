@@ -31,6 +31,14 @@ from app.services.financial_schedule import (
     validate_closure,
 )
 from app.services.payable_snapshot_service import PayableSnapshotService, payable_snapshot_payment_status
+# Aliases: `financial_schedule` e `debt_accrual` têm funções de mesmo nome (cada núcleo
+# calcula os indicadores do SEU modelo — agenda de parcelas × saldo que evolui). Importar os
+# dois sem alias faria um sobrescrever o outro silenciosamente.
+from app.services.debt_accrual import (
+    DebtIndicators,
+    build_ledger,
+    compute_indicators as compute_accrual_indicators,
+)
 from app.services.settings_service import SettingsService
 from app.utils.lifecycle import DELETE_WITH_MOVEMENT_MSG, normalize_lifecycle
 
@@ -186,6 +194,8 @@ class CompanyFinanceService:
         # Resumo da última sincronização grade→CAP (para o router avisar o usuário quando
         # algum mês não foi ajustado por já ter pagamento registrado).
         self.last_payable_sync: dict | None = None
+        #: Taxa padrão do SGC, lida sob demanda e reaproveitada em toda a lista.
+        self._debt_default_rate: Decimal | None = None
 
     async def _payment_months_for_item(self, *, item_id: UUID) -> set[date]:
         rows = (
@@ -233,6 +243,10 @@ class CompanyFinanceService:
             .where(CompanyFinancialItem.tipo == tipo)
             .options(
                 selectinload(CompanyFinancialItem.payments),
+                # O motor de saldo precisa de vigências e eventos junto: sem eager load,
+                # cada item da lista dispararia duas consultas extras.
+                selectinload(CompanyFinancialItem.rates),
+                selectinload(CompanyFinancialItem.events),
                 selectinload(CompanyFinancialItem.employee),
                 selectinload(CompanyFinancialItem.cost_center_project),
             )
@@ -404,9 +418,27 @@ class CompanyFinanceService:
                 else:
                     pago_mes = 0.0
             else:
-                restante = max(0.0, debt_base - total_pago)
-                progresso = (total_pago / debt_base) if debt_base > 0 else 0.0
-                status = "quitado" if progresso >= 1.0 else "ativo"
+                # Fonte única: o RAZÃO. Saldo, progresso e status saem da evolução da dívida
+                # (principal + aportes + juros − pagamentos), nunca de `referência − pago`.
+                ind = await self._accrual_execution(it)
+                # `total_pago` continua sendo a SOMA DA GRADE (contrato antigo do cartão, que
+                # inclui lançamento datado no futuro) MAIS as retiradas de Repasse que abatem
+                # esta dívida — elas são pagamento de fato, só não passam pelo caixa. Saldo,
+                # progresso e status é que passam a vir do razão, que enxerga aporte e juros.
+                from app.services.debt_ledger_service import DebtLedgerService as _DLS
+
+                repasse_total = sum(
+                    float(v) for v in (await _DLS(self.db)._repasse_by_month(it.id)).values()
+                )
+                total_pago = round(total_pago + repasse_total, 2)
+                restante = float(ind.saldo_atual)
+                # Progresso medido sobre o que de fato aconteceu até hoje: converge para 100%
+                # quando o saldo zera, e não quando o pago alcança o valor de origem — que era o
+                # que marcava dívida viva como quitada.
+                pago_realizado = float(ind.total_pago)
+                denominador = pago_realizado + restante
+                progresso = (pago_realizado / denominador) if denominador > 0.005 else 0.0
+                status = "quitado" if restante <= 0.005 else "ativo"
             return {
                 "id": it.id,
                 "tipo": it.tipo,
@@ -1351,6 +1383,60 @@ class CompanyFinanceService:
     # cronograma (planejado) + pagamentos REAIS do CAP (via entry_id). Nunca
     # infere pagamento a partir da existência da parcela.
     # ------------------------------------------------------------------ #
+    async def _default_debt_rate(self) -> Decimal:
+        """Taxa mensal padrão do SGC, lida uma vez por serviço (a lista chama por item)."""
+        if self._debt_default_rate is None:
+            settings = await SettingsService(self.db).get_or_create()
+            self._debt_default_rate = Decimal(str(getattr(settings, "debt_default_monthly_rate", 0) or 0))
+        return self._debt_default_rate
+
+    async def _accrual_execution(self, it: CompanyFinancialItem) -> "DebtIndicators":
+        """Execução de uma dívida SEM cronograma, derivada do razão (motor de saldo).
+
+        Fonte ÚNICA de saldo/progresso/status desses itens. A conta antiga
+        (`valor_referencia − Σ pagamentos`) ignorava aporte e juros: uma dívida que recebeu
+        R$ 88 mil de aportes e correu juros aparecia como QUITADA assim que o pago passava do
+        valor de origem, mesmo devendo mais de R$ 70 mil. Ver docs/ETAPA0_ENDIVIDAMENTO_MOTOR_DE_SALDO.md.
+
+        **Não depende de eager loading do chamador.** Quando `rates`/`events` já vieram
+        carregados (o caso da lista, que usa selectinload), usa-os; quando não vieram, busca —
+        em vez de tocar a relação e estourar um lazy load em contexto assíncrono. Foi o que
+        quebrou o PATCH da estrutura: o item gravava e a montagem da RESPOSTA é que falhava,
+        aparecendo na tela como "não foi possível salvar" numa alteração que tinha sido salva.
+        """
+        from sqlalchemy import inspect as sa_inspect
+
+        from app.services.debt_ledger_service import DebtLedgerService
+
+        svc = DebtLedgerService(self.db)
+        nao_carregados = sa_inspect(it).unloaded
+        if "rates" in nao_carregados or "events" in nao_carregados:
+            it = await svc._load_item(it.id) or it
+        origem = svc.origin_month(it)
+        vigencias, _padrao = svc._vigencias_com_padrao(it, origem, await self._default_debt_rate())
+        hoje = first_of_month(date.today())
+        pagamentos = dict(svc._payments_by_month(it))
+        # Retirada de Repasse que abate esta dívida também é pagamento: sem ela o cartão diria
+        # que se deve mais do que se deve.
+        for comp_rep, valor in (await svc._repasse_by_month(it.id)).items():
+            pagamentos[comp_rep] = pagamentos.get(comp_rep, Decimal("0")) + valor
+        # `max` com a ORIGEM dentro: uma dívida cadastrada para começar no futuro tem origem
+        # depois de hoje, e sem isso o razão pediria um intervalo invertido — o que derrubava
+        # a lista inteira de Endividamento, não só aquele item.
+        fim = max([hoje, origem, *pagamentos.keys(), *(first_of_month(e.competencia) for e in (it.events or []))])
+        linhas = build_ledger(
+            principal=Decimal(str(it.valor_referencia or 0)),
+            origin_month=origem,
+            through=fim,
+            rates=vigencias,
+            events=svc._events(it),
+            payments=pagamentos,
+            # Pagamento lançado para mês futuro é PLANO, não fato: o cartão não pode contá-lo
+            # como pago nem antecipar a queda do saldo.
+            realized_through=hoje,
+        )
+        return compute_accrual_indicators(linhas, principal=Decimal(str(it.valor_referencia or 0)))
+
     @staticmethod
     def _uses_schedule(it: CompanyFinancialItem) -> bool:
         return getattr(it, "tipo", None) == "endividamento" and bool(getattr(it, "uses_custom_schedule", False))
@@ -1413,7 +1499,11 @@ class CompanyFinanceService:
         item = (
             await self.db.execute(
                 select(CompanyFinancialItem)
-                .options(selectinload(CompanyFinancialItem.payments))
+                .options(
+                    selectinload(CompanyFinancialItem.payments),
+                    selectinload(CompanyFinancialItem.rates),
+                    selectinload(CompanyFinancialItem.events),
+                )
                 .where(CompanyFinancialItem.id == item_id)
             )
         ).scalar_one_or_none()
@@ -1486,7 +1576,13 @@ class CompanyFinanceService:
                 await self.db.execute(
                     select(CompanyFinancialItem)
                     .where(CompanyFinancialItem.tipo == "endividamento")
-                    .options(selectinload(CompanyFinancialItem.payments))
+                    .options(
+                        selectinload(CompanyFinancialItem.payments),
+                        selectinload(CompanyFinancialItem.rates),
+                        selectinload(CompanyFinancialItem.events),
+                        selectinload(CompanyFinancialItem.rates),
+                        selectinload(CompanyFinancialItem.events),
+                    )
                 )
             )
             .scalars()
@@ -1507,10 +1603,10 @@ class CompanyFinanceService:
                 saldo_restante += float(ind.saldo_restante)
                 total_pago_mes += round(pbm_all.get(it.id, {}).get(comp, 0.0), 2)
             else:
-                ref = _debt_base_amount(it)
-                total_pago = sum(_f(p.valor) for p in it.payments)
+                # Mesmo cálculo do cartão: o saldo vem do razão, com aportes e juros dentro.
+                ind = await self._accrual_execution(it)
                 total_pago_mes += sum(_f(p.valor) for p in it.payments if p.competencia == comp)
-                saldo_restante += max(0.0, ref - total_pago)
+                saldo_restante += float(ind.saldo_atual)
         return {
             "total_endividamento": total_endividamento,
             "total_pago_mes": total_pago_mes,
@@ -1526,6 +1622,10 @@ class CompanyFinanceService:
                     .where(CompanyFinancialItem.tipo == "custo_fixo")
                     .options(
                 selectinload(CompanyFinancialItem.payments),
+                # O motor de saldo precisa de vigências e eventos junto: sem eager load,
+                # cada item da lista dispararia duas consultas extras.
+                selectinload(CompanyFinancialItem.rates),
+                selectinload(CompanyFinancialItem.events),
                 selectinload(CompanyFinancialItem.employee),
                 selectinload(CompanyFinancialItem.cost_center_project),
             )
@@ -1610,6 +1710,8 @@ class CompanyFinanceService:
                     .where(*where)
                     .options(
                         selectinload(CompanyFinancialItem.payments),
+                        selectinload(CompanyFinancialItem.rates),
+                        selectinload(CompanyFinancialItem.events),
                         selectinload(CompanyFinancialItem.employee),
                         selectinload(CompanyFinancialItem.cost_center_project),
                     )
@@ -1730,7 +1832,13 @@ class CompanyFinanceService:
                 await self.db.execute(
                     select(CompanyFinancialItem)
                     .where(CompanyFinancialItem.tipo == tipo)
-                    .options(selectinload(CompanyFinancialItem.payments))
+                    .options(
+                        selectinload(CompanyFinancialItem.payments),
+                        selectinload(CompanyFinancialItem.rates),
+                        selectinload(CompanyFinancialItem.events),
+                        selectinload(CompanyFinancialItem.rates),
+                        selectinload(CompanyFinancialItem.events),
+                    )
                 )
             )
             .scalars()

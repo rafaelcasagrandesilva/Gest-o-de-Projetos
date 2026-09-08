@@ -26,6 +26,7 @@ export const WITHDRAWAL_PURPOSE_LABELS: Record<WithdrawalPurpose, string> = {
 };
 
 export interface LedgerEntry {
+  debt_item_id?: string | null;
   id: string;
   institution_id: string;
   direction: LedgerDirection;
@@ -63,6 +64,8 @@ export interface WithdrawalInput {
   occurred_at: string; // YYYY-MM-DD
   purpose: WithdrawalPurpose;
   description?: string | null;
+  /** Dívida abatida (só com purpose DEBT_REDUCTION): vira pagamento na Evolução da dívida. */
+  debt_item_id?: string | null;
 }
 
 /** Registra uma Retirada de Repasse (DÉBITO append-only). Reduz apenas o saldo do Repasse. */

@@ -100,6 +100,7 @@ class AdvanceRepasseLedgerService:
         source_movement_id: UUID | None,
         created_by_id: UUID | None,
         withdrawal_purpose: RepasseWithdrawalPurpose | None = None,
+        debt_item_id: UUID | None = None,
     ) -> AdvanceRepasseLedgerEntry:
         val = _money(amount)
         if val <= 0:
@@ -114,6 +115,7 @@ class AdvanceRepasseLedgerService:
             occurred_at=occurred_at,
             description=(description or None),
             withdrawal_purpose=withdrawal_purpose,
+            debt_item_id=debt_item_id,
             created_by_id=created_by_id,
         )
         self.db.add(entry)
@@ -171,6 +173,7 @@ class AdvanceRepasseLedgerService:
     async def withdraw(
         self,
         *,
+        debt_item_id: UUID | None = None,
         institution_id: UUID,
         amount: float | Decimal,
         purpose: RepasseWithdrawalPurpose,
@@ -204,6 +207,7 @@ class AdvanceRepasseLedgerService:
             source_movement_id=None,
             created_by_id=created_by_id,
             withdrawal_purpose=purpose,
+            debt_item_id=debt_item_id,
         )
 
     # --- leitura --------------------------------------------------------------
