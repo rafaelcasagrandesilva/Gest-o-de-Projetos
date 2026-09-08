@@ -721,7 +721,10 @@ export function AdvanceBatchModal({
                 </>
               ) : null}
             </div>
-            {/* Indicador informativo: custo efetivo de antecipar as NFs (Daycoval). */}
+            {/* Indicador informativo: custo efetivo de antecipar as NFs (Daycoval).
+                A base é o valor CEDIDO (soma do antecipado por NF), não o líquido integral:
+                a parte da NF que não foi cedida (retenção, ou outra operação) continua a
+                receber e não é custo financeiro. Mesma base dos cards de taxa efetiva. */}
             {detail.institution_profile === "DAYCOVAL" && detail.finance_cost_percent != null ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-800">
@@ -729,9 +732,9 @@ export function AdvanceBatchModal({
                 </p>
                 <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-4">
                   <div>
-                    <dt className="text-[11px] text-amber-700/80">Total líquido das NFs</dt>
+                    <dt className="text-[11px] text-amber-700/80">Valor cedido nesta operação</dt>
                     <dd className="font-semibold tabular-nums text-slate-800">
-                      {formatBRL(detail.invoices_net_total ?? 0)}
+                      {formatBRL(detail.advanced_total ?? 0)}
                     </dd>
                   </div>
                   <div>
