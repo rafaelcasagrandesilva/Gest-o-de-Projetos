@@ -429,3 +429,181 @@ export async function replaceSchedule(
   });
   return data;
 }
+
+// --- Motor de saldo (Endividamento) ---------------------------------------------------- //
+// O razão é DERIVADO a cada leitura no backend (principal + vigências de taxa + eventos + a
+// grade mensal de pagamentos). O frontend só consome — nenhuma regra financeira mora aqui.
+
+export interface DebtLedgerLine {
+  competencia: string; // "AAAA-MM-01"
+  saldo_inicial: number;
+  aporte: number;
+  abatimento: number;
+  encargo_manual: number;
+  taxa: number; // decimal ao mês: 0.015 = 1,5% a.m.
+  encargo: number;
+  pagamento: number;
+  /** Parte do pagamento vinda de Retirada de Repasse — não editável (vem do Ledger). */
+  pagamento_repasse: number;
+  juros_pagos: number;
+  amortizacao: number;
+  saldo_final: number;
+  encargo_acumulado: number;
+  is_projected: boolean;
+}
+
+export interface DebtLedgerSummary {
+  principal: number;
+  total_aportes: number;
+  total_abatimentos: number;
+  total_contratado: number;
+  total_encargos: number;
+  encargos_pagos: number;
+  encargos_capitalizados: number;
+  total_pago: number;
+  total_amortizado: number;
+  saldo_atual: number;
+  taxa_vigente: number;
+  competencia_final: string | null;
+  /** Hipótese ("se ninguém pagar"), separada do saldo atual, que é fato. */
+  saldo_projetado: number | null;
+  competencia_projecao: string | null;
+}
+
+export interface DebtRate {
+  id: string;
+  valid_from: string;
+  monthly_rate: number;
+  note: string | null;
+}
+
+export type DebtEventKind = "APORTE" | "ABATIMENTO" | "ENCARGO_MANUAL";
+
+export interface DebtEvent {
+  id: string;
+  competencia: string;
+  kind: DebtEventKind;
+  amount: number;
+  description: string | null;
+}
+
+export interface DebtLedger {
+  item_id: string;
+  nome: string;
+  origem: string;
+  /** false = dívida congelada (nenhuma vigência com taxa > 0). */
+  tem_correcao: boolean;
+  /** true = a taxa exibida é o padrão do SGC, e não uma vigência desta dívida. */
+  usando_taxa_padrao: boolean;
+  linhas: DebtLedgerLine[];
+  resumo: DebtLedgerSummary;
+  taxas: DebtRate[];
+  eventos: DebtEvent[];
+  payable_sync_warning?: string | null;
+}
+
+/** Uma linha da planilha de evolução como o usuário a edita: cada campo é uma caixa da linha. */
+export interface DebtLedgerRowInput {
+  competencia: string;
+  /** Decimal ao mês. Preenchida cria a vigência NAQUELE mês; vazia herda; zero congela. */
+  taxa?: number | null;
+  aporte?: number | null;
+  abatimento?: number | null;
+  encargo_manual?: number | null;
+  /** `null` = caixa vazia (limpa o lançamento); `0` = zero declarado. */
+  pagamento?: number | null;
+}
+
+export interface DebtLedgerReplaceInput {
+  start_month?: string | null;
+  principal?: number | null;
+  linhas: DebtLedgerRowInput[];
+}
+
+/** Recalcula a evolução a partir do que está digitado, sem gravar. */
+export async function previewDebtLedger(
+  itemId: string,
+  payload: DebtLedgerReplaceInput,
+  projecao = 6,
+): Promise<DebtLedger> {
+  const { data } = await api.post<DebtLedger>(
+    `/company-finance/items/${itemId}/ledger/preview`,
+    payload,
+    { params: { projecao } },
+  );
+  return data;
+}
+
+/** Salva a planilha inteira: início, taxas, aportes e pagamentos numa transação. */
+export async function replaceDebtLedger(
+  itemId: string,
+  payload: DebtLedgerReplaceInput,
+  projecao = 6,
+): Promise<DebtLedger> {
+  const { data } = await api.put<DebtLedger>(
+    `/company-finance/items/${itemId}/ledger`,
+    payload,
+    { params: { projecao } },
+  );
+  return data;
+}
+
+export async function fetchDebtLedger(itemId: string, projecao = 6): Promise<DebtLedger> {
+  const { data } = await api.get<DebtLedger>(`/company-finance/items/${itemId}/ledger`, {
+    params: { projecao },
+  });
+  return data;
+}
+
+export async function setDebtRate(
+  itemId: string,
+  payload: { valid_from: string; monthly_rate: number; note?: string | null },
+): Promise<DebtLedger> {
+  const { data } = await api.put<DebtLedger>(`/company-finance/items/${itemId}/rates`, payload);
+  return data;
+}
+
+export async function deleteDebtRate(itemId: string, rateId: string): Promise<DebtLedger> {
+  const { data } = await api.delete<DebtLedger>(`/company-finance/items/${itemId}/rates/${rateId}`);
+  return data;
+}
+
+export async function addDebtEvent(
+  itemId: string,
+  payload: { competencia: string; kind: DebtEventKind; amount: number; description?: string | null },
+): Promise<DebtLedger> {
+  const { data } = await api.post<DebtLedger>(`/company-finance/items/${itemId}/events`, payload);
+  return data;
+}
+
+export async function deleteDebtEvent(itemId: string, eventId: string): Promise<DebtLedger> {
+  const { data } = await api.delete<DebtLedger>(`/company-finance/items/${itemId}/events/${eventId}`);
+  return data;
+}
+
+/** Gerador de parcelas da Evolução (o caso "parcelas fixas COM juros rodando"). */
+export type DebtPlanMode = "AMORT_FIXA" | "PARCELA_FIXA" | "N_PARCELAS";
+
+export interface DebtPlanLine {
+  competencia: string;
+  juros: number;
+  amortizacao: number;
+  valor: number;
+  saldo_final: number;
+}
+
+export interface DebtPlan {
+  saldo_base: number;
+  competencia_inicial: string;
+  total_pago: number;
+  total_juros: number;
+  parcelas: DebtPlanLine[];
+}
+
+export async function planDebtInstallments(
+  itemId: string,
+  payload: { start_month: string; mode: DebtPlanMode; amount?: number | null; count?: number | null },
+): Promise<DebtPlan> {
+  const { data } = await api.post<DebtPlan>(`/company-finance/items/${itemId}/ledger/plan`, payload);
+  return data;
+}

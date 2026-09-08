@@ -109,6 +109,18 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
         back_populates="item",
         cascade="all, delete-orphan",
     )
+    # Motor de saldo (Endividamento): vigências de taxa e eventos que mexem no saldo.
+    # Vazios = dívida congelada, que é o estado de todo cadastro anterior ao motor.
+    rates: Mapped[list["CompanyFinancialRate"]] = relationship(
+        back_populates="item",
+        cascade="all, delete-orphan",
+        order_by="CompanyFinancialRate.valid_from",
+    )
+    events: Mapped[list["CompanyFinancialEvent"]] = relationship(
+        back_populates="item",
+        cascade="all, delete-orphan",
+        order_by="CompanyFinancialEvent.competencia",
+    )
 
     employee: Mapped[Employee | None] = relationship()
     cost_center_project: Mapped[Project | None] = relationship()
@@ -149,3 +161,48 @@ class CompanyFinancialPayment(TimestampUUIDMixin, Base):
     schedule_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     item: Mapped["CompanyFinancialItem"] = relationship(back_populates="payments")
+
+
+class CompanyFinancialRate(TimestampUUIDMixin, Base):
+    """Vigência de taxa de um item (Endividamento): a partir de `valid_from`, vale `monthly_rate`.
+
+    A taxa de uma competência é a da MAIOR `valid_from` menor ou igual a ela — resolvido em
+    `app/services/debt_accrual.rate_for`. Mudar a taxa é ACRESCENTAR vigência, nunca editar a
+    anterior: assim o histórico de quanto se cobrou em cada mês fica preservado.
+
+    Taxa 0 congela a dívida a partir daquele mês — é como se representa um acordo fechado, que
+    para de correr encargo. Item SEM vigência nenhuma é uma dívida congelada desde sempre (o
+    estado de todo cadastro anterior a esta funcionalidade).
+    """
+
+    __tablename__ = "company_financial_rates"
+
+    item_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("company_financial_items.id", ondelete="CASCADE"), index=True
+    )
+    valid_from: Mapped[date] = mapped_column(Date, nullable=False)
+    monthly_rate: Mapped[float] = mapped_column(Numeric(9, 6), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    item: Mapped["CompanyFinancialItem"] = relationship(back_populates="rates")
+
+
+class CompanyFinancialEvent(TimestampUUIDMixin, Base):
+    """Movimento de saldo que NÃO é pagamento (pagamento vive na grade mensal → Contas a Pagar).
+
+    `kind`: APORTE (+, dívida nova contratada no meio do caminho), ABATIMENTO (− perdão/desconto
+    negociado, que não é caixa) e ENCARGO_MANUAL (+ multa, honorário). Os valores são sempre
+    positivos: o sinal vem do tipo. Constantes e validação em `app/services/debt_accrual`.
+    """
+
+    __tablename__ = "company_financial_events"
+
+    item_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("company_financial_items.id", ondelete="CASCADE"), index=True
+    )
+    competencia: Mapped[date] = mapped_column(Date, nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    item: Mapped["CompanyFinancialItem"] = relationship(back_populates="events")

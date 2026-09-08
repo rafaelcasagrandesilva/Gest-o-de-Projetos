@@ -500,3 +500,144 @@ class ChartPoint(BaseModel):
 
 class ChartSeriesRead(BaseModel):
     points: list[ChartPoint]
+
+
+# --- Motor de saldo (Endividamento) ------------------------------------------------------- #
+# O razão é DERIVADO a cada leitura (nunca armazenado): principal + vigências de taxa +
+# eventos + a grade mensal de pagamentos. Ver app/services/debt_ledger_service.py.
+
+
+class DebtRateRead(BaseModel):
+    id: str
+    valid_from: date
+    monthly_rate: float
+    note: str | None = None
+
+
+class DebtRateIn(BaseModel):
+    valid_from: date
+    #: Decimal ao mês: 0.005 = 0,5% a.m. Zero CONGELA a dívida a partir da competência.
+    monthly_rate: float = Field(ge=0, le=1)
+    note: str | None = Field(default=None, max_length=255)
+
+
+class DebtEventRead(BaseModel):
+    id: str
+    competencia: date
+    kind: str
+    amount: float
+    description: str | None = None
+
+
+class DebtEventIn(BaseModel):
+    competencia: date
+    #: APORTE | ABATIMENTO | ENCARGO_MANUAL
+    kind: str = Field(pattern="^(APORTE|ABATIMENTO|ENCARGO_MANUAL)$")
+    #: Sempre positivo — o sinal vem do tipo.
+    amount: float = Field(gt=0)
+    description: str | None = Field(default=None, max_length=255)
+
+
+class DebtLedgerLineRead(BaseModel):
+    competencia: date
+    saldo_inicial: float
+    aporte: float
+    abatimento: float
+    encargo_manual: float
+    taxa: float
+    encargo: float
+    pagamento: float
+    #: Parte do pagamento que veio de Retirada de Repasse (não editável: vem do Ledger).
+    pagamento_repasse: float = 0.0
+    juros_pagos: float
+    amortizacao: float
+    saldo_final: float
+    encargo_acumulado: float
+    is_projected: bool = False
+
+
+class DebtLedgerSummaryRead(BaseModel):
+    principal: float
+    total_aportes: float
+    total_abatimentos: float
+    total_contratado: float
+    total_encargos: float
+    encargos_pagos: float
+    encargos_capitalizados: float
+    total_pago: float
+    total_amortizado: float
+    saldo_atual: float
+    taxa_vigente: float
+    competencia_final: date | None = None
+    #: Hipótese ("se ninguém pagar"), separada do saldo atual, que é fato.
+    saldo_projetado: float | None = None
+    competencia_projecao: date | None = None
+
+
+class DebtLedgerRead(BaseModel):
+    item_id: str
+    nome: str
+    origem: date
+    #: False = dívida congelada (nenhuma vigência com taxa > 0) — o estado de todo cadastro antigo.
+    tem_correcao: bool = False
+    linhas: list[DebtLedgerLineRead] = Field(default_factory=list)
+    resumo: DebtLedgerSummaryRead
+    #: True quando a taxa exibida é o padrão do SGC, e não uma vigência desta dívida.
+    usando_taxa_padrao: bool = False
+    taxas: list[DebtRateRead] = Field(default_factory=list)
+    eventos: list[DebtEventRead] = Field(default_factory=list)
+    payable_sync_warning: str | None = None
+
+
+class DebtLedgerRowIn(BaseModel):
+    """Uma linha da planilha de evolução, como o usuário a edita na tela.
+
+    Cada campo opcional é uma caixa da linha: preenchida vira registro, vazia não existe.
+    `taxa` preenchida cria a VIGÊNCIA naquele mês (e vale dali para frente); vazia herda o mês
+    anterior; zero congela.
+    """
+
+    competencia: date
+    taxa: float | None = Field(default=None, ge=0, le=1)
+    aporte: float | None = Field(default=None, ge=0)
+    abatimento: float | None = Field(default=None, ge=0)
+    encargo_manual: float | None = Field(default=None, ge=0)
+    #: `None` = caixa vazia (limpa o lançamento); `0` = zero declarado. Mesma semântica da grade.
+    pagamento: float | None = None
+    descricao: str | None = Field(default=None, max_length=255)
+    nota: str | None = Field(default=None, max_length=255)
+
+
+class DebtLedgerReplaceIn(BaseModel):
+    """Salvar da tela de evolução: parâmetros + a planilha inteira de uma vez."""
+
+    start_month: date | None = None
+    principal: float | None = Field(default=None, ge=0)
+    linhas: list[DebtLedgerRowIn] = Field(default_factory=list)
+
+
+class DebtPlanIn(BaseModel):
+    """Gerador de parcelas da Evolução da dívida (o caso "parcelas fixas COM juros rodando")."""
+
+    #: Mês da 1ª parcela. O saldo base é o do razão no mês anterior — nunca informado à mão.
+    start_month: date
+    #: AMORT_FIXA (abate valor fixo de principal + juros) | PARCELA_FIXA | N_PARCELAS
+    mode: str = Field(pattern="^(AMORT_FIXA|PARCELA_FIXA|N_PARCELAS)$")
+    amount: float | None = Field(default=None, gt=0)
+    count: int | None = Field(default=None, ge=1, le=600)
+
+
+class DebtPlanLineRead(BaseModel):
+    competencia: date
+    juros: float
+    amortizacao: float
+    valor: float
+    saldo_final: float
+
+
+class DebtPlanRead(BaseModel):
+    saldo_base: float
+    competencia_inicial: date
+    total_pago: float
+    total_juros: float
+    parcelas: list[DebtPlanLineRead] = Field(default_factory=list)

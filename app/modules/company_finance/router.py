@@ -22,6 +22,12 @@ from app.schemas.company_finance import (
     CompanyFinancialItemCreate,
     CompanyFinancialItemRead,
     CompanyFinancialItemUpdate,
+    DebtEventIn,
+    DebtLedgerReplaceIn,
+    DebtPlanIn,
+    DebtPlanRead,
+    DebtLedgerRead,
+    DebtRateIn,
     KpiCustosFixosRead,
     KpiEndividamentoRead,
     LancamentosCompetenciaRead,
@@ -34,6 +40,7 @@ from app.schemas.company_finance import (
     SchedulePreviewRead,
 )
 from app.services.company_finance_service import CompanyFinanceService, parse_month
+from app.services.debt_ledger_service import DEFAULT_PROJECTION_MONTHS, DebtLedgerService
 
 
 router = APIRouter()
@@ -113,6 +120,9 @@ async def _load_item(db: AsyncSession, item_id: UUID) -> CompanyFinancialItem | 
         .where(CompanyFinancialItem.id == item_id)
         .options(
             selectinload(CompanyFinancialItem.payments),
+            # O motor de saldo lê vigências e eventos ao montar a leitura do item.
+            selectinload(CompanyFinancialItem.rates),
+            selectinload(CompanyFinancialItem.events),
             selectinload(CompanyFinancialItem.employee),
             selectinload(CompanyFinancialItem.cost_center_project),
         )
@@ -499,3 +509,215 @@ async def chart_series(
     points = [ChartPoint.model_validate(p) for p in points_raw]
     _res = "debt_chart" if tipo == "endividamento" else "custo_fixo_chart"
     return redact_for(_res, ChartSeriesRead(points=points), actor)
+
+
+# --- Motor de saldo do Endividamento ------------------------------------------------------ #
+# O razão substitui a grade de caixas como tela padrão de uma dívida SEM cronograma: as mesmas
+# caixas continuam sendo a fonte do pagamento, mas agora aparecem dentro da evolução do saldo.
+# Nenhum destes endpoints escreve no Contas a Pagar — o motor apenas lê a grade.
+
+
+async def _assert_debt_item(db: AsyncSession, item_id: UUID, actor: User, verb: str) -> None:
+    tipo = await _item_tipo(db, item_id)
+    if tipo is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    if tipo != "endividamento":
+        raise HTTPException(status_code=400, detail="Motor de saldo existe apenas no Endividamento.")
+    _assert_verb(actor, tipo, verb)
+
+
+@router.get("/items/{item_id}/ledger", response_model=DebtLedgerRead)
+async def get_debt_ledger(
+    item_id: UUID,
+    projecao: int = Query(default=DEFAULT_PROJECTION_MONTHS, ge=0, le=36),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> DebtLedgerRead:
+    """Evolução da dívida mês a mês (saldo, encargo, pagamento) + resumo, taxas e eventos.
+
+    `projecao` estende o razão para o futuro sem pagamento nenhum — é a resposta a "onde essa
+    dívida vai parar se ninguém pagar".
+    """
+    await _assert_debt_item(db, item_id, actor, "read")
+    data = await DebtLedgerService(db).ledger(item_id=item_id, projection_months=projecao)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    return redact_for("debt_item", DebtLedgerRead.model_validate(data), actor)
+
+
+@router.put("/items/{item_id}/rates", response_model=DebtLedgerRead)
+async def set_debt_rate(
+    item_id: UUID,
+    payload: DebtRateIn,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> DebtLedgerRead:
+    """Cria ou corrige a vigência de taxa de uma competência.
+
+    Mudar a taxa de verdade é criar uma vigência NOVA num mês posterior — a anterior fica no
+    histórico. Taxa 0 congela a dívida a partir daquele mês (é como se registra um acordo).
+    """
+    await _assert_debt_item(db, item_id, actor, "update")
+    svc = DebtLedgerService(db)
+    try:
+        await svc.set_rate(
+            item_id=item_id,
+            valid_from=payload.valid_from,
+            monthly_rate=payload.monthly_rate,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    data = await svc.ledger(item_id=item_id)
+    return redact_for("debt_item", DebtLedgerRead.model_validate(data), actor)
+
+
+@router.delete("/items/{item_id}/rates/{rate_id}", response_model=DebtLedgerRead)
+async def delete_debt_rate(
+    item_id: UUID,
+    rate_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> DebtLedgerRead:
+    await _assert_debt_item(db, item_id, actor, "update")
+    svc = DebtLedgerService(db)
+    if not await svc.delete_rate(item_id=item_id, rate_id=rate_id):
+        raise HTTPException(status_code=404, detail="Vigência não encontrada")
+    await db.commit()
+    data = await svc.ledger(item_id=item_id)
+    return redact_for("debt_item", DebtLedgerRead.model_validate(data), actor)
+
+
+@router.post("/items/{item_id}/events", response_model=DebtLedgerRead)
+async def add_debt_event(
+    item_id: UUID,
+    payload: DebtEventIn,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> DebtLedgerRead:
+    """Aporte (dívida nova), abatimento (perdão/desconto) ou encargo manual (multa/honorário)."""
+    await _assert_debt_item(db, item_id, actor, "update")
+    svc = DebtLedgerService(db)
+    try:
+        await svc.add_event(
+            item_id=item_id,
+            competencia=payload.competencia,
+            kind=payload.kind,
+            amount=payload.amount,
+            description=payload.description,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    data = await svc.ledger(item_id=item_id)
+    return redact_for("debt_item", DebtLedgerRead.model_validate(data), actor)
+
+
+@router.delete("/items/{item_id}/events/{event_id}", response_model=DebtLedgerRead)
+async def delete_debt_event(
+    item_id: UUID,
+    event_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> DebtLedgerRead:
+    await _assert_debt_item(db, item_id, actor, "update")
+    svc = DebtLedgerService(db)
+    if not await svc.delete_event(item_id=item_id, event_id=event_id):
+        raise HTTPException(status_code=404, detail="Evento não encontrado")
+    await db.commit()
+    data = await svc.ledger(item_id=item_id)
+    return redact_for("debt_item", DebtLedgerRead.model_validate(data), actor)
+
+
+@router.put("/items/{item_id}/ledger", response_model=DebtLedgerRead)
+async def replace_debt_ledger(
+    item_id: UUID,
+    payload: DebtLedgerReplaceIn,
+    projecao: int = Query(default=DEFAULT_PROJECTION_MONTHS, ge=0, le=36),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> DebtLedgerRead:
+    """Salva a planilha de evolução inteira: início, taxas, aportes e pagamentos numa transação.
+
+    Mesmo espírito do `replace_schedule` — o usuário edita a tabela e grava uma vez só.
+    """
+    await _assert_debt_item(db, item_id, actor, "update")
+    svc = DebtLedgerService(db)
+    try:
+        res = await svc.replace_ledger(
+            item_id=item_id,
+            start_month=payload.start_month,
+            principal=payload.principal,
+            # `exclude_unset` é ESSENCIAL: sem ele o Pydantic materializa os campos que o
+            # cliente NÃO mandou com o default `None`, e o serviço lê `pagamento=None` como
+            # "apagar o lançamento deste mês". O efeito era apagar o pagamento justamente dos
+            # meses que a tela reenviava por outro motivo (ter uma vigência de taxa).
+            linhas=[l.model_dump(exclude_unset=True) for l in payload.linhas],
+        )
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    data = await svc.ledger(item_id=item_id, projection_months=projecao)
+    data["payable_sync_warning"] = res.get("payable_sync_warning")
+    return redact_for("debt_item", DebtLedgerRead.model_validate(data), actor)
+
+
+@router.post("/items/{item_id}/ledger/preview", response_model=DebtLedgerRead)
+async def preview_debt_ledger(
+    item_id: UUID,
+    payload: DebtLedgerReplaceIn,
+    projecao: int = Query(default=DEFAULT_PROJECTION_MONTHS, ge=0, le=36),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> DebtLedgerRead:
+    """Recalcula o razão a partir do que está digitado na tela, SEM gravar nada.
+
+    É o que deixa a planilha responder enquanto o usuário digita sem duplicar regra financeira
+    no frontend — mesmo padrão do `schedule/preview`.
+    """
+    await _assert_debt_item(db, item_id, actor, "read")
+    try:
+        data = await DebtLedgerService(db).preview_ledger(
+            item_id=item_id,
+            start_month=payload.start_month,
+            principal=payload.principal,
+            # Ver a nota em `replace_debt_ledger`: campo ausente ≠ campo nulo.
+            linhas=[l.model_dump(exclude_unset=True) for l in payload.linhas],
+            projection_months=projecao,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if data is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    return redact_for("debt_item", DebtLedgerRead.model_validate(data), actor)
+
+
+@router.post("/items/{item_id}/ledger/plan", response_model=DebtPlanRead)
+async def plan_debt_installments(
+    item_id: UUID,
+    payload: DebtPlanIn,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> DebtPlanRead:
+    """Calcula as parcelas de um acordo em que o JURO CONTINUA correndo.
+
+    Responde "quanto pagar por mês": com encargo incidindo, fixar a amortização e fixar a
+    parcela dão planos diferentes, e o valor a pagar muda mês a mês no primeiro caso. Não grava
+    nada — devolve os valores para a tela preencher a coluna Pagamento.
+    """
+    await _assert_debt_item(db, item_id, actor, "read")
+    try:
+        data = await DebtLedgerService(db).plan_installments_for(
+            item_id=item_id,
+            start_month=payload.start_month,
+            mode=payload.mode,
+            amount=payload.amount,
+            count=payload.count,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if data is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    return redact_for("debt_item", DebtPlanRead.model_validate(data), actor)

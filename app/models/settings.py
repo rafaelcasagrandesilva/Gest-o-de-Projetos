@@ -14,6 +14,11 @@ class SystemSettings(TimestampUUIDMixin, Base):
     tax_rate: Mapped[float] = mapped_column(Numeric(8, 6), default=0, nullable=False)
     overhead_rate: Mapped[float] = mapped_column(Numeric(8, 6), default=0, nullable=False)
     anticipation_rate: Mapped[float] = mapped_column(Numeric(8, 6), default=0, nullable=False)
+    # Taxa mensal padrão de correção de dívidas NOVAS (0,5% a.m. = 6% ao ano). Não retroage:
+    # dívida já cadastrada só corrige se alguém criar uma vigência para ela.
+    debt_default_monthly_rate: Mapped[float] = mapped_column(
+        Numeric(9, 6), default=0.005, server_default="0.005000", nullable=False
+    )
     clt_charges_rate: Mapped[float] = mapped_column(Numeric(8, 6), default=0, nullable=False)
 
     vehicle_light_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0, nullable=False)
