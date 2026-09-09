@@ -91,6 +91,10 @@ class ProjectCommitment(TimestampUUIDMixin, Base):
     created_by_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    # Ocorrências da mesma repetição (a gerencial de toda quarta). MATERIALIZADAS: cada uma é um
+    # compromisso de verdade, com ata, participantes e pauta próprios — e remarcar uma não mexe
+    # nas outras.
+    series_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True, index=True)
 
     participants: Mapped[list["ProjectCommitmentParticipant"]] = relationship(
         back_populates="commitment", cascade="all, delete-orphan"

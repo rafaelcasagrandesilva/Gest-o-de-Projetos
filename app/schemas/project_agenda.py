@@ -51,6 +51,8 @@ class CommitmentRead(BaseModel):
     status: str
     completed_at: datetime | None = None
     completion_note: str | None = None
+    #: Ocorrências da mesma repetição (a gerencial de toda quarta).
+    series_id: UUID | None = None
     #: Tem prazo, já passou e ninguém fechou. Compromisso sem data nunca atrasa — só espera.
     is_overdue: bool = False
     participants: list[CommitmentParticipantRead] = Field(default_factory=list)
@@ -76,6 +78,9 @@ class CommitmentCreate(BaseModel):
     participant_ids: list[UUID] = Field(default_factory=list)
     #: Quem não tem login (escritório, cliente, colaborador sem acesso).
     external_participants: str | None = Field(default=None, max_length=500)
+    #: Repetição: a cada quantas semanas e por quantas ocorrências. Ausente = compromisso único.
+    repeat_every_weeks: int | None = Field(default=None, ge=1, le=8)
+    repeat_count: int | None = Field(default=None, ge=2, le=52)
 
 
 class CommitmentUpdate(BaseModel):
@@ -156,3 +161,5 @@ class MeetingOptionRead(BaseModel):
     id: UUID
     title: str
     starts_at: datetime | None = None
+    #: Permite destacar a próxima ocorrência da MESMA série na hora de levar um item adiante.
+    series_id: UUID | None = None

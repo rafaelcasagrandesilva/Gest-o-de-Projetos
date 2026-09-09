@@ -105,7 +105,16 @@ export function MeetingAgendaItems({
     void carregar();
     void listAgendaUsers().then(setUsuarios).catch(() => setUsuarios([]));
     void listUpcomingMeetings()
-      .then((rows) => setReunioes(rows.filter((r) => r.id !== meeting.id)))
+      .then((rows) => {
+        const outras = rows.filter((r) => r.id !== meeting.id);
+        // Mesma série primeiro: é o destino natural de um item que "fica para a próxima".
+        outras.sort((a, b) => {
+          const sa = meeting.series_id != null && a.series_id === meeting.series_id ? 0 : 1;
+          const sb = meeting.series_id != null && b.series_id === meeting.series_id ? 0 : 1;
+          return sa - sb;
+        });
+        setReunioes(outras);
+      })
       .catch(() => setReunioes([]));
   }, [carregar, meeting.id]);
 
@@ -174,6 +183,12 @@ export function MeetingAgendaItems({
       setSalvando(false);
     }
   }
+
+  /** Primeira reunião futura da MESMA série — o destino esperado de um item adiado. */
+  const proximaDaSerie =
+    meeting.series_id == null
+      ? null
+      : (reunioes.find((r) => r.series_id === meeting.series_id) ?? null);
 
   const emAberto = itens.filter((i) => i.outcome === "OPEN" || i.outcome === "PARTIAL").length;
 
@@ -271,17 +286,29 @@ export function MeetingAgendaItems({
                       <p className="mb-1 text-[11px] text-slate-700">Levar para qual reunião?</p>
                       {reunioes.length ? (
                         <div className="flex flex-wrap gap-1">
-                          {reunioes.slice(0, 6).map((r) => (
-                            <button
-                              key={r.id}
-                              type="button"
-                              disabled={salvando}
-                              onClick={() => void marcar(i, "EXTENDED", r.id)}
-                              className="rounded-lg bg-white px-2 py-1 text-[11px] font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50 disabled:opacity-50"
-                            >
-                              {r.starts_at ? dataBr(r.starts_at) : r.title}
-                            </button>
-                          ))}
+                          {reunioes.slice(0, 6).map((r) => {
+                            // A próxima ocorrência da MESMA série é o destino esperado numa
+                            // reunião que se repete ("fica para a semana que vem"), então vem
+                            // primeiro e destacada — as demais continuam disponíveis.
+                            const mesmaSerie =
+                              proximaDaSerie != null && r.id === proximaDaSerie.id;
+                            return (
+                              <button
+                                key={r.id}
+                                type="button"
+                                disabled={salvando}
+                                onClick={() => void marcar(i, "EXTENDED", r.id)}
+                                className={`rounded-lg px-2 py-1 text-[11px] font-medium ring-1 disabled:opacity-50 ${
+                                  mesmaSerie
+                                    ? "bg-indigo-600 text-white ring-indigo-600 hover:bg-indigo-700"
+                                    : "bg-white text-indigo-700 ring-indigo-200 hover:bg-indigo-50"
+                                }`}
+                              >
+                                {r.starts_at ? dataBr(r.starts_at) : r.title}
+                                {mesmaSerie ? " · próxima" : ""}
+                              </button>
+                            );
+                          })}
                         </div>
                       ) : (
                         <p className="text-[11px] text-amber-800">

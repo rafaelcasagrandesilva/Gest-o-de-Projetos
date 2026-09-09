@@ -142,6 +142,7 @@ class ProjectAgendaService:
                         }
                         for a in sorted(r.attachments or [], key=lambda x: x.created_at)
                     ],
+                    "series_id": r.series_id,
                     "created_by_id": r.created_by_id,
                 }
             )
@@ -277,6 +278,7 @@ class ProjectAgendaService:
             project_id=data.get("project_id"),
             owner_user_id=data.get("owner_user_id"),
             external_participants=(data.get("external_participants") or None),
+            series_id=data.get("series_id"),
             status=CommitmentStatus.AGENDADO.value,
             created_by_id=actor_id,
         )
@@ -600,6 +602,75 @@ class ProjectAgendaService:
             ).scalars().all()
         )
 
+    # ------------------------------------------------------------------ recorrência
+
+    #: Teto de ocorrências criadas de uma vez — um ano de reunião semanal.
+    MAX_OCCURRENCES = 52
+
+    async def create_series(
+        self, *, data: dict, every_weeks: int, count: int, actor_id: UUID | None
+    ) -> list[ProjectCommitment]:
+        """Cria N ocorrências da mesma repetição, todas com o mesmo `series_id`.
+
+        As ocorrências são MATERIALIZADAS (uma linha por semana), e não calculadas na leitura:
+        cada reunião precisa carregar a sua própria ata, os seus participantes e a sua pauta —
+        coisas que uma data virtual não guardaria. O preço é que a série não é editável em bloco;
+        o ganho é que remarcar uma quarta não toca nas outras, que é o que a gestão pediu.
+        """
+        if every_weeks < 1:
+            raise HTTPException(status_code=400, detail="O intervalo deve ser de ao menos 1 semana.")
+        if count < 1 or count > self.MAX_OCCURRENCES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A repetição aceita de 1 a {self.MAX_OCCURRENCES} ocorrências.",
+            )
+        inicio = data.get("starts_at")
+        if inicio is None:
+            raise HTTPException(
+                status_code=400, detail="Informe a data e a hora da primeira ocorrência."
+            )
+
+        serie = uuid4()
+        criadas: list[ProjectCommitment] = []
+        participantes = data.get("participant_ids")
+        for i in range(count):
+            deslocamento = timedelta(weeks=every_weeks * i)
+            criadas.append(
+                await self.create(
+                    data={
+                        **data,
+                        "series_id": serie,
+                        "starts_at": inicio + deslocamento,
+                        # O prazo, quando existe, acompanha a ocorrência — senão todas herdariam
+                        # a data-limite da primeira e nasceriam atrasadas.
+                        "due_at": (data["due_at"] + deslocamento) if data.get("due_at") else None,
+                        "participant_ids": participantes,
+                    },
+                    actor_id=actor_id,
+                )
+            )
+        return criadas
+
+    async def next_in_series(
+        self, *, meeting_id: UUID
+    ) -> ProjectCommitment | None:
+        """Próxima ocorrência da MESMA série, para levar um item adiante em um clique."""
+        atual = await self.db.get(ProjectCommitment, meeting_id)
+        if atual is None or atual.series_id is None or atual.starts_at is None:
+            return None
+        return (
+            await self.db.execute(
+                select(ProjectCommitment)
+                .where(
+                    ProjectCommitment.series_id == atual.series_id,
+                    ProjectCommitment.id != atual.id,
+                    ProjectCommitment.starts_at > atual.starts_at,
+                    ProjectCommitment.status != CommitmentStatus.CANCELADO.value,
+                )
+                .order_by(ProjectCommitment.starts_at.asc())
+                .limit(1)
+            )
+        ).scalars().first()
 
 def _meeting_date(meeting) -> date | None:
     if meeting is None:
