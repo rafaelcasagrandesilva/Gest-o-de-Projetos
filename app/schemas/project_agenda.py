@@ -163,3 +163,22 @@ class MeetingOptionRead(BaseModel):
     starts_at: datetime | None = None
     #: Permite destacar a próxima ocorrência da MESMA série na hora de levar um item adiante.
     series_id: UUID | None = None
+
+
+class SeriesSummaryRead(BaseModel):
+    """Estado da repetição, para a tela avisar antes de acrescentar ou apagar em bloco."""
+
+    series_id: UUID
+    every_weeks: int
+    total: int
+    #: Desta ocorrência em diante — o que um "excluir a série" levaria junto.
+    from_here: int
+    #: Quantas dessas já têm ata anexada ou item de pauta: apagar aí destrói registro.
+    from_here_with_content: int
+    last_starts_at: datetime | None = None
+
+
+class SeriesExtend(BaseModel):
+    """Quantas ocorrências acrescentar ao fim da série. O intervalo é o que ela já tem."""
+
+    count: int = Field(ge=1, le=52)

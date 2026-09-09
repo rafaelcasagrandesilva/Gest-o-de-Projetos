@@ -17,7 +17,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -671,6 +671,161 @@ class ProjectAgendaService:
                 .limit(1)
             )
         ).scalars().first()
+
+    async def _series_rows(self, commitment_id: UUID) -> tuple[ProjectCommitment, list[ProjectCommitment]] | None:
+        """A ocorrência pedida e TODAS as irmãs dela, em ordem de data."""
+        atual = await self._load(commitment_id)
+        if atual is None or atual.series_id is None:
+            return None
+        irmas = (
+            await self.db.execute(
+                select(ProjectCommitment)
+                .options(selectinload(ProjectCommitment.participants))
+                .where(ProjectCommitment.series_id == atual.series_id)
+                .order_by(ProjectCommitment.starts_at.asc())
+            )
+        ).scalars().all()
+        return atual, list(irmas)
+
+    @staticmethod
+    def _cadencia_semanas(ocorrencias: list[ProjectCommitment]) -> int:
+        """Intervalo da série, em semanas, lido do intervalo mais comum entre as ocorrências.
+
+        Não guardamos a regra de repetição: uma ocorrência remarcada à mão tornaria o registro
+        mentiroso. O intervalo MAIS COMUM sobrevive a essas exceções — mover uma quarta para a
+        quinta não faz a série virar quinzenal.
+        """
+        datas = sorted(o.starts_at for o in ocorrencias if o.starts_at)
+        if len(datas) < 2:
+            return 1
+        vaos: dict[int, int] = {}
+        for anterior, seguinte in zip(datas, datas[1:]):
+            semanas = max(1, round((seguinte - anterior).days / 7))
+            vaos[semanas] = vaos.get(semanas, 0) + 1
+        return max(vaos.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+
+    async def series_summary(self, *, commitment_id: UUID) -> dict | None:
+        """O que a série tem hoje — para a tela poder avisar antes de criar ou apagar em bloco."""
+        dados = await self._series_rows(commitment_id)
+        if dados is None:
+            return None
+        atual, irmas = dados
+        referencia = atual.starts_at
+        daqui = [
+            o for o in irmas
+            if referencia is None or o.starts_at is None or o.starts_at >= referencia
+        ]
+        com_conteudo = 0
+        for o in daqui:
+            itens = await self.db.scalar(
+                select(func.count())
+                .select_from(ProjectCommitmentOccurrence)
+                .where(ProjectCommitmentOccurrence.meeting_id == o.id)
+            )
+            anexos = await self.db.scalar(
+                select(func.count())
+                .select_from(ProjectCommitmentAttachment)
+                .where(ProjectCommitmentAttachment.commitment_id == o.id)
+            )
+            if (itens or 0) + (anexos or 0) > 0:
+                com_conteudo += 1
+        return {
+            "series_id": atual.series_id,
+            "every_weeks": self._cadencia_semanas(irmas),
+            "total": len(irmas),
+            "from_here": len(daqui),
+            "from_here_with_content": com_conteudo,
+            "last_starts_at": max((o.starts_at for o in irmas if o.starts_at), default=None),
+        }
+
+    async def extend_series(
+        self, *, commitment_id: UUID, count: int, actor_id: UUID | None
+    ) -> list[ProjectCommitment]:
+        """Acrescenta N ocorrências ao fim de uma série já criada.
+
+        Errar o número de semanas na criação é o normal (o ciclo muda, entra um mês a mais). Sem
+        isto a saída seria cadastrar a reunião solta, e ela nasceria FORA da série — perdendo o
+        atalho de levar um item "para a próxima".
+
+        As novas nascem do RITMO da série (primeira ocorrência + múltiplos do intervalo), não da
+        data da última: se uma quarta foi remarcada para quinta em caráter de exceção, as
+        próximas continuam caindo na quarta.
+        """
+        if count < 1:
+            raise HTTPException(status_code=400, detail="Informe quantas ocorrências acrescentar.")
+        dados = await self._series_rows(commitment_id)
+        if dados is None:
+            raise HTTPException(
+                status_code=400, detail="Este compromisso não faz parte de uma repetição."
+            )
+        _, irmas = dados
+        com_data = [o for o in irmas if o.starts_at]
+        if not com_data:
+            raise HTTPException(status_code=400, detail="A série não tem data para continuar.")
+        if len(irmas) + count > self.MAX_OCCURRENCES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A série chega no limite de {self.MAX_OCCURRENCES} ocorrências.",
+            )
+
+        semanas = self._cadencia_semanas(irmas)
+        primeira, ultima = com_data[0], com_data[-1]
+        # Primeiro múltiplo do ritmo que cai DEPOIS da última ocorrência: é onde a série continua.
+        passo = 1
+        while primeira.starts_at + timedelta(weeks=semanas * passo) <= ultima.starts_at:
+            passo += 1
+
+        # O molde é a última ocorrência: se o local ou os participantes mudaram no meio do
+        # caminho, é a configuração mais recente que deve seguir adiante.
+        participantes = [p.user_id for p in ultima.participants]
+        base = {
+            "kind": ultima.kind,
+            "title": ultima.title,
+            "description": ultima.description,
+            "all_day": ultima.all_day,
+            "duration_minutes": ultima.duration_minutes,
+            "location": ultima.location,
+            "modality": ultima.modality,
+            "project_id": ultima.project_id,
+            "owner_user_id": ultima.owner_user_id,
+            "external_participants": ultima.external_participants,
+            "series_id": ultima.series_id,
+            "participant_ids": participantes,
+        }
+        folga = (ultima.due_at - ultima.starts_at) if ultima.due_at else None
+        criadas: list[ProjectCommitment] = []
+        for i in range(count):
+            quando = primeira.starts_at + timedelta(weeks=semanas * (passo + i))
+            criadas.append(
+                await self.create(
+                    data={**base, "starts_at": quando, "due_at": (quando + folga) if folga else None},
+                    actor_id=actor_id,
+                )
+            )
+        return criadas
+
+    async def delete_series_from(self, *, commitment_id: UUID) -> int:
+        """Apaga ESTA ocorrência e as seguintes da mesma série. As passadas ficam.
+
+        Encerrar uma reunião recorrente é dizer "não acontece mais", nunca "nunca aconteceu": o
+        que já foi realizado tem ata e pauta e é histórico. Por isso o corte é sempre daqui para
+        frente, e a tela avisa quantas das que vão sumir já têm conteúdo.
+        """
+        dados = await self._series_rows(commitment_id)
+        if dados is None:
+            raise HTTPException(
+                status_code=400, detail="Este compromisso não faz parte de uma repetição."
+            )
+        atual, irmas = dados
+        referencia = atual.starts_at
+        apagadas = 0
+        for o in irmas:
+            if referencia is not None and o.starts_at is not None and o.starts_at < referencia:
+                continue
+            if await self.delete(commitment_id=o.id):
+                apagadas += 1
+        return apagadas
+
 
 def _meeting_date(meeting) -> date | None:
     if meeting is None:
