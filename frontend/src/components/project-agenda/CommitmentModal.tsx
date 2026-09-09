@@ -74,6 +74,12 @@ export function CommitmentModal({
     commitment?.participants.map((p) => p.user_id) ?? [],
   );
   const [externos, setExternos] = useState(commitment?.external_participants ?? "");
+  // Repetição só na CRIAÇÃO: as ocorrências são materializadas, então editar depois é
+  // editar uma reunião específica — que é justamente a liberdade de remarcar uma sem
+  // mexer nas outras.
+  const [repetir, setRepetir] = useState(false);
+  const [aCadaSemanas, setACadaSemanas] = useState("1");
+  const [quantas, setQuantas] = useState("12");
 
   const [usuarios, setUsuarios] = useState<AgendaUser[]>([]);
   const [projetos, setProjetos] = useState<{ id: string; name: string }[]>([]);
@@ -110,6 +116,9 @@ export function CommitmentModal({
         owner_user_id: ownerId || null,
         participant_ids: participantes,
         external_participants: externos.trim() || null,
+        ...(!editando && repetir && temHora
+          ? { repeat_every_weeks: Number(aCadaSemanas), repeat_count: Number(quantas) }
+          : {}),
       };
       if (editando && commitment) await updateCommitment(commitment.id, payload);
       else await createCommitment(payload);
@@ -307,6 +316,48 @@ export function CommitmentModal({
               O responsável entra como participante automaticamente.
             </p>
           </div>
+
+          {/* Repetição — o caso da gerencial de toda quarta. Cada ocorrência nasce como uma
+              reunião de verdade: tem ata, participantes e pauta próprios, e remarcar uma não
+              toca nas outras. */}
+          {!editando && temHora ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={repetir} onChange={(e) => setRepetir(e.target.checked)} />
+                Repetir este compromisso
+              </label>
+              {repetir ? (
+                <div className="mt-2 flex flex-wrap items-end gap-3">
+                  <label className="text-xs font-medium text-slate-600">
+                    A cada
+                    <select
+                      value={aCadaSemanas}
+                      onChange={(e) => setACadaSemanas(e.target.value)}
+                      className="ml-1 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                    >
+                      <option value="1">1 semana</option>
+                      <option value="2">2 semanas</option>
+                      <option value="4">4 semanas</option>
+                    </select>
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">
+                    Por
+                    <input
+                      value={quantas}
+                      onChange={(e) => setQuantas(e.target.value.replace(/\D/g, ""))}
+                      inputMode="numeric"
+                      className="ml-1 w-16 rounded-lg border border-slate-300 px-2 py-1.5 text-sm tabular-nums"
+                    />
+                    <span className="ml-1">ocorrências</span>
+                  </label>
+                  <p className="text-[11px] text-slate-500">
+                    Cada ocorrência é uma reunião própria — dá para remarcar ou cancelar uma sem
+                    mexer nas outras.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <label className="block text-xs font-medium text-slate-600">
             Participantes externos

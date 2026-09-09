@@ -105,7 +105,17 @@ async def create_commitment(
     actor: User = Depends(get_current_user),
 ) -> CommitmentRead:
     svc = ProjectAgendaService(db)
-    row = await svc.create(data=payload.model_dump(), actor_id=actor.id)
+    dados = payload.model_dump()
+    semanas = dados.pop("repeat_every_weeks", None)
+    quantas = dados.pop("repeat_count", None)
+    if semanas and quantas:
+        # Repetição: cria as ocorrências de uma vez. A primeira é a que volta na resposta.
+        criadas = await svc.create_series(
+            data=dados, every_weeks=semanas, count=quantas, actor_id=actor.id
+        )
+        await db.commit()
+        return await _one(svc, criadas[0].id)
+    row = await svc.create(data=dados, actor_id=actor.id)
     await db.commit()
     return (await _one(svc, row.id))
 
@@ -122,7 +132,8 @@ async def list_upcoming_meetings(db: AsyncSession = Depends(get_db)) -> list[Mee
     """Reuniões futuras — o destino possível de um item estendido."""
     rows = await ProjectAgendaService(db).upcoming_meetings()
     return [
-        MeetingOptionRead(id=r.id, title=r.title, starts_at=r.starts_at) for r in rows
+        MeetingOptionRead(id=r.id, title=r.title, starts_at=r.starts_at, series_id=r.series_id)
+        for r in rows
     ]
 
 

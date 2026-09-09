@@ -75,6 +75,8 @@ export interface Commitment {
   status: CommitmentStatus;
   completed_at: string | null;
   completion_note: string | null;
+  /** Ocorrências da mesma repetição (a gerencial de toda quarta). */
+  series_id: string | null;
   /** Tem prazo, já passou e ninguém fechou. Compromisso sem data nunca atrasa. */
   is_overdue: boolean;
   participants: CommitmentParticipant[];
@@ -108,6 +110,9 @@ export interface CommitmentInput {
   owner_user_id?: string | null;
   participant_ids?: string[];
   external_participants?: string | null;
+  /** Repetição: a cada quantas semanas, por quantas ocorrências. Ausente = compromisso único. */
+  repeat_every_weeks?: number | null;
+  repeat_count?: number | null;
   status?: CommitmentStatus;
 }
 
@@ -218,6 +223,8 @@ export interface MeetingOption {
   id: string;
   title: string;
   starts_at: string | null;
+  /** Permite destacar a próxima ocorrência da MESMA série ao levar um item adiante. */
+  series_id: string | null;
 }
 
 export async function listMeetingItems(meetingId: string): Promise<AgendaItem[]> {
