@@ -69,6 +69,12 @@ from app.models.settings import SystemSettings
 from app.models.permission import Permission, RolePermission, UserPermission
 from app.models.asset import Asset, AssetAssignment, AssetAttachment, AssetInspection
 from app.models.user import ProjectUser, Role, User, UserRole
+from app.models.project_agenda import (  # noqa: F401
+    ProjectCommitment,
+    ProjectCommitmentAttachment,
+    ProjectCommitmentOccurrence,
+    ProjectCommitmentParticipant,
+)
 
 __all__ = [
     "LegalEvent",

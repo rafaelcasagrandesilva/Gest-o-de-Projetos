@@ -11,6 +11,7 @@ from app.modules.financial.router import router as financial_router
 from app.modules.fleet.router import router as fleet_router
 from app.modules.hr.router import router as hr_router
 from app.modules.project_structure.router import router as project_structure_router
+from app.modules.project_agenda.router import router as project_agenda_router
 from app.modules.projects.router import router as projects_router
 from app.modules.settings.router import router as settings_router
 from app.modules.users.router import router as users_router
@@ -34,6 +35,7 @@ protected = APIRouter()
 protected.include_router(users_router, prefix="/users", tags=["users"])
 protected.include_router(projects_router, prefix="/projects", tags=["projects"])
 protected.include_router(project_structure_router, prefix="/projects", tags=["project-structure"])
+protected.include_router(project_agenda_router, prefix="/project-agenda", tags=["project-agenda"])
 protected.include_router(settings_router, prefix="/settings", tags=["settings"])
 protected.include_router(employees_router, prefix="/employees", tags=["employees"])
 protected.include_router(collaborators_router, prefix="/collaborators", tags=["collaborators"])
