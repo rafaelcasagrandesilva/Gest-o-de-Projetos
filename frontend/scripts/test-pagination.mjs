@@ -59,7 +59,7 @@ check("última página traz só o resto", paginate(ops, 10, 3).pageRows, [21, 22
 check("rótulo da última página", [paginate(ops, 10, 3).from, paginate(ops, 10, 3).to], [21, 26]);
 
 console.log("\n— Nenhuma linha se perde nem aparece duas vezes —");
-for (const size of [5, 10, 15, 20]) {
+for (const size of [3, 5, 10, 15, 20]) {
   const { totalPages } = paginate(ops, size, 1);
   const visitadas = [];
   for (let p = 1; p <= totalPages; p += 1) visitadas.push(...paginate(ops, size, p).pageRows);
