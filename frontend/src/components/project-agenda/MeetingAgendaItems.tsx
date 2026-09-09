@@ -10,6 +10,7 @@ import {
   OUTCOME_LABELS,
   OUTCOME_STYLES,
   setItemOutcome,
+  updateCommitment,
   type AgendaItem,
   type AgendaUser,
   type Commitment,
@@ -56,6 +57,15 @@ export function MeetingAgendaItems({
   const [salvando, setSalvando] = useState(false);
   /** Item aguardando a escolha da reunião de destino (fluxo de "Estendido"). */
   const [estendendo, setEstendendo] = useState<string | null>(null);
+  /** Item em edição na própria linha, e o rascunho dos campos. */
+  const [editando, setEditando] = useState<string | null>(null);
+  const [rascunho, setRascunho] = useState({
+    title: "",
+    description: "",
+    external_participants: "",
+    owner_user_id: "",
+    due_at: "",
+  });
 
   const [assunto, setAssunto] = useState("");
   const [acao, setAcao] = useState("");
@@ -109,6 +119,40 @@ export function MeetingAgendaItems({
     }
   }
 
+  function abrirEdicao(i: AgendaItem) {
+    setEditando(i.occurrence_id);
+    setRascunho({
+      title: i.title,
+      description: i.description ?? "",
+      external_participants: i.external_participants ?? "",
+      owner_user_id: i.owner_user_id ?? "",
+      due_at: i.due_at ? new Date(i.due_at).toISOString().slice(0, 10) : "",
+    });
+  }
+
+  /** Salva a correção do item. Errar o responsável na hora da reunião é comum — e antes
+   *  disto a única saída era excluir e recriar, perdendo o histórico de passagens. */
+  async function salvarEdicao(i: AgendaItem) {
+    setSalvando(true);
+    setErro(null);
+    try {
+      await updateCommitment(i.id, {
+        title: rascunho.title.trim(),
+        description: rascunho.description.trim() || null,
+        external_participants: rascunho.external_participants.trim() || null,
+        owner_user_id: rascunho.owner_user_id || null,
+        due_at: rascunho.due_at ? new Date(`${rascunho.due_at}T23:59`).toISOString() : null,
+      });
+      setEditando(null);
+      await carregar();
+      await onChanged();
+    } catch (e) {
+      setErro(isAxiosError(e) ? formatApiError(e) : "Não foi possível salvar a alteração.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
   async function marcar(item: AgendaItem, outcome: CommitmentOutcome, nextId?: string) {
     // Estender exige destino: em vez de recusar depois, a tela pede a reunião antes de enviar.
     if (outcome === "EXTENDED" && !nextId) {
@@ -152,11 +196,13 @@ export function MeetingAgendaItems({
               <th className="w-44 px-3 py-2.5 text-left">Responsável</th>
               <th className="w-24 px-3 py-2.5 text-left">Prazo</th>
               <th className="w-64 px-3 py-2.5 text-left">Situação</th>
-              <th className="w-16 px-3 py-2.5" />
+              <th className="w-20 px-3 py-2.5" />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {itens.map((i) => (
+            {itens.map((i) => {
+              const emEdicao = editando === i.occurrence_id;
+              return (
               <tr
                 key={i.occurrence_id}
                 className={
@@ -170,8 +216,27 @@ export function MeetingAgendaItems({
                 }
               >
                 <td className="px-4 py-3 align-top">
-                  <p className="font-medium text-slate-800">{i.title}</p>
-                  {i.description ? <p className="mt-0.5 text-xs text-slate-500">{i.description}</p> : null}
+                  {emEdicao ? (
+                    <div className="space-y-1.5">
+                      <input
+                        value={rascunho.title}
+                        onChange={(e) => setRascunho((r) => ({ ...r, title: e.target.value }))}
+                        placeholder="Assunto"
+                        className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                      />
+                      <input
+                        value={rascunho.description}
+                        onChange={(e) => setRascunho((r) => ({ ...r, description: e.target.value }))}
+                        placeholder="Ação"
+                        className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      <p className="font-medium text-slate-800">{i.title}</p>
+                      {i.description ? <p className="mt-0.5 text-xs text-slate-500">{i.description}</p> : null}
+                    </>
+                  )}
                   {/* Quantas vezes o assunto já rolou: um item na 4ª reunião é um sinal. */}
                   {i.occurrence_number > 1 ? (
                     <p className="mt-1 text-[11px] text-indigo-700">
@@ -180,13 +245,48 @@ export function MeetingAgendaItems({
                   ) : null}
                 </td>
                 <td className="px-3 py-3 align-top text-xs text-slate-600">
-                  {i.external_participants ?? "—"}
+                  {emEdicao ? (
+                    <input
+                      value={rascunho.external_participants}
+                      onChange={(e) =>
+                        setRascunho((r) => ({ ...r, external_participants: e.target.value }))
+                      }
+                      placeholder="—"
+                      className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                    />
+                  ) : (
+                    (i.external_participants ?? "—")
+                  )}
                 </td>
-                <td className="px-3 py-3 align-top text-xs text-slate-700">{i.owner_name ?? "—"}</td>
+                <td className="px-3 py-3 align-top text-xs text-slate-700">
+                  {emEdicao ? (
+                    <select
+                      value={rascunho.owner_user_id}
+                      onChange={(e) => setRascunho((r) => ({ ...r, owner_user_id: e.target.value }))}
+                      className="w-full rounded border border-slate-300 px-1 py-1 text-xs"
+                    >
+                      <option value="">—</option>
+                      {usuarios.map((u) => (
+                        <option key={u.id} value={u.id}>{u.full_name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    (i.owner_name ?? "—")
+                  )}
+                </td>
                 <td className="whitespace-nowrap px-3 py-3 align-top text-xs">
-                  <span className={i.is_overdue && i.outcome !== "DONE" ? "font-medium text-rose-700" : "text-slate-600"}>
-                    {i.due_at ? dataBr(i.due_at) : "—"}
-                  </span>
+                  {emEdicao ? (
+                    <input
+                      type="date"
+                      value={rascunho.due_at}
+                      onChange={(e) => setRascunho((r) => ({ ...r, due_at: e.target.value }))}
+                      className="w-full rounded border border-slate-300 px-1 py-1 text-xs"
+                    />
+                  ) : (
+                    <span className={i.is_overdue && i.outcome !== "DONE" ? "font-medium text-rose-700" : "text-slate-600"}>
+                      {i.due_at ? dataBr(i.due_at) : "—"}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-3 align-top">
                   {i.outcome === "EXTENDED" && i.extended_to_date ? (
@@ -249,22 +349,52 @@ export function MeetingAgendaItems({
                 </td>
                 <td className="px-3 py-3 align-top text-right">
                   {podeEditar ? (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (!window.confirm(`Excluir "${i.title}"?`)) return;
-                        await deleteCommitment(i.id);
-                        await carregar();
-                        await onChanged();
-                      }}
-                      className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50"
-                    >
-                      Excluir
-                    </button>
+                    emEdicao ? (
+                      <div className="flex flex-col items-end gap-1">
+                        <button
+                          type="button"
+                          disabled={salvando || !rascunho.title.trim()}
+                          onClick={() => void salvarEdicao(i)}
+                          className="rounded bg-indigo-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                        >
+                          Salvar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditando(null)}
+                          className="text-[11px] text-slate-500 hover:text-slate-700"
+                        >
+                          cancelar
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-end gap-0.5">
+                        <button
+                          type="button"
+                          onClick={() => abrirEdicao(i)}
+                          className="rounded px-1.5 py-0.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!window.confirm(`Excluir "${i.title}"?`)) return;
+                            await deleteCommitment(i.id);
+                            await carregar();
+                            await onChanged();
+                          }}
+                          className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50"
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    )
                   ) : null}
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {itens.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-4 py-5 text-center text-xs text-slate-500">
