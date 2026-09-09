@@ -891,7 +891,11 @@ export function Employees() {
               {visibleItems.length === items.length ? "" : ` de ${items.length}`})
             </span>
           </h3>
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          {/* `overflow-hidden` daqui CORTAVA as colunas da direita sem oferecer barra de
+              rolagem: com a tela ampliada (zoom alto), Editar/Histórico/Excluir ficavam
+              inalcançáveis. Rolagem horizontal + a coluna de ações fixada na borda direita,
+              que resolve o caso sem depender de o usuário descobrir que precisa rolar. */}
+          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
             <table className="w-full text-left text-sm">
               <thead className="border-b border-slate-100 bg-slate-50/80">
                 <tr>
@@ -906,7 +910,9 @@ export function Employees() {
                     </>
                   )}
                   <th className="px-4 py-3 font-medium text-slate-600">Ativo</th>
-                  {(canUpdateEmployees || canDeleteEmployees) && <th className="px-4 py-3" />}
+                  {(canUpdateEmployees || canDeleteEmployees) && (
+                    <th className="sticky right-0 z-10 border-l border-slate-200 bg-slate-50 px-4 py-3" />
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -946,7 +952,7 @@ export function Employees() {
                       )}
                     </td>
                     {(canUpdateEmployees || canDeleteEmployees) && (
-                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <td className="sticky right-0 z-10 border-l border-slate-100 bg-white px-4 py-3 text-right whitespace-nowrap">
                         {canUpdateEmployees && (
                           <>
                             <button
