@@ -49,11 +49,27 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function Kpi({ label, value, accent }: { label: string; value: string; accent?: string }) {
+/** Opções do filtro de Situação. `NAO_LIQUIDADA` é um RECORTE (tudo menos liquidada), não
+ * um estado do backend — por isso não entra em `SituacaoLiquidacao`. */
+type FiltroSituacao = "ALL" | "NAO_LIQUIDADA" | SituacaoLiquidacao;
+
+function Kpi({
+  label,
+  value,
+  accent,
+  hint,
+}: {
+  label: string;
+  value: string;
+  accent?: string;
+  /** Linha de apoio (ex.: a contagem sob o valor). */
+  hint?: string;
+}) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
       <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</p>
       <p className={`mt-0.5 text-base font-semibold tabular-nums text-slate-900 ${accent ?? ""}`}>{value}</p>
+      {hint ? <p className="text-[10px] text-slate-500">{hint}</p> : null}
     </div>
   );
 }
@@ -144,7 +160,7 @@ export function AdvanceSettlementsTab({
   const [error, setError] = useState<string | null>(null);
 
   // Filtros: aplicados APENAS sobre o conjunto já carregado (dados já vêm prontos do backend).
-  const [fSituacao, setFSituacao] = useState<"ALL" | SituacaoLiquidacao>("ALL");
+  const [fSituacao, setFSituacao] = useState<FiltroSituacao>("ALL");
   const [fInstitution, setFInstitution] = useState<string>("ALL");
   const [fClient, setFClient] = useState("");
   const [fNf, setFNf] = useState("");
@@ -189,7 +205,13 @@ export function AdvanceSettlementsTab({
 
   const filtered = useMemo(() => {
     return obligations.filter((o) => {
-      if (fSituacao !== "ALL" && o.situacao !== fSituacao) return false;
+      // "NAO_LIQUIDADA" não é uma situação do backend: é o recorte de quem vai quitar —
+      // tudo menos o que já foi liquidado (em aberto, parcial e vencida juntas).
+      if (fSituacao === "NAO_LIQUIDADA") {
+        if (o.situacao === "LIQUIDADA") return false;
+      } else if (fSituacao !== "ALL" && o.situacao !== fSituacao) {
+        return false;
+      }
       if (fInstitution !== "ALL" && o.institution_id !== fInstitution) return false;
       if (fClient.trim() && !(o.client_name || "").toLowerCase().includes(fClient.trim().toLowerCase())) return false;
       if (fNf.trim() && !(o.invoice_number || "").toLowerCase().includes(fNf.trim().toLowerCase())) return false;
@@ -227,7 +249,15 @@ export function AdvanceSettlementsTab({
       )}
 
       {/* Cards: consomem EXCLUSIVAMENTE os KPIs do backend (sem somatório em React). */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {/* O card que responde "quanto ainda devo à instituição": inclui vencidas e parciais,
+            porque quem vai quitar precisa do total, não do recorte por atraso. */}
+        <Kpi
+          label="A liquidar"
+          value={kpis ? formatCurrency(kpis.valor_nao_liquidado) : "—"}
+          accent="text-amber-700"
+          hint={kpis ? `${kpis.nfs_nao_liquidadas} NF(s) não liquidada(s)` : undefined}
+        />
         <Kpi label="NFs pendentes" value={kpis ? String(kpis.nfs_pendentes) : "—"} />
         <Kpi label="NFs vencidas" value={kpis ? String(kpis.nfs_vencidas) : "—"} accent="text-red-700" />
         <Kpi label="Valor total vencido" value={kpis ? formatCurrency(kpis.valor_total_vencido) : "—"} accent="text-red-700" />
@@ -245,10 +275,11 @@ export function AdvanceSettlementsTab({
             Situação
             <select
               value={fSituacao}
-              onChange={(e) => setFSituacao(e.target.value as "ALL" | SituacaoLiquidacao)}
+              onChange={(e) => setFSituacao(e.target.value as FiltroSituacao)}
               className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
             >
               <option value="ALL">Todas</option>
+              <option value="NAO_LIQUIDADA">Não liquidadas (em aberto + vencidas)</option>
               <option value="EM_ABERTO">Em aberto</option>
               <option value="PARCIALMENTE_LIQUIDADA">Parcialmente liquidada</option>
               <option value="VENCIDA">Vencida</option>

@@ -714,6 +714,14 @@ class AdvanceSettlementService:
         total_liquidado = float(
             sum((_money(o["valor_liquidado"]) for o in obligations), Decimal("0.00"))
         )
+        # "Não liquidada" = tudo que AINDA se deve à instituição, vencido ou não: em aberto,
+        # parcialmente liquidada e vencida. É a leitura de quem vai quitar — o corte por
+        # atraso (`nfs_vencidas`) responde outra pergunta, e sozinho esconde o que vence amanhã.
+        nao_liquidadas = [o for o in obligations if o["situacao"] != LIQUIDADA]
+        nfs_nao_liquidadas = len(nao_liquidadas)
+        valor_nao_liquidado = float(
+            sum((_money(o["valor_residual"]) for o in nao_liquidadas), Decimal("0.00"))
+        )
         # Saldo de repasse por instituição envolvida.
         inst_ids = {o["institution_id"] for o in obligations if o["institution_id"] is not None}
         saldo_total = Decimal("0.00")
@@ -725,6 +733,8 @@ class AdvanceSettlementService:
             "nfs_vencidas": nfs_vencidas,
             "valor_total_vencido": valor_total_vencido,
             "total_liquidado": total_liquidado,
+            "nfs_nao_liquidadas": nfs_nao_liquidadas,
+            "valor_nao_liquidado": valor_nao_liquidado,
             "saldo_repasse": saldo_repasse,
         }
 

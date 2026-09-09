@@ -73,6 +73,9 @@ export interface Obligation {
 
 export interface SettlementKpis {
   nfs_pendentes: number;
+  /** Tudo que ainda se deve à instituição — em aberto, parcial e vencida. */
+  nfs_nao_liquidadas: number;
+  valor_nao_liquidado: number;
   nfs_vencidas: number;
   valor_total_vencido: number;
   total_liquidado: number;
