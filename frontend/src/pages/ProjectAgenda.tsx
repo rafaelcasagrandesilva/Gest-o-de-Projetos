@@ -90,6 +90,9 @@ function Contador({ label, valor, meus, destaque }: { label: string; valor: numb
   );
 }
 
+/** Quantas etiquetas cabem num dia antes de a célula esticar e desalinhar a semana. */
+const CHIPS_POR_DIA = 4;
+
 /** Etiqueta do compromisso no calendário: tipo, hora e título, com marca de atraso. */
 function Chip({ c, onClick }: { c: Commitment; onClick: () => void }) {
   const concluido = c.status === "CONCLUIDO";
@@ -130,6 +133,9 @@ export function ProjectAgenda() {
   //: Data clicada no calendário, para o formulário já nascer no dia certo.
   const [dataPadrao, setDataPadrao] = useState<string | null>(null);
   const [detalhe, setDetalhe] = useState<Commitment | null>(null);
+  /** Dia (ISO) com a lista aberta. Um por vez: abrir outro fecha o anterior, senão a grade
+   *  volta a esticar em vários lugares ao mesmo tempo. */
+  const [diaAberto, setDiaAberto] = useState<string | null>(null);
 
   const janela = useMemo(() => {
     if (vista === "semana") {
@@ -342,11 +348,38 @@ export function ProjectAgenda() {
                       {dia.getDate()}
                     </span>
                   </div>
-                  <div className="space-y-1">
-                    {doDia.map((c) => (
-                      <Chip key={c.id} c={c} onClick={() => setDetalhe(c)} />
-                    ))}
-                  </div>
+                  {(() => {
+                    // Um dia de reunião gerencial acumula uma dúzia de itens e a célula
+                    // esticava, empurrando a semana inteira para baixo. Mostra as primeiras
+                    // e guarda o resto atrás de um "+N" — a grade fica legível e nada some.
+                    const chave = iso(dia);
+                    const aberto = diaAberto === chave;
+                    const visiveis =
+                      aberto || doDia.length <= CHIPS_POR_DIA
+                        ? doDia
+                        : doDia.slice(0, CHIPS_POR_DIA);
+                    const escondidos = doDia.length - visiveis.length;
+                    return (
+                      <div className="space-y-1">
+                        {visiveis.map((c) => (
+                          <Chip key={c.id} c={c} onClick={() => setDetalhe(c)} />
+                        ))}
+                        {escondidos > 0 || aberto ? (
+                          <button
+                            type="button"
+                            // Sem isto o clique cairia na célula e abriria "novo compromisso".
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDiaAberto(aberto ? null : chave);
+                            }}
+                            className="block w-full rounded px-1.5 py-0.5 text-left text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                          >
+                            {aberto ? "mostrar menos" : `+${escondidos} mais`}
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}

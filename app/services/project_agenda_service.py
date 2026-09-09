@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -40,6 +41,9 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9À-ÿ ._-]")
 
 #: Status que ainda cobram alguém. CANCELADO e CONCLUIDO saem das pendências.
 OPEN_STATUSES = (CommitmentStatus.AGENDADO.value, CommitmentStatus.ADIADO.value)
+
+#: Fuso do escritório. O calendário é lido em horário de Brasília, então "hoje" é o daqui.
+BR_TZ = ZoneInfo("America/Sao_Paulo")
 
 
 def _clean_file_name(raw: str) -> str:
@@ -585,15 +589,25 @@ class ProjectAgendaService:
         return {"outcome": outcome, "next_occurrence_created": criada}
 
     async def upcoming_meetings(self, *, after: datetime | None = None) -> list[ProjectCommitment]:
-        """Reuniões futuras, para escolher o destino de um item estendido."""
-        base = after or datetime.now(timezone.utc)
+        """Reuniões de HOJE em diante, para escolher o destino de um item estendido.
+
+        O corte é o COMEÇO DO DIA, não o instante. Itens são levados adiante durante a reunião,
+        com ela em curso — e com `> agora` a reunião de hoje sumia da lista das 9h01 em diante,
+        justo quando ela é o destino mais provável de um item da semana passada. O dia é contado
+        em horário de Brasília: a meia-noite de UTC cairia às 21h do dia anterior aqui.
+        """
+        if after is None:
+            inicio_do_dia = datetime.now(BR_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+            base = inicio_do_dia.astimezone(timezone.utc)
+        else:
+            base = after
         return list(
             (
                 await self.db.execute(
                     select(ProjectCommitment)
                     .where(
                         ProjectCommitment.kind == CommitmentKind.REUNIAO.value,
-                        ProjectCommitment.starts_at > base,
+                        ProjectCommitment.starts_at >= base,
                         ProjectCommitment.status != CommitmentStatus.CANCELADO.value,
                     )
                     .order_by(ProjectCommitment.starts_at.asc())
