@@ -359,6 +359,29 @@ NEW_PERMISSION_CODES: tuple[str, ...] = (
     *LEGAL_MODULE_CODES,
 )
 
+
+# ---------------------------------------------------------------------------
+# Agenda do workspace Projetos (menu Agenda)
+#
+# Recurso PRÓPRIO, um por menu, como todo o resto do sistema. É deliberadamente separado da
+# agenda do Jurídico (`legal_cases.*`): decisão de produto de que as duas agendas não
+# compartilham dado, opção nem permissão — quem administra processos não passa a marcar
+# reunião de gestores, e vice-versa. Ver docs/ETAPA0_AGENDA_PROJETOS.md.
+# ---------------------------------------------------------------------------
+PROJECT_AGENDA_LIST = "project_agenda.list"
+PROJECT_AGENDA_READ = "project_agenda.read"
+PROJECT_AGENDA_CREATE = "project_agenda.create"
+PROJECT_AGENDA_UPDATE = "project_agenda.update"
+PROJECT_AGENDA_DELETE = "project_agenda.delete"
+
+PROJECT_AGENDA_CODES: tuple[str, ...] = (
+    PROJECT_AGENDA_LIST,
+    PROJECT_AGENDA_READ,
+    PROJECT_AGENDA_CREATE,
+    PROJECT_AGENDA_UPDATE,
+    PROJECT_AGENDA_DELETE,
+)
+
 ALL_PERMISSION_CODES: tuple[str, ...] = (
     SYSTEM_ADMIN,
     SYSTEM_ALL_PROJECTS,
@@ -367,6 +390,7 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     WORKSPACE_ASSETS_ACCESS,
     WORKSPACE_INDICATORS_ACCESS,
     WORKSPACE_LEGAL_ACCESS,
+    *PROJECT_AGENDA_CODES,
     DASHBOARD_VIEW,
     DASHBOARD_DIRECTOR,
     INDICATORS_VIEW,
@@ -462,6 +486,7 @@ PRESET_ADMIN = frozenset(ALL_PERMISSION_CODES) - EXPLICIT_GRANT_ONLY_PERMISSIONS
 PRESET_GESTOR = frozenset(
     {
         WORKSPACE_PROJECTS_ACCESS,
+        *PROJECT_AGENDA_CODES,
         WORKSPACE_FINANCE_ACCESS,
         DASHBOARD_VIEW,
         DASHBOARD_DIRECTOR,
@@ -626,6 +651,12 @@ PERMISSION_IMPLIES: dict[str, frozenset[str]] = {
     PROJECTS_CREATE: frozenset({PROJECTS_REFERENCE, COST_CENTER_REFERENCE}),
     PROJECTS_READ: frozenset({PROJECTS_LIST}),
     PROJECTS_LIST: frozenset({PROJECTS_REFERENCE}),
+    # -- Agenda de Projetos: cadeia de verbos; qualquer uma abre o workspace Projetos --
+    PROJECT_AGENDA_UPDATE: frozenset({PROJECT_AGENDA_READ}),
+    PROJECT_AGENDA_DELETE: frozenset({PROJECT_AGENDA_READ}),
+    PROJECT_AGENDA_CREATE: frozenset({PROJECT_AGENDA_READ, PROJECTS_REFERENCE}),
+    PROJECT_AGENDA_READ: frozenset({PROJECT_AGENDA_LIST}),
+    PROJECT_AGENDA_LIST: frozenset({WORKSPACE_PROJECTS_ACCESS}),
     # -- Cadeia de verbos: Colaboradores (criar/editar exige escolher Centro de Custo) --
     EMPLOYEES_UPDATE: frozenset({EMPLOYEES_READ, COST_CENTER_REFERENCE}),
     EMPLOYEES_DELETE: frozenset({EMPLOYEES_READ}),

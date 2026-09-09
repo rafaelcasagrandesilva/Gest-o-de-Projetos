@@ -19,6 +19,7 @@ import { Invoices } from "@/pages/Invoices";
 import { AdvanceBatches } from "@/pages/AdvanceBatches";
 import { AdvanceInstitutions } from "@/pages/AdvanceInstitutions";
 import { CompanyDebt } from "@/pages/CompanyDebt";
+import { ProjectAgenda } from "@/pages/ProjectAgenda";
 import { CompanyFixedCosts } from "@/pages/CompanyFixedCosts";
 import { FinancialDashboard } from "@/pages/FinancialDashboard";
 import { Payables } from "@/pages/Payables";
@@ -92,6 +93,7 @@ export default function App() {
               {/* Rotas novas (workspaces) */}
               <Route path="projects/dashboard" element={<Dashboard />} />
               <Route path="projects/reports" element={<Reports />} />
+              <Route path="projects/agenda" element={<ProjectAgenda />} />
               <Route path="projects/list" element={<Projects />} />
               <Route path="projects/list/:projectId" element={<ProjectDetail />} />
               <Route path="projects/users" element={<Users />} />

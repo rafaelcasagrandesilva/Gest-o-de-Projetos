@@ -32,6 +32,7 @@ export const WORKSPACE_MENUS: Record<WorkspaceName, WorkspaceMenuItem[]> = {
   projects: [
     { to: "/projects/dashboard", label: "Dashboard operacional", perm: "dashboard.read", end: true },
     { to: "/projects/reports", label: "Relatórios", perm: "reports.read" },
+    { to: "/projects/agenda", label: "Agenda", perm: "project_agenda.list" },
     { to: "/projects/list", label: "Projetos", perm: "projects.list" },
     { to: "/projects/users", label: "Usuários", perm: "users.manage" },
     { to: "/projects/employees", label: "Colaboradores", perm: "employees.read" },

@@ -125,6 +125,9 @@ class SettlementEventCreatedRead(BaseModel):
 
 class SettlementKpisRead(BaseModel):
     nfs_pendentes: int
+    #: Tudo que ainda se deve à instituição — em aberto, parcial e vencida.
+    nfs_nao_liquidadas: int = 0
+    valor_nao_liquidado: float = 0.0
     nfs_vencidas: int
     valor_total_vencido: float
     total_liquidado: float

@@ -60,6 +60,14 @@ class Settings(BaseSettings):
         default=10 * 1024 * 1024, alias="PAYMENT_COMPONENT_ATTACHMENT_MAX_BYTES"
     )
 
+    # Anexos da Agenda de Projetos — a ATA da reunião e documentos de apoio.
+    project_agenda_attachment_dir: str = Field(
+        default="var/project_agenda_attachments", alias="PROJECT_AGENDA_ATTACHMENT_DIR"
+    )
+    project_agenda_attachment_max_bytes: int = Field(
+        default=25 * 1024 * 1024, alias="PROJECT_AGENDA_ATTACHMENT_MAX_BYTES"
+    )
+
     @field_validator("jwt_secret_key", "jwt_algorithm", mode="before")
     @classmethod
     def strip_secrets(cls, v: str) -> str:
@@ -116,6 +124,7 @@ class Settings(BaseSettings):
             "asset_upload_dir": "asset_uploads",
             "project_document_dir": "project_documents",
             "payment_component_attachment_dir": "payment_component_attachments",
+            "project_agenda_attachment_dir": "project_agenda_attachments",
         }
         for field, subdir in derived.items():
             if field not in self.model_fields_set:
