@@ -185,6 +185,39 @@ class ProjectAgendaSeriesTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await session.rollback()
 
+    async def test_reuniao_de_hoje_continua_sendo_destino_possivel(self) -> None:
+        """O item é levado adiante DURANTE a reunião — ela já começou, e não pode sumir da lista.
+
+        Era o bug real: a gerencial das 9h desaparecia das opções às 9h01, justo quando é o
+        destino mais provável de um item da semana passada.
+        """
+        from datetime import datetime as dt
+        from app.database.session import AsyncSessionLocal, engine
+        from app.services.project_agenda_service import BR_TZ, ProjectAgendaService
+
+        await engine.dispose()
+        agora = dt.now(BR_TZ)
+        # Uma reunião hoje, já iniciada (uma hora atrás) — e ainda assim de hoje.
+        comecou = (agora - timedelta(hours=1)).astimezone(timezone.utc)
+        # Se rodar logo depois da meia-noite, "uma hora atrás" é ontem: aí o caso testado é
+        # outro, e o teste não teria o que provar.
+        if comecou.astimezone(BR_TZ).date() != agora.date():
+            self.skipTest("Rodando logo após a virada do dia.")
+        async with AsyncSessionLocal() as session:
+            await self._prelude(session)
+            try:
+                svc = ProjectAgendaService(session)
+                hoje = await svc.create(data=self._dados(comecou), actor_id=None)
+                ontem = await svc.create(
+                    data=self._dados(comecou - timedelta(days=1)), actor_id=None
+                )
+                opcoes = {r.id for r in await svc.upcoming_meetings()}
+
+                self.assertIn(hoje.id, opcoes)
+                self.assertNotIn(ontem.id, opcoes)
+            finally:
+                await session.rollback()
+
     async def test_limites(self) -> None:
         from fastapi import HTTPException
         from app.database.session import AsyncSessionLocal, engine
