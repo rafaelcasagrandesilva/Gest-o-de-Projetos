@@ -4,6 +4,9 @@ import { formatApiError } from "@/utils/apiError";
 import { listProjects } from "@/services/projects";
 import {
   createCommitment,
+  deleteSeriesFrom,
+  extendSeries,
+  fetchSeries,
   KIND_LABELS,
   listAgendaUsers,
   MODALITY_LABELS,
@@ -12,6 +15,7 @@ import {
   type Commitment,
   type CommitmentKind,
   type CommitmentModality,
+  type SeriesSummary,
 } from "@/services/projectAgenda";
 
 /**
@@ -80,6 +84,12 @@ export function CommitmentModal({
   const [repetir, setRepetir] = useState(false);
   const [aCadaSemanas, setACadaSemanas] = useState("1");
   const [quantas, setQuantas] = useState("12");
+  // Ao EDITAR uma ocorrência de série, o que dá para fazer é mexer na série inteira: acrescentar
+  // semanas ao fim (o ciclo esticou) ou encerrá-la daqui para frente.
+  const [serie, setSerie] = useState<SeriesSummary | null>(null);
+  const [maisQuantas, setMaisQuantas] = useState("1");
+  const [mexendoNaSerie, setMexendoNaSerie] = useState(false);
+  const [confirmarFim, setConfirmarFim] = useState(false);
 
   const [usuarios, setUsuarios] = useState<AgendaUser[]>([]);
   const [projetos, setProjetos] = useState<{ id: string; name: string }[]>([]);
@@ -92,6 +102,12 @@ export function CommitmentModal({
       .then((rows) => setProjetos(rows.map((p) => ({ id: p.id, name: p.name }))))
       .catch(() => setProjetos([]));
   }, []);
+
+  useEffect(() => {
+    // 404 aqui é o caso normal do compromisso avulso: sem série, sem bloco na tela.
+    if (!commitment?.series_id) return;
+    void fetchSeries(commitment.id).then(setSerie).catch(() => setSerie(null));
+  }, [commitment?.id, commitment?.series_id]);
 
   const temHora = useMemo(() => TIPOS_COM_HORA.includes(kind), [kind]);
 
@@ -127,6 +143,36 @@ export function CommitmentModal({
       setErro(isAxiosError(e) ? formatApiError(e) : "Não foi possível salvar o compromisso.");
     } finally {
       setSalvando(false);
+    }
+  }
+
+  async function acrescentarNaSerie() {
+    if (!commitment) return;
+    setErro(null);
+    setMexendoNaSerie(true);
+    try {
+      await extendSeries(commitment.id, Number(maisQuantas) || 1);
+      await onSaved();
+      onClose();
+    } catch (e) {
+      setErro(isAxiosError(e) ? formatApiError(e) : "Não foi possível acrescentar ocorrências.");
+    } finally {
+      setMexendoNaSerie(false);
+    }
+  }
+
+  async function encerrarSerie() {
+    if (!commitment) return;
+    setErro(null);
+    setMexendoNaSerie(true);
+    try {
+      await deleteSeriesFrom(commitment.id);
+      await onSaved();
+      onClose();
+    } catch (e) {
+      setErro(isAxiosError(e) ? formatApiError(e) : "Não foi possível encerrar a repetição.");
+    } finally {
+      setMexendoNaSerie(false);
     }
   }
 
@@ -356,6 +402,84 @@ export function CommitmentModal({
                   </p>
                 </div>
               ) : null}
+            </div>
+          ) : null}
+
+          {/* Série já criada: o que falta é justamente o que não dá para fazer ocorrência a
+              ocorrência — esticar o ciclo e encerrá-lo. */}
+          {editando && serie ? (
+            <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2">
+              <p className="text-sm text-slate-700">
+                Repetição de{" "}
+                <span className="font-semibold">{serie.total} ocorrências</span>
+                {serie.every_weeks === 1
+                  ? " — toda semana"
+                  : ` — a cada ${serie.every_weeks} semanas`}
+                {serie.last_starts_at
+                  ? `, até ${new Date(serie.last_starts_at).toLocaleDateString("pt-BR")}`
+                  : ""}
+                .
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-600">Acrescentar</span>
+                <input
+                  value={maisQuantas}
+                  onChange={(e) => setMaisQuantas(e.target.value.replace(/\D/g, ""))}
+                  inputMode="numeric"
+                  className="w-14 rounded-lg border border-slate-300 px-2 py-1 text-sm tabular-nums"
+                />
+                <span className="text-xs text-slate-600">no fim, no mesmo ritmo</span>
+                <button
+                  type="button"
+                  disabled={mexendoNaSerie || !maisQuantas}
+                  onClick={() => void acrescentarNaSerie()}
+                  className="rounded-lg bg-indigo-600 px-3 py-1 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  Acrescentar
+                </button>
+              </div>
+              <div className="mt-2 border-t border-indigo-100 pt-2">
+                {confirmarFim ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-slate-700">
+                      {serie.from_here === 1
+                        ? "Apagar esta ocorrência?"
+                        : serie.from_here === 2
+                          ? "Apagar esta e a seguinte?"
+                          : `Apagar esta e as ${serie.from_here - 1} seguintes?`}
+                      {serie.from_here_with_content > 0
+                        ? ` ${serie.from_here_with_content} já ${
+                            serie.from_here_with_content === 1 ? "tem ata ou pauta" : "têm ata ou pauta"
+                          }.`
+                        : ""}{" "}
+                      As anteriores ficam.
+                    </span>
+                    <button
+                      type="button"
+                      disabled={mexendoNaSerie}
+                      onClick={() => void encerrarSerie()}
+                      className="rounded-lg bg-red-600 px-3 py-1 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                    >
+                      Apagar {serie.from_here}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmarFim(false)}
+                      className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-white"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmarFim(true)}
+                    className="text-xs font-medium text-red-700 hover:underline"
+                  >
+                    Encerrar a repetição daqui em diante
+                  </button>
+                )}
+              </div>
             </div>
           ) : null}
 

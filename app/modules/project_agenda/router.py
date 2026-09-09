@@ -37,6 +37,8 @@ from app.schemas.project_agenda import (
     CommitmentRead,
     CommitmentUpdate,
     MeetingOptionRead,
+    SeriesExtend,
+    SeriesSummaryRead,
 )
 from app.services.project_agenda_service import ProjectAgendaService
 from app.utils.media_type import resolve_media_type
@@ -239,6 +241,51 @@ async def delete_commitment(commitment_id: UUID, db: AsyncSession = Depends(get_
     if not await ProjectAgendaService(db).delete(commitment_id=commitment_id):
         raise HTTPException(status_code=404, detail="Compromisso não encontrado.")
     await db.commit()
+
+
+# --- repetição (a gerencial de toda quarta) -----------------------------------------------
+
+
+@router.get(
+    "/commitments/{commitment_id}/series", response_model=SeriesSummaryRead, dependencies=_read
+)
+async def get_series(commitment_id: UUID, db: AsyncSession = Depends(get_db)) -> SeriesSummaryRead:
+    """Estado da série desta ocorrência. 404 quando o compromisso não se repete."""
+    resumo = await ProjectAgendaService(db).series_summary(commitment_id=commitment_id)
+    if resumo is None:
+        raise HTTPException(status_code=404, detail="Este compromisso não faz parte de uma repetição.")
+    return SeriesSummaryRead.model_validate(resumo)
+
+
+@router.post(
+    "/commitments/{commitment_id}/series/extend",
+    response_model=list[CommitmentRead],
+    status_code=201,
+    dependencies=_create,
+)
+async def extend_series(
+    commitment_id: UUID,
+    payload: SeriesExtend,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> list[CommitmentRead]:
+    """Acrescenta ocorrências ao fim da série, no mesmo ritmo dela."""
+    svc = ProjectAgendaService(db)
+    criadas = await svc.extend_series(
+        commitment_id=commitment_id, count=payload.count, actor_id=actor.id
+    )
+    await db.commit()
+    # Recarrega: as linhas recém-criadas não têm participantes carregados, e ler a relação
+    # depois do commit, em sessão async, estoura MissingGreenlet.
+    return [await _one(svc, c.id) for c in criadas]
+
+
+@router.delete("/commitments/{commitment_id}/series", dependencies=_delete)
+async def delete_series(commitment_id: UUID, db: AsyncSession = Depends(get_db)) -> dict:
+    """Apaga esta ocorrência e as seguintes. As já realizadas ficam — elas são histórico."""
+    apagadas = await ProjectAgendaService(db).delete_series_from(commitment_id=commitment_id)
+    await db.commit()
+    return {"deleted": apagadas}
 
 
 # --- anexos (a ATA da reunião e documentos de apoio) --------------------------------------

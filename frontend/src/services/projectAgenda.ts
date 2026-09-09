@@ -266,3 +266,38 @@ export async function listUpcomingMeetings(): Promise<MeetingOption[]> {
   const { data } = await api.get<MeetingOption[]>(`${BASE}/meetings`);
   return data;
 }
+
+/** Estado da repetição — quantas ocorrências existem e o que um "excluir a série" levaria. */
+export interface SeriesSummary {
+  series_id: string;
+  every_weeks: number;
+  total: number;
+  /** Desta ocorrência em diante. */
+  from_here: number;
+  /** Quantas dessas já têm ata ou pauta: apagar aí destrói registro. */
+  from_here_with_content: number;
+  last_starts_at: string | null;
+}
+
+/** 404 quando o compromisso não se repete — o chamador trata como "sem série". */
+export async function fetchSeries(commitmentId: string): Promise<SeriesSummary> {
+  const { data } = await api.get<SeriesSummary>(`${BASE}/commitments/${commitmentId}/series`);
+  return data;
+}
+
+/** Acrescenta ocorrências ao FIM da série, no ritmo que ela já tem. */
+export async function extendSeries(commitmentId: string, count: number): Promise<Commitment[]> {
+  const { data } = await api.post<Commitment[]>(
+    `${BASE}/commitments/${commitmentId}/series/extend`,
+    { count },
+  );
+  return data;
+}
+
+/** Apaga esta ocorrência e as seguintes. As já realizadas ficam. */
+export async function deleteSeriesFrom(commitmentId: string): Promise<number> {
+  const { data } = await api.delete<{ deleted: number }>(
+    `${BASE}/commitments/${commitmentId}/series`,
+  );
+  return data.deleted;
+}
