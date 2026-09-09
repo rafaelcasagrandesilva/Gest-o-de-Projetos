@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { isAxiosError } from "axios";
 import { formatApiError } from "@/utils/apiError";
+import { PageSizeSelect, TablePager } from "@/components/table";
+import { usePagination } from "@/hooks/usePagination";
 import {
   addMeetingItem,
   deleteCommitment,
@@ -17,6 +19,9 @@ import {
   type CommitmentOutcome,
   type MeetingOption,
 } from "@/services/projectAgenda";
+
+/** Menor tamanho de página oferecido: abaixo disso, paginar não tira nada da tela. */
+const MENOR_PAGINA = 5;
 
 /**
  * Pauta de uma reunião — os itens tratados nela, no ritmo da reunião gerencial semanal.
@@ -81,6 +86,9 @@ export function MeetingAgendaItems({
     owner_user_id: "",
     due_at: "",
   });
+  /** A pauta da gerencial passou de dez itens e virou rolagem. Paginação é recorte de
+   *  LEITURA: o contador do cabeçalho continua somando a pauta inteira. */
+  const paginacao = usePagination(itens, 10);
 
   const VAZIO = {
     title: "",
@@ -153,7 +161,13 @@ export function MeetingAgendaItems({
         await updateCommitment(form.item.id, dados);
         await carregar();
       } else {
-        setItens(await addMeetingItem(meeting.id, { ...dados, project_id: meeting.project_id }));
+        const novos = await addMeetingItem(meeting.id, { ...dados, project_id: meeting.project_id });
+        setItens(novos);
+        // O item novo entra no FIM da pauta. Sem isto ele cairia numa página que o usuário
+        // não está vendo, e anotar pareceria não ter funcionado.
+        if (paginacao.pageSize !== "ALL") {
+          paginacao.setPage(Math.ceil(novos.length / paginacao.pageSize));
+        }
       }
       setForm(null);
       setRascunho(VAZIO);
@@ -192,15 +206,28 @@ export function MeetingAgendaItems({
 
   const emAberto = itens.filter((i) => i.outcome === "OPEN" || i.outcome === "PARTIAL").length;
 
+  // Uma pauta curta se lê inteira; só a partir daí os controles pagam o espaço que ocupam.
+  const paginar = itens.length > MENOR_PAGINA;
+
   return (
     <div className="mt-5 overflow-hidden rounded-xl border border-slate-200">
       <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
           Pauta da reunião
         </p>
-        <span className="text-[11px] text-slate-500">
-          {emAberto} em aberto · {itens.length} {itens.length === 1 ? "item" : "itens"}
-        </span>
+        <div className="flex items-center gap-3">
+          {paginar ? (
+            <PageSizeSelect
+              value={paginacao.pageSize}
+              onChange={paginacao.setPageSize}
+              label="Ver"
+              compact
+            />
+          ) : null}
+          <span className="text-[11px] text-slate-500">
+            {emAberto} em aberto · {itens.length} {itens.length === 1 ? "item" : "itens"}
+          </span>
+        </div>
       </div>
 
       {carregando ? (
@@ -218,7 +245,7 @@ export function MeetingAgendaItems({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {itens.map((i) => {
+            {paginacao.pageRows.map((i) => {
               const emEdicao = form?.modo === "edicao" && form.item.occurrence_id === i.occurrence_id;
               return (
               <tr
@@ -363,6 +390,8 @@ export function MeetingAgendaItems({
           </tbody>
         </table>
       )}
+
+      {!carregando && paginar ? <TablePager pagination={paginacao} itemLabel="itens" /> : null}
 
       {/* Um formulário só, e fechado por padrão. Aberto sempre, ele competia com a pauta —
           que é o que se lê na reunião. Editar reusa o mesmo formulário, com os campos no

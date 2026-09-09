@@ -14,18 +14,30 @@ export function PageSizeSelect({
   value,
   onChange,
   label = "Linhas por página",
+  /** Rótulo ao lado do campo, tudo miúdo — para barras densas (o cabeçalho de uma pauta,
+   *  por exemplo), onde a versão empilhada da barra de filtros roubaria a linha inteira. */
+  compact = false,
 }: {
   value: PageSize;
   onChange: (size: PageSize) => void;
   label?: string;
+  compact?: boolean;
 }) {
   return (
-    <label className="flex flex-col gap-1 text-sm">
-      <span className="font-medium text-slate-700">{label}</span>
+    <label
+      className={
+        compact ? "flex items-center gap-1.5 text-[11px] text-slate-500" : "flex flex-col gap-1 text-sm"
+      }
+    >
+      <span className={compact ? "" : "font-medium text-slate-700"}>{label}</span>
       <select
         value={String(value)}
         onChange={(e) => onChange(e.target.value === "ALL" ? "ALL" : Number(e.target.value))}
-        className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        className={
+          compact
+            ? "rounded-md border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] text-slate-700"
+            : "rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        }
       >
         {PAGE_SIZE_OPTIONS.map((size) => (
           <option key={String(size)} value={String(size)}>
