@@ -68,6 +68,12 @@ class Settings(BaseSettings):
         default=25 * 1024 * 1024, alias="PROJECT_AGENDA_ATTACHMENT_MAX_BYTES"
     )
 
+    # Devolução de memória ao SO após requisições pesadas (exportar relatório, importar
+    # planilha). O Railway cobra MB × minuto, então memória liberada pelo Python mas não
+    # devolvida ao sistema continua sendo paga. Ver app/utils/memory.py.
+    # 0 desativa; o padrão ignora o tráfego normal e pega só o que cresce de verdade.
+    memory_trim_min_growth_mb: int = Field(default=32, ge=0, le=4096, alias="MEMORY_TRIM_MIN_GROWTH_MB")
+
     @field_validator("jwt_secret_key", "jwt_algorithm", mode="before")
     @classmethod
     def strip_secrets(cls, v: str) -> str:
