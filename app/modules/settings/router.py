@@ -13,9 +13,15 @@ from app.schemas.payment_component_type import (
     PaymentComponentTypeRead,
     PaymentComponentTypeUpdate,
 )
-from app.schemas.settings import SystemSettingsRead, SystemSettingsUpdate
+from app.schemas.settings import (
+    SystemSettingsRead,
+    SystemSettingsUpdate,
+    TaxRegimePeriodCreate,
+    TaxRegimePeriodRead,
+)
 from app.services.payment_component_type_service import PaymentComponentTypeService
 from app.services.settings_service import SettingsService
+from app.services.tax_regime_service import TaxRegimeService
 
 
 router = APIRouter()
@@ -37,6 +43,43 @@ async def put_settings(
 ) -> SystemSettingsRead:
     row = await SettingsService(db).update(payload.model_dump(exclude_unset=True))
     return SystemSettingsRead.model_validate(row)
+
+
+# ------------------------------------------------------------------ #
+# Regime tributário: vigências (Lucro Presumido × Lucro Real)
+# ------------------------------------------------------------------ #
+@router.get("/tax-regimes", response_model=list[TaxRegimePeriodRead], dependencies=_READ)
+async def list_tax_regimes(db: AsyncSession = Depends(get_db)) -> list[TaxRegimePeriodRead]:
+    rows = await TaxRegimeService(db).list_periods()
+    return [TaxRegimePeriodRead.model_validate(r) for r in rows]
+
+
+@router.post("/tax-regimes", response_model=TaxRegimePeriodRead, dependencies=_EDIT)
+async def create_tax_regime(
+    payload: TaxRegimePeriodCreate,
+    db: AsyncSession = Depends(get_db),
+) -> TaxRegimePeriodRead:
+    try:
+        row = await TaxRegimeService(db).create_period(payload.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    data = TaxRegimePeriodRead.model_validate(row)
+    await db.commit()
+    return data
+
+
+@router.delete("/tax-regimes/{period_id}", status_code=204, dependencies=_EDIT)
+async def delete_tax_regime(
+    period_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    try:
+        ok = await TaxRegimeService(db).delete_period(period_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Período de regime não encontrado.")
+    await db.commit()
 
 
 # ------------------------------------------------------------------ #

@@ -8,10 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_permission
-from app.core.permission_codes import INDICATORS_DIRECTOR, INDICATORS_READ
+from app.core.permission_codes import COMPANY_RESULT_READ, INDICATORS_DIRECTOR, INDICATORS_READ
 from app.api.sensitive import redact_for
 from app.database.session import get_db
 from app.models.user import User
+from app.schemas.company_result import CompanyResultRead
+from app.services.company_result_service import CompanyResultService
 from app.schemas.indicators import (
     ConsolidatedRoi,
     FinancialEvolution,
@@ -234,6 +236,31 @@ async def evolucao_financeira(
         start=start, end=end, scenario=scenario_param, project_ids=ids, cost_centers=ccs
     )
     return redact_for("financial_evolution", FinancialEvolution.model_validate(data), actor)
+
+
+@router.get(
+    "/company-result",
+    response_model=CompanyResultRead,
+    dependencies=[Depends(require_permission(COMPANY_RESULT_READ))],
+)
+async def company_result(
+    data_inicial: date | None = Query(default=None, description="Início do intervalo (1º do mês)"),
+    data_final: date | None = Query(default=None, description="Fim do intervalo (1º do mês)"),
+    scenario_param: str | None = Query(
+        default=None, alias="scenario", description="PREVISTO ou REALIZADO; omitir = REALIZADO"
+    ),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> CompanyResultRead:
+    """Resultado da Empresa — projetos, custos indiretos e endividamento em cascata."""
+    start, end = _resolve_range(data_inicial, data_final)
+    if (end.year - start.year) * 12 + (end.month - start.month) >= 36:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Selecione um período de até 36 meses.",
+        )
+    data = await CompanyResultService(db).company_result(start=start, end=end, scenario=scenario_param)
+    return redact_for("company_result", CompanyResultRead.model_validate(data), actor)
 
 
 @router.get(

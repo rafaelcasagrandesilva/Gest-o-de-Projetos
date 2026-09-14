@@ -2,7 +2,8 @@
 
 Valida a mudança de comportamento: o Repasse deixa o CAP e vira crédito no Ledger, com estorno
 automático no cancelamento/edição (criar→crédito / cancelar→estorno, SEM resíduo). Deságio/tarifa
-continuam no CAP. Testes de banco NÃO commitam (rollback ao final).
+também não vão ao CAP (já vêm descontados do valor creditado). Testes de banco NÃO commitam
+(rollback ao final).
 """
 
 from __future__ import annotations
@@ -178,7 +179,7 @@ class RepasseLedgerIntegrationTests(_Base):
             finally:
                 await s.rollback()
 
-    async def test_desagio_tarifa_still_in_cap(self) -> None:
+    async def test_desagio_tarifa_repasse_not_in_cap(self) -> None:
         from sqlalchemy import select
         from app.database.session import AsyncSessionLocal, engine
         from app.models.payable_snapshot import PayableSnapshot
@@ -190,10 +191,11 @@ class RepasseLedgerIntegrationTests(_Base):
                 inst = await self._lepta(s)
                 svc, batch, _ = await self._confirm_batch(s, inst=inst, gross=100_000.0, discount=5_000.0, fee=300.0)
                 rows = (await s.execute(select(PayableSnapshot).where(PayableSnapshot.ref_id == batch.id))).scalars().all()
-                names = [r.name for r in rows]
-                self.assertTrue(any("Deságio" in (n or "") for n in names))
-                self.assertTrue(any("Tarifas" in (n or "") for n in names))
-                self.assertFalse(any("Repasse" in (n or "") for n in names))  # repasse saiu do CAP
+                # Deságio e tarifas já vêm descontados do valor creditado e o repasse vai ao Ledger:
+                # a operação não deixa NENHUM título no Contas a Pagar.
+                self.assertEqual(rows, [])
+                self.assertEqual(float(batch.discount_amount), 5_000.0)  # o custo fica na operação
+                self.assertEqual(float(batch.fee_amount), 300.0)
             finally:
                 await s.rollback()
 

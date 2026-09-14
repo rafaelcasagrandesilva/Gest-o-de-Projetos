@@ -11,6 +11,12 @@ TipoFinanceiro = Literal["endividamento", "custo_fixo"]
 RenegotiationType = Literal["UNIQUE", "INSTALLMENTS"]
 CompanyFinancialItemType = Literal["MANUAL", "COLABORADOR_MATRIZ"]
 CompanyFinancialCostCenterSystem = Literal["ADMINISTRATIVO", "FINANCEIRO"]
+# Rateio pela frota: LOCACAO = fatura de locação (substitui o custo dos veículos);
+# ADICIONAL = custo adicional da frota (soma ao custo dos veículos). None = sem rateio.
+FleetAllocation = Literal["LOCACAO", "ADICIONAL"]
+# "Entra no projeto como": custo raiz do projeto em que o item (centro de custo = projeto) soma.
+# None = Fixos operacionais (padrão).
+ProjectCostGroup = Literal["MAO_DE_OBRA", "VEICULOS", "SISTEMAS", "FIXOS"]
 
 
 def _money(v: object) -> float:
@@ -63,6 +69,10 @@ class CompanyFinancialItemCreate(BaseModel):
     legal_person_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
     is_monthly_required: bool = False
+    # Rateio pela frota (só custo_fixo; o serviço força None em endividamento).
+    fleet_allocation: FleetAllocation | None = None
+    # "Entra no projeto como" (só custo_fixo; o serviço força None em endividamento).
+    project_cost_group: ProjectCostGroup | None = None
     # Ciclo de vida — início obrigatório em novos cadastros; encerramento opcional.
     is_active: bool = True
     start_date: date = Field(..., description="Data de início do custo/endividamento.")
@@ -162,6 +172,11 @@ class CompanyFinancialItemUpdate(BaseModel):
     legal_person_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
     is_monthly_required: bool | None = None
+    # Rateio pela frota (só custo_fixo). Ausente = não altera; presente com null = limpa
+    # (o router usa model_dump(exclude_unset=True) e o serviço testa a presença da chave).
+    fleet_allocation: FleetAllocation | None = None
+    # "Entra no projeto como" (só custo_fixo). Mesma semântica: ausente = não altera; null = limpa.
+    project_cost_group: ProjectCostGroup | None = None
     # Ciclo de vida — invariante (inativo exige end_date) aplicada no serviço.
     is_active: bool | None = None
     start_date: date | None = None
@@ -287,6 +302,10 @@ class CompanyFinancialItemRead(BaseModel):
     description: str | None = None
     recurrence: str | None = None
     is_monthly_required: bool = False
+    # Rateio pela frota: LOCACAO (substitui o custo dos veículos) | ADICIONAL (soma) | None.
+    fleet_allocation: FleetAllocation | None = None
+    # "Entra no projeto como": MAO_DE_OBRA | VEICULOS | SISTEMAS | FIXOS | None (= Fixos operacionais).
+    project_cost_group: ProjectCostGroup | None = None
     # Ciclo de vida do cadastro (distinto de `status`, que é o progresso do endividamento).
     is_active: bool = True
     start_date: date | None = None

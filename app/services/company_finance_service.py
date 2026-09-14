@@ -459,6 +459,8 @@ class CompanyFinanceService:
                 "description": getattr(it, "description", None),
                 "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
                 "is_monthly_required": bool(getattr(it, "is_monthly_required", False)),
+                "fleet_allocation": getattr(it, "fleet_allocation", None) or None,
+                "project_cost_group": getattr(it, "project_cost_group", None) or None,
                 "is_active": bool(getattr(it, "is_active", True)),
                 "start_date": getattr(it, "start_date", None),
                 "end_date": getattr(it, "end_date", None),
@@ -506,6 +508,8 @@ class CompanyFinanceService:
             "description": getattr(it, "description", None),
             "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
             "is_monthly_required": bool(getattr(it, "is_monthly_required", False)),
+            "fleet_allocation": getattr(it, "fleet_allocation", None) or None,
+            "project_cost_group": getattr(it, "project_cost_group", None) or None,
             "is_active": bool(getattr(it, "is_active", True)),
             "start_date": getattr(it, "start_date", None),
             "end_date": getattr(it, "end_date", None),
@@ -579,6 +583,11 @@ class CompanyFinanceService:
             legal_person_id=data.get("legal_person_id"),
             percentual=percentual,
             is_monthly_required=bool(data.get("is_monthly_required") or False),
+            # Rateio pela frota só existe em custo fixo; endividamento nunca rateia.
+            fleet_allocation=(data.get("fleet_allocation") or None) if data["tipo"] == "custo_fixo" else None,
+            # "Entra no projeto como" só existe em custo fixo; endividamento é sempre None.
+            # Mantido mesmo se o centro de custo não for projeto (inócuo: só é lido para projetos).
+            project_cost_group=(data.get("project_cost_group") or None) if data["tipo"] == "custo_fixo" else None,
             has_legal_process=bool(data.get("has_legal_process") or False),
             has_renegotiation=bool(data.get("has_renegotiation") or False),
             renegotiated_amount=data.get("renegotiated_amount"),
@@ -637,6 +646,13 @@ class CompanyFinanceService:
             row.recurrence = (data.get("recurrence") or _default_recurrence(row.tipo)).strip()
         if data.get("is_monthly_required") is not None:
             row.is_monthly_required = bool(data["is_monthly_required"])
+        if "fleet_allocation" in data:
+            # Presente com null = limpa. Rateio pela frota só existe em custo fixo;
+            # endividamento nunca rateia.
+            row.fleet_allocation = (data.get("fleet_allocation") or None) if row.tipo == "custo_fixo" else None
+        if "project_cost_group" in data:
+            # Presente com null = limpa (volta a Fixos operacionais). Só custo fixo.
+            row.project_cost_group = (data.get("project_cost_group") or None) if row.tipo == "custo_fixo" else None
         # Ciclo de vida do cadastro.
         if "start_date" in data:
             row.start_date = data.get("start_date")

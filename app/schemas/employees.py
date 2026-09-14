@@ -33,6 +33,12 @@ class EmployeeRead(UUIDTimestampRead):
     # Quem tem contrato em mais de um centro aparece com todos (o `cost_center` sozinho
     # mostrava só o principal e escondia o multi-contrato na listagem).
     cost_centers: list[str] = Field(default_factory=list)
+    # Mão de obra na competência da listagem, DERIVADA (sem campo no cadastro):
+    # DIRETA = alocado em projeto; INDIRETA = item dos Custos Indiretos vinculado a ele;
+    # DIRETA_E_INDIRETA = os dois no mesmo mês (legítimo quando divide o tempo).
+    labor_kind: Literal["DIRETA", "INDIRETA", "DIRETA_E_INDIRETA"] | None = None
+    # Projeto + Custos Indiretos somam mais de 100% no mês: custo contado em dobro.
+    labor_over_allocated: bool = False
     can_allocate_other_cost_centers: bool = False
     has_periculosidade: bool = False
     has_adicional_dirigida: bool = False

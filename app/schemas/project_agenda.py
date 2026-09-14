@@ -12,7 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-CommitmentKindLiteral = Literal["REUNIAO", "OBRIGACAO", "EVENTO", "PRAZO", "VISITA"]
+CommitmentKindLiteral = Literal["REUNIAO", "OBRIGACAO", "EVENTO", "VISITA"]
 CommitmentStatusLiteral = Literal["AGENDADO", "CONCLUIDO", "CANCELADO", "ADIADO"]
 CommitmentModalityLiteral = Literal["PRESENCIAL", "VIRTUAL", "HIBRIDA"]
 

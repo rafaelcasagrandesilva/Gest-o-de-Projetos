@@ -146,7 +146,7 @@ function EvolutionTooltip({ active, payload }: TooltipProps<number, string>) {
           <dd className="font-medium tabular-nums text-slate-900">{formatBRL(row.lucroOperacional)}</dd>
         </div>
         <div className="flex justify-between gap-4">
-          <dt className={lucroNeg ? "font-medium text-red-800" : ""}>Lucro líquido</dt>
+          <dt className={lucroNeg ? "font-medium text-red-800" : ""}>Lucro disponível</dt>
           <dd className={`font-semibold tabular-nums ${lucroNeg ? "text-red-700" : "text-emerald-700"}`}>
             {formatBRL(row.lucro)}
           </dd>
@@ -208,7 +208,7 @@ export function FinancialEvolutionProjectChart({ monthlySeries, scenario, multiM
     if (showCusto) rows.push({ name: "Custo total", valor: p.custo, color: CHART_COLORS.custo });
     if (showLucro) {
       rows.push({
-        name: "Lucro líquido",
+        name: "Lucro disponível",
         valor: p.lucro,
         color: p.lucro < -0.01 ? CHART_COLORS.lucroNeg : CHART_COLORS.lucroPos,
       });
@@ -264,7 +264,7 @@ export function FinancialEvolutionProjectChart({ monthlySeries, scenario, multiM
             <input type="checkbox" checked={showLucro} onChange={(e) => setShowLucro(e.target.checked)} />
             <span className="inline-flex items-center gap-1.5">
               <span className="h-2 w-4 rounded-sm" style={{ backgroundColor: CHART_COLORS.lucroPos }} />
-              Lucro líquido
+              Lucro disponível
             </span>
           </label>
         </div>
@@ -302,7 +302,7 @@ export function FinancialEvolutionProjectChart({ monthlySeries, scenario, multiM
                 <li
                   key={row.name}
                   className={`rounded-lg border px-3 py-2 text-sm ${
-                    row.name === "Lucro líquido" && row.valor < -0.01
+                    row.name === "Lucro disponível" && row.valor < -0.01
                       ? "border-red-200 bg-red-50"
                       : "border-slate-200 bg-slate-50"
                   }`}
@@ -310,12 +310,12 @@ export function FinancialEvolutionProjectChart({ monthlySeries, scenario, multiM
                   <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{row.name}</span>
                   <p
                     className={`mt-1 font-semibold tabular-nums ${
-                      row.name === "Lucro líquido" && row.valor < -0.01 ? "text-red-700" : "text-slate-900"
+                      row.name === "Lucro disponível" && row.valor < -0.01 ? "text-red-700" : "text-slate-900"
                     }`}
                   >
                     {formatBRL(row.valor)}
                   </p>
-                  {row.name === "Lucro líquido" && chartData[0] && chartData[0].receita > 0 && (
+                  {row.name === "Lucro disponível" && chartData[0] && chartData[0].receita > 0 && (
                     <p className="mt-0.5 text-xs text-slate-600">
                       Margem: {formatPct((row.valor / chartData[0].receita) * 100)}
                     </p>
@@ -385,7 +385,7 @@ export function FinancialEvolutionProjectChart({ monthlySeries, scenario, multiM
                   type="monotone"
                   dataKey="lucro"
                   stroke={CHART_COLORS.lucroPos}
-                  name="Lucro líquido"
+                  name="Lucro disponível"
                   strokeWidth={3}
                   dot={(props) => {
                     const { cx, cy, payload } = props;

@@ -9,6 +9,9 @@ import {
   registerPayablePayment,
   reversePayablePayment,
   updatePayableSnapshot,
+  PAYABLE_RESULT_CLASSIFICATIONS,
+  PAYABLE_RESULT_CLASSIFICATION_LABELS,
+  type PayableResultClassification,
   type PayableSnapshotRow,
   type PayableSnapshotStatus,
   type PayableSnapshotType,
@@ -78,15 +81,82 @@ function typeLabel(t: PayableSnapshotType): string {
 }
 
 /**
- * Rótulo do "Tipo" exibido na linha. Para os lançamentos automáticos de Custos Fixos
- * gerados a partir do cadastro, mostra a categoria ("Custo Fixo" / "Colaborador");
+ * Rótulo do "Tipo" exibido na linha. Para os lançamentos automáticos de Custos Indiretos
+ * gerados a partir do cadastro, mostra a categoria ("Custo Indireto" / "Colaborador");
  * os demais (projetos, legado, manuais) mantêm o rótulo por tipo — sem regressão.
+ * A categoria gravada continua "Custo Fixo"; só o texto exibido mudou (espelha
+ * `payable_display_group` no backend).
  */
 function payableTipoLabel(r: PayableSnapshotRow): string {
-  if (r.type === "FIXED_COST" && (r.category === "Custo Fixo" || r.category === "Colaborador")) {
-    return r.category;
-  }
+  if (r.type === "FIXED_COST" && r.category === "Custo Fixo") return "Custo Indireto";
+  if (r.type === "FIXED_COST" && r.category === "Colaborador") return r.category;
   return typeLabel(r.type);
+}
+
+/** Linha manual ainda sem classificação no Resultado da Empresa. */
+function isUnclassifiedManual(r: PayableSnapshotRow): boolean {
+  return r.type === "MANUAL" && !r.result_classification;
+}
+
+/** Chave de comparação do centro de custo com o nome do projeto (mesma regra do backend: sem caixa/espaços extras). */
+function costCenterKey(value: string | null | undefined): string {
+  return (value ?? "").trim().split(/\s+/).join(" ").toLocaleLowerCase("pt-BR");
+}
+
+/** Opções de classificação: «Custo direto do projeto» só quando o centro de custo é um projeto ATIVO. */
+function resultClassificationOptions(
+  costCenter: string,
+  activeProjectCostCenters: Set<string>,
+  current?: PayableResultClassification | "" | null,
+): PayableResultClassification[] {
+  const direct = activeProjectCostCenters.has(costCenterKey(costCenter)) || current === "DIRETO";
+  return PAYABLE_RESULT_CLASSIFICATIONS.filter((c) => c !== "DIRETO" || direct);
+}
+
+/** Badge discreto da classificação no resultado (só linhas MANUAL). */
+function ResultClassificationBadge({ row }: { row: PayableSnapshotRow }) {
+  if (row.type !== "MANUAL") return null;
+  const base = "inline-flex whitespace-nowrap rounded-full px-1.5 py-0 text-[10px] font-medium ring-1";
+  const c = row.result_classification;
+  if (!c) {
+    return (
+      <span
+        className={`${base} bg-amber-50 text-amber-800 ring-amber-200`}
+        title="Defina como esta despesa entra no Resultado da Empresa (editar)."
+      >
+        Sem classificação
+      </span>
+    );
+  }
+  if (c === "DIRETO") {
+    return (
+      <span
+        className={`${base} bg-sky-50 text-sky-800 ring-sky-200`}
+        title={`Entra no resultado como custo direto do projeto ${row.cost_center}`}
+      >
+        Custo direto
+      </span>
+    );
+  }
+  if (c === "INDIRETO") {
+    return (
+      <span className={`${base} bg-orange-50 text-orange-800 ring-orange-200`} title="Entra no resultado como custo indireto">
+        Custo indireto
+      </span>
+    );
+  }
+  if (c === "ENDIVIDAMENTO") {
+    return (
+      <span className={`${base} bg-violet-50 text-violet-800 ring-violet-200`} title="Entra no resultado como endividamento">
+        Endividamento
+      </span>
+    );
+  }
+  return (
+    <span className={`${base} bg-slate-100 text-slate-600 ring-slate-200`} title="Não entra no Resultado da Empresa">
+      Fora do resultado
+    </span>
+  );
 }
 
 export function Payables() {
@@ -101,6 +171,7 @@ export function Payables() {
   const [period, setPeriod] = useState(() => formatMonthToYYYYMM(new Date()));
   const [statusFilter, setStatusFilter] = useState<PayableSnapshotStatus | "">("");
   const [search, setSearch] = useState("");
+  const [onlyUnclassifiedManual, setOnlyUnclassifiedManual] = useState(false);
 
   const [rows, setRows] = useState<PayableSnapshotRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -117,6 +188,7 @@ export function Payables() {
     category: "",
     cost_center: PAYABLES_MANUAL_CC_ADMIN,
     include_in_dashboard: true,
+    result_classification: "" as PayableResultClassification | "",
   });
 
   const [projectOptions, setProjectOptions] = useState<Project[]>([]);
@@ -125,6 +197,7 @@ export function Payables() {
   const [editValue, setEditValue] = useState(0);
   const [editDate, setEditDate] = useState("");
   const [editIncludeInDashboard, setEditIncludeInDashboard] = useState(true);
+  const [editResultClassification, setEditResultClassification] = useState<PayableResultClassification | "">("");
 
   const [actionModal, setActionModal] = useState<ActionModal>({ open: false });
   const [modalAmount, setModalAmount] = useState("");
@@ -164,6 +237,11 @@ export function Payables() {
       return f;
     });
   }, [projectOptions]);
+
+  const activeProjectCostCenters = useMemo(
+    () => new Set(projectOptions.filter((p) => p.is_active).map((p) => costCenterKey(p.name))),
+    [projectOptions],
+  );
 
   const load = useCallback(async () => {
     if (!canView) return;
@@ -233,7 +311,7 @@ export function Payables() {
     if (!canReconcileSnapshot || periodMode !== "MONTH") return;
     const ok = window.confirm(
       "Reconciliar o snapshot deste mês?\n\n" +
-        "Verifica os lançamentos automáticos cuja origem (colaborador, custo fixo, " +
+        "Verifica os lançamentos automáticos cuja origem (colaborador, custo indireto, " +
         "alocação, antecipação) foi removida e os marca como obsoletos.\n\n" +
         "Não altera valores, pagamentos ou estornos; apenas sinaliza resíduos para limpeza.",
     );
@@ -271,11 +349,14 @@ export function Payables() {
     const q = search.trim().toLowerCase();
     return rows.filter((r) => {
       if (statusFilter && r.status !== statusFilter) return false;
+      if (onlyUnclassifiedManual && !isUnclassifiedManual(r)) return false;
       if (!q) return true;
       const hay = `${r.name} ${r.cost_center} ${r.category}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [rows, statusFilter, search]);
+  }, [rows, statusFilter, search, onlyUnclassifiedManual]);
+
+  const unclassifiedManualCount = useMemo(() => rows.filter(isUnclassifiedManual).length, [rows]);
 
   const { sortedRows, headerSort } = useTableSort(filteredRows, PAYABLE_SORT_COLUMNS, {
     defaultCompare: periodMode === "MONTH" ? defaultPayableOperationalSort : defaultPayableSort,
@@ -449,6 +530,15 @@ export function Payables() {
       setError("Informe o vencimento.");
       return;
     }
+    if (!form.result_classification) {
+      setError("Informe como a despesa entra no resultado.");
+      return;
+    }
+    if (form.result_classification === "DIRETO" && !activeProjectCostCenters.has(costCenterKey(form.cost_center))) {
+      setError("“Custo direto do projeto” exige um projeto ativo como centro de custo.");
+      return;
+    }
+    const resultClassification = form.result_classification;
 
     setSaving(true);
     setError(null);
@@ -462,6 +552,7 @@ export function Payables() {
         category: form.category.trim(),
         cost_center: form.cost_center.trim(),
         include_in_dashboard: form.include_in_dashboard,
+        result_classification: resultClassification,
       });
       setShowForm(false);
       setForm({
@@ -471,6 +562,7 @@ export function Payables() {
         category: "",
         cost_center: PAYABLES_MANUAL_CC_ADMIN,
         include_in_dashboard: true,
+        result_classification: "",
       });
       await load();
     } catch (e) {
@@ -488,6 +580,7 @@ export function Payables() {
     setEditValue(row.amount_final ?? 0);
     setEditDate(row.due_date.slice(0, 10));
     setEditIncludeInDashboard(row.include_in_dashboard !== false);
+    setEditResultClassification(row.type === "MANUAL" ? (row.result_classification ?? "") : "");
   }
 
   function cancelEdit() {
@@ -512,10 +605,14 @@ export function Payables() {
     setEditSaving(true);
     setError(null);
     try {
+      // Classificação no resultado só existe para manuais (backend devolve 400 nas demais).
+      const editingRow = rows.find((x) => x.id === editingId);
+      const isManual = editingRow?.type === "MANUAL";
       const updated = await updatePayableSnapshot(editingId, {
         amount_final: editValue,
         due_date: editDate,
         include_in_dashboard: editIncludeInDashboard,
+        ...(isManual && editResultClassification ? { result_classification: editResultClassification } : {}),
       });
       setRows((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setEditingId(null);
@@ -547,6 +644,9 @@ export function Payables() {
     editDate,
     editIncludeInDashboard,
     setEditIncludeInDashboard,
+    editResultClassification,
+    setEditResultClassification,
+    activeProjectCostCenters,
     setEditValue,
     setEditDate,
     onSaveEdit: () => void saveEdit(),
@@ -640,6 +740,26 @@ export function Payables() {
               className="rounded-lg border border-slate-300 px-3 py-2"
             />
           </label>
+
+          <label
+            className="flex items-center gap-2 self-end pb-2 text-sm text-slate-700"
+            title="Mostra só as despesas manuais que ainda não dizem como entram no Resultado da Empresa."
+          >
+            <input
+              type="checkbox"
+              checked={onlyUnclassifiedManual}
+              onChange={(e) => setOnlyUnclassifiedManual(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300"
+            />
+            <span>
+              Manuais sem classificação
+              {unclassifiedManualCount > 0 ? (
+                <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-900">
+                  {unclassifiedManualCount}
+                </span>
+              ) : null}
+            </span>
+          </label>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -718,7 +838,18 @@ export function Payables() {
             <select
               required
               value={form.cost_center}
-              onChange={(e) => setForm((f) => ({ ...f, cost_center: e.target.value }))}
+              onChange={(e) => {
+                const costCenter = e.target.value;
+                setForm((f) => ({
+                  ...f,
+                  cost_center: costCenter,
+                  // «Custo direto do projeto» deixa de valer se o centro de custo não é mais um projeto ativo.
+                  result_classification:
+                    f.result_classification === "DIRETO" && !activeProjectCostCenters.has(costCenterKey(costCenter))
+                      ? ""
+                      : f.result_classification,
+                }));
+              }}
               className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
             >
               {PAYABLES_MANUAL_FIXED_COST_CENTERS.map((label) => (
@@ -734,6 +865,27 @@ export function Payables() {
                   </option>
                 ))}
             </select>
+          </Field>
+          <Field label="Entra no resultado como *">
+            <select
+              required
+              value={form.result_classification}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, result_classification: e.target.value as PayableResultClassification | "" }))
+              }
+              className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+            >
+              <option value="">Selecione…</option>
+              {resultClassificationOptions(form.cost_center, activeProjectCostCenters).map((c) => (
+                <option key={c} value={c}>
+                  {PAYABLE_RESULT_CLASSIFICATION_LABELS[c]}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs font-normal text-slate-500">
+              Usado no Resultado da Empresa (Indicadores). “Custo direto do projeto” aparece quando o centro de custo
+              é um projeto ativo. Repasses, retenções e bloqueios não são custo: use “Não entra no resultado”.
+            </span>
           </Field>
           <label className="flex items-center gap-2 text-sm sm:col-span-2 lg:col-span-3">
             <input
@@ -968,6 +1120,10 @@ type PayablesSnapshotTableProps = {
   editDate: string;
   editIncludeInDashboard: boolean;
   setEditIncludeInDashboard: (v: boolean) => void;
+  editResultClassification: PayableResultClassification | "";
+  setEditResultClassification: (v: PayableResultClassification | "") => void;
+  /** Nomes normalizados dos projetos ATIVOS — habilita «Custo direto do projeto». */
+  activeProjectCostCenters: Set<string>;
   setEditValue: (n: number) => void;
   setEditDate: (d: string) => void;
   onSaveEdit: () => void;
@@ -990,6 +1146,9 @@ function PayablesSnapshotTable({
   editDate,
   editIncludeInDashboard,
   setEditIncludeInDashboard,
+  editResultClassification,
+  setEditResultClassification,
+  activeProjectCostCenters,
   setEditValue,
   setEditDate,
   onSaveEdit,
@@ -1068,6 +1227,11 @@ function PayablesSnapshotTable({
                     {r.item_description ? (
                       <div className="truncate max-w-[280px] text-xs text-slate-500">
                         {r.item_description}
+                      </div>
+                    ) : null}
+                    {r.type === "MANUAL" ? (
+                      <div className="mt-0.5 leading-none">
+                        <ResultClassificationBadge row={r} />
                       </div>
                     ) : null}
                   </td>
@@ -1164,6 +1328,28 @@ function PayablesSnapshotTable({
                           />
                           Dashboard
                         </label>
+                        {r.type === "MANUAL" ? (
+                          <select
+                            value={editResultClassification}
+                            onChange={(e) =>
+                              setEditResultClassification(e.target.value as PayableResultClassification | "")
+                            }
+                            title="Entra no resultado como"
+                            aria-label="Entra no resultado como"
+                            className="max-w-[200px] rounded border border-slate-300 bg-white px-1 py-0.5 text-xs"
+                          >
+                            {!r.result_classification ? <option value="">Sem classificação</option> : null}
+                            {resultClassificationOptions(
+                              r.cost_center,
+                              activeProjectCostCenters,
+                              r.result_classification,
+                            ).map((c) => (
+                              <option key={c} value={c}>
+                                {PAYABLE_RESULT_CLASSIFICATION_LABELS[c]}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
                         <span className="inline-flex items-center gap-1">
                         <button
                           type="button"

@@ -33,6 +33,12 @@ from app.models.receivable import ReceivableInvoice, ReceivableInvoiceAnticipati
 from app.repositories.projects import ProjectRepository
 from app.models.project import Project
 from app.services.company_finance_cost_center import CompanyFinanceCostCenterService
+from app.services.company_finance_rules import (
+    item_eligible_for_comp,
+    money2,
+    month_bounds,
+    reference_monthly_value,
+)
 from app.services.employee_cost_service import (
     calculate_clt_cost,
     calculate_pj_total_cost,
@@ -58,17 +64,14 @@ VEHICLE_AUTO_PAYABLE_NAME = "Custo com veículos"
 COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE = date(2026, 7, 1)
 
 
-def _money2(value: object) -> Decimal:
-    """Valor monetário com 2 casas — evita comparações quebradas por float / Numeric impreciso."""
-    if value is None:
-        return Decimal("0.00")
-    if isinstance(value, Decimal):
-        return value.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
-    return Decimal(str(round(float(value), 2))).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+# Valor monetário com 2 casas — mesma função das regras do cadastro corporativo.
+_money2 = money2
 
 
 # Contas a pagar — despesa manual (centros fixos + nome de projeto cadastrado)
 MANUAL_PAYABLE_FIXED_COST_CENTERS = frozenset({"Administrativo", "Financeiro"})
+# Classificação «Custo direto do projeto» do lançamento manual (payable_snapshots.result_classification).
+MANUAL_RESULT_DIRECT = "DIRETO"
 PAYABLE_DEBT_TYPES = (PayableSnapshotType.ENDIVIDAMENTO, PayableSnapshotType.FINANCIAL)
 
 # Tipos "manuais/preservados": não são regenerados a partir de uma origem mensal —
@@ -242,10 +245,8 @@ def _default_due_date(payment_month: date, *, day: int = 10) -> date:
     return date(comp.year, comp.month, min(max(day, 1), last))
 
 
-def _month_bounds(comp: date) -> tuple[date, date]:
-    c = normalize_competencia(comp)
-    last = calendar.monthrange(c.year, c.month)[1]
-    return date(c.year, c.month, 1), date(c.year, c.month, last)
+# (primeiro dia, último dia) da competência — mesma função das regras do cadastro corporativo.
+_month_bounds = month_bounds
 
 
 def _competence_month_yyyy_mm(comp: date) -> str:
@@ -686,69 +687,14 @@ class PayableSnapshotService:
     def _company_finance_monthly_value(
         self, item: CompanyFinancialItem, *, comp: date, settings
     ) -> Decimal:
-        """Valor mensal do lançamento automático (congelado no snapshot).
-
-        - Custo fixo colaborador (COLABORADOR_MATRIZ): custo do colaborador no mês × %;
-        - Custo fixo comum: valor mensal de referência;
-        - Endividamento: parcela prevista (installment_value) ou saldo/valor de referência
-          — mesma base já usada pelas pendências, sem alterar cálculo financeiro.
-        """
-        if item.tipo == "custo_fixo":
-            emp = getattr(item, "employee", None)
-            pct = getattr(item, "percentual", None)
-            if (
-                getattr(item, "item_type", None) == CompanyFinancialItemType.COLABORADOR_MATRIZ
-                and emp is not None
-                and pct is not None
-            ):
-                if (getattr(emp, "employment_type", "") or "").upper() == "CLT":
-                    base = calculate_clt_cost(emp, settings, comp.year, comp.month)
-                else:
-                    base = calculate_pj_total_cost(emp)
-                return _money2(float(base) * (float(pct) / 100.0))
-            return _money2(item.valor_referencia)
-        # Endividamento
-        rt = getattr(item, "renegotiation_type", None)
-        rt_val = getattr(rt, "value", rt)
-        if (
-            getattr(item, "has_renegotiation", False)
-            and rt_val == "INSTALLMENTS"
-            and getattr(item, "installment_value", None) is not None
-        ):
-            return _money2(item.installment_value)
-        if getattr(item, "has_renegotiation", False) and getattr(item, "renegotiated_amount", None) is not None:
-            return _money2(item.renegotiated_amount)
-        return _money2(item.valor_referencia)
+        """Valor mensal do lançamento automático — regra pura em `company_finance_rules`."""
+        return reference_monthly_value(item, comp=comp, settings=settings)
 
     def _company_finance_item_eligible_for_comp(
         self, item: CompanyFinancialItem, comp: date
     ) -> bool:
-        """Item elegível a lançamento automático na competência (ciclo de vida + vigência).
-
-        Mesma regra da geração, SEM o piso de implantação: item ativo, vigência cobrindo o
-        mês e, para endividamento, "Obrigatório mensal". Usada para materializar a linha
-        quando o usuário informa explicitamente o valor da competência na grade (manutenção
-        de competência ABERTA anterior ao piso — ex.: DEX em Junho).
-        """
-        if not bool(getattr(item, "is_active", True)):
-            return False
-        _, month_end = _month_bounds(comp)
-        start = getattr(item, "start_date", None)
-        end = getattr(item, "end_date", None)
-        if start is not None and start > month_end:
-            return False
-        if end is not None and end < comp:
-            return False
-        # Modo 2 (Cronograma Financeiro Personalizado): elegível pela vigência apenas — cada
-        # competência que possui parcela do cronograma gera seu título; "Obrigatório mensal" é
-        # conceito do Modo 1 e não se aplica. Legado/Modo 1 permanece exigindo o obrigatório.
-        if (
-            item.tipo == "endividamento"
-            and not bool(getattr(item, "uses_custom_schedule", False))
-            and not bool(getattr(item, "is_monthly_required", False))
-        ):
-            return False
-        return True
+        """Item elegível na competência — regra pura em `company_finance_rules`."""
+        return item_eligible_for_comp(item, comp)
 
 
     async def _company_finance_entries_for_month(
@@ -2753,6 +2699,26 @@ class PayableSnapshotService:
             "Centro de custo inválido. Use «Administrativo», «Financeiro» ou o nome exato de um projeto cadastrado."
         )
 
+    async def _active_project_for_cost_center(self, cost_center: str | None) -> UUID:
+        """Projeto ATIVO cujo nome é o centro de custo do lançamento (exigido por «Custo direto do projeto»)."""
+        cc = " ".join(str(cost_center or "").strip().split())
+        project_id = (
+            await self.session.execute(
+                select(Project.id)
+                .where(
+                    Project.deleted_at.is_(None),
+                    Project.is_active.is_(True),
+                    func.lower(Project.name) == cc.casefold(),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if project_id is None:
+            raise ValueError(
+                f"«Custo direto do projeto» exige um projeto ATIVO como centro de custo (centro de custo atual: «{cc}»)."
+            )
+        return project_id
+
     async def create_manual(
         self,
         *,
@@ -2766,11 +2732,17 @@ class PayableSnapshotService:
         snapshot_type: PayableSnapshotType = PayableSnapshotType.MANUAL,
         include_in_dashboard: bool = True,
         ref_id: UUID | None = None,
+        result_classification: str | None = None,
     ) -> PayableSnapshot:
         # Manual: competência = mês do vencimento (obrigação), não o mês do filtro da tela.
         comp = normalize_competencia(due_date)
         amt = Decimal(str(round(float(amount), 2)))
         cc = await self._validate_manual_cost_center(cost_center)
+        if snapshot_type != PayableSnapshotType.MANUAL:
+            result_classification = None
+        result_project_id = (
+            await self._active_project_for_cost_center(cc) if result_classification == MANUAL_RESULT_DIRECT else None
+        )
         obs = (observation or "").strip() or None
         origin = (
             PayableOrigin.ANTECIPACAO.value
@@ -2795,6 +2767,9 @@ class PayableSnapshotService:
             payment_date=None,
             observation=obs,
             include_in_dashboard=bool(include_in_dashboard),
+            # Destino no Resultado da Empresa — só em lançamento MANUAL.
+            result_classification=result_classification,
+            result_project_id=result_project_id,
         )
         self.session.add(row)
         await self.session.flush()
@@ -2808,7 +2783,16 @@ class PayableSnapshotService:
         due_date: date | None,
         observation: str | None,
         include_in_dashboard: bool | None = None,
+        result_classification: str | None = None,
     ) -> PayableSnapshot:
+        if result_classification is not None and row.type == PayableSnapshotType.MANUAL:
+            # Valida antes de qualquer alteração: «Custo direto» exige projeto ATIVO no centro de custo.
+            row.result_project_id = (
+                await self._active_project_for_cost_center(row.cost_center)
+                if result_classification == MANUAL_RESULT_DIRECT
+                else None
+            )
+            row.result_classification = result_classification
         if amount_final is not None:
             row.amount_final = Decimal(str(round(float(amount_final), 2)))
             self._append_observation(row, PAYABLE_MANUAL_ADJUSTMENT_TAG)
@@ -3100,7 +3084,7 @@ class PayableSnapshotService:
                 return "Sistema do projeto removido da origem."
             if SOURCE_TAG_PROJECT_MISC in obs:
                 return "Custo diverso do projeto removido da origem."
-            return "Custo fixo removido da origem."
+            return "Custo indireto removido da origem."
         if row.type in PAYABLE_DEBT_TYPES:
             return "Endividamento removido da origem ou encerrado nesta competência."
         return "Origem removida."

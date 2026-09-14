@@ -78,18 +78,13 @@ class BaseOperationHandler:
     # --- efeitos financeiros --------------------------------------------------
 
     async def on_confirm(self, batch: "ReceivableAdvanceBatch", *, log_user: str | None = None) -> None:
-        """Efetiva a operação (DRAFT → OPEN). Comportamento default herdado por todas."""
+        """Efetiva a operação (DRAFT → OPEN). Comportamento default herdado por todas.
+
+        Deságio e tarifas não geram Contas a Pagar em nenhum perfil: já vêm descontados do
+        valor creditado — o custo fica na própria operação.
+        """
         svc = self.service
         affected = await svc._mark_invoices_anticipated(batch, log_user=log_user)
-        await svc._ensure_payables_for_batch(
-            batch_number=svc._display_code(batch),
-            institution=batch.institution,
-            receive_date=batch.receive_date,
-            repayment_date=batch.repayment_date,
-            discount_amount=float(batch.discount_amount or 0),
-            fee_amount=float(batch.fee_amount or 0),
-            batch_id=batch.id,
-        )
         await PayableSnapshotService(svc.db).invalidate_months(months=affected)
 
     async def on_cancel(self, batch: "ReceivableAdvanceBatch", *, log_user: str | None = None) -> set[date]:

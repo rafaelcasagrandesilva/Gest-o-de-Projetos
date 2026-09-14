@@ -582,7 +582,7 @@ def render_company_finance_matrix_bytes(
     month_pairs = _month_keys(year)
     headers = ["Item", "Referência"] + [lab for lab, _ in month_pairs] + ["Total pago", "Saldo / Restante", "Progresso %"]
     is_debt = tipo == "endividamento"
-    label = "Endividamento" if is_debt else "Custos fixos (empresa)"
+    label = "Endividamento" if is_debt else "Custos indiretos"
     xlsx_rows: list[list[Any]] = []
     pdf_rows: list[list[Any]] = []
 

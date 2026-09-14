@@ -171,6 +171,11 @@ DASHBOARD_SENSITIVE = "dashboard.sensitive"
 # passava por `redact_for` — sem recurso próprio nem gate de dados sensíveis.
 FINANCIAL_DASHBOARD_READ = "financial_dashboard.read"
 FINANCIAL_DASHBOARD_SENSITIVE = "financial_dashboard.sensitive"
+# Resultado da Empresa (Indicadores → Resultado da Empresa): recurso PRÓPRIO, no mesmo padrão do
+# Dashboard Financeiro. `read` = acessar a tela; `sensitive` = receber os valores. Sem arestas no grafo
+# (nenhum código legado concede o acesso por implicação) — o acesso é semeado nos perfis pela 0134.
+COMPANY_RESULT_READ = "company_result.read"
+COMPANY_RESULT_SENSITIVE = "company_result.sensitive"
 ALERTS_READ = "alerts.read"
 REPORTS_READ = "reports.read"
 # Configurações (system) — read/update
@@ -353,6 +358,7 @@ NEW_PERMISSION_CODES: tuple[str, ...] = (
     INDICATORS_READ, INDICATORS_SENSITIVE,
     DASHBOARD_READ, DASHBOARD_SENSITIVE,
     FINANCIAL_DASHBOARD_READ, FINANCIAL_DASHBOARD_SENSITIVE,
+    COMPANY_RESULT_READ, COMPANY_RESULT_SENSITIVE,
     ALERTS_READ, REPORTS_READ,
     SETTINGS_READ, SETTINGS_UPDATE,
     COST_CENTER_REFERENCE,
@@ -471,6 +477,7 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     INDICATORS_READ, INDICATORS_SENSITIVE,
     DASHBOARD_READ, DASHBOARD_SENSITIVE,
     FINANCIAL_DASHBOARD_READ, FINANCIAL_DASHBOARD_SENSITIVE,
+    COMPANY_RESULT_READ, COMPANY_RESULT_SENSITIVE,
     ALERTS_READ, REPORTS_READ,
     SETTINGS_READ, SETTINGS_UPDATE,
     COST_CENTER_REFERENCE,
@@ -495,6 +502,8 @@ PRESET_GESTOR = frozenset(
         WORKSPACE_INDICATORS_ACCESS,
         INDICATORS_VIEW,
         INDICATORS_DIRECTOR,
+        COMPANY_RESULT_READ,
+        COMPANY_RESULT_SENSITIVE,
         PROJECTS_VIEW,
         PROJECTS_VIEW_LIST,
         PROJECTS_VIEW_DETAIL,
@@ -575,6 +584,8 @@ PRESET_CONSULTA = frozenset(
         FINANCIAL_DASHBOARD_SENSITIVE,
         WORKSPACE_INDICATORS_ACCESS,
         INDICATORS_VIEW,
+        COMPANY_RESULT_READ,
+        COMPANY_RESULT_SENSITIVE,
         PROJECTS_VIEW,
         PROJECTS_VIEW_LIST,
         PROJECTS_VIEW_DETAIL,
@@ -795,6 +806,8 @@ _ACTIVATED_NEW_CODES: frozenset[str] = frozenset(
         INDICATORS_READ, DASHBOARD_READ, ALERTS_READ, REPORTS_READ,
         # Dados Sensíveis — Dashboard Financeiro: recurso próprio ATIVADO (gate de acesso + redação).
         FINANCIAL_DASHBOARD_READ, FINANCIAL_DASHBOARD_SENSITIVE,
+        # Dados Sensíveis — Resultado da Empresa (Indicadores): recurso próprio ATIVADO (acesso + redação).
+        COMPANY_RESULT_READ, COMPANY_RESULT_SENSITIVE,
         SETTINGS_READ, SETTINGS_UPDATE,
         # Workspace Jurídico — módulo novo, já nasce ATIVO no modelo de verbos (um recurso por menu).
         *LEGAL_MODULE_CODES,

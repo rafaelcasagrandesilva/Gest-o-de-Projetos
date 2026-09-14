@@ -90,7 +90,7 @@ class SensitiveRegistryTests(unittest.TestCase):
         """
         from app.api.sensitive import SENSITIVE_SPECS
         from app.schemas import (
-            company_finance as cf, costs as co, dashboard as da, financial as fi,
+            company_finance as cf, company_result as cr, costs as co, dashboard as da, financial as fi,
             financial_dashboard as fd,
             indicators as ind, project_structure as ps, projects as pr, receivable as re,
             receivable_advance_batch as rb, assets, fleet, employees as em, payables as pa,
@@ -123,6 +123,7 @@ class SensitiveRegistryTests(unittest.TestCase):
             "financial_dashboard_point": fd.FinancialDashboardTimeseriesPoint,
             "financial_dashboard_group": fd.FinancialDashboardGroupedItem,
             "financial_dashboard_breakdown": fd.FinancialDashboardBreakdownRead,
+            "company_result": cr.CompanyResultRead, "company_result_month": cr.CompanyResultMonthRead,
         }
         for resource, spec in SENSITIVE_SPECS.items():
             if resource not in MODEL:

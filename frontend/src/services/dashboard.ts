@@ -3,7 +3,39 @@ import { api } from "./api";
 /** Padrão de API quando o cenário não é informado (alinhado ao backend). */
 const DEFAULT_SCENARIO_QUERY = "REALIZADO";
 
-export interface DirectorSummary {
+/** null = percentual de reserva (sem regime cadastrado); "MISTO" = período com regimes diferentes. */
+export type TaxRegime = "LUCRO_PRESUMIDO" | "LUCRO_REAL" | "MISTO";
+
+/**
+ * Origem do custo de antecipação:
+ * REAL = custo real das operações do mês seguinte; PARCIAL = idem, mês seguinte em andamento;
+ * MEDIA = média ponderada dos meses fechados (projeção); FIXA = percentual fixo das Configurações;
+ * MISTO = período com meses de origens diferentes.
+ */
+export type AnticipationSource = "REAL" | "PARCIAL" | "MEDIA" | "FIXA" | "MISTO";
+
+/** Campos do motor de custos por regime / valores pagos (comuns ao resumo e à série mensal). */
+export interface ProjectCostDetail {
+  /**
+   * Custo da antecipação (R$) por instituição (nome de exibição); soma = anticipation_amount.
+   * Vazio/null quando a taxa é a fixa (sem divisão disponível).
+   */
+  anticipation_by_institution?: Record<string, number> | null;
+  anticipation_source?: AnticipationSource | null;
+  /** Mês fechado: mão de obra = folha efetivamente paga no CAP; false = estimativa pelo cadastro. */
+  labor_real?: boolean;
+  /** Mês fechado: veículos = parte do projeto na fatura da frota paga; false = lançado pelos gestores. */
+  vehicle_real?: boolean;
+  tax_regime?: TaxRegime | null;
+  tax_pis?: number | null;
+  tax_cofins?: number | null;
+  tax_iss?: number | null;
+  /** No Lucro Real é 0 aqui (incide sobre o lucro da empresa). */
+  tax_irpj?: number | null;
+  tax_csll?: number | null;
+}
+
+export interface DirectorSummary extends ProjectCostDetail {
   /** Ausente ou null no consolidado global; preenchido ao filtrar por projeto */
   project_id?: string | null;
   competencia: string;
@@ -41,9 +73,11 @@ export interface DirectorSummary {
   tax_amount_pct?: number;
   overhead_amount_pct?: number;
   anticipation_amount_pct?: number;
+  /** Antecipação ainda pode subir: as operações do mês seguinte estão em andamento. */
+  anticipation_partial?: boolean;
 }
 
-export interface MonthlyPoint {
+export interface MonthlyPoint extends ProjectCostDetail {
   competencia: string;
   revenue_total: number;
   total_revenue: number;
@@ -70,6 +104,8 @@ export interface MonthlyPoint {
   tax_amount_pct?: number;
   overhead_amount_pct?: number;
   anticipation_amount_pct?: number;
+  /** Antecipação ainda pode subir: as operações do mês seguinte estão em andamento. */
+  anticipation_partial?: boolean;
 }
 
 export interface FinancialDashboardSummary {
@@ -177,6 +213,8 @@ export interface ProjectSummary {
   tax_amount_pct?: number;
   overhead_amount_pct?: number;
   anticipation_amount_pct?: number;
+  /** Antecipação ainda pode subir: as operações do mês seguinte estão em andamento. */
+  anticipation_partial?: boolean;
 }
 
 export interface ProjectDashboardResponse {

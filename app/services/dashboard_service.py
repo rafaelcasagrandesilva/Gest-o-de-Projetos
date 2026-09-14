@@ -30,6 +30,28 @@ def _last_n_month_first_days(n: int) -> list[date]:
     return list(reversed(months))
 
 
+_EXTRA_MONEY_KEYS = ("tax_pis", "tax_cofins", "tax_iss", "tax_irpj", "tax_csll")
+_EXTRA_FLAG_KEYS = ("labor_real", "vehicle_real")
+
+
+def _engine_extras(cons: dict) -> dict:
+    """Campos do motor que vieram depois (folha/frota reais, tributos, antecipação por instituição)."""
+    out = {key: float(cons.get(key) or 0) for key in _EXTRA_MONEY_KEYS}
+    out.update({key: bool(cons.get(key)) for key in _EXTRA_FLAG_KEYS})
+    out["tax_regime"] = cons.get("tax_regime")
+    out["anticipation_by_institution"] = dict(cons.get("anticipation_by_institution") or {})
+    out["anticipation_source"] = cons.get("anticipation_source")
+    return out
+
+
+def _sum_by_key(dicts) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for d in dicts:
+        for key, value in (d or {}).items():
+            out[key] = out.get(key, 0.0) + float(value or 0)
+    return out
+
+
 def _consolidado_to_monthly_row(comp: date, cons: dict) -> dict:
     return {
         "competencia": comp,
@@ -62,6 +84,8 @@ def _consolidado_to_monthly_row(comp: date, cons: dict) -> dict:
         "tax_amount_pct": cons["tax_amount_pct"],
         "overhead_amount_pct": cons["overhead_amount_pct"],
         "anticipation_amount_pct": cons["anticipation_amount_pct"],
+        "anticipation_partial": bool(cons.get("anticipation_partial")),
+        **_engine_extras(cons),
     }
 
 
@@ -126,6 +150,17 @@ def _aggregate_summary_dicts(rows: list[dict]) -> dict:
         "overhead_amount_pct": p(acc["overhead_amount"], rev),
         "anticipation_amount_pct": p(acc["anticipation_amount"], rev),
     }
+    # Período com algum mês de antecipação ainda em andamento também é parcial.
+    base["anticipation_partial"] = any(bool(r.get("anticipation_partial")) for r in rows)
+    for key in _EXTRA_MONEY_KEYS:
+        base[key] = sum(float(r.get(key) or 0) for r in rows)
+    for key in _EXTRA_FLAG_KEYS:
+        base[key] = any(bool(r.get(key)) for r in rows)
+    base["anticipation_by_institution"] = _sum_by_key(r.get("anticipation_by_institution") for r in rows)
+    sources = {r.get("anticipation_source") for r in rows}
+    base["anticipation_source"] = sources.pop() if len(sources) == 1 else "MISTO"
+    regimes = {r.get("tax_regime") for r in rows}
+    base["tax_regime"] = regimes.pop() if len(regimes) == 1 else "MISTO"
     base["project_id"] = rows[0].get("project_id")
     base["competencia"] = rows[-1]["competencia"]
     return base
@@ -267,6 +302,8 @@ class DashboardService:
             "tax_amount_pct": cons["tax_amount_pct"],
             "overhead_amount_pct": cons["overhead_amount_pct"],
             "anticipation_amount_pct": cons["anticipation_amount_pct"],
+            "anticipation_partial": bool(cons.get("anticipation_partial")),
+        **_engine_extras(cons),
         }
 
     async def resumo_geral_diretor(self, *, competencia: date, scenario: str | Scenario = DEFAULT_SCENARIO) -> dict:
@@ -305,6 +342,8 @@ class DashboardService:
             "tax_amount_pct": cons["tax_amount_pct"],
             "overhead_amount_pct": cons["overhead_amount_pct"],
             "anticipation_amount_pct": cons["anticipation_amount_pct"],
+            "anticipation_partial": bool(cons.get("anticipation_partial")),
+        **_engine_extras(cons),
         }
 
     async def serie_mensal(

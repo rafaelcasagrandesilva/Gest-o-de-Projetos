@@ -136,6 +136,15 @@ class PayableSnapshot(TimestampUUIDMixin, Base):
 
     observation: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Lançamento MANUAL: como entra no Resultado da Empresa (DIRETO | INDIRETO | ENDIVIDAMENTO | FORA).
+    # NULL = não classificado (não entra). Demais tipos têm o destino definido pelo cadastro.
+    result_classification: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # DIRETO: projeto ATIVO do centro de custo em que o lançamento soma como custo direto. Coluna própria
+    # (não `project_id`, que governa acesso por projeto e as sincronizações do CAP).
+    result_project_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     # --- Reconciliação de snapshot (resíduos cuja origem foi removida) ---
     # Apenas marcação operacional/auditoria: NÃO altera amount_*, pagamentos,
     # estornos ou lançamentos manuais. Permite limpeza manual e remoção do

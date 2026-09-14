@@ -26,6 +26,10 @@ PayableSnapshotType = Literal[
 
 PayableSnapshotStatus = Literal["ABERTO", "PARCIAL", "PAGO"]
 
+# Lançamento manual → destino no Resultado da Empresa (FORA = não entra: repasse, retenção, bloqueio…).
+# DIRETO = custo direto do projeto ATIVO que é o centro de custo do lançamento.
+PayableResultClassification = Literal["DIRETO", "INDIRETO", "ENDIVIDAMENTO", "FORA"]
+
 
 class PayableSnapshotRead(UUIDTimestampRead):
     month: date
@@ -58,6 +62,10 @@ class PayableSnapshotRead(UUIDTimestampRead):
 
     observation: str | None = None
     include_in_dashboard: bool = True
+    # Só MANUAL: como entra no Resultado da Empresa; None = não classificado (não entra).
+    result_classification: PayableResultClassification | None = None
+    # DIRETO: projeto (centro de custo) em que o lançamento soma como custo direto.
+    result_project_id: UUID | None = None
     # Reconciliação: lançamento automático cuja origem foi removida (resíduo).
     is_obsolete: bool = False
     obsolete_reason: str | None = None
@@ -104,6 +112,8 @@ class PayableSnapshotUpdate(BaseModel):
     due_date: date | None = None
     observation: str | None = Field(None, max_length=4000)
     include_in_dashboard: bool | None = None
+    # Só aceito em lançamento MANUAL.
+    result_classification: PayableResultClassification | None = None
 
 
 class PayableSnapshotManualCreate(BaseModel):
@@ -114,6 +124,7 @@ class PayableSnapshotManualCreate(BaseModel):
     cost_center: str = Field(..., min_length=1, max_length=255)
     month: date = Field(..., description="Mês de competência do pagamento (YYYY-MM-01).")
     include_in_dashboard: bool = True
+    result_classification: PayableResultClassification | None = None
 
     @field_validator("month")
     @classmethod

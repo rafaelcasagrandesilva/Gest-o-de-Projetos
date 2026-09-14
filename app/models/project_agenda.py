@@ -22,7 +22,6 @@ class CommitmentKind(str, enum.Enum):
     REUNIAO = "REUNIAO"
     OBRIGACAO = "OBRIGACAO"
     EVENTO = "EVENTO"
-    PRAZO = "PRAZO"
     VISITA = "VISITA"
 
 

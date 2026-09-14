@@ -25,6 +25,8 @@ import {
   updateCompanyFinanceItem,
   type ChartPoint,
   type CompanyFinancialItem,
+  type FleetAllocation,
+  type ProjectCostGroup,
   type PendenciaLancamento,
   type RenegotiationType,
   type TipoFinanceiro,
@@ -40,6 +42,7 @@ import { COMPANY_FINANCE_SORT_COLUMNS, defaultCompanyFinanceSort } from "@/table
 import {
   CC_REF_ADMINISTRATIVO,
   defaultCostCenterRef,
+  isSystemCostCenterRef,
   itemCostCenterRef,
 } from "@/components/company-finance/costCenter";
 import { CostCenterSelect } from "@/components/company-finance/CostCenterSelect";
@@ -122,6 +125,40 @@ function EmployeeOptionBadges({ employee }: { employee: Employee }) {
  * essa pessoa quase nunca está em Colaboradores.
  */
 type DraftItemType = "MANUAL" | "COLABORADOR_MATRIZ" | "DESLIGADO";
+
+/** Opções do "Rateio pela frota" (só custo fixo). Valor "" = sem rateio (null no payload). */
+const FLEET_ALLOCATION_OPTIONS: { value: FleetAllocation | ""; label: string }[] = [
+  { value: "", label: "Não" },
+  { value: "LOCACAO", label: "Fatura de locação (substitui o custo dos veículos)" },
+  { value: "ADICIONAL", label: "Custo adicional da frota (soma ao custo dos veículos)" },
+];
+
+const FLEET_ALLOCATION_HELP =
+  "A fatura é dividida entre os projetos pelo custo mensal dos veículos de cada centro de custo (cadastro de Veículos); o restante é custo indireto. Sem fatura de locação no Contas a Pagar, vale o custo mensal dos veículos ativos.";
+
+function parseFleetAllocation(raw: string): FleetAllocation | null {
+  return raw === "LOCACAO" || raw === "ADICIONAL" ? raw : null;
+}
+
+/** Opções do "Entra no projeto como" (só custo fixo com centro de custo = projeto). "" = null. */
+const PROJECT_COST_GROUP_OPTIONS: { value: ProjectCostGroup | ""; label: string }[] = [
+  { value: "", label: "Fixos operacionais (padrão)" },
+  { value: "MAO_DE_OBRA", label: "Mão de obra" },
+  { value: "VEICULOS", label: "Veículos" },
+  { value: "SISTEMAS", label: "Sistemas" },
+];
+
+const PROJECT_COST_GROUP_HELP =
+  "Em qual custo do projeto este item soma no Dashboard Operacional e no Resultado da Empresa (ex.: combustível → Veículos; plano de saúde → Mão de obra).";
+
+function parseProjectCostGroup(raw: string): ProjectCostGroup | null {
+  return raw === "MAO_DE_OBRA" || raw === "VEICULOS" || raw === "SISTEMAS" || raw === "FIXOS" ? raw : null;
+}
+
+/** Centro de custo selecionado é um PROJETO (ref = UUID do projeto, não um centro fixo do sistema). */
+function isProjectCostCenterRef(ref: string | null | undefined): boolean {
+  return Boolean(ref) && !isSystemCostCenterRef(ref as string);
+}
 
 function parseBRLInput(raw: string): number {
   return normalizeCurrencyForApi(raw);
@@ -301,6 +338,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [draftEmployeeId, setDraftEmployeeId] = useState("");
   const [draftPercentual, setDraftPercentual] = useState("100");
   const [draftIsMonthlyRequired, setDraftIsMonthlyRequired] = useState(false);
+  const [draftFleetAllocation, setDraftFleetAllocation] = useState<FleetAllocation | null>(null);
+  const [draftProjectCostGroup, setDraftProjectCostGroup] = useState<ProjectCostGroup | null>(null);
   const [draftHasLegalProcess, setDraftHasLegalProcess] = useState(false);
   const [draftHasRenegotiation, setDraftHasRenegotiation] = useState(false);
   const [draftRenegotiatedAmount, setDraftRenegotiatedAmount] = useState("");
@@ -332,6 +371,8 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     setDraftEmployeeId("");
     setDraftPercentual("100");
     setDraftIsMonthlyRequired(false);
+    setDraftFleetAllocation(null);
+    setDraftProjectCostGroup(null);
     setDraftHasLegalProcess(false);
     setDraftHasRenegotiation(false);
     setDraftRenegotiatedAmount("");
@@ -748,6 +789,10 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
           tipo === "endividamento" && draftItemType === "DESLIGADO" ? draftLegalPersonId || null : null,
         percentual: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? percentualN : null,
         is_monthly_required: draftIsMonthlyRequired,
+        fleet_allocation: tipo === "custo_fixo" ? draftFleetAllocation : null,
+        // Só vale para centro de custo = projeto; fora disso o campo nem aparece, então vai null.
+        project_cost_group:
+          tipo === "custo_fixo" && isProjectCostCenterRef(draftCostCenterRef) ? draftProjectCostGroup : null,
         has_legal_process: tipo === "endividamento" ? draftHasLegalProcess : false,
         has_renegotiation: tipo === "endividamento" ? draftHasRenegotiation : false,
         renegotiated_amount: tipo === "endividamento" && draftHasRenegotiation ? renegotiatedAmountN : null,
@@ -1554,6 +1599,44 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             </span>
           </label>
 
+          {tipo === "custo_fixo" && (
+            <label className="flex w-full flex-col gap-1 text-sm">
+              <span className="text-slate-600">Rateio pela frota</span>
+              <select
+                value={draftFleetAllocation ?? ""}
+                onChange={(e) => setDraftFleetAllocation(parseFleetAllocation(e.target.value))}
+                disabled={financeReadOnly}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 sm:max-w-md"
+              >
+                {FLEET_ALLOCATION_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-slate-500">{FLEET_ALLOCATION_HELP}</span>
+            </label>
+          )}
+
+          {tipo === "custo_fixo" && isProjectCostCenterRef(draftCostCenterRef) && (
+            <label className="flex w-full flex-col gap-1 text-sm">
+              <span className="text-slate-600">Entra no projeto como</span>
+              <select
+                value={draftProjectCostGroup ?? ""}
+                onChange={(e) => setDraftProjectCostGroup(parseProjectCostGroup(e.target.value))}
+                disabled={financeReadOnly}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 sm:max-w-md"
+              >
+                {PROJECT_COST_GROUP_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-slate-500">{PROJECT_COST_GROUP_HELP}</span>
+            </label>
+          )}
+
 
           {tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" && (
             <div className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -2161,6 +2244,12 @@ function FinanceItemCard({
   const [structureIsMonthlyRequired, setStructureIsMonthlyRequired] = useState(
     Boolean(item.is_monthly_required),
   );
+  const [structureFleetAllocation, setStructureFleetAllocation] = useState<FleetAllocation | null>(
+    item.fleet_allocation ?? null,
+  );
+  const [structureProjectCostGroup, setStructureProjectCostGroup] = useState<ProjectCostGroup | null>(
+    item.project_cost_group ?? null,
+  );
   const [structurePercentual, setStructurePercentual] = useState(
     typeof item.percentual === "number" ? String(item.percentual).replace(".", ",") : "",
   );
@@ -2220,6 +2309,8 @@ function FinanceItemCard({
     setStructureDescription(item.description ?? "");
     setStructureRecurrence(item.recurrence ?? defaultRecurrence(tipo));
     setStructureIsMonthlyRequired(Boolean(item.is_monthly_required));
+    setStructureFleetAllocation(item.fleet_allocation ?? null);
+    setStructureProjectCostGroup(item.project_cost_group ?? null);
     setStructurePercentual(typeof item.percentual === "number" ? String(item.percentual).replace(".", ",") : "");
     setStructureHasLegal(Boolean(item.has_legal_process));
     setStructureHasReneg(Boolean(item.has_renegotiation));
@@ -2398,6 +2489,13 @@ function FinanceItemCard({
       payload.percentual = Number(String(structurePercentual || "0").replace(",", "."));
     }
     payload.is_monthly_required = structureIsMonthlyRequired;
+    if (tipo === "custo_fixo") {
+      payload.fleet_allocation = structureFleetAllocation;
+      // Só vale para centro de custo = projeto; ao trocar para um centro fixo, limpa (null).
+      payload.project_cost_group = isProjectCostCenterRef(structureCostCenterRef)
+        ? structureProjectCostGroup
+        : null;
+    }
     if (tipo === "endividamento") {
       payload.has_legal_process = structureHasLegal;
       payload.has_renegotiation = structureHasReneg;
@@ -2792,6 +2890,42 @@ function FinanceItemCard({
                   />
                   <span>Obrigatório mensal</span>
                 </label>
+                {tipo === "custo_fixo" && (
+                  <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+                    <span className="text-slate-600">Rateio pela frota</span>
+                    <select
+                      value={structureFleetAllocation ?? ""}
+                      onChange={(e) => setStructureFleetAllocation(parseFleetAllocation(e.target.value))}
+                      className="rounded border border-slate-300 bg-white px-2 py-1.5"
+                      disabled={readOnly || structureSaving}
+                    >
+                      {FLEET_ALLOCATION_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-xs text-slate-500">{FLEET_ALLOCATION_HELP}</span>
+                  </label>
+                )}
+                {tipo === "custo_fixo" && isProjectCostCenterRef(structureCostCenterRef) && (
+                  <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+                    <span className="text-slate-600">Entra no projeto como</span>
+                    <select
+                      value={structureProjectCostGroup ?? ""}
+                      onChange={(e) => setStructureProjectCostGroup(parseProjectCostGroup(e.target.value))}
+                      className="rounded border border-slate-300 bg-white px-2 py-1.5"
+                      disabled={readOnly || structureSaving}
+                    >
+                      {PROJECT_COST_GROUP_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-xs text-slate-500">{PROJECT_COST_GROUP_HELP}</span>
+                  </label>
+                )}
                 {isMatrixCollaborator && (
                   <label className="flex flex-col gap-1 text-sm">
                     <span className="text-slate-600">Percentual (%)</span>

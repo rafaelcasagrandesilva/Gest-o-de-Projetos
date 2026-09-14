@@ -2,12 +2,22 @@ import { useEffect, useState } from "react";
 import { FinancialDashboardCharts } from "@/components/FinancialDashboardCharts";
 import { FinancialEvolutionProjectChart } from "@/components/FinancialEvolutionProjectChart";
 import { DashboardToolbar } from "@/components/dashboard/DashboardToolbar";
+import { HoverDetails, type HoverDetailsRow } from "@/components/dashboard/HoverDetails";
 import { useSeesAllProjects } from "@/hooks/usePermission";
 import { useScenario, type ScenarioKind } from "@/context/ScenarioContext";
 import { formatCurrencyOrDash } from "@/utils/currency";
 import {
+  ANTICIPATION_SOURCE_NOTE,
+  LABOR_REAL_TITLE,
+  LUCRO_REAL_PROFIT_TAX_NOTE,
+  VEHICLE_REAL_TITLE,
+  anticipationInstitutions,
+  taxLabel,
+} from "@/utils/projectCostBasis";
+import {
   fetchFinancialSummary,
   fetchProjectsBreakdown,
+  type DirectorSummary,
   type FinancialDashboardSummary,
   type ProjectBreakdownRow,
 } from "@/services/dashboard";
@@ -56,6 +66,82 @@ function formatMoneyVsRevenue(money: number | null | undefined, pctOfRevenue: nu
   if (money == null) return SENSITIVE_DASH;
   const pct = pctOfRevenue == null ? "" : ` (${pctOfRevenue.toFixed(1)}%)`;
   return `${formatMoney(money)}${pct}`;
+}
+
+/** Parte ÷ todo em "12,34%" (2 casas, vírgula). Sem valor ou todo zero/ausente → "—". */
+function formatShare(part: number | null | undefined, whole: number | null | undefined): string {
+  if (part == null || whole == null || !Number.isFinite(whole) || Math.abs(whole) < 0.005) return SENSITIVE_DASH;
+  return `${((part / whole) * 100).toFixed(2).replace(".", ",")}%`;
+}
+
+/** Detalhamento dos impostos por tributo (valor e % da receita). */
+function TaxDetails({ s }: { s: DirectorSummary }) {
+  const revenue = s.total_revenue ?? s.revenue_total;
+  const regime = s.tax_regime ?? null;
+  const components: Array<[string, number | null | undefined]> = regime
+    ? [
+        ["PIS", s.tax_pis],
+        ["COFINS", s.tax_cofins],
+        ["ISS", s.tax_iss],
+        ["IRPJ", s.tax_irpj],
+        ["CSLL", s.tax_csll],
+      ]
+    : [];
+  const rows: HoverDetailsRow[] = components
+    // No Lucro Real IRPJ/CSLL incidem sobre o lucro da empresa: aqui vêm 0 → ocultos.
+    .filter(([name, v]) => !(regime === "LUCRO_REAL" && (name === "IRPJ" || name === "CSLL") && v === 0))
+    .map(([name, v]) => ({ key: name, label: name, values: [formatMoney(v), formatShare(v, revenue)] }));
+  rows.push({
+    key: "total",
+    label: "Total",
+    values: [formatMoney(s.tax_amount), formatShare(s.tax_amount, revenue)],
+    emphasis: true,
+  });
+  const footer =
+    regime === "LUCRO_REAL" || regime === "MISTO"
+      ? LUCRO_REAL_PROFIT_TAX_NOTE
+      : !regime
+        ? "Sem regime tributário cadastrado: percentual de reserva sobre a receita."
+        : undefined;
+  return (
+    <HoverDetails
+      title={taxLabel(regime)}
+      subtitle={`Carga efetiva ${formatShare(s.tax_amount, revenue)} da receita`}
+      columns={["Valor", "% receita"]}
+      rows={rows}
+      footer={footer}
+    >
+      {taxLabel(regime)}
+    </HoverDetails>
+  );
+}
+
+/** Detalhamento da antecipação por instituição (valor e % do total da antecipação). */
+function AnticipationDetails({ s }: { s: DirectorSummary }) {
+  const total = s.anticipation_amount;
+  const institutions = anticipationInstitutions(s.anticipation_by_institution);
+  const rows: HoverDetailsRow[] = institutions.map(([name, v]) => ({
+    key: name,
+    label: name,
+    values: [formatMoney(v), formatShare(v, total)],
+  }));
+  rows.push({
+    key: "total",
+    label: "Total",
+    values: institutions.length ? [formatMoney(total), formatShare(total, total)] : [formatMoney(total)],
+    emphasis: true,
+  });
+  const source = s.anticipation_source ?? (s.anticipation_partial ? "PARCIAL" : null);
+  return (
+    <HoverDetails
+      title="Antecipação — custo por instituição"
+      columns={institutions.length ? ["Valor", "% antecip."] : undefined}
+      rows={rows}
+      footer={source ? ANTICIPATION_SOURCE_NOTE[source] : undefined}
+    >
+      Antecipação
+    </HoverDetails>
+  );
 }
 
 export function Dashboard() {
@@ -474,7 +560,7 @@ export function Dashboard() {
           higherIsWorse
         />
         <ScenarioCompareCard
-          label={multiMonth ? "Lucro líquido (soma no período)" : "Lucro líquido"}
+          label={multiMonth ? "Lucro disponível (soma no período)" : "Lucro disponível"}
           previsto={dataPrevisto.lucro_liquido_previsto ?? sp.net_profit ?? sp.profit}
           realizado={dataRealizado.lucro_liquido_realizado ?? sr.net_profit ?? sr.profit}
         />
@@ -505,7 +591,7 @@ export function Dashboard() {
           subtitle={`Margem${multiMonth ? " no período" : ""}: ${formatPercentage(s.margin_operational ?? s.margin)}`}
         />
         <KpiCard
-          label={`Lucro líquido (${scenarioLabelShort})`}
+          label={`Lucro disponível (${scenarioLabelShort})`}
           value={formatMoney(s.net_profit ?? s.profit)}
           accent={getProfitColor(s.net_profit ?? s.profit)}
           subtitle={`Margem${multiMonth ? " no período" : ""}: ${formatPercentage(s.margin_net ?? s.margin)}`}
@@ -530,13 +616,19 @@ export function Dashboard() {
             </dd>
           </div>
           <div>
-            <dt className="text-slate-500">Mão de obra</dt>
+            <dt className="flex items-center gap-1.5 text-slate-500">
+              Mão de obra
+              {s.labor_real && <BasisChip title={LABOR_REAL_TITLE}>folha real</BasisChip>}
+            </dt>
             <dd className="font-medium tabular-nums text-slate-900">
               {formatMoneyVsRevenue(s.labor_cost, s.labor_cost_pct)}
             </dd>
           </div>
           <div>
-            <dt className="text-slate-500">Veículos</dt>
+            <dt className="flex items-center gap-1.5 text-slate-500">
+              Veículos
+              {s.vehicle_real && <BasisChip title={VEHICLE_REAL_TITLE}>frota real</BasisChip>}
+            </dt>
             <dd className="font-medium tabular-nums text-slate-900">
               {formatMoneyVsRevenue(s.vehicle_cost, s.vehicle_cost_pct)}
             </dd>
@@ -554,7 +646,9 @@ export function Dashboard() {
             </dd>
           </div>
           <div>
-            <dt className="text-slate-500">Impostos (sobre receita)</dt>
+            <dt className="text-slate-500">
+              <TaxDetails s={s} />
+            </dt>
             <dd className="font-medium tabular-nums text-slate-900">
               {formatMoneyVsRevenue(s.tax_amount, s.tax_amount_pct)}
             </dd>
@@ -566,7 +660,17 @@ export function Dashboard() {
             </dd>
           </div>
           <div>
-            <dt className="text-slate-500">Antecipação</dt>
+            <dt className="flex items-center gap-1.5 text-slate-500">
+              <AnticipationDetails s={s} />
+              {s.anticipation_partial && (
+                <span
+                  className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700"
+                  title="Custo das antecipações do mês seguinte, que ainda está em andamento: o valor pode subir a cada nova operação até o fim do mês."
+                >
+                  parcial
+                </span>
+              )}
+            </dt>
             <dd className="font-medium tabular-nums text-slate-900">
               {formatMoneyVsRevenue(s.anticipation_amount, s.anticipation_amount_pct)}
             </dd>
@@ -587,6 +691,15 @@ export function Dashboard() {
         selectedScenario={dashboardScenario}
       />
     </div>
+  );
+}
+
+/** Chip "folha real" / "frota real" — mesmo desenho do chip "parcial" da Antecipação, em verde. */
+function BasisChip({ title, children }: { title: string; children: string }) {
+  return (
+    <span className="cursor-help rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700" title={title}>
+      {children}
+    </span>
   );
 }
 

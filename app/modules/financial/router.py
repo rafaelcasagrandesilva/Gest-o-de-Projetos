@@ -758,6 +758,8 @@ def _snapshot_to_read(
         paid=st == "PAGO",
         observation=row.observation,
         include_in_dashboard=bool(getattr(row, "include_in_dashboard", True)),
+        result_classification=getattr(row, "result_classification", None),
+        result_project_id=getattr(row, "result_project_id", None),
         is_obsolete=bool(getattr(row, "is_obsolete", False)),
         obsolete_reason=getattr(row, "obsolete_reason", None),
         reconciled_at=getattr(row, "reconciled_at", None),
@@ -893,13 +895,22 @@ async def update_payables_snapshot(
     await _ensure_payable_snapshot_edit_access(row=row, user=user, db=db)
 
     data = payload.model_dump(exclude_unset=True)
-    updated = await svc.update_row(
-        row=row,
-        amount_final=data.get("amount_final"),
-        due_date=data.get("due_date"),
-        observation=data.get("observation"),
-        include_in_dashboard=data.get("include_in_dashboard"),
-    )
+    if data.get("result_classification") is not None and row.type != PayableSnapshotType.MANUAL:
+        raise HTTPException(
+            status_code=400,
+            detail="A classificação no resultado só se aplica a lançamentos manuais.",
+        )
+    try:
+        updated = await svc.update_row(
+            row=row,
+            amount_final=data.get("amount_final"),
+            due_date=data.get("due_date"),
+            observation=data.get("observation"),
+            include_in_dashboard=data.get("include_in_dashboard"),
+            result_classification=data.get("result_classification"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     await db.commit()
     dates = await FinanceService(db).payable_snapshots.last_payment_dates_by_snapshot_ids([updated.id])
     return redact_for("payables", _snapshot_to_read(updated, last_payment_date=dates.get(updated.id)), user)
@@ -1254,6 +1265,7 @@ async def create_manual_payables_snapshot(
             amount=payload.amount,
             due_date=payload.due_date,
             include_in_dashboard=payload.include_in_dashboard,
+            result_classification=payload.result_classification,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

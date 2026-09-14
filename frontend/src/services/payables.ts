@@ -37,6 +37,22 @@ export type PayableSnapshotType =
   | "ANTECIPACAO_OPERACAO"
   | "MANUAL";
 
+/**
+ * Como uma despesa MANUAL entra no Resultado da Empresa (Indicadores).
+ * `null` na linha = não classificada → não entra no resultado (igual a FORA).
+ */
+export type PayableResultClassification = "DIRETO" | "INDIRETO" | "ENDIVIDAMENTO" | "FORA";
+
+/** "DIRETO" só pode ser escolhido quando o centro de custo é um projeto ATIVO (validado também no backend). */
+export const PAYABLE_RESULT_CLASSIFICATIONS: PayableResultClassification[] = ["DIRETO", "INDIRETO", "ENDIVIDAMENTO", "FORA"];
+
+export const PAYABLE_RESULT_CLASSIFICATION_LABELS: Record<PayableResultClassification, string> = {
+  DIRETO: "Custo direto do projeto",
+  INDIRETO: "Custo indireto",
+  ENDIVIDAMENTO: "Endividamento",
+  FORA: "Não entra no resultado",
+};
+
 export interface PayableSnapshotRow {
   id: string;
   created_at: string;
@@ -70,6 +86,10 @@ export interface PayableSnapshotRow {
 
   observation: string | null;
   include_in_dashboard: boolean;
+  /** Classificação no Resultado da Empresa — só tem significado para `type === "MANUAL"`. */
+  result_classification?: PayableResultClassification | null;
+  /** DIRETO: projeto (centro de custo) em que o lançamento soma como custo direto. */
+  result_project_id?: string | null;
   /** Reconciliação: lançamento automático cuja origem foi removida (resíduo). */
   is_obsolete: boolean;
   obsolete_reason: string | null;
@@ -109,6 +129,8 @@ export async function updatePayableSnapshot(
     due_date: string;
     observation: string | null;
     include_in_dashboard: boolean;
+    /** Só para linhas MANUAL (o backend recusa com 400 nas demais). */
+    result_classification: PayableResultClassification;
   }>,
 ): Promise<PayableSnapshotRow> {
   const { data } = await api.patch<PayableSnapshotRow>(`/financial/payables/${id}/`, payload);
@@ -144,6 +166,7 @@ export async function createManualPayableSnapshot(payload: {
   category: string;
   cost_center: string;
   include_in_dashboard?: boolean;
+  result_classification: PayableResultClassification;
 }): Promise<PayableSnapshotRow> {
   const body = {
     ...payload,

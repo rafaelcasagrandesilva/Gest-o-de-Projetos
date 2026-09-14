@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import func, select
 
+from app.core.scenario import Scenario
 from app.models.company_finance import CompanyFinancialItem
 from app.models.employee import Employee, EmployeeAllocation
 from app.models.employee_assignment import EmployeeAssignment
@@ -21,6 +22,7 @@ from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_
 from app.services.payable_snapshot_service import PayableSnapshotService
 from app.services.settings_service import SettingsService
 from app.services.utils import model_to_dict
+from app.utils.date_utils import normalize_competencia
 from app.utils.lifecycle import DELETE_WITH_MOVEMENT_MSG, normalize_lifecycle
 
 
@@ -104,6 +106,93 @@ class EmployeesService:
                 out.setdefault(emp_id, set()).add(nome)
         return out
 
+    async def labor_kinds(self, employee_ids: list, *, competencia: date) -> dict:
+        """Mão de obra DIRETA/INDIRETA de cada colaborador na competência (derivada; três queries).
+
+        DIRETA: tem Mão de Obra REALIZADA em projeto no mês (a mesma base do custo dos projetos)
+        ou alocação ATIVA em projeto — assim a etiqueta não some no mês cuja Mão de Obra ainda
+        não foi lançada.
+        INDIRETA: está vinculado a um item dos Custos Indiretos (tipo custo_fixo) vigente no mês,
+        pela MESMA regra de elegibilidade da geração do Contas a Pagar (sem regra paralela).
+        Os dois → DIRETA_E_INDIRETA, que é legítimo quando a pessoa divide o tempo (ex.: 50% em
+        projetos + 50% administrativo). `labor_over_allocated` só acende quando a soma conhecida
+        passa de 100% — aí sim o custo está sendo contado em dobro.
+
+        Retorna {employee_id: {"labor_kind": ..., "labor_over_allocated": bool}} (só classificados).
+        """
+        ids = [i for i in employee_ids if i is not None]
+        if not ids:
+            return {}
+        from app.models.employee_assignment import AssignmentStatus
+
+        comp = normalize_competencia(competencia)
+        pct_projeto = {
+            emp_id: float(pct or 0)
+            for emp_id, pct in (
+                await self.session.execute(
+                    select(ProjectLabor.employee_id, func.sum(ProjectLabor.allocation_percentage))
+                    .where(
+                        ProjectLabor.employee_id.in_(ids),
+                        ProjectLabor.competencia == comp,
+                        ProjectLabor.scenario == Scenario.REALIZADO,
+                        ProjectLabor.allocation_percentage > 0,
+                    )
+                    .group_by(ProjectLabor.employee_id)
+                )
+            ).all()
+        }
+        alocados = set(
+            (
+                await self.session.execute(
+                    select(EmployeeAssignment.employee_id)
+                    .where(
+                        EmployeeAssignment.employee_id.in_(ids),
+                        EmployeeAssignment.status == AssignmentStatus.ATIVA,
+                        EmployeeAssignment.project_id.is_not(None),
+                    )
+                    .distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        itens = (
+            (
+                await self.session.execute(
+                    select(CompanyFinancialItem).where(
+                        CompanyFinancialItem.tipo == "custo_fixo",
+                        CompanyFinancialItem.employee_id.in_(ids),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        elegivel = PayableSnapshotService(self.session)._company_finance_item_eligible_for_comp
+        # Percentual indireto por colaborador; None = item sem percentual (soma desconhecida).
+        pct_indireto: dict = {}
+        for it in itens:
+            if not elegivel(it, comp):
+                continue
+            atual = pct_indireto.get(it.employee_id, 0.0)
+            pct = float(it.percentual) if it.percentual is not None else None
+            pct_indireto[it.employee_id] = None if atual is None or pct is None else atual + pct
+        out: dict = {}
+        for emp_id in ids:
+            direta = emp_id in pct_projeto or emp_id in alocados
+            indireta = emp_id in pct_indireto
+            if not (direta or indireta):
+                continue
+            kind = "DIRETA_E_INDIRETA" if direta and indireta else ("DIRETA" if direta else "INDIRETA")
+            soma_conhecida = indireta and emp_id in pct_projeto and pct_indireto[emp_id] is not None
+            out[emp_id] = {
+                "labor_kind": kind,
+                "labor_over_allocated": bool(
+                    soma_conhecida and pct_projeto[emp_id] + pct_indireto[emp_id] > 100.0 + 1e-6
+                ),
+            }
+        return out
+
     @staticmethod
     def _merge_cost_centers(principal: str | None, alocados: set | None) -> list[str]:
         """Centro do cadastro + centros das alocações, sem repetir, em ordem estável."""
@@ -123,11 +212,13 @@ class EmployeesService:
         else:
             tc = calculate_pj_total_cost(emp)
         alocados = (await self.active_assignment_cost_centers([emp.id])).get(emp.id)
+        kinds = await self.labor_kinds([emp.id], competencia=competencia)
         base = EmployeeRead.model_validate(emp)
         return base.model_copy(
             update={
                 "total_cost": tc,
                 "cost_centers": self._merge_cost_centers(emp.cost_center, alocados),
+                **kinds.get(emp.id, {}),
             }
         )
 
@@ -154,6 +245,7 @@ class EmployeesService:
         settings = await SettingsService(self.session).get_or_create()
         y, m = competencia.year, competencia.month
         centros = await self.active_assignment_cost_centers([e.id for e in rows])
+        kinds = await self.labor_kinds([e.id for e in rows], competencia=competencia)
         out: list[EmployeeRead] = []
         for emp in rows:
             if emp.employment_type == "CLT":
@@ -165,6 +257,7 @@ class EmployeesService:
                     update={
                         "total_cost": tc,
                         "cost_centers": self._merge_cost_centers(emp.cost_center, centros.get(emp.id)),
+                        **kinds.get(emp.id, {}),
                     }
                 )
             )
