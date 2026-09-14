@@ -27,7 +27,7 @@ import { DashboardHeader } from "@/components/dashboard/executive/DashboardHeade
 import { DashboardFilterBar, FilterField } from "@/components/dashboard/executive/DashboardFilterBar";
 import { ChartCard } from "@/components/dashboard/executive/ChartCard";
 import { EChart } from "@/components/dashboard/executive/EChart";
-import { InsightsPanel, type InsightItem } from "@/components/dashboard/executive/InsightsPanel";
+import { Money } from "@/components/Money";
 
 /**
  * Resultado da Empresa — quanto entra pelos projetos e quanto a empresa realmente precisa pagar.
@@ -355,6 +355,24 @@ function buildWaterfall(t: CompanyResultMonth, basis: CompanyResultBasis): WfSte
   return steps;
 }
 
+/**
+ * Limites do eixo Y com folga para o rótulo de valor. Sem ela, uma barra que termina rente ao limite
+ * do eixo (ex.: resultado negativo de −196 mil com eixo em −200 mil) desenha o rótulo fora da área do
+ * gráfico — por cima do nome da barra, e pior quanto menor a tela. A folga é proporcional à amplitude
+ * (não arredondada para passos grandes, que achatariam as barras); as linhas continuam em valores
+ * redondos escolhidos pelo ECharts e os rótulos quebrados das bordas ficam ocultos.
+ */
+function waterfallAxisBounds(steps: WfStep[]): { min: number; max: number } {
+  const values = steps.flatMap((s) => [s.start, s.end]);
+  const lo = Math.min(0, ...values);
+  const hi = Math.max(0, ...values);
+  const range = hi - lo || 1;
+  return {
+    min: lo < 0 ? lo - range * 0.09 : 0,
+    max: hi + range * 0.07,
+  };
+}
+
 function WaterfallChart({
   totals,
   basis,
@@ -375,8 +393,11 @@ function WaterfallChart({
       return s.raw >= 0 ? `−${fmt(s.raw)}` : `+${fmt(-s.raw)}`;
     };
 
+    const bounds = waterfallAxisBounds(steps);
+
     return {
-      grid: { top: 28, right: 16, bottom: 64, left: 72 },
+      // containLabel: a margem esquerda acompanha a largura real dos valores do eixo em qualquer tela.
+      grid: { top: 28, right: 16, bottom: 12, left: 8, containLabel: true },
       tooltip: {
         ...TOOLTIP_BASE,
         trigger: "axis",
@@ -421,8 +442,17 @@ function WaterfallChart({
       },
       yAxis: {
         type: "value",
+        min: bounds.min,
+        max: bounds.max,
         splitLine: { lineStyle: { color: CHART_COLORS.grid, type: "dashed" } },
-        axisLabel: { color: "#64748b", fontSize: 11, formatter: (v: number) => formatCurrencyShort(v) },
+        axisLabel: {
+          color: "#64748b",
+          fontSize: 11,
+          // As bordas do eixo são a folga (valor quebrado): só as linhas redondas levam rótulo.
+          showMinLabel: false,
+          showMaxLabel: false,
+          formatter: (v: number) => formatCurrencyShort(v),
+        },
       },
       series: [
         // Série auxiliar transparente: empurra a barra visível até o início da dedução.
@@ -842,7 +872,9 @@ function IndirectCostsCard({ data }: { data: CompanyResult }) {
                       </span>
                     </td>
                     <td className="py-1.5 pr-3 text-slate-500">{it.category}</td>
-                    <td className="py-1.5 pr-3 text-right tabular-nums text-slate-900">{formatCurrencyOrDash(it.amount)}</td>
+                    <td className="py-1.5 pr-3 text-slate-900">
+                      <Money value={it.amount} />
+                    </td>
                     <td className="py-1.5 text-right tabular-nums text-slate-500">
                       {formatFraction(shareOf(it.amount, t.indirect_cost))}
                     </td>
@@ -901,7 +933,9 @@ function DebtCard({ data }: { data: CompanyResult }) {
               {data.debt_items.map((d) => (
                 <tr key={d.item_id} className="border-b border-slate-100 last:border-0">
                   <td className="py-1.5 pr-3 text-slate-800">{d.name}</td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums text-slate-900">{formatCurrencyOrDash(d.amount)}</td>
+                  <td className="py-1.5 pr-3 text-slate-900">
+                    <Money value={d.amount} />
+                  </td>
                   <td className="py-1.5 text-right tabular-nums text-slate-500">{formatFraction(shareOf(d.amount, t.debt_cost))}</td>
                 </tr>
               ))}
@@ -998,55 +1032,6 @@ export function ResultadoEmpresa() {
 
   const projectedCount = data ? data.months.filter(isProjectedMonth).length : 0;
   const basis: CompanyResultBasis = data ? basisOf(data) : globalScenario === "PREVISTO" ? "LANCADO" : "PAGO";
-
-  const insights: InsightItem[] = useMemo(() => {
-    if (!t) return [];
-    const rev = t.revenue;
-    const pctRev = (v: number | null) => (v == null ? undefined : formatFraction(shareOf(v, rev)));
-    const items: InsightItem[] = [
-      { label: "Margem de contribuição", value: formatCurrencyShortOrDash(t.contribution_margin), meta: pctRev(t.contribution_margin), color: COLORS.revenue },
-      {
-        label: "Custos diretos dos projetos",
-        value: (() => {
-          const open = openAmount(basis, t.direct_open_cost);
-          const paidValue = formatCurrencyShortOrDash(t.direct_cost);
-          return open == null ? paidValue : `${paidValue} · ${formatCurrencyShort(open)} a pagar`;
-        })(),
-        meta: pctRev(t.direct_cost),
-        color: COLORS.projectCost,
-      },
-      {
-        label: `Impostos — ${taxRegimeName(t.tax_regime)}`,
-        value: formatCurrencyShortOrDash(t.tax_amount),
-        meta: formatFraction(t.tax_rate ?? shareOf(t.tax_amount, rev)),
-        color: COLORS.projectCost,
-      },
-      {
-        label: t.anticipation_partial ? "Antecipação (parcial)" : "Antecipação",
-        value: formatCurrencyShortOrDash(t.anticipation_amount),
-        meta: formatFraction(t.anticipation_rate),
-        color: COLORS.projectCost,
-      },
-      { label: "Retenção 10% (não disponível)", value: formatCurrencyShortOrDash(t.retention), meta: pctRev(t.retention), color: "#94a3b8" },
-      { label: "Lucro operacional", value: formatCurrencyShortOrDash(t.operational_profit), meta: pctRev(t.operational_profit), color: COLORS.pos },
-    ];
-    if (showsProfitTax(t)) {
-      items.push({
-        label: "IRPJ/CSLL (Lucro Real) sobre o lucro",
-        value: formatCurrencyShortOrDash(t.profit_tax_amount ?? null),
-        meta: pctRev(t.profit_tax_amount ?? null),
-        color: COLORS.indirect,
-      });
-    }
-    if (data && projectedCount > 0) {
-      items.push({
-        label: "Meses com projeção (indiretos/dívidas)",
-        value: `${projectedCount} de ${data.months.length}`,
-        color: "#0ea5e9",
-      });
-    }
-    return items;
-  }, [t, data, projectedCount, basis]);
 
   if (!canRead) {
     return <p className="text-slate-600">Sem permissão para acessar o Resultado da Empresa.</p>;
@@ -1259,10 +1244,9 @@ export function ResultadoEmpresa() {
             />
           </div>
 
-          {/* Cascata (2/3) + leitura do período (1/3) */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {/* Cascata do resultado (largura total) */}
+          <div className="grid grid-cols-1 gap-4">
             <ChartCard
-              className="lg:col-span-2"
               title="Cascata do resultado"
               subtitle={
                 basis === "PAGO"
@@ -1297,38 +1281,12 @@ export function ResultadoEmpresa() {
                 <LegendDot color={COLORS.debt} label="Endividamento" />
               </div>
               <div className="overflow-x-auto">
-                <div className={showsProfitTax(t) ? "min-w-[720px]" : "min-w-[640px]"}>
+                {/* Mínimo só para telas muito estreitas (celular); em notebook e monitor o gráfico acompanha a largura. */}
+                <div className={showsProfitTax(t) ? "min-w-[600px]" : "min-w-[540px]"}>
                   <WaterfallChart totals={t} basis={basis} />
                 </div>
               </div>
             </ChartCard>
-
-            <InsightsPanel
-              title="Leitura do período"
-              headline={{
-                label: "Margem disponível",
-                value: formatFraction(t.available_margin),
-                meta: periodLabel,
-              }}
-              items={insights}
-              footer={
-                <div className="space-y-2">
-                  <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-                    <p className="font-semibold text-slate-700">
-                      Impostos — {taxRegimeName(t.tax_regime)} · {formatFraction(t.tax_rate)} da receita
-                    </p>
-                    <p className="mt-0.5 tabular-nums">{taxBreakdownLines(t).join(" · ")}</p>
-                    <p className="mt-1.5">
-                      Itens dos Custos Indiretos com o projeto como centro de custo somam no custo do projeto conforme
-                      o cadastro do item (ex.: combustível em Veículos, plano de saúde em Mão de obra).
-                    </p>
-                  </div>
-                  <p className="text-[11px] leading-snug text-slate-400">
-                    % sobre a receita dos projetos; impostos e antecipação mostram a taxa efetiva.
-                  </p>
-                </div>
-              }
-            />
           </div>
 
           {/* Evolução mensal + margem necessária × margem real */}
