@@ -212,7 +212,7 @@ INDICATOR_ROI_SENSITIVE_FIELDS: tuple[str, ...] = (
 )  # project_count/ids/nome permanecem
 INDICATOR_FIN_POINT_SENSITIVE_FIELDS: tuple[str, ...] = (
     "faturamento", "custo_total", "custo_mo", "custo_veiculos",
-    "lucro_operacional", "lucro_liquido", "custo_cap",
+    "lucro_operacional", "lucro_liquido",
 )
 INDICATOR_FIN_KPI_SENSITIVE_FIELDS: tuple[str, ...] = ("total", "growth_pct")
 INDICATOR_HIGHLIGHT_SENSITIVE_FIELDS: tuple[str, ...] = ("value",)

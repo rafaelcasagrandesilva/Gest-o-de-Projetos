@@ -96,10 +96,6 @@ class FinancialEvolutionPoint(BaseModel):
     custo_veiculos: float | None = None
     lucro_operacional: float | None = None
     lucro_liquido: float | None = None
-    # Modo "Contas a Pagar": soma dos títulos LANÇADOS no CAP naquele mês, da EMPRESA
-    # INTEIRA (a maior parte do CAP é corporativa, sem projeto — filtrar por projeto
-    # descartaria ~75% do custo). Por isso o modo desabilita os filtros na tela.
-    custo_cap: float | None = None
 
 
 class FinancialKpi(BaseModel):

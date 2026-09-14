@@ -121,10 +121,6 @@ export interface FinancialEvolutionPoint {
   custo_veiculos: number;
   lucro_operacional: number;
   lucro_liquido: number;
-  /** Modo Contas a Pagar: títulos lançados no mês, empresa inteira (sem filtro). */
-  custo_cap: number;
-  /** Derivado no cliente: faturamento − custo_cap. */
-  lucro_liquido_cap?: number;
 }
 
 export interface FinancialKpi {
