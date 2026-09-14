@@ -62,6 +62,22 @@ class MonthlyPoint(BaseModel):
     tax_amount_pct: float | None = 0
     overhead_amount_pct: float | None = 0
     anticipation_amount_pct: float | None = 0
+    # Antecipação do mês ainda pode subir: as operações do mês seguinte estão em andamento.
+    anticipation_partial: bool = False
+    # Antecipação por instituição (R$; soma = anticipation_amount) e origem da taxa
+    # (REAL | PARCIAL | MEDIA | FIXA | MISTO).
+    anticipation_by_institution: dict[str, float] | None = None
+    anticipation_source: str | None = None
+    # Mês fechado: mão de obra pela folha PAGA no CAP / frota pela fatura rateada paga.
+    labor_real: bool = False
+    vehicle_real: bool = False
+    # Tributos sobre a receita pelo regime da competência (None = percentual de reserva).
+    tax_regime: str | None = None
+    tax_pis: float | None = 0
+    tax_cofins: float | None = 0
+    tax_iss: float | None = 0
+    tax_irpj: float | None = 0
+    tax_csll: float | None = 0
 
 
 class ProjectSummary(BaseModel):
@@ -97,6 +113,22 @@ class ProjectSummary(BaseModel):
     tax_amount_pct: float | None = 0
     overhead_amount_pct: float | None = 0
     anticipation_amount_pct: float | None = 0
+    # Antecipação do mês ainda pode subir: as operações do mês seguinte estão em andamento.
+    anticipation_partial: bool = False
+    # Antecipação por instituição (R$; soma = anticipation_amount) e origem da taxa
+    # (REAL | PARCIAL | MEDIA | FIXA | MISTO).
+    anticipation_by_institution: dict[str, float] | None = None
+    anticipation_source: str | None = None
+    # Mês fechado: mão de obra pela folha PAGA no CAP / frota pela fatura rateada paga.
+    labor_real: bool = False
+    vehicle_real: bool = False
+    # Tributos sobre a receita pelo regime da competência (None = percentual de reserva).
+    tax_regime: str | None = None
+    tax_pis: float | None = 0
+    tax_cofins: float | None = 0
+    tax_iss: float | None = 0
+    tax_irpj: float | None = 0
+    tax_csll: float | None = 0
 
 
 class DirectorSummary(BaseModel):
@@ -131,6 +163,22 @@ class DirectorSummary(BaseModel):
     tax_amount_pct: float | None = 0
     overhead_amount_pct: float | None = 0
     anticipation_amount_pct: float | None = 0
+    # Antecipação do mês ainda pode subir: as operações do mês seguinte estão em andamento.
+    anticipation_partial: bool = False
+    # Antecipação por instituição (R$; soma = anticipation_amount) e origem da taxa
+    # (REAL | PARCIAL | MEDIA | FIXA | MISTO).
+    anticipation_by_institution: dict[str, float] | None = None
+    anticipation_source: str | None = None
+    # Mês fechado: mão de obra pela folha PAGA no CAP / frota pela fatura rateada paga.
+    labor_real: bool = False
+    vehicle_real: bool = False
+    # Tributos sobre a receita pelo regime da competência (None = percentual de reserva).
+    tax_regime: str | None = None
+    tax_pis: float | None = 0
+    tax_cofins: float | None = 0
+    tax_iss: float | None = 0
+    tax_irpj: float | None = 0
+    tax_csll: float | None = 0
 
 
 class FinancialDashboardSummary(BaseModel):

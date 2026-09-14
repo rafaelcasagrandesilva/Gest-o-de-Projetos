@@ -53,7 +53,7 @@ class AdvanceBatchEditTests(unittest.IsolatedAsyncioTestCase):
             )
         ).scalars().all()
 
-    async def test_create_confirm_then_edit_updates_cap(self) -> None:
+    async def test_create_confirm_then_edit_keeps_cap_clean(self) -> None:
         from app.database.session import AsyncSessionLocal, engine
         from app.models.receivable_advance_batch import ReceivableAdvanceBatchStatus
         from app.services.receivable_advance_batch_service import ReceivableAdvanceBatchService
@@ -72,9 +72,8 @@ class AdvanceBatchEditTests(unittest.IsolatedAsyncioTestCase):
                 await svc.confirm_batch(batch_id=batch.id)
                 await s.flush()
                 self.assertEqual(batch.status, ReceivableAdvanceBatchStatus.OPEN)
-                titles = await self._bordero_titles(s, batch.id)
-                desagio = next(t for t in titles if "Deságio" in t.name)
-                self.assertEqual(float(desagio.amount_final), 5000.0)
+                # Deságio e tarifas já vêm descontados: nenhum título no Contas a Pagar.
+                self.assertEqual(await self._bordero_titles(s, batch.id), [])
                 # NFs marcadas como antecipadas.
                 await s.refresh(inv_a)
                 self.assertTrue(inv_a.is_anticipated)
@@ -89,10 +88,8 @@ class AdvanceBatchEditTests(unittest.IsolatedAsyncioTestCase):
                 await s.flush()
                 edited = await svc.get_batch(batch.id)
                 self.assertEqual(edited.status, ReceivableAdvanceBatchStatus.OPEN)
-                self.assertEqual(float(edited.discount_amount), 3000.0)
-                titles2 = await self._bordero_titles(s, batch.id)
-                desagio2 = next(t for t in titles2 if "Deságio" in t.name)
-                self.assertEqual(float(desagio2.amount_final), 3000.0)  # CAP atualizado
+                self.assertEqual(float(edited.discount_amount), 3000.0)  # o custo fica na operação
+                self.assertEqual(await self._bordero_titles(s, batch.id), [])  # CAP continua limpo
                 self.assertEqual(len(edited.items), 2)  # itens remontados
             finally:
                 await s.rollback()
@@ -127,38 +124,6 @@ class AdvanceBatchEditTests(unittest.IsolatedAsyncioTestCase):
                 # NF removida volta a não-antecipada (não está em outra operação).
                 await s.refresh(inv_b)
                 self.assertFalse(inv_b.is_anticipated)
-            finally:
-                await s.rollback()
-
-    async def test_edit_blocked_when_expense_paid(self) -> None:
-        from app.database.session import AsyncSessionLocal, engine
-        from app.services.receivable_advance_batch_service import ReceivableAdvanceBatchService
-        from app.services.payable_snapshot_service import PayableSnapshotService
-
-        await engine.dispose()
-        async with AsyncSessionLocal() as s:
-            await self._prelude(s)
-            try:
-                _proj, (inv_a, inv_b) = await self._setup_invoices(s)
-                svc = ReceivableAdvanceBatchService(s)
-                batch = await svc.create_batch(
-                    institution="LEPTA", received_amount=94_500.0, discount_amount=5_000.0,
-                    fee_amount=500.0, receive_date=date(2026, 6, 10), repayment_date=date(2026, 7, 10),
-                    observation=None, invoice_ids=[inv_a.id, inv_b.id], created_by_id=None,
-                )
-                await svc.confirm_batch(batch_id=batch.id)
-                await s.flush()
-                desagio = next(t for t in await self._bordero_titles(s, batch.id) if "Deságio" in t.name)
-                await PayableSnapshotService(s).register_payment(row=desagio, amount=5000.0, payment_date=TODAY)
-                await s.flush()
-                # Com despesa paga, editar é bloqueado (preserva histórico).
-                with self.assertRaises(ValueError):
-                    await svc.edit_batch(
-                        batch_id=batch.id, institution="LEPTA", received_amount=94_500.0,
-                        discount_amount=3_000.0, fee_amount=500.0, receive_date=date(2026, 6, 10),
-                        repayment_date=date(2026, 7, 10), observation=None,
-                        invoice_ids=[inv_a.id, inv_b.id],
-                    )
             finally:
                 await s.rollback()
 

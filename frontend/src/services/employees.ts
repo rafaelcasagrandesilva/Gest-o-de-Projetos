@@ -22,6 +22,10 @@ export interface Employee {
   cost_center: string | null;
   /** Todos os centros onde atua: o do cadastro + os das alocações ATIVAS. */
   cost_centers: string[];
+  /** Mão de obra na competência (derivada): em projeto, nos Custos Indiretos, ou nos dois. */
+  labor_kind?: "DIRETA" | "INDIRETA" | "DIRETA_E_INDIRETA" | null;
+  /** Projeto + Custos Indiretos passam de 100% no mês (custo contado em dobro). */
+  labor_over_allocated?: boolean;
   can_allocate_other_cost_centers: boolean;
   has_periculosidade: boolean;
   has_adicional_dirigida: boolean;

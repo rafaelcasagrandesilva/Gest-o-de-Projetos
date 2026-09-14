@@ -19,9 +19,9 @@ from app.models.receivable_advance_batch import (
     ReceivableAdvanceBatchItem,
     ReceivableAdvanceBatchStatus,
 )
-from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.schemas.receivable import CENT_TOL, derive_invoice_status
 from app.services.advance_operations import AdvanceOperationService
+from app.services.anticipation_rate import batch_advanced_and_cost
 from app.services.advance_repasse_ledger_service import AdvanceRepasseLedgerService
 from app.services.payable_snapshot_service import PayableSnapshotService
 from app.services.receivable_service import ReceivableService, get_affected_months
@@ -45,35 +45,6 @@ def _next_batch_number(existing: list[str], *, year: int) -> str:
         except ValueError:
             continue
     return f"{prefix}{max_seq + 1:04d}"
-
-
-_BATCH_DISCOUNT_SUFFIX = " — Deságio"
-_BATCH_FEE_SUFFIX = " — Tarifas bancárias"
-
-
-def _batch_payable_observation(operation_tag: str) -> str:
-    return f"Operação={operation_tag}"
-
-
-def _is_bordero_operation_payable(row: PayableSnapshot, *, operation_tag: str) -> bool:
-    """Linhas de deságio/tarifa criadas por borderô (MANUAL atual ou ANTECIPACAO legado)."""
-    obs = str(getattr(row, "observation", "") or "")
-    if _batch_payable_observation(operation_tag) not in obs:
-        return False
-    name = str(getattr(row, "name", "") or "")
-    return _BATCH_DISCOUNT_SUFFIX in name or _BATCH_FEE_SUFFIX in name
-
-
-def _row_belongs_to_batch(row: PayableSnapshot, *, batch_id: UUID, operation_tag: str) -> bool:
-    """Linha de Contas a Pagar pertencente à operação.
-
-    Detecta por `ref_id == batch_id` (lançamentos novos: deságio/tarifa/repasse,
-    todos vinculados) e, como fallback, pelo padrão legado de observação+nome
-    (linhas antigas com ref_id aleatório).
-    """
-    if getattr(row, "ref_id", None) == batch_id:
-        return True
-    return _is_bordero_operation_payable(row, operation_tag=operation_tag)
 
 
 def _op_display_code(
@@ -361,122 +332,6 @@ class ReceivableAdvanceBatchService:
         ).scalars().all()
         return _next_batch_number(list(rows), year=year)
 
-    async def _find_batch_payable_line(
-        self,
-        payables: PayableSnapshotService,
-        *,
-        month: date,
-        operation_tag: str,
-        name_suffix: str,
-    ) -> PayableSnapshot | None:
-        comp = normalize_competencia(month)
-        for row in await payables.list_for_month(month=comp):
-            if not _is_bordero_operation_payable(row, operation_tag=operation_tag):
-                continue
-            if name_suffix in str(getattr(row, "name", "") or ""):
-                return row
-        return None
-
-    async def add_operation_payable_line(
-        self,
-        *,
-        batch: ReceivableAdvanceBatch,
-        month: date,
-        name: str,
-        amount: float,
-        due_date: date,
-        category: str = "Despesas financeiras",
-        cost_center: str = "Financeiro",
-        full_name: str | None = None,
-    ) -> None:
-        """Cria um lançamento em Contas a Pagar vinculado à operação (ref_id=batch.id).
-
-        Helper genérico de infraestrutura: qualquer Operation Handler pode gerar
-        efeitos de CAP sem conhecer os detalhes do snapshot. Garante o vínculo com
-        o borderô para rastreabilidade/auditoria/reversão (regra 8).
-
-        O tipo é `ANTECIPACAO_OPERACAO` (isolado da antecipação individual de NF; a UI
-        exibe "Antecipação"). `full_name` guarda o nome completo em `observation` para o
-        tooltip do CAP quando o `name` é apresentado de forma abreviada.
-        """
-        comp = normalize_competencia(month)
-        payables = PayableSnapshotService(self.db)
-        if not await payables.is_generated(month=comp):
-            await payables.get_or_create_for_month(
-                payment_month=comp,
-                sees_all_projects=True,
-                accessible_project_ids=None,
-            )
-        await payables.create_manual(
-            month=comp,
-            name=name,
-            category=category,
-            cost_center=cost_center,
-            amount=amount,
-            due_date=due_date,
-            snapshot_type=PayableSnapshotType.ANTECIPACAO_OPERACAO,
-            observation=(full_name or "").strip() or _batch_payable_observation(self._display_code(batch)),
-            ref_id=batch.id,
-        )
-
-    async def _ensure_payables_for_batch(
-        self,
-        *,
-        batch_number: str,
-        institution: str,
-        receive_date: date,
-        repayment_date: date,
-        discount_amount: float,
-        fee_amount: float,
-        batch_id: UUID | None = None,
-    ) -> None:
-        comp = normalize_competencia(receive_date)
-        payables = PayableSnapshotService(self.db)
-        if not await payables.is_generated(month=comp):
-            await payables.get_or_create_for_month(
-                payment_month=comp,
-                sees_all_projects=True,
-                accessible_project_ids=None,
-            )
-
-        inst = institution.strip()
-        obs = _batch_payable_observation(batch_number)
-
-        if discount_amount > 0.005:
-            if await self._find_batch_payable_line(
-                payables,
-                month=comp,
-                operation_tag=batch_number,
-                name_suffix=_BATCH_DISCOUNT_SUFFIX,
-            ) is None:
-                await payables.create_manual(
-                    month=comp,
-                    name=f"{inst}{_BATCH_DISCOUNT_SUFFIX}",
-                    category="Despesas financeiras",
-                    cost_center="Financeiro",
-                    amount=discount_amount,
-                    due_date=receive_date,
-                    observation=obs,
-                    ref_id=batch_id,
-                )
-        if fee_amount > 0.005:
-            if await self._find_batch_payable_line(
-                payables,
-                month=comp,
-                operation_tag=batch_number,
-                name_suffix=_BATCH_FEE_SUFFIX,
-            ) is None:
-                await payables.create_manual(
-                    month=comp,
-                    name=f"{inst}{_BATCH_FEE_SUFFIX}",
-                    category="Despesas financeiras",
-                    cost_center="Financeiro",
-                    amount=fee_amount,
-                    due_date=receive_date,
-                    observation=obs,
-                    ref_id=batch_id,
-                )
-
     async def _revert_batch_effects(
         self,
         batch: ReceivableAdvanceBatch,
@@ -489,31 +344,15 @@ class ReceivableAdvanceBatchService:
 
         Núcleo ÚNICO compartilhado por Cancelar (→CANCELLED) e Editar (→DRAFT):
         - reversão específica da instituição (`on_cancel`);
-        - apaga as despesas automáticas do lote no CAP (BLOQUEIA se houver pagamento);
+        - estorna o crédito de repasse da operação;
         - recompõe o estado das NFs a partir das operações confirmadas remanescentes (N:N);
         - invalida os meses afetados. NUNCA apaga histórico.
+        A operação não tem despesas no Contas a Pagar (deságio e tarifas já vêm descontados do
+        valor creditado), então não há título a apagar nem pagamento a bloquear.
         `action` ("cancelar"/"editar") compõe apenas a mensagem de erro e o log.
         """
         handler = AdvanceOperationService(self).resolve(await self._profile_for_batch(batch))
         handler_extra_months = await handler.on_cancel(batch, log_user=log_user)
-
-        payables = PayableSnapshotService(self.db)
-        tag = _op_display_code(
-            batch_number=batch.batch_number,
-            operation_code=getattr(batch, "operation_code", None),
-            batch_id=batch.id,
-        )
-        candidates = []
-        for row in await payables.list_all():
-            if not _row_belongs_to_batch(row, batch_id=batch.id, operation_tag=tag):
-                continue
-            if float(getattr(row, "amount_paid", 0) or 0) > 0.005:
-                raise ValueError(
-                    f"Não é possível {action}: despesas do borderô já possuem pagamento registrado."
-                )
-            candidates.append(row)
-        for row in candidates:
-            await payables.delete_row(row=row)
 
         # Ledger de Repasse (Fase 1B): estorna o crédito da operação (simetria criar→crédito /
         # cancelar→estorno). BLOQUEIA se o repasse já foi consumido em liquidação — nesse caso o
@@ -594,26 +433,13 @@ class ReceivableAdvanceBatchService:
 
         Regras:
         - só permite se status=CANCELLED
-        - não permite se houver pagamentos nas despesas automáticas do borderô
+        (a operação não tem despesas no Contas a Pagar — deságio e tarifas já vêm descontados)
         """
         batch = await self.get_batch(batch_id)
         if batch is None:
             raise ValueError("Borderô não encontrado.")
         if batch.status != ReceivableAdvanceBatchStatus.CANCELLED:
             raise ValueError("Para excluir definitivamente, primeiro cancele o borderô.")
-
-        # Segurança extra: garantir que não ficou despesa com pagamento.
-        tag = _op_display_code(
-            batch_number=batch.batch_number,
-            operation_code=getattr(batch, "operation_code", None),
-            batch_id=batch.id,
-        )
-        payables = PayableSnapshotService(self.db)
-        for row in await payables.list_all():
-            if not _row_belongs_to_batch(row, batch_id=batch.id, operation_tag=tag):
-                continue
-            if float(getattr(row, "amount_paid", 0) or 0) > 0.005:
-                raise ValueError("Não é possível excluir: despesas do borderô já possuem pagamento registrado.")
 
         # O borderô já está CANCELADO — o estado das NFs já foi recomposto no cancelamento.
         # NÃO limpar `advance_batch_id` cegamente (poderia apagar o vínculo com outra
@@ -1081,16 +907,11 @@ class ReceivableAdvanceBatchService:
         disc = float(batch.discount_amount or 0)
         discount_percent = round((disc / gross) * 100.0, 2) if gross > 0.005 else None
         items_out: list[dict] = []
-        advanced_total = 0.0
-        has_advanced = False
         for item in batch.items or []:
             try:
                 inv = item.invoice
             except MissingGreenlet:
                 inv = None
-            if getattr(item, "advanced_amount", None) is not None:
-                advanced_total += float(item.advanced_amount or 0)
-                has_advanced = True
             items_out.append(
                 {
                     "id": item.id,
@@ -1135,18 +956,11 @@ class ReceivableAdvanceBatchService:
         # operações — e o que não foi cedido continua a receber, não é custo financeiro.
         # Usar o líquido integral inflava a taxa (ex.: 16,41% no lugar dos 6,44% reais).
         # É a mesma base dos cards de taxa efetiva (frontend/src/utils/advanceRates.ts);
-        # o fallback abaixo espelha o de lá, para operações antigas sem advanced_amount.
-        advanced_total = round(
-            advanced_total
-            if has_advanced
-            else float(batch.received_amount or 0) + float(batch.discount_amount or 0) + float(batch.fee_amount or 0),
-            2,
-        )
-        valor_recebido = float(batch.received_amount or 0)
-        finance_cost_amount = round(advanced_total - valor_recebido, 2) if advanced_total > 0.005 else None
-        finance_cost_percent = (
-            round((advanced_total - valor_recebido) / advanced_total * 100.0, 2) if advanced_total > 0.005 else None
-        )
+        # o fallback (em `batch_advanced_and_cost`) espelha o de lá, para operações antigas sem
+        # advanced_amount. A mesma função alimenta o custo automático de antecipação do motor.
+        advanced_total, custo = batch_advanced_and_cost(batch)
+        finance_cost_amount = round(custo, 2) if custo is not None else None
+        finance_cost_percent = round(custo / advanced_total * 100.0, 2) if custo is not None else None
         return {
             "id": batch.id,
             "created_at": batch.created_at,

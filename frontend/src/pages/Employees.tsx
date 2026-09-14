@@ -21,6 +21,7 @@ import { isAxiosError } from "axios";
 import { EmployeeAssignments } from "@/components/employees/EmployeeAssignments";
 import { EmployeesOverviewCards } from "@/components/employees/EmployeesOverviewCards";
 import { CostCenterBadges } from "@/components/employees/CostCenterBadges";
+import { LaborKindBadge } from "@/components/employees/LaborKindBadge";
 import { usePermission } from "@/hooks/usePermission";
 import { useAuxiliaryResource } from "@/hooks/useAuxiliaryResource";
 import { TruncatedCell } from "@/components/TruncatedText";
@@ -918,7 +919,12 @@ export function Employees() {
                     <td className="min-w-0 max-w-[220px] px-4 py-3 align-middle text-slate-600">
                       <TruncatedCell value={emp.role_title} maxWidthClass="max-w-[220px]" />
                     </td>
-                    <td className="px-4 py-3">{emp.employment_type}</td>
+                    <td className="px-4 py-3">
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {emp.employment_type}
+                        <LaborKindBadge employee={emp} />
+                      </span>
+                    </td>
                     <td className="px-4 py-3 align-middle">
                       <CostCenterBadges employee={emp} />
                     </td>

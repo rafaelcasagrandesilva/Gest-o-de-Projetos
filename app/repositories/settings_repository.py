@@ -11,7 +11,14 @@ class SystemSettingsRepository:
         self.session = session
 
     async def get_singleton(self) -> SystemSettings | None:
-        res = await self.session.execute(select(SystemSettings).limit(1))
+        # Deveria haver UMA linha, mas bancos já nasceram com duplicata (duas criações
+        # simultâneas no primeiro acesso). Sem ORDER BY o Postgres devolvia qualquer uma —
+        # inclusive a zerada, que nunca foi editada. Vale a última editada, sempre a mesma.
+        res = await self.session.execute(
+            select(SystemSettings)
+            .order_by(SystemSettings.updated_at.desc(), SystemSettings.created_at.desc())
+            .limit(1)
+        )
         return res.scalar_one_or_none()
 
     async def add(self, row: SystemSettings) -> SystemSettings:

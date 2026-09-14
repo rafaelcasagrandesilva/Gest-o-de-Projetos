@@ -93,6 +93,7 @@ export const ALL_PERMISSION_CODES: string[] = [
   "indicators.read", "indicators.sensitive",
   "dashboard.read", "dashboard.sensitive",
   "financial_dashboard.read", "financial_dashboard.sensitive",
+  "company_result.read", "company_result.sensitive",
   "reports.read",
   "settings.read", "settings.update",
   "alerts.read",
@@ -151,6 +152,7 @@ export const NEW_PERMISSION_CODES: string[] = [
   "indicators.read", "indicators.sensitive",
   "dashboard.read", "dashboard.sensitive",
   "financial_dashboard.read", "financial_dashboard.sensitive",
+  "company_result.read", "company_result.sensitive",
   "reports.read",
   "settings.read", "settings.update",
   "alerts.read",
@@ -180,6 +182,8 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "dashboard.director": "Dashboard diretoria",
   "financial_dashboard.read": "Dashboard financeiro · Visualizar",
   "financial_dashboard.sensitive": "Dashboard financeiro · Dados sensíveis",
+  "company_result.read": "Resultado da Empresa · Visualizar",
+  "company_result.sensitive": "Resultado da Empresa · Dados sensíveis",
   "payables.view": "Contas a pagar (visualizar)",
   "payables.edit": "Contas a pagar (editar)",
   "receivables.view": "Contas a receber (visualizar)",
@@ -383,13 +387,14 @@ export const RESOURCE_LABELS: Record<string, string> = {
   invoices: "Notas fiscais",
   debts: "Endividamento",
   // "Custos" gate a API de custos de projeto/rateio corporativo (/costs/*). "Finanças da
-  // empresa" controla a tela "Custos Fixos - Matriz" — rótulos alinhados às funcionalidades.
+  // empresa" controla a tela "Custos Indiretos" — rótulos alinhados às funcionalidades.
   costs: "Custos de projeto (rateio)",
-  company_finance: "Finanças da empresa (Custos Fixos - Matriz)",
+  company_finance: "Finanças da empresa (Custos Indiretos)",
   billing: "Faturamento",
   dashboard: "Dashboard",
   financial_dashboard: "Dashboard financeiro",
   indicators: "Indicadores",
+  company_result: "Resultado da Empresa",
   reports: "Relatórios",
   alerts: "Alertas",
   audit: "Auditoria",
@@ -419,7 +424,7 @@ export const RESOURCE_LABELS: Record<string, string> = {
 export const RESOURCE_GROUPS: { label: string; resources: string[] }[] = [
   { label: "Cadastros", resources: ["employees", "vehicles", "assets", "projects", "cost_center"] },
   { label: "Financeiro", resources: ["financial_dashboard", "payables", "receivables", "invoices", "debts", "costs", "company_finance", "billing"] },
-  { label: "Gestão", resources: ["dashboard", "indicators", "reports", "alerts", "audit"] },
+  { label: "Gestão", resources: ["dashboard", "indicators", "company_result", "reports", "alerts", "audit"] },
   {
     label: "Jurídico",
     resources: ["legal_dashboard", "legal_cases", "legal_persons", "legal_companies", "legal_projects", "legal_reports"],
@@ -675,7 +680,9 @@ export function hasPermission(permissionNames: string[] | undefined, code: strin
     );
   }
   if (code === "workspace.indicators.access") {
-    return permissionNames.some((p) => ["indicators.view", "indicators.director"].includes(p));
+    return permissionNames.some((p) =>
+      ["indicators.view", "indicators.director", "company_result.read"].includes(p),
+    );
   }
   if (code === "workspace.legal.access") {
     // Qualquer permissão de QUALQUER menu do Jurídico abre o workspace (espelha
@@ -719,6 +726,8 @@ export const ROLE_PERMISSION_PRESET: Record<"ADMIN" | "GESTOR" | "CONSULTA", str
     "assets.view",
     "financial_dashboard.read",
     "financial_dashboard.sensitive",
+    "company_result.read",
+    "company_result.sensitive",
     // Modelo de verbos (equivalente a *.view legado): leitura + sensitive, sem CRUD.
     "employees.reference",
     "employees.list",

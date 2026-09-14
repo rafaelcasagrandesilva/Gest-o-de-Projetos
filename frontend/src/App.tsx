@@ -39,6 +39,7 @@ import { LegalAgenda } from "@/pages/legal/LegalAgenda";
 import { LegalPersons } from "@/pages/legal/LegalPersons";
 import { RoiOperacional } from "@/pages/indicators/RoiOperacional";
 import { EvolucaoFinanceira } from "@/pages/indicators/EvolucaoFinanceira";
+import { ResultadoEmpresa } from "@/pages/indicators/ResultadoEmpresa";
 
 function LegacyProjectDetailRedirect() {
   const { projectId } = useParams();
@@ -129,6 +130,7 @@ export default function App() {
 
               <Route path="indicators/roi" element={<RoiOperacional />} />
               <Route path="indicators/evolucao-financeira" element={<EvolucaoFinanceira />} />
+              <Route path="indicators/resultado-empresa" element={<ResultadoEmpresa />} />
 
               {/* Sem acesso a nenhuma tela do Workspace (dentro do Layout). */}
               <Route path="no-access" element={<WorkspaceNoAccess />} />

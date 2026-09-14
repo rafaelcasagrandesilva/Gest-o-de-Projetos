@@ -107,33 +107,12 @@ class LeptaOperationHandler(BaseOperationHandler):
         # 3. Marca as NFs como ANTECIPADA (comportamento comum).
         affected = await svc._mark_invoices_anticipated(batch, log_user=log_user)
 
-        # 4. Obrigações financeiras da operação no Contas a Pagar — todas com
-        #    competência/vencimento = DATA DE RECEBIMENTO e ref_id=batch.id (removidas
-        #    automaticamente no cancelamento por ref_id, como os demais efeitos).
+        # 4. Deságio e tarifas NÃO vão para o Contas a Pagar: já vêm descontados do valor
+        #    creditado (líquido = antecipados − deságio − tarifas) — não há o que pagar. O custo
+        #    fica registrado na própria operação (discount_amount/fee_amount) e é dali que sai a
+        #    taxa de antecipação dos dashboards.
         comp = normalize_competencia(batch.receive_date)
         display = svc._display_code(batch)  # número interno do SGC
-        discount = round(float(batch.discount_amount or 0), 2)
-        fee = round(float(batch.fee_amount or 0), 2)
-
-        # Nomes curtos para a coluna Nome (largura fixa); o nome completo vai no tooltip.
-        if discount > 0.005:
-            await svc.add_operation_payable_line(
-                batch=batch,
-                month=batch.receive_date,
-                name=f"Deságio • SGC {display}",
-                full_name=f"Deságio - Operação SGC {display}",
-                amount=discount,
-                due_date=batch.receive_date,
-            )
-        if fee > 0.005:
-            await svc.add_operation_payable_line(
-                batch=batch,
-                month=batch.receive_date,
-                name=f"Tarifas • SGC {display}",
-                full_name=f"Tarifas bancárias - Operação SGC {display}",
-                amount=fee,
-                due_date=batch.receive_date,
-            )
         # Repasse (Fase 1B): NÃO gera mais Contas a Pagar — credita o Ledger de Repasse
         # (append-only, por instituição). O estorno acontece no `_revert_batch_effects`
         # (cancelar/editar), mantendo a simetria criar→crédito / cancelar→estorno.

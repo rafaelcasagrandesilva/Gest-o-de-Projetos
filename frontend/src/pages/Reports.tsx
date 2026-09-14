@@ -31,7 +31,7 @@ const REPORT_GROUPS: { label: string; reports: ReportDef[] }[] = [
       { id: "invoices", label: "Notas fiscais — resumo (legado)", perm: "invoices.read" },
       { id: "antecipacoes", label: "Antecipações — Operações e Liquidações", perm: "invoices.read" },
       { id: "debt", label: "Endividamento — matriz mensal", perm: "debts.read" },
-      { id: "fixed_costs", label: "Custos fixos (empresa) — matriz mensal", perm: "company_finance.read" },
+      { id: "fixed_costs", label: "Custos indiretos — matriz mensal", perm: "company_finance.read" },
       { id: "revenues", label: "Receitas lançadas (faturamento)", perm: "billing.read" },
     ],
   },

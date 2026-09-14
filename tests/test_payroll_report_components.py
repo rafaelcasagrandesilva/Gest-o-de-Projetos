@@ -38,9 +38,10 @@ class DisplayGroupTests(unittest.TestCase):
         )
 
     def test_fixed_cost_custo_fixo_is_NOT_folha(self) -> None:
+        # Categoria gravada continua "Custo Fixo"; a tela a exibe como "Custo Indireto".
         self.assertFalse(is_collaborator_payroll(type_=PayableSnapshotType.FIXED_COST, category="Custo Fixo"))
         self.assertEqual(
-            payable_display_group(type_=PayableSnapshotType.FIXED_COST, category="Custo Fixo"), "Custo Fixo"
+            payable_display_group(type_=PayableSnapshotType.FIXED_COST, category="Custo Fixo"), "Custo Indireto"
         )
 
     def test_manual_is_NOT_folha(self) -> None:

@@ -149,7 +149,8 @@ class ImplicationTests(unittest.TestCase):
             self.assertIn(c, ACTIVE_PERMISSION_CODES, f"{c} deveria estar ativo")
         # `*.sensitive` segue INATIVO, EXCETO os módulos cujo eixo Dados Sensíveis já foi ativado
         # (omissão no backend + ocultação no frontend): employees, vehicles, assets, o recurso
-        # próprio financial_dashboard (Dashboard Financeiro) e o Jurídico — módulo NOVO, que nasce
+        # próprio financial_dashboard (Dashboard Financeiro), o recurso próprio company_result
+        # (Resultado da Empresa) e o Jurídico — módulo NOVO, que nasce
         # com o eixo completo (`redact_for("legal_case"/"legal_person"/...)` no router).
         inactive = set(pc.NEW_PERMISSION_CODES) - set(ACTIVE_PERMISSION_CODES)
         expected_inactive = {
@@ -157,6 +158,7 @@ class ImplicationTests(unittest.TestCase):
         } - {
             pc.EMPLOYEES_SENSITIVE, pc.VEHICLES_SENSITIVE, pc.ASSETS_SENSITIVE,
             pc.FINANCIAL_DASHBOARD_SENSITIVE,
+            pc.COMPANY_RESULT_SENSITIVE,
             pc.LEGAL_CASES_SENSITIVE, pc.LEGAL_PERSONS_SENSITIVE,
         }
         self.assertEqual(inactive, expected_inactive)
@@ -165,6 +167,7 @@ class ImplicationTests(unittest.TestCase):
             pc.VEHICLES_SENSITIVE, pc.VEHICLES_EXPORT,
             pc.ASSETS_SENSITIVE,
             pc.FINANCIAL_DASHBOARD_READ, pc.FINANCIAL_DASHBOARD_SENSITIVE,
+            pc.COMPANY_RESULT_READ, pc.COMPANY_RESULT_SENSITIVE,
             *pc.LEGAL_MODULE_CODES,
         ):
             self.assertIn(code, ACTIVE_PERMISSION_CODES)

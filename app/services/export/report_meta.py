@@ -21,7 +21,7 @@ REPORT_TITLES: dict[str, str] = {
     "invoices": "Notas Fiscais - Resumo",
     "invoices_detailed": "Notas Fiscais - Detalhado",
     "debt": "Endividamento - Matriz Mensal",
-    "fixed_costs": "Custos Fixos - Matriz Mensal",
+    "fixed_costs": "Custos Indiretos - Matriz Mensal",
     "users": "Usuários do Sistema",
     "revenues": "Receitas Lançadas",
     "dashboard": "Dashboard - Série Mensal Receita, Custos e Margem",

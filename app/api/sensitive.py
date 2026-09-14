@@ -28,6 +28,7 @@ from app.core.permission_codes import (
     ASSETS_SENSITIVE,
     BILLING_SENSITIVE,
     COMPANY_FINANCE_SENSITIVE,
+    COMPANY_RESULT_SENSITIVE,
     COSTS_SENSITIVE,
     DASHBOARD_SENSITIVE,
     DEBTS_SENSITIVE,
@@ -193,6 +194,7 @@ DASHBOARD_MONEY_SENSITIVE_FIELDS: tuple[str, ...] = (
     "fixed_operational_cost", "tax_amount", "overhead_amount", "anticipation_amount",
     "labor_cost_pct", "vehicle_cost_pct", "system_cost_pct", "fixed_operational_cost_pct",
     "operational_cost_pct", "tax_amount_pct", "overhead_amount_pct", "anticipation_amount_pct",
+    "anticipation_by_institution", "tax_pis", "tax_cofins", "tax_iss", "tax_irpj", "tax_csll",
     "value",  # KPIRead.value
     "lucro_liquido_previsto", "lucro_liquido_realizado",  # wrapper FinancialDashboardSummary
 )
@@ -365,6 +367,31 @@ SENSITIVE_SPECS: dict[str, SensitiveSpec] = {
             ("groups", "financial_dashboard_group"),
             ("received_groups", "financial_dashboard_group"),
             ("paid_groups", "financial_dashboard_group"),
+        ),
+    ),
+    # --- Resultado da Empresa (company_result.sensitive) — Indicadores → /indicators/company-result ---
+    "company_result_month": SensitiveSpec(
+        COMPANY_RESULT_SENSITIVE,
+        (
+            "revenue", "direct_cost", "labor_cost", "vehicle_cost", "system_cost",
+            "fixed_operational_cost", "direct_open_cost", "anticipation_by_institution", "contribution_margin",
+            "tax_amount", "tax_rate",
+            "tax_pis", "tax_cofins", "tax_iss", "tax_irpj", "tax_csll", "profit_tax_amount", "anticipation_amount",
+            "anticipation_rate", "operational_profit", "retention", "available_profit",
+            "indirect_cost", "indirect_labor_cost", "indirect_supplier_cost", "indirect_open_cost",
+            "debt_cost", "debt_open_cost",
+            "company_result", "available_margin", "coverage", "break_even_revenue", "required_margin", "revenue_gap",
+        ),
+    ),
+    "company_result_amount": SensitiveSpec(COMPANY_RESULT_SENSITIVE, ("amount",)),
+    "company_result": SensitiveSpec(
+        COMPANY_RESULT_SENSITIVE, (),
+        nested=(
+            ("totals", "company_result_month"),
+            ("months", "company_result_month"),
+            ("indirect_by_category", "company_result_amount"),
+            ("indirect_items", "company_result_amount"),
+            ("debt_items", "company_result_amount"),
         ),
     ),
     # --- Indicadores (indicators.sensitive) ---

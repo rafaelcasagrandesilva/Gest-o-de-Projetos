@@ -1,5 +1,11 @@
 import { api } from "./api";
 
+/** Modo do "Rateio pela frota" (Custos Indiretos). */
+export type FleetAllocation = "LOCACAO" | "ADICIONAL";
+
+/** "Entra no projeto como": custo raiz do projeto em que o item soma. null = Fixos operacionais. */
+export type ProjectCostGroup = "MAO_DE_OBRA" | "VEICULOS" | "SISTEMAS" | "FIXOS";
+
 export type TipoFinanceiro = "endividamento" | "custo_fixo";
 export type RenegotiationType = "UNIQUE" | "INSTALLMENTS";
 
@@ -36,6 +42,10 @@ export interface CompanyFinancialItem {
   description?: string | null;
   recurrence?: string | null;
   is_monthly_required?: boolean;
+  /** Rateio pela frota (só custo fixo): LOCACAO substitui o custo dos veículos; ADICIONAL soma; null = sem rateio. */
+  fleet_allocation?: FleetAllocation | null;
+  /** "Entra no projeto como" (só custo fixo com centro de custo = projeto). null = Fixos operacionais. */
+  project_cost_group?: ProjectCostGroup | null;
   has_legal_process?: boolean;
   has_renegotiation?: boolean;
   renegotiated_amount?: number | null;
@@ -135,6 +145,10 @@ export async function createCompanyFinanceItem(payload: {
   legal_person_id?: string | null;
   percentual?: number | null;
   is_monthly_required?: boolean;
+  /** Rateio pela frota (só custo fixo): LOCACAO substitui o custo dos veículos; ADICIONAL soma; null = sem rateio. */
+  fleet_allocation?: FleetAllocation | null;
+  /** "Entra no projeto como" (só custo fixo com centro de custo = projeto). null = Fixos operacionais. */
+  project_cost_group?: ProjectCostGroup | null;
   has_legal_process?: boolean;
   has_renegotiation?: boolean;
   renegotiated_amount?: number | null;
@@ -170,6 +184,8 @@ export async function updateCompanyFinanceItem(
     legal_person_id?: string | null;
     percentual?: number | null;
     is_monthly_required?: boolean;
+    fleet_allocation?: FleetAllocation | null;
+    project_cost_group?: ProjectCostGroup | null;
     has_legal_process?: boolean;
     has_renegotiation?: boolean;
     renegotiated_amount?: number | null;

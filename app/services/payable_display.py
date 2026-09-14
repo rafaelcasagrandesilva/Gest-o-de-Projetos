@@ -29,23 +29,29 @@ PAYABLE_TYPE_LABELS: dict[str, str] = {
 COLLABORATOR_GROUP = "Colaborador"
 ENDIVIDAMENTO_GROUP = "Endividamento"
 
-# Categorias de FIXED_COST que a tela exibe pela própria categoria (custos gerados do
+# Categorias de FIXED_COST que a tela exibe por um rótulo próprio (custos gerados do
 # cadastro corporativo), em vez do rótulo do tipo — idêntico a `payableTipoLabel`.
-_FIXED_COST_CATEGORY_AS_LABEL = ("Custo Fixo", "Colaborador")
+# A categoria GRAVADA continua "Custo Fixo" (a geração do CAP casa por ela); só o texto
+# exibido acompanha o nome do menu, que passou a ser "Custos Indiretos".
+_FIXED_COST_CATEGORY_LABELS: dict[str, str] = {
+    "Custo Fixo": "Custo Indireto",
+    "Colaborador": "Colaborador",
+}
 
 
 def payable_display_group(*, type_: object, category: str | None) -> str:
     """Grupo EXIBIDO da linha no Contas a Pagar (o mesmo texto que aparece na coluna Tipo).
 
-    FIXED_COST com categoria "Custo Fixo"/"Colaborador" aparece pela categoria; os demais
-    pelo rótulo do tipo. Regra única — não interpretar nome/descrição.
+    FIXED_COST com categoria "Custo Fixo"/"Colaborador" aparece pelo rótulo da categoria
+    ("Custo Indireto"/"Colaborador"); os demais pelo rótulo do tipo. Regra única — não
+    interpretar nome/descrição.
     """
     type_value = getattr(type_, "value", type_)
     if (
         type_value == PayableSnapshotType.FIXED_COST.value
-        and category in _FIXED_COST_CATEGORY_AS_LABEL
+        and category in _FIXED_COST_CATEGORY_LABELS
     ):
-        return str(category)
+        return _FIXED_COST_CATEGORY_LABELS[category]
     return PAYABLE_TYPE_LABELS.get(str(type_value), str(type_value))
 
 

@@ -66,6 +66,7 @@ from app.models.project_operational import (
     ProjectVehicle,
 )
 from app.models.settings import SystemSettings
+from app.models.tax_regime import TaxRegimePeriod
 from app.models.permission import Permission, RolePermission, UserPermission
 from app.models.asset import Asset, AssetAssignment, AssetAttachment, AssetInspection
 from app.models.user import ProjectUser, Role, User, UserRole
@@ -146,6 +147,7 @@ __all__ = [
     "ProjectSystemCost",
     "ProjectVehicle",
     "SystemSettings",
+    "TaxRegimePeriod",
     "Permission",
     "ProjectUser",
     "Role",

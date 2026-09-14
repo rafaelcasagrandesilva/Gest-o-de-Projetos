@@ -48,7 +48,7 @@ export const WORKSPACE_MENUS: Record<WorkspaceName, WorkspaceMenuItem[]> = {
     { to: "/finance/advance-batches", label: "Antecipações", perm: "invoices.read" },
     { to: "/finance/advance-institutions", label: "Instituições de Antecipação", perm: "invoices.read" },
     { to: "/finance/debt", label: "Endividamento", perm: "debts.read" },
-    { to: "/finance/fixed-costs", label: "Custos Fixos - Matriz", perm: "company_finance.read" },
+    { to: "/finance/fixed-costs", label: "Custos Indiretos", perm: "company_finance.read" },
     { to: "/finance/reports", label: "Relatórios", perm: "reports.read" },
     SETTINGS_ITEM,
   ],
@@ -61,6 +61,7 @@ export const WORKSPACE_MENUS: Record<WorkspaceName, WorkspaceMenuItem[]> = {
   indicators: [
     { to: "/indicators/roi", label: "ROI Operacional", perm: "indicators.read" },
     { to: "/indicators/evolucao-financeira", label: "Evolução Financeira", perm: "indicators.read" },
+    { to: "/indicators/resultado-empresa", label: "Resultado da Empresa", perm: "company_result.read" },
   ],
   legal: [
     // O Painel do passivo abre o menu — e, por consequência, é a tela de entrada do workspace

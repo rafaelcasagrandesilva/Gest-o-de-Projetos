@@ -164,6 +164,18 @@ function nameCell(item: CompanyFinancialItem): React.ReactNode {
         </span>
       ) : null}
       {item.nome}
+      {item.fleet_allocation ? (
+        <span
+          className="ml-2 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-800 ring-1 ring-sky-200"
+          title={
+            item.fleet_allocation === "LOCACAO"
+              ? "Fatura de locação da frota: substitui o custo dos veículos e é dividida entre os projetos pelo custo mensal dos veículos de cada centro de custo; o restante é custo indireto."
+              : "Custo adicional da frota: dividido entre os projetos pelo custo mensal dos veículos de cada centro de custo e somado ao custo dos veículos; o restante é custo indireto."
+          }
+        >
+          {item.fleet_allocation === "LOCACAO" ? "Frota: locação" : "Frota: adicional"}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -538,7 +550,7 @@ export function CompanyFinanceAnalyticTable({
                     <td className="px-3 py-2 text-left">
                       <label
                         className={`inline-flex items-center gap-2 ${readOnly ? "cursor-not-allowed" : "cursor-pointer"}`}
-                        title={readOnly ? readOnlyTitle : "Marcar/desmarcar custo fixo obrigatório mensal"}
+                        title={readOnly ? readOnlyTitle : "Marcar/desmarcar custo indireto obrigatório mensal"}
                       >
                         <input
                           type="checkbox"

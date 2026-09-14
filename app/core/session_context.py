@@ -13,6 +13,7 @@ from app.core.permission_codes import (
     BILLING_VIEW,
     COMPANY_FINANCE_EDIT,
     COMPANY_FINANCE_VIEW,
+    COMPANY_RESULT_READ,
     COSTS_EDIT,
     COSTS_VIEW,
     DASHBOARD_DIRECTOR,
@@ -118,6 +119,7 @@ INDICATORS_WORKSPACE_PERMISSIONS = frozenset(
     {
         INDICATORS_VIEW,
         INDICATORS_DIRECTOR,
+        COMPANY_RESULT_READ,
     }
 )
 

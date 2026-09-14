@@ -13,6 +13,18 @@ from app.models.employee import Employee
 from app.models.project import Project
 
 
+# Modos de `CompanyFinancialItem.fleet_allocation` ("Rateio pela frota"). NULL = sem rateio.
+FLEET_ALLOCATION_RENTAL = "LOCACAO"  # fatura de locação: substitui o custo dos veículos
+FLEET_ALLOCATION_ADDITIONAL = "ADICIONAL"  # custo adicional (ex.: seguro): soma ao custo dos veículos
+
+# Grupos de `CompanyFinancialItem.project_cost_group` ("Entra no projeto como"). Só faz sentido
+# quando o centro de custo é um PROJETO. NULL = Fixos operacionais (padrão).
+PROJECT_COST_GROUP_LABOR = "MAO_DE_OBRA"  # soma na Mão de obra do projeto (ex.: plano de saúde)
+PROJECT_COST_GROUP_VEHICLES = "VEICULOS"  # soma nos Veículos do projeto (ex.: cartão combustível)
+PROJECT_COST_GROUP_SYSTEMS = "SISTEMAS"  # soma nos Sistemas do projeto
+PROJECT_COST_GROUP_FIXED = "FIXOS"  # soma nos Fixos operacionais do projeto (explícito)
+
+
 class RenegotiationType(str, Enum):
     UNIQUE = "UNIQUE"
     INSTALLMENTS = "INSTALLMENTS"
@@ -66,6 +78,23 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     is_monthly_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+
+    # Rateio pela frota (só custos fixos / "Custos Indiretos"). Modo com três estados:
+    #   - NULL: sem rateio pela frota (padrão) — o item é custo indireto.
+    #   - FLEET_ALLOCATION_RENTAL ("LOCACAO"): fatura de locação da frota — SUBSTITUI o custo dos
+    #     veículos e é dividida entre os projetos pelo custo mensal dos veículos de cada centro.
+    #   - FLEET_ALLOCATION_ADDITIONAL ("ADICIONAL"): custo adicional da frota (ex.: seguro) —
+    #     dividido do mesmo jeito e SOMADO ao custo dos veículos.
+    # O restante permanece como custo indireto. Endividamento é sempre NULL.
+    # CHECK ck_company_financial_items_fleet_allocation (migration 0137).
+    fleet_allocation: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # "Entra no projeto como" (só custos fixos / "Custos Indiretos"): em qual custo RAIZ do
+    # projeto o item soma (Mão de obra, Veículos, Sistemas ou Fixos operacionais). Só faz sentido
+    # quando o centro de custo é um projeto (`cost_center_project_id`); nos demais é ignorado.
+    # NULL = Fixos operacionais (padrão). Endividamento é sempre NULL.
+    # CHECK ck_company_financial_items_project_cost_group (migration 0139).
+    project_cost_group: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     # Ciclo de vida do cadastro. start_date = início; end_date = encerramento.
     # Inativo (is_active=False) não gera NOVOS lançamentos automáticos nem pendências,
