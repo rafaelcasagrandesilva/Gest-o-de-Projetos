@@ -17,11 +17,15 @@ export function PageSizeSelect({
   /** Rótulo ao lado do campo, tudo miúdo — para barras densas (o cabeçalho de uma pauta,
    *  por exemplo), onde a versão empilhada da barra de filtros roubaria a linha inteira. */
   compact = false,
+  /** Tamanhos oferecidos; padrão = `PAGE_SIZE_OPTIONS`. Uma tela pode oferecer os seus
+   *  (a pauta da reunião começa em 3, que cabe em notebook sem rolar o modal). */
+  options = PAGE_SIZE_OPTIONS,
 }: {
   value: PageSize;
   onChange: (size: PageSize) => void;
   label?: string;
   compact?: boolean;
+  options?: readonly PageSize[];
 }) {
   return (
     <label
@@ -39,7 +43,7 @@ export function PageSizeSelect({
             : "rounded-lg border border-slate-300 px-3 py-2 text-sm"
         }
       >
-        {PAGE_SIZE_OPTIONS.map((size) => (
+        {options.map((size) => (
           <option key={String(size)} value={String(size)}>
             {SIZE_LABEL(size)}
           </option>
