@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { isAxiosError } from "axios";
 import {
   createManualPayableSnapshot,
+  bulkDeleteManualPayables,
   deletePayableSnapshot,
   formatMonthToYYYYMM,
   listPayableSnapshots,
@@ -208,6 +209,10 @@ export function Payables() {
   const [regenerating, setRegenerating] = useState(false);
   const [reconciling, setReconciling] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // Exclusão em massa de lançamentos manuais.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   useEffect(() => {
     if (!canEdit) return;
@@ -250,6 +255,7 @@ export function Payables() {
     setEmptyMessage(null);
     setLoading(true);
     setRows([]);
+    setSelectedIds(new Set());
     try {
       const list =
         periodMode === "ALL" ? await listPayableSnapshots() : await listPayableSnapshots({ month: period });
@@ -361,6 +367,25 @@ export function Payables() {
   const { sortedRows, headerSort } = useTableSort(filteredRows, PAYABLE_SORT_COLUMNS, {
     defaultCompare: periodMode === "MONTH" ? defaultPayableOperationalSort : defaultPayableSort,
   });
+
+  // Exclusão em massa: só lançamentos MANUAIS visíveis nos filtros atuais podem ser selecionados.
+  const selectableManualIds = useMemo(
+    () => sortedRows.filter((r) => r.type === "MANUAL").map((r) => r.id),
+    [sortedRows],
+  );
+  const selectedRows = useMemo(
+    () => sortedRows.filter((r) => r.type === "MANUAL" && selectedIds.has(r.id)),
+    [sortedRows, selectedIds],
+  );
+  const selectedSummary = useMemo(() => {
+    const redacted = selectedRows.some((r) => r.amount_final == null);
+    const withPayment = selectedRows.filter((r) => (r.amount_paid ?? 0) > 0.005);
+    return {
+      total: redacted ? null : selectedRows.reduce((acc, r) => acc + (r.amount_final ?? 0), 0),
+      paidCount: withPayment.length,
+      paid: redacted ? null : withPayment.reduce((acc, r) => acc + (r.amount_paid ?? 0), 0),
+    };
+  }, [selectedRows]);
 
   const totals = useMemo(() => {
     // Sem "Dados sensíveis" o backend redige os valores (null) → totais ficam ocultos ("—"),
@@ -503,6 +528,40 @@ export function Payables() {
       else setError("Não foi possível excluir.");
     } finally {
       setModalBusy(false);
+    }
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllManual() {
+    setSelectedIds((prev) => {
+      const allSelected = selectableManualIds.length > 0 && selectableManualIds.every((id) => prev.has(id));
+      return allSelected ? new Set() : new Set(selectableManualIds);
+    });
+  }
+
+  async function confirmBulkDelete() {
+    if (!canEdit || selectedRows.length === 0) return;
+    setBulkBusy(true);
+    setError(null);
+    try {
+      await bulkDeleteManualPayables(selectedRows.map((r) => r.id));
+      if (editingId && selectedIds.has(editingId)) setEditingId(null);
+      setBulkDeleteOpen(false);
+      await load();
+    } catch (e) {
+      setBulkDeleteOpen(false);
+      if (isAxiosError(e)) setError(formatApiError(e));
+      else setError("Não foi possível excluir os lançamentos selecionados.");
+    } finally {
+      setBulkBusy(false);
     }
   }
 
@@ -655,6 +714,10 @@ export function Payables() {
     onRegisterPayment: openRegisterPayment,
     onReversePayment: openReversePayment,
     onDeleteManual: openDeleteManual,
+    selectedIds,
+    selectableManualIds,
+    onToggleSelect: toggleSelect,
+    onToggleSelectAll: toggleSelectAllManual,
   };
 
   return (
@@ -920,6 +983,38 @@ export function Payables() {
           Não foi possível carregar os dados.
         </div>
       ) : (
+        <>
+        {canEdit && selectedRows.length > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm">
+            <span className="text-slate-800">
+              <strong>{selectedRows.length}</strong>{" "}
+              {selectedRows.length === 1 ? "lançamento manual selecionado" : "lançamentos manuais selecionados"} ·{" "}
+              {formatBRL(selectedSummary.total)}
+              {selectedSummary.paidCount > 0 ? (
+                <span className="text-red-800">
+                  {" "}
+                  · {selectedSummary.paidCount} com pagamento registrado ({formatBRL(selectedSummary.paid)})
+                </span>
+              ) : null}
+            </span>
+            <span className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Limpar seleção
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkDeleteOpen(true)}
+                className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+              >
+                Excluir selecionados
+              </button>
+            </span>
+          </div>
+        ) : null}
         <PayablesSnapshotTable
           rows={sortedRows}
           headerSort={headerSort}
@@ -930,6 +1025,7 @@ export function Payables() {
           }
           {...tableProps}
         />
+        </>
       )}
 
       <PayablesImportModal
@@ -1104,6 +1200,51 @@ export function Payables() {
           </div>
         </div>
       )}
+
+      {bulkDeleteOpen && selectedRows.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bulk-del-modal-title"
+            className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-lg"
+          >
+            <h3 id="bulk-del-modal-title" className="text-lg font-semibold text-slate-900">
+              Excluir lançamentos manuais
+            </h3>
+            <p className="mt-2 text-sm text-slate-600">
+              Confirma a exclusão de <span className="font-medium text-slate-900">{selectedRows.length}</span>{" "}
+              {selectedRows.length === 1 ? "lançamento manual" : "lançamentos manuais"}, somando{" "}
+              <span className="font-medium text-slate-900">{formatBRL(selectedSummary.total)}</span>? Esta ação não
+              pode ser desfeita.
+            </p>
+            {selectedSummary.paidCount > 0 ? (
+              <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                {selectedSummary.paidCount} {selectedSummary.paidCount === 1 ? "tem" : "têm"} pagamento registrado (
+                {formatBRL(selectedSummary.paid)}). Os pagamentos serão excluídos junto.
+              </p>
+            ) : null}
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={bulkBusy}
+                onClick={() => setBulkDeleteOpen(false)}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={bulkBusy}
+                onClick={() => void confirmBulkDelete()}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {bulkBusy ? "Excluindo…" : `Excluir ${selectedRows.length}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1132,6 +1273,11 @@ type PayablesSnapshotTableProps = {
   onRegisterPayment: (r: PayableSnapshotRow) => void;
   onReversePayment: (r: PayableSnapshotRow) => void;
   onDeleteManual: (r: PayableSnapshotRow) => void;
+  /** Seleção para exclusão em massa (só lançamentos MANUAIS). */
+  selectedIds: Set<string>;
+  selectableManualIds: string[];
+  onToggleSelect: (id: string) => void;
+  onToggleSelectAll: () => void;
 };
 
 function PayablesSnapshotTable({
@@ -1157,12 +1303,33 @@ function PayablesSnapshotTable({
   onRegisterPayment,
   onReversePayment,
   onDeleteManual,
+  selectedIds,
+  selectableManualIds,
+  onToggleSelect,
+  onToggleSelectAll,
 }: PayablesSnapshotTableProps) {
+  const allManualSelected = selectableManualIds.length > 0 && selectableManualIds.every((id) => selectedIds.has(id));
+  const someManualSelected = selectableManualIds.some((id) => selectedIds.has(id));
   return (
     <div className="overflow-x-auto w-full rounded-xl border border-slate-200 bg-white shadow-sm">
       <table className="min-w-[1320px] w-full table-fixed divide-y divide-slate-200 text-sm">
         <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
           <tr>
+            <th className="w-[36px] px-2 py-2">
+              {canEdit && selectableManualIds.length > 0 ? (
+                <input
+                  type="checkbox"
+                  checked={allManualSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someManualSelected && !allManualSelected;
+                  }}
+                  onChange={onToggleSelectAll}
+                  title="Selecionar todos os lançamentos manuais visíveis"
+                  aria-label="Selecionar todos os lançamentos manuais visíveis"
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+              ) : null}
+            </th>
             <SortableTh label="Tipo" column="type" className="w-[90px] px-2 py-2" {...headerSort} />
             <SortableTh label="Nome" column="name" className="w-[280px] px-2 py-2" {...headerSort} />
             <SortableTh label="Competência" column="month" className="w-[110px] px-2 py-2" {...headerSort} />
@@ -1197,7 +1364,7 @@ function PayablesSnapshotTable({
         <tbody className="divide-y divide-slate-100">
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
+              <td colSpan={13} className="px-3 py-8 text-center text-slate-500">
                 {emptyLabel}
               </td>
             </tr>
@@ -1206,7 +1373,18 @@ function PayablesSnapshotTable({
               const isEditing = editingId === r.id;
               const temPago = (r.amount_paid ?? 0) > 0.005;
               return (
-                <tr key={r.id} className="hover:bg-slate-50/80">
+                <tr key={r.id} className={selectedIds.has(r.id) ? "bg-red-50/60" : "hover:bg-slate-50/80"}>
+                  <td className="px-2 py-1.5">
+                    {canEdit && r.type === "MANUAL" ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(r.id)}
+                        onChange={() => onToggleSelect(r.id)}
+                        aria-label={`Selecionar ${r.name}`}
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                    ) : null}
+                  </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-slate-700">{payableTipoLabel(r)}</td>
                   <td className="min-w-0 px-2 py-1.5 align-middle text-slate-900">
                     {/* Tooltip com o nome completo (obrigações de operação de antecipação
@@ -1406,14 +1584,16 @@ function PayablesSnapshotTable({
                             editingId === r.id ||
                             (r.is_obsolete
                               ? !canReconcile
-                              : !canEdit || r.type !== "MANUAL")
+                              : !canEdit || (r.type !== "MANUAL" && r.type !== "VEHICLE"))
                           }
                           onClick={() => onDeleteManual(r)}
                           className="rounded px-1.5 py-0.5 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                           title={
                             r.is_obsolete
                               ? "Excluir resíduo obsoleto (apenas sem pagamentos registrados)."
-                              : undefined
+                              : r.type === "VEHICLE"
+                                ? "Veículos no Contas a Pagar foi descontinuado: pode excluir quando não há pagamento ativo."
+                                : undefined
                           }
                         >
                           Excluir

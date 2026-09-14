@@ -64,6 +64,8 @@ from app.schemas.payable_import import (
 )
 from app.services.cost_center_alias_service import CostCenterAliasService
 from app.schemas.payables import (
+    PayableSnapshotBulkDelete,
+    PayableSnapshotBulkDeleteResult,
     PayableSnapshotManualCreate,
     PayableSnapshotReconcileResult,
     PayableSnapshotRegisterPaymentBody,
@@ -1297,6 +1299,43 @@ async def delete_payables_snapshot(
     await _ensure_payable_snapshot_edit_access(row=row, user=user, db=db)
     await svc.delete_row(row=row)
     await db.commit()
+
+
+@router.post(
+    "/payables/bulk-delete",
+    response_model=PayableSnapshotBulkDeleteResult,
+    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
+)
+async def bulk_delete_manual_payables(
+    payload: PayableSnapshotBulkDelete,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> PayableSnapshotBulkDeleteResult:
+    """Exclui de uma vez lançamentos MANUAIS — mesma regra e acesso da exclusão individual.
+
+    Tudo ou nada: se algum id não existir ou não for manual, nada é excluído. Os pagamentos
+    registrados nesses lançamentos saem junto (como na exclusão individual).
+    """
+    svc = FinanceService(db).payable_snapshots
+    ids = list(dict.fromkeys(payload.ids))
+    rows = await svc.get_by_ids(ids)
+    if len(rows) != len(ids):
+        raise HTTPException(
+            status_code=404,
+            detail=f"{len(ids) - len(rows)} lançamento(s) não encontrado(s). Atualize a tela e tente novamente.",
+        )
+    not_manual = [row for row in rows if row.type != PayableSnapshotType.MANUAL]
+    if not_manual:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A exclusão em massa aceita só lançamentos manuais ({len(not_manual)} selecionado(s) não são).",
+        )
+    for row in rows:
+        await _ensure_payable_snapshot_edit_access(row=row, user=user, db=db)
+    for row in rows:
+        await svc.delete_row(row=row)
+    await db.commit()
+    return PayableSnapshotBulkDeleteResult(deleted=len(rows))
 
 
 @router.post(
