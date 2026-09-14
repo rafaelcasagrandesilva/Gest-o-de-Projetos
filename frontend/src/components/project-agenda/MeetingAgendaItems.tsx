@@ -21,7 +21,11 @@ import {
 } from "@/services/projectAgenda";
 
 /** Menor tamanho de página oferecido: abaixo disso, paginar não tira nada da tela. */
-const MENOR_PAGINA = 5;
+const MENOR_PAGINA = 3;
+
+/** Padrão da pauta: a tabela mora DENTRO do modal, e num notebook de 13" dez linhas exigem
+ *  rolar a reunião inteira para achar o rodapé. Quem tem tela grande sobe no seletor. */
+const PAUTA_POR_PAGINA = 3;
 
 /**
  * Pauta de uma reunião — os itens tratados nela, no ritmo da reunião gerencial semanal.
@@ -88,7 +92,7 @@ export function MeetingAgendaItems({
   });
   /** A pauta da gerencial passou de dez itens e virou rolagem. Paginação é recorte de
    *  LEITURA: o contador do cabeçalho continua somando a pauta inteira. */
-  const paginacao = usePagination(itens, 10);
+  const paginacao = usePagination(itens, PAUTA_POR_PAGINA);
 
   const VAZIO = {
     title: "",

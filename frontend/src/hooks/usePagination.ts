@@ -14,7 +14,9 @@ import { useEffect, useMemo, useState } from "react";
 /** "ALL" = uma página só, com tudo (opção "Todas"). */
 export type PageSize = number | "ALL";
 
-export const PAGE_SIZE_OPTIONS: readonly PageSize[] = [5, 10, 15, 20, "ALL"];
+/** O 3 existe para telas dentro de modal (a pauta da reunião), onde num notebook de 13"
+ *  mesmo cinco linhas já passam da dobra. */
+export const PAGE_SIZE_OPTIONS: readonly PageSize[] = [3, 5, 10, 15, 20, "ALL"];
 
 export interface Pagination<T> {
   /** As linhas da página corrente — é isto que a tabela renderiza. */
