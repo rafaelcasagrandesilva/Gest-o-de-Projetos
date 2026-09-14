@@ -41,7 +41,7 @@ livre **participantes externos** — decisão do usuário, e evita inventar cada
 
 | Campo | Observação |
 |---|---|
-| `kind` | REUNIAO · OBRIGACAO · EVENTO · PRAZO · VISITA — **opções próprias da agenda de Projetos** |
+| `kind` | REUNIAO · OBRIGACAO · EVENTO · VISITA — **opções próprias da agenda de Projetos** (PRAZO removido em 09/2026: sem uso; a data-limite fica no campo "Prazo (opcional)") |
 | `title` | "Reunião de gestores", "Resposta da Vilela Advogados" |
 | `description` | o que se espera; texto livre |
 | `starts_at` | data e hora do compromisso (reunião/evento) |

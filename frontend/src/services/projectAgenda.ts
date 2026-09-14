@@ -7,7 +7,7 @@ import { api } from "@/services/api";
  * registros são exclusivos daqui (ver docs/ETAPA0_AGENDA_PROJETOS.md).
  */
 
-export type CommitmentKind = "REUNIAO" | "OBRIGACAO" | "EVENTO" | "PRAZO" | "VISITA";
+export type CommitmentKind = "REUNIAO" | "OBRIGACAO" | "EVENTO" | "VISITA";
 export type CommitmentStatus = "AGENDADO" | "CONCLUIDO" | "CANCELADO" | "ADIADO";
 export type CommitmentModality = "PRESENCIAL" | "VIRTUAL" | "HIBRIDA";
 
@@ -15,7 +15,6 @@ export const KIND_LABELS: Record<CommitmentKind, string> = {
   REUNIAO: "Reunião",
   OBRIGACAO: "Obrigação",
   EVENTO: "Evento",
-  PRAZO: "Prazo",
   VISITA: "Visita",
 };
 
@@ -24,7 +23,6 @@ export const KIND_STYLES: Record<CommitmentKind, string> = {
   REUNIAO: "bg-indigo-100 text-indigo-800 ring-indigo-200",
   OBRIGACAO: "bg-amber-100 text-amber-900 ring-amber-200",
   EVENTO: "bg-emerald-100 text-emerald-800 ring-emerald-200",
-  PRAZO: "bg-rose-100 text-rose-800 ring-rose-200",
   VISITA: "bg-sky-100 text-sky-800 ring-sky-200",
 };
 
