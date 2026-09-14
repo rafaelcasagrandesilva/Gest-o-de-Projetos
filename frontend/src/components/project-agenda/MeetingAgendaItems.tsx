@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { isAxiosError } from "axios";
 import { formatApiError } from "@/utils/apiError";
 import { PageSizeSelect, TablePager } from "@/components/table";
-import { usePagination } from "@/hooks/usePagination";
+import { usePagination, type PageSize } from "@/hooks/usePagination";
 import {
   addMeetingItem,
   deleteCommitment,
@@ -20,8 +20,11 @@ import {
   type MeetingOption,
 } from "@/services/projectAgenda";
 
-/** Menor tamanho de página oferecido: abaixo disso, paginar não tira nada da tela. */
-const MENOR_PAGINA = 5;
+/** Menor tamanho de página oferecido — e o PADRÃO: 3 itens cabem num notebook de 13" sem rolar
+ *  o modal. Pauta com até 3 itens se lê inteira e não mostra controle nenhum. */
+const MENOR_PAGINA = 3;
+/** Tamanhos da pauta: começa em 3 (as demais tabelas usam a lista padrão, a partir de 5). */
+const TAMANHOS_PAUTA: readonly PageSize[] = [3, 5, 10, 15, 20, "ALL"];
 
 /**
  * Pauta de uma reunião — os itens tratados nela, no ritmo da reunião gerencial semanal.
@@ -88,7 +91,7 @@ export function MeetingAgendaItems({
   });
   /** A pauta da gerencial passou de dez itens e virou rolagem. Paginação é recorte de
    *  LEITURA: o contador do cabeçalho continua somando a pauta inteira. */
-  const paginacao = usePagination(itens, 10);
+  const paginacao = usePagination(itens, MENOR_PAGINA);
 
   const VAZIO = {
     title: "",
@@ -221,6 +224,7 @@ export function MeetingAgendaItems({
               value={paginacao.pageSize}
               onChange={paginacao.setPageSize}
               label="Ver"
+              options={TAMANHOS_PAUTA}
               compact
             />
           ) : null}
