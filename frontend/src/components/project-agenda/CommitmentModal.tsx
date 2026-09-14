@@ -211,11 +211,6 @@ export function CommitmentModal({
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder={
-                kind === "OBRIGACAO"
-                  ? "Ex.: Resposta da Vilela Advogados"
-                  : "Ex.: Reunião de gestores"
-              }
               className="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
             />
           </label>
@@ -226,9 +221,6 @@ export function CommitmentModal({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
-              placeholder={
-                kind === "OBRIGACAO" ? "Ex.: Trazer o retorno do escritório sobre a renegociação." : "Opcional"
-              }
               className="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
             />
           </label>
@@ -261,7 +253,6 @@ export function CommitmentModal({
                     value={duracao}
                     onChange={(e) => setDuracao(e.target.value.replace(/\D/g, ""))}
                     inputMode="numeric"
-                    placeholder="60"
                     className="mt-1 block w-24 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
                   />
                 </label>
@@ -285,7 +276,6 @@ export function CommitmentModal({
                 <input
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
-                  placeholder="Sede, sala 2 — ou o link da chamada"
                   className="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
                 />
               </label>
@@ -488,7 +478,6 @@ export function CommitmentModal({
             <input
               value={externos}
               onChange={(e) => setExternos(e.target.value)}
-              placeholder="Quem não tem acesso ao sistema — ex.: Vilela Advogados"
               className="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
             />
           </label>

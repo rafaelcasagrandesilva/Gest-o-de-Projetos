@@ -419,7 +419,6 @@ export function MeetingAgendaItems({
               <input
                 value={rascunho.title}
                 onChange={(e) => setRascunho((r) => ({ ...r, title: e.target.value }))}
-                placeholder="Ex.: Processos Trabalhistas ENEL"
                 className="mt-1 block w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm"
               />
             </label>
@@ -430,7 +429,6 @@ export function MeetingAgendaItems({
                 onChange={(e) =>
                   setRascunho((r) => ({ ...r, external_participants: e.target.value }))
                 }
-                placeholder="Ex.: Dra. Débora"
                 className="mt-1 block w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm"
               />
             </label>
@@ -453,7 +451,6 @@ export function MeetingAgendaItems({
                 value={rascunho.description}
                 onChange={(e) => setRascunho((r) => ({ ...r, description: e.target.value }))}
                 rows={2}
-                placeholder="Ex.: João entrar em contato com a Dra. Débora"
                 className="mt-1 block w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm"
               />
             </label>

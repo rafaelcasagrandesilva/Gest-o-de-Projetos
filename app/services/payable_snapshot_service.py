@@ -3068,6 +3068,22 @@ class PayableSnapshotService:
             # removido (mantém coerência com Custos Fixos sem alterar a UI/renegociação).
             if row.entry_id is not None:
                 return await self.session.get(CompanyFinancialPayment, row.entry_id) is None
+            # Legado sem vínculo a lançamento (gerado pelo valor de referência antes da grade mês a
+            # mês): se a regra ATUAL não geraria título na competência — dívida não obrigatória e sem
+            # cronograma — e a grade não tem lançamento nesse mês, é resíduo (ex.: os R$ 19 mil do
+            # "Aluguel do Instituto" em 07/2026 quando a dívida só tem lançamentos a partir de 08/2026).
+            if not self._company_finance_item_eligible_for_comp(src, row.month):
+                entries = (
+                    await self.session.execute(
+                        select(func.count())
+                        .select_from(CompanyFinancialPayment)
+                        .where(
+                            CompanyFinancialPayment.item_id == src.id,
+                            CompanyFinancialPayment.competencia == normalize_competencia(row.month),
+                        )
+                    )
+                ).scalar_one()
+                return int(entries or 0) == 0
             return False
 
         return None

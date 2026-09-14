@@ -2361,15 +2361,23 @@ function FinanceItemCard({
   // NÃO faz autosave — o usuário digita livremente e só o botão "Salvar agora" persiste.
   const savedByMes = useMemo(() => {
     const m = new Map<string, number>();
-    for (const p of item.pagamentos) m.set(p.mes, p.valor ?? 0);
+    for (const p of item.pagamentos) if (p.valor != null) m.set(p.mes, p.valor);
     return m;
   }, [item.pagamentos]);
   const dirtyMonths = useMemo(() => {
     const s = new Set<string>();
     for (const mes of monthKeys) {
-      const cur = parseBRLInput(localPayments[mes] ?? "");
-      const saved = savedByMes.get(mes) ?? 0;
-      if (Math.abs(cur - saved) > 0.005) s.add(mes);
+      const texto = (localPayments[mes] ?? "").trim();
+      const saved = savedByMes.get(mes);
+      if (!texto) {
+        // Caixa vazia: só é alteração se o mês tinha lançamento salvo (limpar volta à referência).
+        if (saved !== undefined) s.add(mes);
+        continue;
+      }
+      // Valor digitado — inclusive ZERO, que declara "neste mês não se paga nada" e tira o título
+      // do Contas a Pagar. Antes o zero digitado num mês sem lançamento era lido como "sem mudança"
+      // (0 == 0) e o botão Salvar ficava desabilitado, então não havia como declarar o zero.
+      if (saved === undefined || Math.abs(parseBRLInput(texto) - saved) > 0.005) s.add(mes);
     }
     return s;
   }, [monthKeys, localPayments, savedByMes]);

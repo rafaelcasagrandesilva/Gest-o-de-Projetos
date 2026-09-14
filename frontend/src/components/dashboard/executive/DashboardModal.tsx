@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * Modal quase full-screen reutilizável para "expandir" gráficos/painéis dos
@@ -11,6 +12,7 @@ export function DashboardModal({
   onClose,
   actions,
   children,
+  fullScreen = false,
 }: {
   open: boolean;
   title: ReactNode;
@@ -18,6 +20,8 @@ export function DashboardModal({
   /** controles à direita do cabeçalho (ex.: resetar zoom, toggles) */
   actions?: ReactNode;
   children: ReactNode;
+  /** Ocupa a janela inteira (sem margem nem backdrop visível) — "Tela cheia". */
+  fullScreen?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -36,16 +40,28 @@ export function DashboardModal({
 
   if (!open) return null;
 
-  return (
+  // Portal no <body>: dentro do layout da página, um ancestral com rolagem/transformação faz o
+  // `fixed` ficar relativo a ele e a "tela cheia" não cobre a janela inteira.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-3 sm:p-6"
+      className={
+        fullScreen
+          ? "fixed inset-0 z-50 flex bg-white"
+          : "fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-3 sm:p-6"
+      }
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
       role="dialog"
       aria-modal="true"
     >
-      <div className="flex h-full max-h-[94vh] w-full max-w-[96vw] flex-col rounded-xl border border-slate-200 bg-white shadow-xl">
+      <div
+        className={
+          fullScreen
+            ? "flex h-full w-full flex-col bg-white"
+            : "flex h-full max-h-[94vh] w-full max-w-[96vw] flex-col rounded-xl border border-slate-200 bg-white shadow-xl"
+        }
+      >
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
           <div className="flex flex-wrap items-center gap-2">
@@ -65,6 +81,7 @@ export function DashboardModal({
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

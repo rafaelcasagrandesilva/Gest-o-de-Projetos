@@ -39,15 +39,18 @@ export const MAIN_SERIES = [
 }>;
 
 /**
- * Modo "Contas a Pagar": o custo vem do CAP (todos os títulos lançados no mês, empresa
- * inteira) e o Lucro Líquido é derivado dele — Faturamento − Custos (CP). As séries do
- * modo normal ficam fora: misturar as duas origens de custo no mesmo gráfico faria o
- * leitor somar coisas que não se somam.
+ * Empresa inteira (todos os projetos, sem filtro de centro de custo): mesma fonte e regras do
+ * Resultado da Empresa (`/indicators/company-result`) — faturamento, custos diretos, custos
+ * indiretos, endividamento, lucro operacional e resultado da empresa. Os campos são montados
+ * pela página a partir dos meses do Resultado da Empresa.
  */
-export const CAP_SERIES = [
+export const COMPANY_SERIES = [
   { id: "faturamento", name: "Faturamento", field: "faturamento", color: CHART_COLORS.faturamento },
-  { id: "custoCap", name: "Custos (Contas a Pagar)", field: "custo_cap", color: CHART_COLORS.custos },
-  { id: "lucroLiquidoCap", name: "Lucro Líquido (CP)", field: "lucro_liquido_cap", color: NET_PROFIT_COLOR },
+  { id: "custoDireto", name: "Custos Diretos", field: "custo_direto", color: CHART_COLORS.custos },
+  { id: "custoIndireto", name: "Custos Indiretos", field: "custo_indireto", color: "#ea580c" },
+  { id: "endividamento", name: "Endividamento", field: "endividamento", color: "#7c3aed" },
+  { id: "lucroOperacional", name: "Lucro Operacional", field: "lucro_operacional", color: CHART_COLORS.caixaPos },
+  { id: "resultadoEmpresa", name: "Resultado da Empresa", field: "resultado_empresa", color: "#0f172a" },
 ] as const satisfies ReadonlyArray<{
   id: string;
   name: string;
@@ -56,19 +59,24 @@ export const CAP_SERIES = [
 }>;
 
 export const MAIN_SERIES_IDS = MAIN_SERIES.map((s) => s.id);
-export const CAP_SERIES_IDS = CAP_SERIES.map((s) => s.id);
+export const COMPANY_SERIES_IDS = COMPANY_SERIES.map((s) => s.id);
 
-/** Só Faturamento, Custos e Lucro Operacional acesos; Lucro Líquido entra desligado. */
+/**
+ * Padrão de visibilidade: acesas só Faturamento, Custos (Diretos) e Lucro Operacional; as demais
+ * entram desligadas e o usuário liga pela legenda.
+ */
 export const DEFAULT_SERIES_VISIBILITY: Record<string, boolean> = {
   faturamento: true,
   custo: true,
   lucroOperacional: true,
   lucroLiquido: false,
-  custoCap: true,
-  lucroLiquidoCap: true,
+  custoDireto: true,
+  custoIndireto: false,
+  endividamento: false,
+  resultadoEmpresa: false,
 };
 const NAME_TO_ID = Object.fromEntries(
-  [...MAIN_SERIES, ...CAP_SERIES].map((s) => [s.name, s.id]),
+  [...MAIN_SERIES, ...COMPANY_SERIES].map((s) => [s.name, s.id]),
 );
 
 type SeriesSpec = { id: string; name: string; field: string; color: string };
@@ -96,7 +104,8 @@ export function FinancialEvolutionMainChart({
   height = 380,
   seriesCatalog,
 }: {
-  points: FinancialEvolutionPoint[];
+  /** Pontos mensais: `FinancialEvolutionPoint` (projetos) ou os campos de `COMPANY_SERIES`. */
+  points: ReadonlyArray<{ competencia: string }>;
   showAllValues: boolean;
   /** visibilidade por id de série (controlada pelo React) */
   selectedSeries: SeriesVisibility;
@@ -105,7 +114,7 @@ export function FinancialEvolutionMainChart({
   expanded?: boolean;
   onReady?: (instance: EChartsType) => void;
   height?: number | string;
-  /** Catálogo de séries: MAIN_SERIES (padrão) ou CAP_SERIES no modo Contas a Pagar. */
+  /** Catálogo de séries: MAIN_SERIES (projetos filtrados) ou COMPANY_SERIES (empresa inteira). */
   seriesCatalog?: ReadonlyArray<SeriesSpec>;
 }) {
   const option = useMemo<EChartsOption>(() => {
