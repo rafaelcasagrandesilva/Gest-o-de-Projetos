@@ -180,6 +180,12 @@ export async function deletePayableSnapshot(id: string): Promise<void> {
   await api.delete(`/financial/payables/${id}/`);
 }
 
+/** Exclui de uma vez lançamentos MANUAIS (tudo ou nada; pagamentos registrados saem junto). */
+export async function bulkDeleteManualPayables(ids: string[]): Promise<{ deleted: number }> {
+  const { data } = await api.post<{ deleted: number }>("/financial/payables/bulk-delete", { ids });
+  return data;
+}
+
 export interface PayableReconcileResult {
   month: string;
   checked: number;

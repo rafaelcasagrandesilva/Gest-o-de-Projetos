@@ -3213,6 +3213,11 @@ class PayableSnapshotService:
         if _money2(row.amount_paid) > 0:
             return False
 
+        # Veículos no CAP é integração descontinuada (nada mais cria VEHICLE): sem pagamento ativo,
+        # a sobra pode sair pela tela — antes só saía na regeração do mês, bloqueada com pagos.
+        if row.type == PayableSnapshotType.VEHICLE:
+            return True
+
         if await self.origin_is_missing(row=row) is True:
             return True
         return await self._has_duplicate_sibling(row=row)
@@ -3251,3 +3256,10 @@ class PayableSnapshotService:
     async def delete_row(self, *, row: PayableSnapshot) -> None:
         await self.session.delete(row)
         await self.session.flush()
+
+    async def get_by_ids(self, ids: list[UUID]) -> list[PayableSnapshot]:
+        """Títulos pelos ids (os inexistentes ficam de fora)."""
+        if not ids:
+            return []
+        stmt = select(PayableSnapshot).where(PayableSnapshot.id.in_(ids))
+        return list((await self.session.execute(stmt)).scalars().all())

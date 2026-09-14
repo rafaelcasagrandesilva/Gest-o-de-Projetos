@@ -132,6 +132,16 @@ class PayableSnapshotManualCreate(BaseModel):
         return normalize_competencia(v)
 
 
+class PayableSnapshotBulkDelete(BaseModel):
+    """Exclusão em massa de lançamentos MANUAIS do Contas a Pagar (tudo ou nada)."""
+
+    ids: list[UUID] = Field(..., min_length=1, max_length=500)
+
+
+class PayableSnapshotBulkDeleteResult(BaseModel):
+    deleted: int
+
+
 class PayableSnapshotReconcileResult(BaseModel):
     """Resumo da reconciliação de um snapshot mensal."""
 
