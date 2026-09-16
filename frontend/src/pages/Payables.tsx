@@ -1051,13 +1051,13 @@ export function Payables() {
             </h3>
             <p className="mt-1 text-sm text-slate-600">{actionModal.row.name}</p>
             <p className="mt-2 text-xs text-slate-500">
-              Valor final: <span className="font-medium text-slate-700">{money(actionModal.row.amount_final)}</span>
+              Valor final: <span className="font-medium tabular-nums text-slate-700">{money(actionModal.row.amount_final)}</span>
               {" · "}
-              Pago: <span className="font-medium text-slate-700">{money(actionModal.row.amount_paid)}</span>
+              Pago: <span className="font-medium tabular-nums text-slate-700">{money(actionModal.row.amount_paid)}</span>
               {" · "}
               Saldo:{" "}
               <span
-                className={`font-medium ${saldoClassName(
+                className={`font-medium tabular-nums ${saldoClassName(
                   actionModal.row.amount_remaining,
                   actionModal.row.is_overpaid,
                 )}`}
@@ -1071,12 +1071,12 @@ export function Payables() {
                 role="status"
               >
                 Pagamento acima do valor esperado. Adiantamento de{" "}
-                <span className="font-semibold">{formatBRL(modalOverpaymentPreview.overpaidAmount)}</span>
+                <span className="font-semibold tabular-nums">{formatBRL(modalOverpaymentPreview.overpaidAmount)}</span>
                 {modalOverpaymentPreview.newRemaining < -0.005 ? (
                   <>
                     {" "}
                     (saldo após pagamento:{" "}
-                    <span className="font-semibold">{formatBRL(modalOverpaymentPreview.newRemaining)}</span>)
+                    <span className="font-semibold tabular-nums">{formatBRL(modalOverpaymentPreview.newRemaining)}</span>)
                   </>
                 ) : null}
               </div>
@@ -1219,7 +1219,7 @@ export function Payables() {
             <p className="mt-2 text-sm text-slate-600">
               Confirma a exclusão de <span className="font-medium text-slate-900">{selectedRows.length}</span>{" "}
               {selectedRows.length === 1 ? "lançamento manual" : "lançamentos manuais"}, somando{" "}
-              <span className="font-medium text-slate-900">{formatBRL(selectedSummary.total)}</span>? Esta ação não
+              <span className="font-medium tabular-nums text-slate-900">{formatBRL(selectedSummary.total)}</span>? Esta ação não
               pode ser desfeita.
             </p>
             {selectedSummary.paidCount > 0 ? (

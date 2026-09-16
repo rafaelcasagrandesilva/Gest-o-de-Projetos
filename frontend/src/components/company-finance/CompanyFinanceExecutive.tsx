@@ -1688,7 +1688,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                 </div>
                 {selectedEmployee ? (
                   <p className="mt-1 text-xs text-slate-500">
-                    Base: <span className="font-medium text-slate-700">{formatBRL(selectedEmployee.total_cost)}</span>
+                    Base: <span className="font-medium tabular-nums text-slate-700">{formatBRL(selectedEmployee.total_cost)}</span>
                   </p>
                 ) : null}
               </label>
@@ -2602,7 +2602,7 @@ function FinanceItemCard({
             )}
             <div>
               <dt className="text-xs text-slate-500">Referência</dt>
-              <dd className="font-medium text-slate-900">{formatBRL(ref)}</dd>
+              <dd className="font-medium tabular-nums text-slate-900">{formatBRL(ref)}</dd>
             </div>
             {tipo === "custo_fixo" && (
               <div>
@@ -2613,22 +2613,22 @@ function FinanceItemCard({
             {isMatrixCollaborator && (
               <div>
                 <dt className="text-xs text-slate-500">Percentual</dt>
-                <dd className="font-medium text-slate-900">{typeof item.percentual === "number" ? `${item.percentual}%` : "—"}</dd>
+                <dd className="font-medium tabular-nums text-slate-900">{typeof item.percentual === "number" ? `${item.percentual}%` : "—"}</dd>
               </div>
             )}
             <div>
               <dt className="text-xs text-slate-500">{tipo === "endividamento" ? "Total pago" : "Total pago (hist.)"}</dt>
-              <dd className="font-medium text-slate-900">{formatCurrencyOrDash(item.total_pago)}</dd>
+              <dd className="font-medium tabular-nums text-slate-900">{formatCurrencyOrDash(item.total_pago)}</dd>
             </div>
             {tipo === "endividamento" && item.restante != null && (
               <div>
                 <dt className="text-xs text-slate-500">Restante</dt>
-                <dd className="font-medium text-slate-900">{formatCurrencyOrDash(item.restante)}</dd>
+                <dd className="font-medium tabular-nums text-slate-900">{formatCurrencyOrDash(item.restante)}</dd>
               </div>
             )}
             <div>
               <dt className="text-xs text-slate-500">Pago no mês</dt>
-              <dd className="font-medium text-slate-900">{formatCurrencyOrDash(item.pago_mes)}</dd>
+              <dd className="font-medium tabular-nums text-slate-900">{formatCurrencyOrDash(item.pago_mes)}</dd>
             </div>
           </dl>
           <div className="mt-3">
@@ -3129,7 +3129,7 @@ function FinanceItemCard({
                   <>
                     <div>
                       <dt className="text-xs text-slate-500">Valor renegociado</dt>
-                      <dd className="font-medium text-slate-900">
+                      <dd className="font-medium tabular-nums text-slate-900">
                         {typeof item.renegotiated_amount === "number" ? formatBRL(item.renegotiated_amount) : "—"}
                       </dd>
                     </div>
@@ -3141,11 +3141,11 @@ function FinanceItemCard({
                       <>
                         <div>
                           <dt className="text-xs text-slate-500">Parcelas</dt>
-                          <dd className="font-medium text-slate-900">{item.installment_count ?? "—"}</dd>
+                          <dd className="font-medium tabular-nums text-slate-900">{item.installment_count ?? "—"}</dd>
                         </div>
                         <div>
                           <dt className="text-xs text-slate-500">Valor da parcela</dt>
-                          <dd className="font-medium text-slate-900">
+                          <dd className="font-medium tabular-nums text-slate-900">
                             {typeof item.installment_value === "number" ? formatBRL(item.installment_value) : "—"}
                           </dd>
                         </div>
@@ -3198,7 +3198,7 @@ function FinanceItemCard({
                   </div>
                   <div>
                     <dt className="text-[10px] uppercase tracking-wide text-slate-500">Próxima parcela</dt>
-                    <dd className="text-sm font-medium text-slate-800">
+                    <dd className="text-sm font-medium tabular-nums text-slate-800">
                       {item.schedule.proxima_vencimento
                         ? `${item.schedule.proxima_vencimento.slice(8, 10)}/${item.schedule.proxima_vencimento.slice(5, 7)}/${item.schedule.proxima_vencimento.slice(0, 4)}`
                         : "—"}

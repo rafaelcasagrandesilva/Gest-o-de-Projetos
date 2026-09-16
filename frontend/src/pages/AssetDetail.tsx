@@ -546,7 +546,7 @@ export function AssetDetailPage() {
                   onChange={setPurchaseValueInput}
                 />
                 {canSeeSensitive && detail.purchase_value != null && detail.purchase_value > 0 ? (
-                  <p className="mt-1 text-xs text-slate-500">{formatBRL(detail.purchase_value)}</p>
+                  <p className="mt-1 text-xs tabular-nums text-slate-500">{formatBRL(detail.purchase_value)}</p>
                 ) : null}
               </label>
             ) : null}

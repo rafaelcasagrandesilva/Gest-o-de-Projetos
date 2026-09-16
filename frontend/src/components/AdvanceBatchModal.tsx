@@ -682,41 +682,46 @@ export function AdvanceBatchModal({
                 <span className="text-slate-500">Recebimento:</span> {formatDateBr(detail.receive_date)}
               </p>
               <p>
-                <span className="text-slate-500">Bruto:</span> {formatBRL(detail.gross_amount)}
+                <span className="text-slate-500">Bruto:</span> <span className="tabular-nums">{formatBRL(detail.gross_amount)}</span>
               </p>
               <p>
-                <span className="text-slate-500">Líquido:</span> {formatBRL(detail.received_amount)}
+                <span className="text-slate-500">Líquido:</span> <span className="tabular-nums">{formatBRL(detail.received_amount)}</span>
               </p>
               {detail.expected_amount != null ? (
                 <>
                   <p>
-                    <span className="text-slate-500">Previsto:</span> {formatBRL(detail.expected_amount)}
+                    <span className="text-slate-500">Previsto:</span> <span className="tabular-nums">{formatBRL(detail.expected_amount)}</span>
                   </p>
                   <p>
                     <span className="text-slate-500">Realizado:</span>{" "}
-                    {detail.actual_received_amount != null ? formatBRL(detail.actual_received_amount) : "—"}
+                    <span className="tabular-nums">{detail.actual_received_amount != null ? formatBRL(detail.actual_received_amount) : "—"}</span>
                   </p>
                   <p>
                     <span className="text-slate-500">Diferença:</span>{" "}
-                    {detail.actual_received_amount != null
-                      ? formatBRL(detail.actual_received_amount - detail.expected_amount)
-                      : "—"}
+                    <span className="tabular-nums">
+                      {detail.actual_received_amount != null
+                        ? formatBRL(detail.actual_received_amount - detail.expected_amount)
+                        : "—"}
+                    </span>
                   </p>
                 </>
               ) : null}
               {detail.repasse_amount != null ? (
                 <p>
-                  <span className="text-slate-500">Repasse:</span> {formatBRL(detail.repasse_amount)}
+                  <span className="text-slate-500">Repasse:</span> <span className="tabular-nums">{formatBRL(detail.repasse_amount)}</span>
                 </p>
               ) : null}
               {detail.expected_amount == null ? (
                 <>
                   <p>
-                    <span className="text-slate-500">Deságio:</span> {formatBRL(detail.discount_amount)}
-                    {detail.discount_percent != null ? ` (${detail.discount_percent}%)` : null}
+                    <span className="text-slate-500">Deságio:</span> 
+                    <span className="tabular-nums">
+                      {formatBRL(detail.discount_amount)}
+                      {detail.discount_percent != null ? ` (${detail.discount_percent}%)` : null}
+                    </span>
                   </p>
                   <p>
-                    <span className="text-slate-500">Tarifas:</span> {formatBRL(detail.fee_amount)}
+                    <span className="text-slate-500">Tarifas:</span> <span className="tabular-nums">{formatBRL(detail.fee_amount)}</span>
                   </p>
                 </>
               ) : null}
