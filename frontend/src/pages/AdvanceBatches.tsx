@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { isAxiosError } from "axios";
 import { AdvanceBatchModal } from "@/components/AdvanceBatchModal";
 import { AdvanceRateCards } from "@/components/AdvanceRateCards";
 import { AdvanceSettlementsTab } from "@/components/AdvanceSettlementsTab";
+import { AdvanceInstitutions } from "@/pages/AdvanceInstitutions";
 import { Money } from "@/components/Money";
 import { PeriodFilter, type PeriodMode } from "@/components/PeriodFilter";
 import { PageSizeSelect, SortableTh, TablePager } from "@/components/table";
@@ -33,6 +34,13 @@ const STATUS_META: Record<AdvanceBatchStatus, { label: string; cls: string }> = 
   CANCELLED: { label: "Cancelada", cls: "bg-slate-200 text-slate-700 ring-slate-300" },
 };
 
+type AdvanceTab = "operacoes" | "liquidacao" | "instituicoes";
+const TAB_LABELS: Record<AdvanceTab, string> = {
+  operacoes: "Operações",
+  liquidacao: "Liquidação de NFs",
+  instituicoes: "Instituições",
+};
+
 export function AdvanceBatches() {
   const canEditInvoices = usePermission("invoices.update");
   const navigate = useNavigate();
@@ -43,7 +51,11 @@ export function AdvanceBatches() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [viewBatchId, setViewBatchId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"operacoes" | "liquidacao">("operacoes");
+  // Instituições de Antecipação virou aba daqui (saiu do menu); `?aba=instituicoes` abre direto nela.
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<AdvanceTab>(() =>
+    searchParams.get("aba") === "instituicoes" ? "instituicoes" : "operacoes",
+  );
   // Ações da aba Liquidação, elevadas ao pai para ficarem na mesma linha das abas.
   const [mgmtOpen, setMgmtOpen] = useState(false);
   const [ledgerOpen, setLedgerOpen] = useState(false);
@@ -166,7 +178,7 @@ export function AdvanceBatches() {
       {/* Abas + ações na MESMA linha (aproveita o espaço do topo). */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-          {(["operacoes", "liquidacao"] as const).map((t) => (
+          {(["operacoes", "liquidacao", "instituicoes"] as const).map((t) => (
             <button
               key={t}
               type="button"
@@ -175,7 +187,7 @@ export function AdvanceBatches() {
                 tab === t ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
               }`}
             >
-              {t === "operacoes" ? "Operações" : "Liquidação de NFs"}
+              {TAB_LABELS[t]}
             </button>
           ))}
         </div>
@@ -222,7 +234,7 @@ export function AdvanceBatches() {
                 Extrato do Repasse
               </button>
             </>
-          ) : (
+          ) : tab === "instituicoes" ? null : (
             <>
               <button
                 type="button"
@@ -259,6 +271,8 @@ export function AdvanceBatches() {
           onCloseEvents={() => setEventsOpen(false)}
           refreshSignal={settlementsRefresh}
         />
+      ) : tab === "instituicoes" ? (
+        <AdvanceInstitutions embedded />
       ) : (
         <>
       {error && (

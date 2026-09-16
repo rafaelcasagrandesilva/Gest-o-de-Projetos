@@ -23,7 +23,8 @@ function emptyForm() {
   };
 }
 
-export function AdvanceInstitutions() {
+/** `embedded`: aba dentro de Antecipações — sem o título da página, só a ação. */
+export function AdvanceInstitutions({ embedded = false }: { embedded?: boolean }) {
   const canEdit = usePermission("invoices.update");
   const [rows, setRows] = useState<AdvanceInstitution[]>([]);
   const [loading, setLoading] = useState(true);
@@ -102,8 +103,8 @@ export function AdvanceInstitutions() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+      <div className={`flex items-start gap-3 ${embedded ? "justify-end" : "justify-between"}`}>
+        <div className={embedded ? "hidden" : undefined}>
           <h1 className="text-2xl font-semibold text-slate-900">Instituições de Antecipação</h1>
           <p className="mt-1 text-sm text-slate-600">
             Instituições financeiras usadas nas operações de antecipação. O perfil de operação define

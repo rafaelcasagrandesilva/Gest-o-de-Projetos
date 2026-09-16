@@ -16,62 +16,60 @@ export type WorkspaceMenuItem = {
   label: string;
   /** Permissão exigida para ver o item. Array = QUALQUER uma das permissões (any-of). */
   perm: string | string[];
+  /** Abreviação fixa com a sidebar recolhida; sem ela, iniciais do rótulo (até 3 letras). */
+  short?: string;
   /** NavLink `end` (match exato da rota). */
   end?: boolean;
 };
 
-// Item compartilhado "Configurações" (mesma regra usada hoje nas Sidebars: settings.view OU audit.export).
+// "Configurações" fica só no workspace Projetos: settings.read OU audit.export (quem só exporta auditoria chega à aba).
 const SETTINGS_ITEM: WorkspaceMenuItem = {
   to: "/settings",
   label: "Configurações",
-  perm: ["settings.view", "audit.export"],
+  perm: ["settings.read", "audit.export"],
   end: false,
 };
 
 export const WORKSPACE_MENUS: Record<WorkspaceName, WorkspaceMenuItem[]> = {
   projects: [
     { to: "/projects/dashboard", label: "Dashboard operacional", perm: "dashboard.read", end: true },
-    { to: "/projects/reports", label: "Relatórios", perm: "reports.read" },
-    { to: "/projects/agenda", label: "Agenda", perm: "project_agenda.list" },
     { to: "/projects/list", label: "Projetos", perm: "projects.list" },
-    { to: "/projects/users", label: "Usuários", perm: "users.manage" },
+    { to: "/projects/agenda", label: "Agenda", perm: "project_agenda.list" },
     { to: "/projects/employees", label: "Colaboradores", perm: "employees.read" },
     { to: "/projects/vehicles", label: "Veículos", perm: "vehicles.read" },
     { to: "/projects/revenue", label: "Faturamento", perm: "billing.read" },
+    { to: "/projects/reports", label: "Relatórios", perm: "reports.read" },
+    { to: "/projects/users", label: "Usuários", perm: "users.manage" },
     SETTINGS_ITEM,
   ],
   finance: [
-    { to: "/finance/dashboard", label: "Dashboard", perm: "financial_dashboard.read", end: true },
+    { to: "/finance/dashboard", label: "Dashboard", short: "DO", perm: "financial_dashboard.read", end: true },
     { to: "/finance/payables", label: "Contas a pagar", perm: "payables.read" },
     { to: "/finance/receivables", label: "Contas a receber", perm: "receivables.read" },
-    { to: "/finance/invoices", label: "Notas fiscais (NFs)", perm: "invoices.read" },
-    { to: "/finance/advance-batches", label: "Antecipações", perm: "invoices.read" },
-    { to: "/finance/advance-institutions", label: "Instituições de Antecipação", perm: "invoices.read" },
-    { to: "/finance/debt", label: "Endividamento", perm: "debts.read" },
+    { to: "/finance/invoices", label: "Notas fiscais (NFs)", short: "NF's", perm: "invoices.read" },
+    { to: "/finance/advance-batches", label: "Antecipações", short: "ANT", perm: "invoices.read" },
+    { to: "/finance/debt", label: "Endividamento", short: "END", perm: "debts.read" },
     { to: "/finance/fixed-costs", label: "Custos Indiretos", perm: "company_finance.read" },
     { to: "/finance/reports", label: "Relatórios", perm: "reports.read" },
-    SETTINGS_ITEM,
   ],
   assets: [
-    { to: "/assets/dashboard", label: "Dashboard", perm: "assets.list" },
-    { to: "/assets", label: "Patrimônio", perm: "assets.list", end: true },
-    { to: "/epis", label: "EPIs", perm: "assets.list", end: true },
-    SETTINGS_ITEM,
+    { to: "/assets/dashboard", label: "Dashboard", short: "DO", perm: "assets.list" },
+    { to: "/assets", label: "Patrimônio", short: "PTM", perm: "assets.list", end: true },
+    { to: "/epis", label: "EPIs", short: "EPIs", perm: "assets.list", end: true },
   ],
   indicators: [
     { to: "/indicators/roi", label: "ROI Operacional", perm: "indicators.read" },
     { to: "/indicators/evolucao-financeira", label: "Evolução Financeira", perm: "indicators.read" },
-    { to: "/indicators/resultado-empresa", label: "Resultado da Empresa", perm: "company_result.read" },
+    { to: "/indicators/resultado-empresa", label: "Resultado da Empresa", short: "RE", perm: "company_result.read" },
   ],
   legal: [
     // O Painel do passivo abre o menu — e, por consequência, é a tela de entrada do workspace
     // (a navegação inicial usa o primeiro item permitido).
-    { to: "/legal/dashboard", label: "Painel do passivo", perm: "legal_dashboard.read" },
-    { to: "/legal/central", label: "Central de Trabalho", perm: "legal_cases.list", end: true },
+    { to: "/legal/dashboard", label: "Painel do passivo", short: "DO", perm: "legal_dashboard.read" },
+    { to: "/legal/central", label: "Central de Trabalho", short: "CT", perm: "legal_cases.list", end: true },
     { to: "/legal/agenda", label: "Agenda", perm: "legal_cases.list" },
     { to: "/legal/cases", label: "Processos", perm: "legal_cases.list" },
     { to: "/legal/persons", label: "Desligados", perm: "legal_persons.list" },
-    { to: "/legal/reports", label: "Relatórios", perm: "legal_reports.read" },
     // Manutenção dos dados — exige poder ALTERAR alguma das quatro entidades, OU importar
     // (a aba Importações vive aqui dentro: sem `legal_imports.*` na lista, quem recebe só a
     // permissão de importar não teria como CHEGAR à tela). Só leitura não vê o menu.
@@ -86,6 +84,7 @@ export const WORKSPACE_MENUS: Record<WorkspaceName, WorkspaceMenuItem[]> = {
         "legal_imports.list", "legal_imports.create",
       ],
     },
+    { to: "/legal/reports", label: "Relatórios", perm: "legal_reports.read" },
   ],
 };
 

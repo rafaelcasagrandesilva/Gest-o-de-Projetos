@@ -10,7 +10,7 @@ export function FinanceSidebar() {
   return (
     <AppSidebarShell subtitle="Workspace: Financeiro">
       {visible.map((item) => (
-        <SidebarNavItem key={item.to} to={item.to} end={item.end ?? false} label={item.label} />
+        <SidebarNavItem key={item.to} to={item.to} end={item.end ?? false} label={item.label} short={item.short} />
       ))}
     </AppSidebarShell>
   );
