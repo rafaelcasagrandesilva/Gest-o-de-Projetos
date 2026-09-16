@@ -14,6 +14,8 @@ import {
 import { formatApiError } from "@/utils/apiError";
 import { formatCurrency, normalizeCurrencyForApi, sanitizeCurrencyTyping } from "@/utils/currency";
 import { Money } from "@/components/Money";
+import { PageSizeSelect, TablePager } from "@/components/table";
+import { usePagination } from "@/hooks/usePagination";
 
 function formatDateBr(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -91,13 +93,17 @@ export function RepasseLedgerModal({
     };
   }, [instId, refresh]);
 
-  const entries = useMemo(() => statement?.entries ?? [], [statement]);
+  // Mais recentes primeiro: a página 1 mostra o que aconteceu por último. `reverse` preserva a
+  // ordem do backend entre lançamentos do mesmo dia (só inverte o sentido).
+  const entries = useMemo(() => [...(statement?.entries ?? [])].reverse(), [statement]);
   const selectedInst = institutions.find((i) => i.id === instId);
+  // Mesma paginação das outras tabelas financeiras (o saldo vem do backend, não da página).
+  const pagination = usePagination(entries);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={onClose}>
       <div
-        className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white shadow-xl"
+        className="max-h-[92vh] w-full max-w-6xl overflow-y-auto rounded-xl bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between border-b border-slate-200 p-4">
@@ -111,21 +117,24 @@ export function RepasseLedgerModal({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
-          <label className="text-xs font-medium text-slate-600">
-            Instituição
-            <select
-              value={instId}
-              onChange={(e) => setInstId(e.target.value)}
-              className="mt-1 block w-56 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-            >
-              {institutions.length === 0 && <option value="">—</option>}
-              {institutions.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="text-xs font-medium text-slate-600">
+              Instituição
+              <select
+                value={instId}
+                onChange={(e) => setInstId(e.target.value)}
+                className="mt-1 block w-56 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+              >
+                {institutions.length === 0 && <option value="">—</option>}
+                {institutions.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <PageSizeSelect value={pagination.pageSize} onChange={pagination.setPageSize} />
+          </div>
           <div className="flex items-center gap-4">
             {canEdit && (
               <button
@@ -148,8 +157,8 @@ export function RepasseLedgerModal({
 
         {error && <div className="m-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>}
 
-        <div className="overflow-x-auto p-2">
-          <table className="w-full min-w-[640px] divide-y divide-slate-200 text-sm">
+        <div className="overflow-x-auto px-4 py-2">
+          <table className="w-full min-w-[860px] divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
               <tr>
                 <th className="px-2 py-2">Data</th>
@@ -173,7 +182,7 @@ export function RepasseLedgerModal({
                   </td>
                 </tr>
               ) : (
-                entries.map((e) => {
+                pagination.pageRows.map((e) => {
                   const isIn = e.direction === "CREDIT";
                   const reversed = Boolean(e.reversed_at);
                   const isWithdrawal = e.source_type === "WITHDRAWAL";
@@ -196,7 +205,7 @@ export function RepasseLedgerModal({
                       <td className={`px-2 py-1.5 ${isIn ? "text-emerald-700" : "text-red-700"}`}>
                         <Money value={e.amount} sign={isIn ? "+" : "−"} />
                       </td>
-                      <td className="max-w-[240px] px-2 py-1.5 text-slate-600">
+                      <td className="max-w-[520px] px-2 py-1.5 text-slate-600">
                         <div className="flex items-center gap-1.5">
                           {purposeLabel && (
                             <span className="inline-flex shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-900 ring-1 ring-amber-200">
@@ -241,6 +250,11 @@ export function RepasseLedgerModal({
             </tbody>
           </table>
         </div>
+        {loading ? null : (
+          <div className="px-4 pb-4">
+            <TablePager pagination={pagination} itemLabel="lançamentos" />
+          </div>
+        )}
       </div>
 
       {withdrawOpen && instId && (
