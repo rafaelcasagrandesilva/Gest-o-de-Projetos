@@ -687,7 +687,7 @@ export function ProjectDetailsModal({ open, projectId, projectName, canEdit, onC
                         <div className="mb-2 flex items-center justify-between">
                           <span className="text-xs font-semibold text-slate-700">Aditivo {idx + 1}</span>
                           {!canEdit ? (
-                            <span className="text-xs text-slate-500">{formatBRL(a.additive_value)}</span>
+                            <span className="text-xs tabular-nums text-slate-500">{formatBRL(a.additive_value)}</span>
                           ) : null}
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

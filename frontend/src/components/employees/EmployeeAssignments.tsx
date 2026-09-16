@@ -551,9 +551,9 @@ function AssignmentCard({
         {a.role_title ? <Info label="Cargo">{a.role_title}</Info> : null}
         {independente ? (
           <>
-            <Info label="Valor base">{formatCurrencyOrDash(a.salary_base)}</Info>
-            <Info label="Ajuda">{formatCurrencyOrDash(a.allowance)}</Info>
-            {a.hours_per_month != null ? <Info label="Horas/mês">{a.hours_per_month}</Info> : null}
+            <Info label="Valor base"><span className="tabular-nums">{formatCurrencyOrDash(a.salary_base)}</span></Info>
+            <Info label="Ajuda"><span className="tabular-nums">{formatCurrencyOrDash(a.allowance)}</span></Info>
+            {a.hours_per_month != null ? <Info label="Horas/mês"><span className="tabular-nums">{a.hours_per_month}</span></Info> : null}
           </>
         ) : null}
         {a.start_date ? (

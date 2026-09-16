@@ -458,7 +458,7 @@ export function FinancialDashboard() {
                     </p>
                     {row.name === "Caixa" && chartData[0] && chartData[0].faturamento > 0 && (
                       <p className="mt-0.5 text-xs text-slate-600">
-                        Margem: {formatPct((row.valor / chartData[0].faturamento) * 100)}
+                        Margem: <span className="tabular-nums">{formatPct((row.valor / chartData[0].faturamento) * 100)}</span>
                       </p>
                     )}
                   </li>
@@ -577,7 +577,7 @@ export function FinancialDashboard() {
                 </p>
                 {breakdown && (
                   <p className="mt-1 text-xs text-slate-600">
-                    Total: {formatBRL(breakdown.total)}
+                    Total: <span className="tabular-nums">{formatBRL(breakdown.total)}</span>
                   </p>
                 )}
               </div>

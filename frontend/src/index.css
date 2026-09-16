@@ -1,8 +1,22 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap");
+/* Números: DM Sans não tem algarismos tabulares — Inter tem (mesma largura por dígito). */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Todo valor numérico usa a classe `tabular-nums` (tabelas, cards, totais). Como o DM Sans ignora
+ * os algarismos tabulares, esses números passam a usar a Inter: valores da mesma grandeza ocupam
+ * a mesma largura e alinham do primeiro dígito à vírgula. O texto continua em DM Sans.
+ */
+@layer utilities {
+  .tabular-nums {
+    font-family: "Inter", "DM Sans", system-ui, sans-serif;
+    font-feature-settings: "tnum" 1;
+  }
+}
 
 body {
   @apply bg-slate-50 text-slate-900 antialiased;

@@ -673,12 +673,12 @@ function IndirectCostsCard({ data }: { data: CompanyResult }) {
             <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
               <p className="text-[11px] text-slate-500">Mão de obra indireta</p>
               <p className="text-base font-bold tabular-nums text-slate-900">{formatCurrencyShortOrDash(labor)}</p>
-              <p className="text-[11px] font-medium text-slate-500">{formatFraction(laborShare)}</p>
+              <p className="text-[11px] font-medium tabular-nums text-slate-500">{formatFraction(laborShare)}</p>
             </div>
             <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
               <p className="text-[11px] text-slate-500">Fornecedores e outros</p>
               <p className="text-base font-bold tabular-nums text-slate-900">{formatCurrencyShortOrDash(supplier)}</p>
-              <p className="text-[11px] font-medium text-slate-500">{formatFraction(shareOf(supplier, splitTotal))}</p>
+              <p className="text-[11px] font-medium tabular-nums text-slate-500">{formatFraction(shareOf(supplier, splitTotal))}</p>
             </div>
           </div>
           {laborShare != null ? (
