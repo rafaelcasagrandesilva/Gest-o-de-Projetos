@@ -33,31 +33,17 @@ _SUPERUSER_EMAIL = "rafael.casagrande@meconsulting.com.br"
 # a neutralidade vale para os códigos que existiam ANTES do modelo de verbos.
 _LEGACY_CODES = sorted(set(pc.ALL_PERMISSION_CODES) - set(pc.NEW_PERMISSION_CODES))
 
-# Conjuntos de derivação de workspace EXATAMENTE como em app/api/deps.py (oráculo do golden).
-# NB: o conjunto de finança aqui inclui payables.edit/receivables.edit — deps.py os inclui, ao
-# contrário de session_context.FINANCE_WORKSPACE_PERMISSIONS (inconsistência legada pré-existente).
-_DEPS_PROJECTS = {
-    pc.DASHBOARD_VIEW, pc.DASHBOARD_DIRECTOR, pc.PROJECTS_VIEW, pc.PROJECTS_VIEW_LIST,
-    pc.PROJECTS_VIEW_DETAIL, pc.PROJECTS_CREATE, pc.PROJECTS_EDIT, pc.PROJECTS_DELETE,
-    pc.EMPLOYEES_VIEW, pc.EMPLOYEES_EDIT, pc.VEHICLES_VIEW, pc.VEHICLES_EDIT, pc.BILLING_VIEW,
-    pc.COSTS_VIEW, pc.COSTS_EDIT, pc.REPORTS_VIEW, pc.REPORTS_EXPORT, pc.ALERTS_VIEW,
-    pc.SETTINGS_VIEW, pc.SETTINGS_EDIT, pc.USERS_MANAGE,
-}
-_DEPS_FINANCE = {
-    pc.PAYABLES_VIEW, pc.PAYABLES_EDIT, pc.RECEIVABLES_VIEW, pc.RECEIVABLES_EDIT, pc.INVOICES_VIEW,
-    pc.INVOICES_EDIT, pc.DEBTS_VIEW, pc.DEBTS_EDIT, pc.COMPANY_FINANCE_VIEW, pc.COMPANY_FINANCE_EDIT,
-    pc.REPORTS_VIEW, pc.REPORTS_EXPORT, pc.SETTINGS_VIEW, pc.SETTINGS_EDIT,
-}
-_DEPS_ASSETS = {pc.ASSETS_VIEW, pc.ASSETS_EDIT, pc.SETTINGS_VIEW, pc.SETTINGS_EDIT}
-_DEPS_INDICATORS = {pc.INDICATORS_VIEW, pc.INDICATORS_DIRECTOR}
-
-
-def _user(*perms: str, email: str = "verbs-test@example.com", roles: list[str] | None = None) -> SimpleNamespace:
-    """Usuário com adições individuais (user_permissions) e, opcionalmente, perfis por nome.
-
-    Para perfis, materializa role.permissions com o preset correspondente (vínculo vivo simulado).
+def _user(
+    *perms: str,
+    email: str = "verbs-test@example.com",
+    roles: list[str] | None = None,
+    removes: tuple[str, ...] = (),
+) -> SimpleNamespace:
+    """Usuário com adições individuais (user_permissions), remoções (granted=False) e, opcionalmente,
+    perfis por nome. Para perfis, materializa role.permissions com o preset correspondente.
     """
     ups = [SimpleNamespace(permission=SimpleNamespace(name=p), granted=True) for p in perms]
+    ups += [SimpleNamespace(permission=SimpleNamespace(name=p), granted=False) for p in removes]
     role_links = []
     for rn in roles or []:
         preset = pc.ROLE_PRESET.get(rn, frozenset())
@@ -66,9 +52,10 @@ def _user(*perms: str, email: str = "verbs-test@example.com", roles: list[str] |
     return SimpleNamespace(email=email, user_permissions=ups, roles=role_links, is_active=True)
 
 
-# --- Oráculo do resolvedor (Fase 1): replica app/api/deps.user_has_permission SEM atalhos de perfil.
-# Acesso vem só das permissões (fecho do grafo) + derivação de workspace. Sem ROLE ADMIN, sem e-mail
-# superusuário, sem system.admin liberando negócio (system.admin só implica funcionalidades de sistema).
+# --- Oráculo do resolvedor: replica app/api/deps.user_has_permission SEM atalhos de perfil.
+# Acesso vem só das permissões (fecho do grafo). Workspace só quando CONCEDIDO (sem dedução pelos menus)
+# e recurso exclusivo de workspace exige o acesso a ele. Sem ROLE ADMIN, sem e-mail superusuário, sem
+# system.admin liberando negócio (system.admin só implica funcionalidades de sistema).
 def _legacy_effective(user: SimpleNamespace) -> set[str]:
     adds = {up.permission.name for up in user.user_permissions if getattr(up, "granted", True) is not False}
     removes = {up.permission.name for up in user.user_permissions if getattr(up, "granted", True) is False}
@@ -80,20 +67,58 @@ def _legacy_effective(user: SimpleNamespace) -> set[str]:
 
 
 def _legacy_has(user: SimpleNamespace, code: str) -> bool:
+    names = expand_permissions(_legacy_effective(user))
     if code in EXPLICIT_GRANT_ONLY_PERMISSIONS:
-        return code in {up.permission.name for up in user.user_permissions if getattr(up, "granted", True) is not False}
-    names = _legacy_effective(user)
-    if code in expand_permissions(names):
-        return True
-    if code == WORKSPACE_PROJECTS_ACCESS and names & _DEPS_PROJECTS:
-        return True
-    if code == WORKSPACE_FINANCE_ACCESS and names & _DEPS_FINANCE:
-        return True
-    if code == WORKSPACE_ASSETS_ACCESS and names & _DEPS_ASSETS:
-        return True
-    if code == WORKSPACE_INDICATORS_ACCESS and names & _DEPS_INDICATORS:
-        return True
-    return False
+        granted = code in {up.permission.name for up in user.user_permissions if getattr(up, "granted", True) is not False}
+    else:
+        granted = code in names
+    if not granted:
+        return False
+    workspace = pc.workspace_required_for(code)
+    return workspace is None or workspace in names
+
+
+class WorkspaceAccessTests(unittest.TestCase):
+    """"Acessar" do workspace manda: só vale concedido e bloqueia os recursos exclusivos dele."""
+
+    def test_menus_do_not_grant_workspace(self):
+        u = _user(pc.INDICATORS_VIEW, pc.INDICATORS_DIRECTOR, pc.COMPANY_RESULT_READ)
+        self.assertFalse(user_has_permission(u, WORKSPACE_INDICATORS_ACCESS))
+        u = _user(pc.PAYABLES_VIEW, pc.SETTINGS_EDIT, pc.REPORTS_VIEW)
+        self.assertFalse(user_has_permission(u, WORKSPACE_FINANCE_ACCESS))
+        self.assertFalse(user_has_permission(u, WORKSPACE_ASSETS_ACCESS))
+        # Agenda deixou de abrir o workspace Projetos pelo grafo.
+        self.assertFalse(user_has_permission(_user(pc.PROJECT_AGENDA_UPDATE), WORKSPACE_PROJECTS_ACCESS))
+
+    def test_exclusive_resources_require_workspace(self):
+        sem = _user(pc.PAYABLES_READ, pc.COMPANY_RESULT_READ, pc.PROJECT_AGENDA_LIST, pc.DASHBOARD_READ)
+        for code in (pc.PAYABLES_READ, pc.COMPANY_RESULT_READ, pc.PROJECT_AGENDA_LIST, pc.DASHBOARD_READ):
+            self.assertFalse(user_has_permission(sem, code), f"{code} sem o workspace não vale")
+        com = _user(
+            pc.PAYABLES_READ, pc.COMPANY_RESULT_READ, pc.PROJECT_AGENDA_LIST, pc.DASHBOARD_READ,
+            WORKSPACE_FINANCE_ACCESS, WORKSPACE_INDICATORS_ACCESS, WORKSPACE_PROJECTS_ACCESS,
+        )
+        for code in (pc.PAYABLES_READ, pc.COMPANY_RESULT_READ, pc.PROJECT_AGENDA_LIST, pc.DASHBOARD_READ):
+            self.assertTrue(user_has_permission(com, code), f"{code} com o workspace vale")
+
+    def test_shared_lookups_do_not_require_workspace(self):
+        # Cadastros usados em mais de um workspace (combos do Financeiro) seguem só pela permissão.
+        u = _user(pc.PROJECTS_LIST, pc.EMPLOYEES_READ, pc.VEHICLES_READ, pc.SETTINGS_READ)
+        for code in (pc.PROJECTS_LIST, pc.EMPLOYEES_READ, pc.VEHICLES_READ, pc.SETTINGS_READ):
+            self.assertTrue(user_has_permission(u, code))
+
+    def test_unchecked_access_blocks_the_whole_workspace(self):
+        from app.core.session_context import accessible_workspaces, session_permission_names
+
+        u = _user(roles=["GESTOR"], removes=(WORKSPACE_INDICATORS_ACCESS,))
+        self.assertNotIn("indicators", accessible_workspaces(u))
+        for code in (pc.INDICATORS_READ, pc.INDICATORS_DIRECTOR, pc.COMPANY_RESULT_READ, pc.COMPANY_RESULT_SENSITIVE):
+            self.assertFalse(user_has_permission(u, code), f"{code} deveria sair com o workspace")
+        names = set(session_permission_names(u))
+        self.assertFalse({n for n in names if n.startswith(("indicators.", "company_result.", "workspace.indicators"))})
+        # Os demais workspaces do GESTOR seguem intactos.
+        self.assertTrue(user_has_permission(u, pc.PAYABLES_READ))
+        self.assertIn("finance", accessible_workspaces(u))
 
 
 class ImplicationTests(unittest.TestCase):

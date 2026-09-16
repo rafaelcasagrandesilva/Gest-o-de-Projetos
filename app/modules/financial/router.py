@@ -32,6 +32,8 @@ from app.core.permission_codes import (
     INVOICES_LIST,
     INVOICES_UPDATE,
     PAYABLES_LIST,
+    PAYABLES_CREATE,
+    PAYABLES_DELETE,
     PAYABLES_UPDATE,
     PAYABLE_SNAPSHOT_RECONCILE,
     RECEIVABLES_CREATE,
@@ -1243,7 +1245,7 @@ async def confirm_payables_import(
     return result
 
 
-@router.post("/payables", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(PAYABLES_UPDATE))])
+@router.post("/payables", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(PAYABLES_CREATE))])
 async def create_manual_payables_snapshot(
     payload: PayableSnapshotManualCreate,
     db: AsyncSession = Depends(get_db),
@@ -1275,7 +1277,7 @@ async def create_manual_payables_snapshot(
     return redact_for("payables", _snapshot_to_read(row), user)
 
 
-@router.delete("/payables/{snapshot_id}", status_code=204, dependencies=[Depends(require_permission(PAYABLES_UPDATE))])
+@router.delete("/payables/{snapshot_id}", status_code=204, dependencies=[Depends(require_permission(PAYABLES_DELETE))])
 async def delete_payables_snapshot(
     snapshot_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -1304,7 +1306,7 @@ async def delete_payables_snapshot(
 @router.post(
     "/payables/bulk-delete",
     response_model=PayableSnapshotBulkDeleteResult,
-    dependencies=[Depends(require_permission(PAYABLES_UPDATE))],
+    dependencies=[Depends(require_permission(PAYABLES_DELETE))],
 )
 async def bulk_delete_manual_payables(
     payload: PayableSnapshotBulkDelete,

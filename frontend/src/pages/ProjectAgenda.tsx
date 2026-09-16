@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { isAxiosError } from "axios";
 import { api } from "@/services/api";
 import { useAuth } from "@/context/AuthContext";
+import { hasPermission } from "@/permissions";
 import { formatApiError } from "@/utils/apiError";
 import { canPreviewInBrowser, saveBlobAsFile, viewFileInNewTab } from "@/utils/fileView";
 import { CommitmentModal } from "@/components/project-agenda/CommitmentModal";
@@ -119,7 +120,8 @@ function Chip({ c, onClick }: { c: Commitment; onClick: () => void }) {
 
 export function ProjectAgenda() {
   const { user } = useAuth();
-  const podeEditar = Boolean(user?.permission_names?.includes("project_agenda.create"));
+  // Mesma regra do resto do sistema (grafo + "Acessar" do workspace), não o nome cru na sessão.
+  const podeEditar = hasPermission(user?.permission_names, "project_agenda.create");
 
   const [vista, setVista] = useState<Vista>("mes");
   const [referencia, setReferencia] = useState(new Date());

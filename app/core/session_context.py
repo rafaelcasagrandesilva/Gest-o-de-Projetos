@@ -9,6 +9,7 @@ from app.core.permission_codes import (
     ACTIVE_PERMISSION_CODES,
     EXPLICIT_GRANT_ONLY_PERMISSIONS,
     expand_permissions,
+    workspace_required_for,
     ALERTS_VIEW,
     BILLING_VIEW,
     COMPANY_FINANCE_EDIT,
@@ -62,70 +63,9 @@ from app.repositories.projects import ProjectRepository
 SESSION_VERSION = 2
 WorkspaceName = Literal["projects", "finance", "assets", "indicators", "legal"]
 
-PROJECTS_WORKSPACE_PERMISSIONS = frozenset(
-    {
-        DASHBOARD_VIEW,
-        DASHBOARD_DIRECTOR,
-        PROJECTS_VIEW,
-        PROJECTS_VIEW_LIST,
-        PROJECTS_VIEW_DETAIL,
-        PROJECTS_CREATE,
-        PROJECTS_EDIT,
-        PROJECTS_DELETE,
-        EMPLOYEES_VIEW,
-        EMPLOYEES_EDIT,
-        VEHICLES_VIEW,
-        VEHICLES_EDIT,
-        BILLING_VIEW,
-        COSTS_VIEW,
-        COSTS_EDIT,
-        REPORTS_VIEW,
-        REPORTS_EXPORT,
-        ALERTS_VIEW,
-        SETTINGS_VIEW,
-        SETTINGS_EDIT,
-        USERS_MANAGE,
-    }
-)
-
-FINANCE_WORKSPACE_PERMISSIONS = frozenset(
-    {
-        FINANCIAL_DASHBOARD_READ,
-        PAYABLES_VIEW,
-        RECEIVABLES_VIEW,
-        INVOICES_VIEW,
-        INVOICES_EDIT,
-        DEBTS_VIEW,
-        DEBTS_EDIT,
-        COMPANY_FINANCE_VIEW,
-        COMPANY_FINANCE_EDIT,
-        REPORTS_VIEW,
-        REPORTS_EXPORT,
-        SETTINGS_VIEW,
-        SETTINGS_EDIT,
-    }
-)
-
-ASSETS_WORKSPACE_PERMISSIONS = frozenset(
-    {
-        ASSETS_VIEW,
-        ASSETS_EDIT,
-        SETTINGS_VIEW,
-        SETTINGS_EDIT,
-    }
-)
-
-INDICATORS_WORKSPACE_PERMISSIONS = frozenset(
-    {
-        INDICATORS_VIEW,
-        INDICATORS_DIRECTOR,
-        COMPANY_RESULT_READ,
-    }
-)
-
-# Espelha `permission_codes.LEGAL_WORKSPACE_GRANTING` (fonte única): qualquer permissão de
-# qualquer menu do Jurídico concede o acesso ao workspace.
-LEGAL_WORKSPACE_PERMISSIONS = LEGAL_WORKSPACE_GRANTING
+# Acesso a workspace: SÓ o `workspace.*.access` concedido (perfil/adição − remoção). Não é mais deduzido
+# das permissões dos menus — a dedução ignorava o "Acessar" desmarcado (migration 0144 tornou explícito
+# o acesso de quem o tinha por dedução).
 
 
 def role_names(user: User) -> list[str]:
@@ -188,30 +128,19 @@ def effective_permission_names(user: User) -> frozenset[str]:
     return frozenset((role_perms | adds) - removes)
 
 
-def _workspace_permission_from_module_permissions(names: frozenset[str], code: str) -> bool:
-    if code == WORKSPACE_PROJECTS_ACCESS:
-        return bool(names.intersection(PROJECTS_WORKSPACE_PERMISSIONS))
-    if code == WORKSPACE_FINANCE_ACCESS:
-        return bool(names.intersection(FINANCE_WORKSPACE_PERMISSIONS))
-    if code == WORKSPACE_ASSETS_ACCESS:
-        return bool(names.intersection(ASSETS_WORKSPACE_PERMISSIONS))
-    if code == WORKSPACE_INDICATORS_ACCESS:
-        return bool(names.intersection(INDICATORS_WORKSPACE_PERMISSIONS))
-    if code == WORKSPACE_LEGAL_ACCESS:
-        return bool(names.intersection(LEGAL_WORKSPACE_PERMISSIONS))
-    return False
-
-
 def user_has_permission(user: User, code: str, *, is_superuser: bool = False) -> bool:
-    # Fase 1: sem atalho por perfil (ADMIN), por e-mail (is_superuser) nem por system.admin liberando
-    # negócio. `is_superuser` mantido na assinatura por compat dos chamadores, mas NÃO concede bypass.
+    # Mesma regra de app/api/deps.user_has_permission. Sem atalho por perfil (ADMIN), por e-mail
+    # (is_superuser) nem por system.admin liberando negócio — `is_superuser` fica na assinatura só por
+    # compat dos chamadores. Workspace só concedido; recurso exclusivo exige o acesso ao workspace dele.
+    names = expand_permissions(effective_permission_names(user))
     if code in EXPLICIT_GRANT_ONLY_PERMISSIONS:
-        return code in permission_names_from_user(user)
-    names = effective_permission_names(user)
-    # Fecho transitivo do modelo de verbos (idêntico ao de app/api/deps.py); workspace logo abaixo.
-    if code in expand_permissions(names):
-        return True
-    return _workspace_permission_from_module_permissions(names, code)
+        granted = code in permission_names_from_user(user)
+    else:
+        granted = code in names
+    if not granted:
+        return False
+    workspace = workspace_required_for(code)
+    return workspace is None or workspace in names
 
 
 def accessible_workspaces(user: User, *, is_superuser: bool = False) -> list[WorkspaceName]:
@@ -236,6 +165,10 @@ def session_permission_names(user: User, *, is_superuser: bool = False) -> list[
     # NEUTRALIDADE: expõe ao frontend apenas códigos ATIVOS. Os códigos novos (modelo de verbos)
     # já podem estar semeados nos perfis, mas não entram na sessão até a etapa que ativa o módulo.
     names &= ACTIVE_PERMISSION_CODES
+    # Sem o acesso ao workspace, as permissões dos recursos exclusivos dele não chegam à tela
+    # (menus e botões somem junto com o workspace).
+    granted = expand_permissions(effective_permission_names(user))
+    names = {n for n in names if (ws := workspace_required_for(n)) is None or ws in granted}
     if user_has_permission(user, WORKSPACE_PROJECTS_ACCESS, is_superuser=is_superuser):
         names.add(WORKSPACE_PROJECTS_ACCESS)
     if user_has_permission(user, WORKSPACE_FINANCE_ACCESS, is_superuser=is_superuser):

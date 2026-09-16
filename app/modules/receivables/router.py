@@ -20,6 +20,7 @@ from app.api.deps import (
 from app.core.config import settings
 from app.core.permission_codes import (
     INVOICES_CREATE,
+    INVOICES_DELETE,
     INVOICES_LIST,
     INVOICES_REACTIVATE,
     INVOICES_UPDATE,
@@ -1053,7 +1054,7 @@ async def update_invoice(
     return await _invoice_read(svc, ReceivableAdvanceBatchService(db), loaded, prefix, actor)
 
 
-@invoices_router.delete("/{invoice_id}", status_code=204, dependencies=[Depends(require_permission(INVOICES_UPDATE))])
+@invoices_router.delete("/{invoice_id}", status_code=204, dependencies=[Depends(require_permission(INVOICES_DELETE))])
 async def delete_invoice(
     invoice_id: UUID,
     db: AsyncSession = Depends(get_db),

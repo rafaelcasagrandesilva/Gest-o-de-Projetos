@@ -712,8 +712,9 @@ function IndirectCostsCard({ data }: { data: CompanyResult }) {
                 </tr>
               </thead>
               <tbody>
-                {items.map((it) => (
-                  <tr key={it.item_id ?? `sem-item:${it.name}`} className="border-b border-slate-100 last:border-0">
+                {items.map((it, idx) => (
+                  // Sem permissão de Custos Indiretos os nomes chegam anônimos ("Item restrito"): a chave não pode depender só do nome.
+                  <tr key={it.item_id ?? `sem-item:${idx}:${it.name}`} className="border-b border-slate-100 last:border-0">
                     <td className="py-1.5 pr-3 text-slate-800">
                       <span className="inline-flex flex-wrap items-center gap-1.5">
                         {it.name}
@@ -783,8 +784,8 @@ function DebtCard({ data }: { data: CompanyResult }) {
               </tr>
             </thead>
             <tbody>
-              {data.debt_items.map((d) => (
-                <tr key={d.item_id} className="border-b border-slate-100 last:border-0">
+              {data.debt_items.map((d, idx) => (
+                <tr key={d.item_id ?? `sem-item:${idx}`} className="border-b border-slate-100 last:border-0">
                   <td className="py-1.5 pr-3 text-slate-800">{d.name}</td>
                   <td className="py-1.5 pr-3 text-slate-900">
                     <Money value={d.amount} />

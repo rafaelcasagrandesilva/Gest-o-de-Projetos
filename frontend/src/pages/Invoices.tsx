@@ -178,6 +178,7 @@ function emptyEditDraft(): EditDraft {
 
 export function Invoices() {
   const canEditInvoices = usePermission("invoices.update");
+  const canDeleteInvoices = usePermission("invoices.delete");
   const canReactivateInvoices = usePermission("invoices.reactivate");
   const [reactivatingId, setReactivatingId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -470,7 +471,7 @@ export function Invoices() {
   }
 
   async function handleDelete(id: string) {
-    if (!canEditInvoices) return;
+    if (!canDeleteInvoices) return;
     if (!window.confirm("Excluir esta nota fiscal?")) return;
     try {
       await deleteReceivableInvoice(id);
@@ -1165,7 +1166,7 @@ export function Invoices() {
                         ) : null}
                         <button
                           type="button"
-                          disabled={!canEditInvoices}
+                          disabled={!canDeleteInvoices}
                           onClick={() => void handleDelete(row.id)}
                           className="text-red-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                         >

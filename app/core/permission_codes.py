@@ -305,7 +305,9 @@ LEGAL_MODULE_CODES: tuple[str, ...] = (
     LEGAL_REPORTS_READ, LEGAL_REPORTS_EXPORT,
 )
 
-# Qualquer uma destas concede o acesso ao Workspace Jurídico (derivação, como nos demais).
+# Permissões de menu do Jurídico. HISTÓRICO: até a migration 0144 qualquer uma delas DEDUZIA o acesso ao
+# workspace; hoje o acesso é só o `workspace.legal.access` concedido (lista mantida como referência do
+# conjunto de menus do módulo).
 LEGAL_WORKSPACE_GRANTING: frozenset[str] = frozenset(
     {
         LEGAL_DASHBOARD_READ,
@@ -317,6 +319,29 @@ LEGAL_WORKSPACE_GRANTING: frozenset[str] = frozenset(
         LEGAL_REPORTS_READ, LEGAL_REPORTS_EXPORT,
     }
 )
+
+# Recursos EXCLUSIVOS de um workspace (prefixo do código → workspace). Sem o "Acessar" do workspace,
+# nenhuma permissão desses recursos vale — backend, sessão e frontend (`permissions.ts`) usam a mesma
+# lista. Ficam FORA os cadastros usados em mais de um workspace (projetos, colaboradores, veículos,
+# faturamento, relatórios, configurações, usuários): as telas do Financeiro os usam nos combos. Gestão
+# de Ativos e Jurídico já exigem o workspace nos próprios routers.
+WORKSPACE_EXCLUSIVE_RESOURCES: dict[str, tuple[str, ...]] = {
+    WORKSPACE_FINANCE_ACCESS: (
+        "financial_dashboard.", "payables.", "payable_snapshot.", "receivables.", "invoices.", "debts.",
+        "company_finance.",
+    ),
+    WORKSPACE_INDICATORS_ACCESS: ("indicators.", "company_result."),
+    WORKSPACE_PROJECTS_ACCESS: ("dashboard.", "project_agenda."),
+}
+
+
+def workspace_required_for(code: str) -> str | None:
+    """Workspace cujo "Acessar" é exigido para `code` valer (None = recurso não exclusivo)."""
+    for workspace, prefixes in WORKSPACE_EXCLUSIVE_RESOURCES.items():
+        if code.startswith(prefixes):
+            return workspace
+    return None
+
 
 # Tupla dos códigos introduzidos no modelo de verbos (declarados/atribuíveis; inativos por padrão).
 NEW_PERMISSION_CODES: tuple[str, ...] = (
@@ -662,12 +687,11 @@ PERMISSION_IMPLIES: dict[str, frozenset[str]] = {
     PROJECTS_CREATE: frozenset({PROJECTS_REFERENCE, COST_CENTER_REFERENCE}),
     PROJECTS_READ: frozenset({PROJECTS_LIST}),
     PROJECTS_LIST: frozenset({PROJECTS_REFERENCE}),
-    # -- Agenda de Projetos: cadeia de verbos; qualquer uma abre o workspace Projetos --
+    # -- Agenda de Projetos: cadeia de verbos (o workspace Projetos é o "Acessar" concedido, não deduzido) --
     PROJECT_AGENDA_UPDATE: frozenset({PROJECT_AGENDA_READ}),
     PROJECT_AGENDA_DELETE: frozenset({PROJECT_AGENDA_READ}),
     PROJECT_AGENDA_CREATE: frozenset({PROJECT_AGENDA_READ, PROJECTS_REFERENCE}),
     PROJECT_AGENDA_READ: frozenset({PROJECT_AGENDA_LIST}),
-    PROJECT_AGENDA_LIST: frozenset({WORKSPACE_PROJECTS_ACCESS}),
     # -- Cadeia de verbos: Colaboradores (criar/editar exige escolher Centro de Custo) --
     EMPLOYEES_UPDATE: frozenset({EMPLOYEES_READ, COST_CENTER_REFERENCE}),
     EMPLOYEES_DELETE: frozenset({EMPLOYEES_READ}),
