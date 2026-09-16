@@ -17,7 +17,6 @@ import { Projects } from "@/pages/Projects";
 import { Settings } from "@/pages/Settings";
 import { Invoices } from "@/pages/Invoices";
 import { AdvanceBatches } from "@/pages/AdvanceBatches";
-import { AdvanceInstitutions } from "@/pages/AdvanceInstitutions";
 import { CompanyDebt } from "@/pages/CompanyDebt";
 import { ProjectAgenda } from "@/pages/ProjectAgenda";
 import { CompanyFixedCosts } from "@/pages/CompanyFixedCosts";
@@ -107,7 +106,7 @@ export default function App() {
               <Route path="finance/receivables" element={<Receivables />} />
               <Route path="finance/invoices" element={<Invoices />} />
               <Route path="finance/advance-batches" element={<AdvanceBatches />} />
-              <Route path="finance/advance-institutions" element={<AdvanceInstitutions />} />
+              <Route path="finance/advance-institutions" element={<Navigate to="/finance/advance-batches?aba=instituicoes" replace />} />
               <Route path="finance/debt" element={<CompanyDebt />} />
               <Route path="finance/fixed-costs" element={<CompanyFixedCosts />} />
               <Route path="finance/reports" element={<Reports />} />

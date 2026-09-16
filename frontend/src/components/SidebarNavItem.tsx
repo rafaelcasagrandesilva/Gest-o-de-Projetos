@@ -4,6 +4,7 @@ import { useSidebar } from "@/context/SidebarContext";
 type Props = {
   to: string;
   label: string;
+  short?: string;
   end?: boolean;
 };
 
@@ -27,7 +28,7 @@ function linkClass(collapsed: boolean, isActive: boolean): string {
   return `${layout} text-sm font-medium transition-colors duration-200 ${tone}`;
 }
 
-export function SidebarNavItem({ to, label, end }: Props) {
+export function SidebarNavItem({ to, label, short, end }: Props) {
   const { collapsed } = useSidebar();
 
   return (
@@ -40,7 +41,7 @@ export function SidebarNavItem({ to, label, end }: Props) {
     >
       {collapsed ? (
         <span className="select-none text-[11px] font-semibold tracking-wide">
-          {abbrev(label)}
+          {short ?? abbrev(label)}
         </span>
       ) : (
         <span className="truncate">{label}</span>

@@ -13,7 +13,7 @@ from app.api.deps import (
     require_permission,
     require_project_access,
 )
-from app.core.permission_codes import PROJECTS_UPDATE
+from app.core.permission_codes import PROJECTS_READ, PROJECTS_UPDATE
 from app.core.scenario import coerce_scenario, parse_scenario
 from app.api.sensitive import redact_for
 from app.database.session import get_db
@@ -54,6 +54,9 @@ router = APIRouter()
 # concede `projects.update`, e o grafo mantém retrocompat (`projects.edit ⇒ projects.update`),
 # então ADMIN (e qualquer um com o legado) continua passando. Espelha o módulo de Componentes
 # Variáveis, que já exige `projects.update`.
+# Leitura da estrutura (mão de obra, veículos, sistemas, fixos) exige ver o projeto — o escopo
+# (require_project_access) diz QUAL projeto, não SE o usuário pode abrir projetos.
+_read = [Depends(require_permission(PROJECTS_READ))]
 _write = [Depends(require_permission(PROJECTS_UPDATE))]
 
 
@@ -64,7 +67,7 @@ def _svc(db: AsyncSession) -> ProjectStructureService:
 # --- Mão de obra ---
 
 
-@router.get("/{project_id}/labor-details", response_model=list[ProjectLaborDetailItem])
+@router.get("/{project_id}/labor-details", response_model=list[ProjectLaborDetailItem], dependencies=_read)
 async def get_project_labor_details(
     project_id: UUID,
     competencia: date = Query(..., description="Primeiro dia do mês"),
@@ -77,7 +80,7 @@ async def get_project_labor_details(
     return [redact_for("project_labor_detail", _m, user) for _m in _rows]
 
 
-@router.get("/{project_id}/structure/labors", response_model=list[ProjectLaborRead])
+@router.get("/{project_id}/structure/labors", response_model=list[ProjectLaborRead], dependencies=_read)
 async def list_structure_labors(
     project_id: UUID,
     competencia: date = Query(..., description="Primeiro dia do mês"),
@@ -272,7 +275,7 @@ async def bulk_delete_structure_items(
 # --- Veículos ---
 
 
-@router.get("/{project_id}/structure/vehicles", response_model=list[ProjectVehicleRead])
+@router.get("/{project_id}/structure/vehicles", response_model=list[ProjectVehicleRead], dependencies=_read)
 async def list_structure_vehicles(
     project_id: UUID,
     competencia: date = Query(...),
@@ -340,7 +343,7 @@ async def delete_structure_vehicle(
 # --- Sistemas ---
 
 
-@router.get("/{project_id}/structure/systems", response_model=list[ProjectSystemCostRead])
+@router.get("/{project_id}/structure/systems", response_model=list[ProjectSystemCostRead], dependencies=_read)
 async def list_structure_systems(
     project_id: UUID,
     competencia: date = Query(...),
@@ -408,7 +411,7 @@ async def delete_structure_system(
 # --- Custos fixos operacionais ---
 
 
-@router.get("/{project_id}/structure/fixed-operational", response_model=list[ProjectOperationalFixedRead])
+@router.get("/{project_id}/structure/fixed-operational", response_model=list[ProjectOperationalFixedRead], dependencies=_read)
 async def list_structure_fixed(
     project_id: UUID,
     competencia: date = Query(...),

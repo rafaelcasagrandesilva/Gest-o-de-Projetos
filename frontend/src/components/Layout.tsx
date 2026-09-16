@@ -9,7 +9,10 @@ import { IndicatorsSidebar } from "./IndicatorsSidebar";
 import { LegalSidebar } from "./LegalSidebar";
 import { ProjectsSidebar } from "./ProjectsSidebar";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { WorkspaceNoAccess } from "./WorkspaceNoAccess";
 import { useWorkspace, type WorkspaceName } from "@/context/WorkspaceContext";
+import { useAuth } from "@/context/AuthContext";
+import { hasPermission } from "@/permissions";
 
 /**
  * Prefixo da rota → workspace. Entrar por link direto (ou por um "Abrir caso" vindo de outra
@@ -27,12 +30,16 @@ const WORKSPACE_BY_PREFIX: [string, WorkspaceName][] = [
 
 export function Layout() {
   const { workspace, setWorkspace } = useWorkspace();
+  const { user } = useAuth();
   const location = useLocation();
+  const alvo = WORKSPACE_BY_PREFIX.find(([prefixo]) => location.pathname.startsWith(prefixo))?.[1];
+  // Rota de um workspace sem "Acessar": mostra "Sem permissão" em vez da tela. E NÃO troca o
+  // workspace — senão disputaria com a sincronização da sessão, que devolve ao workspace padrão.
+  const semAcesso = !!alvo && !hasPermission(user?.permission_names, `workspace.${alvo}.access`);
 
   useEffect(() => {
-    const alvo = WORKSPACE_BY_PREFIX.find(([prefixo]) => location.pathname.startsWith(prefixo))?.[1];
-    if (alvo && alvo !== workspace) setWorkspace(alvo);
-  }, [location.pathname, workspace, setWorkspace]);
+    if (alvo && !semAcesso && alvo !== workspace) setWorkspace(alvo);
+  }, [alvo, semAcesso, workspace, setWorkspace]);
 
   return (
     <ScenarioProvider>
@@ -59,7 +66,7 @@ export function Layout() {
                 {/* Salvaguarda por-rota: uma tela que lançar exceção mostra fallback
                     aqui dentro (nav/sidebar seguem funcionando). Reseta ao navegar. */}
                 <ErrorBoundary resetKey={location.pathname} label="route">
-                  <Outlet />
+                  {semAcesso ? <WorkspaceNoAccess /> : <Outlet />}
                 </ErrorBoundary>
               </div>
             </main>

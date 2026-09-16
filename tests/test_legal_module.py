@@ -110,24 +110,25 @@ class PermissionIsolationTests(unittest.TestCase):
         ):
             self.assertFalse(user_has_permission(u, code), f"o Jurídico não pode liberar {code}")
 
-    def test_workspace_access_derives_from_any_menu(self):
+    def test_workspace_access_is_explicit(self):
+        # O acesso ao workspace é o "Acessar" concedido — nenhum menu o deduz (antes, qualquer menu
+        # abria o workspace e desmarcar "Acessar" não tinha efeito).
         for code in (
             pc.LEGAL_DASHBOARD_READ, pc.LEGAL_CASES_LIST, pc.LEGAL_PERSONS_LIST,
             pc.LEGAL_COMPANIES_LIST, pc.LEGAL_PROJECTS_LIST, pc.LEGAL_REPORTS_READ,
         ):
-            self.assertTrue(
-                user_has_permission(_user(code), pc.WORKSPACE_LEGAL_ACCESS), f"{code} deve abrir"
-            )
-        # `reference` e `sensitive` sozinhos NÃO abrem o workspace.
-        for code in (pc.LEGAL_CASES_REFERENCE, pc.LEGAL_CASES_SENSITIVE):
             self.assertFalse(
-                user_has_permission(_user(code), pc.WORKSPACE_LEGAL_ACCESS), f"{code} não abre"
+                user_has_permission(_user(code), pc.WORKSPACE_LEGAL_ACCESS), f"{code} não abre sozinho"
             )
-        self.assertIn("legal", accessible_workspaces(_user(pc.LEGAL_CASES_READ)))
+        self.assertTrue(user_has_permission(_user(pc.WORKSPACE_LEGAL_ACCESS), pc.WORKSPACE_LEGAL_ACCESS))
+        self.assertIn("legal", accessible_workspaces(_user(pc.LEGAL_CASES_READ, pc.WORKSPACE_LEGAL_ACCESS)))
+        self.assertNotIn("legal", accessible_workspaces(_user(pc.LEGAL_CASES_READ)))
         self.assertNotIn("legal", accessible_workspaces(_user(pc.EMPLOYEES_VIEW)))
 
     def test_codes_are_active_in_session(self):
-        names = session_permission_names(_user(pc.LEGAL_CASES_READ, pc.LEGAL_CASES_SENSITIVE))
+        names = session_permission_names(
+            _user(pc.LEGAL_CASES_READ, pc.LEGAL_CASES_SENSITIVE, pc.WORKSPACE_LEGAL_ACCESS)
+        )
         self.assertIn(pc.LEGAL_CASES_READ, names)
         self.assertIn(pc.LEGAL_CASES_SENSITIVE, names)
         self.assertIn(pc.WORKSPACE_LEGAL_ACCESS, names)

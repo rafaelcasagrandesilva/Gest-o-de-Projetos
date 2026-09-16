@@ -29,6 +29,7 @@ from app.core.permission_codes import (
     EMPLOYEES_EDIT,
     EMPLOYEES_VIEW,
     expand_permissions,
+    workspace_required_for,
     FINANCIAL_DASHBOARD_READ,
     INVOICES_EDIT,
     INVOICES_VIEW,
@@ -194,85 +195,26 @@ def effective_permission_names(user: User) -> frozenset[str]:
 def user_has_permission(user: User, code: str) -> bool:
     """Verifica permissão por código.
 
-    Fase 1: autorização depende EXCLUSIVAMENTE das permissões concedidas ao usuário (perfil + deltas).
-    NÃO há mais atalho por perfil (role ADMIN), por e-mail (superuser) nem por `system.admin` liberando
-    funcionalidades de negócio. `system.admin` concede apenas as funcionalidades administrativas do
-    sistema, via grafo (`SYSTEM_ADMIN ⇒ users.manage/settings.*`). O perfil ADMIN continua com acesso
-    total porque suas permissões (role_permissions) já contêm todos os códigos.
-    """
-    if code in EXPLICIT_GRANT_ONLY_PERMISSIONS:
-        return code in permission_names_from_user(user)
-    names = effective_permission_names(user)
-    # Fecho transitivo do modelo de verbos (inclui projects.view ⇒ view_list/detail e
-    # system.admin ⇒ funcionalidades administrativas do sistema).
-    if code in expand_permissions(names):
-        return True
-    if code == WORKSPACE_PROJECTS_ACCESS and names.intersection(
-        {
-            DASHBOARD_VIEW,
-            DASHBOARD_DIRECTOR,
-            PROJECTS_VIEW,
-            PROJECTS_VIEW_LIST,
-            PROJECTS_VIEW_DETAIL,
-            PROJECTS_CREATE,
-            PROJECTS_EDIT,
-            PROJECTS_DELETE,
-            EMPLOYEES_VIEW,
-            EMPLOYEES_EDIT,
-            VEHICLES_VIEW,
-            VEHICLES_EDIT,
-            BILLING_VIEW,
-            COSTS_VIEW,
-            COSTS_EDIT,
-            REPORTS_VIEW,
-            REPORTS_EXPORT,
-            ALERTS_VIEW,
-            SETTINGS_VIEW,
-            SETTINGS_EDIT,
-            USERS_MANAGE,
-        }
-    ):
-        return True
-    if code == WORKSPACE_FINANCE_ACCESS and names.intersection(
-        {
-            FINANCIAL_DASHBOARD_READ,
-            PAYABLES_VIEW,
-            PAYABLES_EDIT,
-            RECEIVABLES_VIEW,
-            RECEIVABLES_EDIT,
-            INVOICES_VIEW,
-            INVOICES_EDIT,
-            DEBTS_VIEW,
-            DEBTS_EDIT,
-            COMPANY_FINANCE_VIEW,
-            COMPANY_FINANCE_EDIT,
-            REPORTS_VIEW,
-            REPORTS_EXPORT,
-            SETTINGS_VIEW,
-            SETTINGS_EDIT,
-        }
-    ):
-        return True
-    if code == WORKSPACE_ASSETS_ACCESS and names.intersection(
-        {
-            ASSETS_VIEW,
-            ASSETS_EDIT,
-            SETTINGS_VIEW,
-            SETTINGS_EDIT,
-        }
-    ):
-        return True
-    if code == WORKSPACE_INDICATORS_ACCESS and names.intersection(
-        {
-            INDICATORS_VIEW,
-            INDICATORS_DIRECTOR,
-        }
-    ):
-        return True
-    if code == WORKSPACE_LEGAL_ACCESS and names.intersection(LEGAL_WORKSPACE_GRANTING):
-        return True
-    return False
+    Autorização depende EXCLUSIVAMENTE das permissões concedidas ao usuário (perfil + deltas), sem
+    atalho por perfil (role ADMIN), por e-mail (superuser) nem por `system.admin` liberando
+    funcionalidades de negócio (`system.admin` só implica as funcionalidades administrativas do sistema,
+    via grafo). O perfil ADMIN tem acesso total porque suas permissões (role_permissions) contêm tudo.
 
+    Workspace: `workspace.*.access` vale só quando CONCEDIDO (perfil/adição − remoção) — não é mais
+    deduzido das permissões dos menus. E as permissões dos recursos EXCLUSIVOS de um workspace
+    (`permission_codes.workspace_required_for`) só valem com o acesso a ele: desmarcar "Acessar" bloqueia
+    o workspace inteiro (menus, telas, endpoints e dados sensíveis). Mesma regra de
+    `session_context.user_has_permission`.
+    """
+    names = expand_permissions(effective_permission_names(user))
+    if code in EXPLICIT_GRANT_ONLY_PERMISSIONS:
+        granted = code in permission_names_from_user(user)
+    else:
+        granted = code in names
+    if not granted:
+        return False
+    workspace = workspace_required_for(code)
+    return workspace is None or workspace in names
 
 def user_has_any_permission(user: User, *codes: str) -> bool:
     """True se o usuário tiver qualquer uma das permissões listadas (OR)."""

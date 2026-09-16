@@ -10,6 +10,8 @@ export const ALL_PERMISSION_CODES: string[] = [
   "workspace.assets.access",
   "workspace.indicators.access",
   "workspace.legal.access",
+  // Agenda do workspace Projetos — recurso próprio (não compartilha nada com a agenda do Jurídico).
+  "project_agenda.list", "project_agenda.read", "project_agenda.create", "project_agenda.update", "project_agenda.delete",
   "dashboard.view",
   "dashboard.director",
   "indicators.view",
@@ -106,6 +108,7 @@ export const ALL_PERMISSION_CODES: string[] = [
   "legal_persons.update", "legal_persons.delete", "legal_persons.sensitive",
   "legal_companies.list", "legal_companies.read", "legal_companies.create", "legal_companies.update", "legal_companies.delete",
   "legal_projects.list", "legal_projects.read", "legal_projects.create", "legal_projects.update", "legal_projects.delete",
+  "legal_imports.list", "legal_imports.create",
   "legal_reports.read", "legal_reports.export",
 ];
 
@@ -275,8 +278,15 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "legal_projects.create": "Jurídico · Projetos · Criar",
   "legal_projects.update": "Jurídico · Projetos · Editar",
   "legal_projects.delete": "Jurídico · Projetos · Desativar",
+  "legal_imports.list": "Jurídico · Importações · Listar",
+  "legal_imports.create": "Jurídico · Importações · Criar",
   "legal_reports.read": "Jurídico · Relatórios · Visualizar",
   "legal_reports.export": "Jurídico · Relatórios · Exportar",
+  "project_agenda.list": "Agenda · Listar",
+  "project_agenda.read": "Agenda · Visualizar",
+  "project_agenda.create": "Agenda · Criar",
+  "project_agenda.update": "Agenda · Editar",
+  "project_agenda.delete": "Agenda · Excluir",
 };
 
 /**
@@ -357,6 +367,11 @@ const PERMISSION_IMPLIES: Record<string, string[]> = {
   "legal_projects.create": ["legal_projects.read"],
   "legal_projects.read": ["legal_projects.list"],
   "legal_reports.export": ["legal_reports.read"],
+  "legal_imports.create": ["legal_imports.list"],
+  "project_agenda.update": ["project_agenda.read"],
+  "project_agenda.delete": ["project_agenda.read"],
+  "project_agenda.create": ["project_agenda.read", "projects.reference"],
+  "project_agenda.read": ["project_agenda.list"],
 };
 
 /** Fecho transitivo de `held` sob `PERMISSION_IMPLIES` (inclui os próprios códigos). */
@@ -410,41 +425,13 @@ export const RESOURCE_LABELS: Record<string, string> = {
   legal_persons: "Jurídico · Desligados",
   legal_companies: "Jurídico · Empresas",
   legal_projects: "Jurídico · Projetos",
+  legal_imports: "Jurídico · Importações",
   legal_reports: "Jurídico · Relatórios",
+  project_agenda: "Agenda",
   system_admin: "Administração do sistema",
   system_all_projects: "Escopo global de projetos",
   project_documents: "Documentos do projeto",
 };
-
-/**
- * Agrupamento lógico dos recursos na grade. MODELO ÚNICO: toda permissão administrável aparece na
- * grade (não existe mais a seção "Outras permissões"). Recursos com célula fora de qualquer grupo
- * caem em "Outros recursos" (salvaguarda — não deve ocorrer).
- */
-export const RESOURCE_GROUPS: { label: string; resources: string[] }[] = [
-  { label: "Cadastros", resources: ["employees", "vehicles", "assets", "projects", "cost_center"] },
-  { label: "Financeiro", resources: ["financial_dashboard", "payables", "receivables", "invoices", "debts", "costs", "company_finance", "billing"] },
-  { label: "Gestão", resources: ["dashboard", "indicators", "company_result", "reports", "alerts", "audit"] },
-  {
-    label: "Jurídico",
-    resources: ["legal_dashboard", "legal_cases", "legal_persons", "legal_companies", "legal_projects", "legal_reports"],
-  },
-  {
-    label: "Sistema",
-    resources: [
-      "users",
-      "settings",
-      "workspace_projects",
-      "workspace_finance",
-      "workspace_assets",
-      "workspace_indicators",
-      "workspace_legal",
-      "system_admin",
-      "system_all_projects",
-      "project_documents",
-    ],
-  },
-];
 
 /**
  * Ações (COLUNAS) — modelo visual ÚNICO. Além do CRUD, colunas transversais dão lugar na grade a
@@ -517,6 +504,7 @@ const DERIVED_COLUMNS = new Set<string>([
 const CODE_PLACEMENT: Record<string, { resource: string; column: PermissionColumn }> = {
   "system.admin": { resource: "system_admin", column: "manage" },
   "system.all_projects": { resource: "system_all_projects", column: "access" },
+  // O "Acessar" de cada workspace fica no CABEÇALHO do bloco (permissionBlocks.ts), não numa linha.
   "workspace.projects.access": { resource: "workspace_projects", column: "access" },
   "workspace.finance.access": { resource: "workspace_finance", column: "access" },
   "workspace.assets.access": { resource: "workspace_assets", column: "access" },
@@ -558,7 +546,8 @@ const RESOURCE_CELLS: Map<string, Map<PermissionColumn, string>> = (() => {
   return m;
 })();
 
-const _cellsFor = (resource: string): PermissionGridCell[] => {
+/** Células (na ordem das colunas) de um recurso. A disposição em blocos fica em `permissionBlocks.ts`. */
+export function resourceCells(resource: string): PermissionGridCell[] {
   const byCol = RESOURCE_CELLS.get(resource);
   if (!byCol) return [];
   return COLUMN_ORDER.filter((c) => byCol.has(c)).map((c) => ({
@@ -566,37 +555,13 @@ const _cellsFor = (resource: string): PermissionGridCell[] => {
     column: c,
     code: byCol.get(c) as string,
   }));
-};
-
-/** Grade agrupada. Todo recurso com ao menos uma célula aparece no seu grupo. */
-export function permissionGridGroups(): {
-  group: string;
-  resources: { resource: string; cells: PermissionGridCell[] }[];
-}[] {
-  const grouped = new Set<string>();
-  const out = RESOURCE_GROUPS.map((g) => {
-    const resources = g.resources
-      .filter((r) => RESOURCE_CELLS.has(r))
-      .map((r) => {
-        grouped.add(r);
-        return { resource: r, cells: _cellsFor(r) };
-      });
-    return { group: g.label, resources };
-  }).filter((g) => g.resources.length > 0);
-  const ungrouped = [...RESOURCE_CELLS.keys()].filter((r) => !grouped.has(r));
-  if (ungrouped.length) {
-    out.push({ group: "Outros recursos", resources: ungrouped.map((r) => ({ resource: r, cells: _cellsFor(r) })) });
-  }
-  return out;
 }
 
-/** Grade achatada (todos os recursos, sem grupo). */
-export function permissionGrid(): { resource: string; cells: PermissionGridCell[] }[] {
-  return permissionGridGroups().flatMap((g) => g.resources);
-}
+/** Recursos com ao menos uma célula — todos precisam aparecer em algum bloco da tela. */
+export const GRID_RESOURCES: string[] = [...RESOURCE_CELLS.keys()];
 
 /** Todos os códigos representados por uma célula da grade. */
-export const GRID_CODES = new Set(permissionGrid().flatMap((g) => g.cells.map((c) => c.code)));
+export const GRID_CODES = new Set(GRID_RESOURCES.flatMap((r) => resourceCells(r).map((c) => c.code)));
 
 /**
  * Códigos LEGADOS redundantes (aliases `<r>.view/.edit/.view_list/.view_detail`) cujo comportamento
@@ -618,84 +583,37 @@ if (import.meta.env?.DEV && UNMAPPED_CODES.length) {
   console.warn("[permissions] códigos sem célula na grade e sem alias legado:", UNMAPPED_CODES);
 }
 
+/**
+ * Recursos EXCLUSIVOS de um workspace — espelha `permission_codes.WORKSPACE_EXCLUSIVE_RESOURCES`.
+ * Sem o "Acessar" do workspace, nenhuma permissão desses recursos vale.
+ */
+const WORKSPACE_EXCLUSIVE_RESOURCES: [string, string[]][] = [
+  [
+    "workspace.finance.access",
+    ["financial_dashboard.", "payables.", "payable_snapshot.", "receivables.", "invoices.", "debts.", "company_finance."],
+  ],
+  ["workspace.indicators.access", ["indicators.", "company_result."]],
+  ["workspace.projects.access", ["dashboard.", "project_agenda."]],
+];
+
+/** "Acessar" do workspace sem o qual `code` não vale — ou `null` para recursos compartilhados. */
+export function workspaceRequiredFor(code: string): string | null {
+  return (
+    WORKSPACE_EXCLUSIVE_RESOURCES.find(([, prefixes]) => prefixes.some((prefix) => code.startsWith(prefix)))?.[0] ??
+    null
+  );
+}
+
 export function hasPermission(permissionNames: string[] | undefined, code: string): boolean {
   if (!permissionNames?.length) return false;
-  if (EXPLICIT_GRANT_ONLY.has(code)) {
-    return permissionNames.includes(code);
-  }
-  // Fase 1: sem atalho "system.admin libera tudo". Acesso vem só das permissões (via grafo).
-  // system.admin só implica as funcionalidades administrativas do sistema (edge no grafo acima).
-  if (expandPermissions(permissionNames).has(code)) return true;
-  if (code === "workspace.projects.access") {
-    return permissionNames.some((p) =>
-      [
-        "dashboard.view",
-        "dashboard.director",
-        "projects.view",
-        "projects.view_list",
-        "projects.view_detail",
-        "projects.create",
-        "projects.edit",
-        "projects.delete",
-        "employees.view",
-        "employees.edit",
-        "vehicles.view",
-        "vehicles.edit",
-        "billing.view",
-        "costs.view",
-        "costs.edit",
-        "reports.view",
-        "reports.export",
-        "alerts.view",
-        "settings.view",
-        "settings.edit",
-        "users.manage",
-      ].includes(p),
-    );
-  }
-  if (code === "workspace.finance.access") {
-    return permissionNames.some((p) =>
-      [
-        "financial_dashboard.read",
-        "payables.view",
-        "payables.edit",
-        "receivables.view",
-        "receivables.edit",
-        "invoices.view",
-        "invoices.edit",
-        "debts.view",
-        "debts.edit",
-        "company_finance.view",
-        "company_finance.edit",
-        "reports.view",
-        "reports.export",
-        "settings.view",
-        "settings.edit",
-      ].includes(p),
-    );
-  }
-  if (code === "workspace.assets.access") {
-    return permissionNames.some((p) =>
-      ["assets.view", "assets.edit", "settings.view", "settings.edit"].includes(p),
-    );
-  }
-  if (code === "workspace.indicators.access") {
-    return permissionNames.some((p) =>
-      ["indicators.view", "indicators.director", "company_result.read"].includes(p),
-    );
-  }
-  if (code === "workspace.legal.access") {
-    // Qualquer permissão de QUALQUER menu do Jurídico abre o workspace (espelha
-    // `permission_codes.LEGAL_WORKSPACE_GRANTING`). `.reference` sozinho não abre.
-    return permissionNames.some(
-      (p) =>
-        p === "legal_dashboard.read" ||
-        (/^legal_(cases|persons|companies|projects|reports)\./.test(p) &&
-          !p.endsWith(".reference") &&
-          !p.endsWith(".sensitive")),
-    );
-  }
-  return false;
+  // Sem atalho "system.admin libera tudo": acesso vem só das permissões (via grafo); system.admin só
+  // implica as funcionalidades administrativas do sistema. Workspace = o "Acessar" concedido (a sessão já
+  // o traz quando concedido) — não é mais deduzido das permissões dos menus.
+  const held = expandPermissions(permissionNames);
+  const granted = EXPLICIT_GRANT_ONLY.has(code) ? permissionNames.includes(code) : held.has(code);
+  if (!granted) return false;
+  const workspace = workspaceRequiredFor(code);
+  return !workspace || held.has(workspace);
 }
 
 /** Presets alinhados a `app/core/permission_codes.ROLE_PRESET` (para aplicar ao mudar perfil na UI). */

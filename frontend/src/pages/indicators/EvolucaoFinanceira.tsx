@@ -12,6 +12,7 @@ import {
   type ProjectRoi,
 } from "@/services/indicators";
 import { fetchCompanyResult, type CompanyResult } from "@/services/companyResult";
+import { usePermission } from "@/hooks/usePermission";
 import { currentMonth, monthMinus, monthToCompetencia } from "@/utils/roiFormat";
 import { formatCurrencyOrDash, formatCurrencyShortOrDash } from "@/utils/currency";
 import { CHART_COLORS } from "@/utils/chartTheme";
@@ -202,12 +203,15 @@ export function EvolucaoFinanceira() {
   // Empresa inteira = TODOS os projetos com movimentação selecionados e nenhum centro de custo
   // filtrado. Aí o gráfico principal vem do Resultado da Empresa; com qualquer filtro, volta às
   // linhas dos projetos selecionados (faturamento, custos e lucros do motor dos projetos).
+  // Sem o Resultado da Empresa (company_result.read) não existe modo empresa: fica nas linhas dos projetos.
+  const canCompanyResult = usePermission("company_result.read");
   const companyMode = useMemo(
     () =>
+      canCompanyResult &&
       rankingItems.length > 0 &&
       selCostCenters.size === 0 &&
       rankingItems.every((i) => selProjects.has(i.project_id)),
-    [rankingItems, selProjects, selCostCenters],
+    [canCompanyResult, rankingItems, selProjects, selCostCenters],
   );
 
   useEffect(() => {

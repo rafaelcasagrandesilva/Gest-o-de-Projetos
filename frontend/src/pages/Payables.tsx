@@ -165,6 +165,9 @@ export function Payables() {
   const canView = usePermission("payables.list");
   // CAP tem permissão de edição PRÓPRIA (antes usava costs.edit, acoplado ao módulo de Custos).
   const canEdit = usePermission("payables.update");
+  // Incluir e excluir despesa têm verbo próprio (o backend exige payables.create / payables.delete).
+  const canCreate = usePermission("payables.create");
+  const canDelete = usePermission("payables.delete");
   const canRegenerateSnapshot = Boolean(user?.is_superuser);
   const canReconcileSnapshot = usePermission("payable_snapshot.reconcile");
 
@@ -548,7 +551,7 @@ export function Payables() {
   }
 
   async function confirmBulkDelete() {
-    if (!canEdit || selectedRows.length === 0) return;
+    if (!canDelete || selectedRows.length === 0) return;
     setBulkBusy(true);
     setError(null);
     try {
@@ -567,7 +570,7 @@ export function Payables() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!canEdit) return;
+    if (!canCreate) return;
     const amount = normalizeCurrencyForApi(form.amount);
     if (!Number.isFinite(amount) || amount <= 0) {
       setError("Informe um valor válido.");
@@ -696,6 +699,7 @@ export function Payables() {
 
   const tableProps = {
     canEdit,
+    canDelete,
     canReconcile: canReconcileSnapshot,
     editingId,
     editSaving,
@@ -742,7 +746,7 @@ export function Payables() {
           </button>
           <button
             type="button"
-            disabled={!canEdit || periodMode === "ALL"}
+            disabled={!canCreate || periodMode === "ALL"}
             onClick={() => setShowForm((s) => !s)}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -857,7 +861,7 @@ export function Payables() {
         </div>
       </section>
 
-      {showForm && canEdit && (
+      {showForm && canCreate && (
         <form
           onSubmit={handleCreate}
           className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50/80 p-4 sm:grid-cols-2 lg:grid-cols-3"
@@ -984,7 +988,7 @@ export function Payables() {
         </div>
       ) : (
         <>
-        {canEdit && selectedRows.length > 0 ? (
+        {canDelete && selectedRows.length > 0 ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm">
             <span className="text-slate-800">
               <strong>{selectedRows.length}</strong>{" "}
@@ -1254,6 +1258,7 @@ type PayablesSnapshotTableProps = {
   headerSort: TableSortHeaderProps;
   emptyLabel: string;
   canEdit: boolean;
+  canDelete: boolean;
   canReconcile: boolean;
   editingId: string | null;
   editSaving: boolean;
@@ -1285,6 +1290,7 @@ function PayablesSnapshotTable({
   headerSort,
   emptyLabel,
   canEdit,
+  canDelete,
   canReconcile,
   editingId,
   editSaving,
@@ -1316,7 +1322,7 @@ function PayablesSnapshotTable({
         <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
           <tr>
             <th className="w-[36px] px-2 py-2">
-              {canEdit && selectableManualIds.length > 0 ? (
+              {canDelete && selectableManualIds.length > 0 ? (
                 <input
                   type="checkbox"
                   checked={allManualSelected}
@@ -1375,7 +1381,7 @@ function PayablesSnapshotTable({
               return (
                 <tr key={r.id} className={selectedIds.has(r.id) ? "bg-red-50/60" : "hover:bg-slate-50/80"}>
                   <td className="px-2 py-1.5">
-                    {canEdit && r.type === "MANUAL" ? (
+                    {canDelete && r.type === "MANUAL" ? (
                       <input
                         type="checkbox"
                         checked={selectedIds.has(r.id)}
@@ -1584,7 +1590,7 @@ function PayablesSnapshotTable({
                             editingId === r.id ||
                             (r.is_obsolete
                               ? !canReconcile
-                              : !canEdit || (r.type !== "MANUAL" && r.type !== "VEHICLE"))
+                              : !canDelete || (r.type !== "MANUAL" && r.type !== "VEHICLE"))
                           }
                           onClick={() => onDeleteManual(r)}
                           className="rounded px-1.5 py-0.5 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"

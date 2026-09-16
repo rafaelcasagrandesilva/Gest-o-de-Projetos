@@ -7,8 +7,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_permission
-from app.core.permission_codes import COMPANY_RESULT_READ, INDICATORS_DIRECTOR, INDICATORS_READ
+from app.api.deps import get_current_user, require_permission, user_has_permission
+from app.core.permission_codes import (
+    COMPANY_FINANCE_READ,
+    COMPANY_RESULT_READ,
+    DEBTS_READ,
+    INDICATORS_DIRECTOR,
+    INDICATORS_READ,
+)
 from app.api.sensitive import redact_for
 from app.database.session import get_db
 from app.models.user import User
@@ -260,7 +266,22 @@ async def company_result(
             detail="Selecione um período de até 36 meses.",
         )
     data = await CompanyResultService(db).company_result(start=start, end=end, scenario=scenario_param)
-    return redact_for("company_result", CompanyResultRead.model_validate(data), actor)
+    return _hide_item_names(redact_for("company_result", CompanyResultRead.model_validate(data), actor), actor)
+
+
+def _hide_item_names(result: CompanyResultRead, actor: User) -> CompanyResultRead:
+    """O NOME de cada custo indireto / dívida é dado do menu de origem (Custos Indiretos / Endividamento).
+
+    Sem a permissão desse menu os valores continuam (compõem o resultado), mas o item fica anônimo —
+    ver o Resultado da Empresa não pode revelar com quem a empresa tem contrato ou dívida.
+    """
+    if not user_has_permission(actor, COMPANY_FINANCE_READ):
+        for item in result.indirect_items:
+            item.name = "Item restrito"
+    if not user_has_permission(actor, DEBTS_READ):
+        for item in result.debt_items:
+            item.name = "Dívida restrita"
+    return result
 
 
 @router.get(

@@ -10,7 +10,7 @@ export function AssetsSidebar() {
   return (
     <AppSidebarShell subtitle="Gestão de Ativos">
       {visible.map((item) => (
-        <SidebarNavItem key={item.to} to={item.to} end={item.end ?? false} label={item.label} />
+        <SidebarNavItem key={item.to} to={item.to} end={item.end ?? false} label={item.label} short={item.short} />
       ))}
     </AppSidebarShell>
   );

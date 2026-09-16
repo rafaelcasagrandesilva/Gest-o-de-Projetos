@@ -23,6 +23,7 @@ from app.core.permission_codes import (
     PAYABLES_EDIT,
     PAYABLES_VIEW,
     RECEIVABLES_EDIT,
+    WORKSPACE_FINANCE_ACCESS,
 )
 from app.modules.company_finance.router import _assert_verb, _assert_view
 from app.modules.reports.router import _assert_report_type_access
@@ -32,8 +33,10 @@ def _user(*perms: str) -> SimpleNamespace:
     """Usuário com permissões CUSTOMIZADas (user_permissions) — sem fallback de preset de role.
 
     email fora da lista de superusuários e sem role ADMIN, para exercitar apenas o RBAC por código.
+    Recebe o "Acessar" do workspace Financeiro: sem ele nenhuma permissão dos módulos financeiros vale
+    (regra da migration 0144), e o que estes testes isolam é um MÓDULO do outro, não o workspace.
     """
-    ups = [SimpleNamespace(permission=SimpleNamespace(name=p)) for p in perms]
+    ups = [SimpleNamespace(permission=SimpleNamespace(name=p)) for p in (*perms, WORKSPACE_FINANCE_ACCESS)]
     return SimpleNamespace(
         email="perm-isolation-test@example.com",
         user_permissions=ups,
