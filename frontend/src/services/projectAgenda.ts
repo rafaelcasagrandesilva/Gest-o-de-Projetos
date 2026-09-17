@@ -7,7 +7,8 @@ import { api } from "@/services/api";
  * registros são exclusivos daqui (ver docs/ETAPA0_AGENDA_PROJETOS.md).
  */
 
-export type CommitmentKind = "REUNIAO" | "OBRIGACAO" | "EVENTO" | "VISITA";
+/** ASSUNTO = item de pauta (tem obrigações filhas; não aparece sozinho no calendário). */
+export type CommitmentKind = "REUNIAO" | "OBRIGACAO" | "EVENTO" | "VISITA" | "ASSUNTO";
 export type CommitmentStatus = "AGENDADO" | "CONCLUIDO" | "CANCELADO" | "ADIADO";
 export type CommitmentModality = "PRESENCIAL" | "VIRTUAL" | "HIBRIDA";
 
@@ -16,6 +17,7 @@ export const KIND_LABELS: Record<CommitmentKind, string> = {
   OBRIGACAO: "Obrigação",
   EVENTO: "Evento",
   VISITA: "Visita",
+  ASSUNTO: "Item de pauta",
 };
 
 /** Cor por tipo — o que permite reconhecer a natureza do compromisso de relance no calendário. */
@@ -24,6 +26,7 @@ export const KIND_STYLES: Record<CommitmentKind, string> = {
   OBRIGACAO: "bg-amber-100 text-amber-900 ring-amber-200",
   EVENTO: "bg-emerald-100 text-emerald-800 ring-emerald-200",
   VISITA: "bg-sky-100 text-sky-800 ring-sky-200",
+  ASSUNTO: "bg-slate-100 text-slate-700 ring-slate-200",
 };
 
 export const MODALITY_LABELS: Record<CommitmentModality, string> = {
@@ -68,7 +71,13 @@ export interface Commitment {
   project_id: string | null;
   project_name: string | null;
   owner_user_id: string | null;
+  /** Nomes de todos os responsáveis, juntos. */
   owner_name: string | null;
+  /** Responsáveis (pode haver mais de um); o principal vem primeiro. */
+  owners: CommitmentParticipant[];
+  /** Obrigação de um item de pauta: o item a que pertence. */
+  parent_id: string | null;
+  parent_title: string | null;
   external_participants: string | null;
   status: CommitmentStatus;
   completed_at: string | null;
@@ -106,6 +115,8 @@ export interface CommitmentInput {
   modality?: CommitmentModality | null;
   project_id?: string | null;
   owner_user_id?: string | null;
+  /** Vários responsáveis; tem precedência sobre `owner_user_id`. */
+  owner_ids?: string[];
   participant_ids?: string[];
   external_participants?: string | null;
   /** Repetição: a cada quantas semanas, por quantas ocorrências. Ausente = compromisso único. */
@@ -151,10 +162,42 @@ export async function updateCommitment(
   return data;
 }
 
-export async function completeCommitment(id: string, note: string | null): Promise<Commitment> {
+export async function completeCommitment(
+  id: string,
+  note: string | null,
+  meetingId?: string | null,
+): Promise<Commitment> {
   const { data } = await api.post<Commitment>(`${BASE}/commitments/${id}/complete`, {
     completion_note: note,
+    meeting_id: meetingId ?? null,
   });
+  return data;
+}
+
+/** Altera o prazo de uma obrigação; de → para e o motivo vão para o histórico do item. */
+export async function rescheduleCommitment(
+  id: string,
+  payload: { due_at: string; reason?: string | null; meeting_id?: string | null },
+): Promise<Commitment> {
+  const { data } = await api.post<Commitment>(`${BASE}/commitments/${id}/reschedule`, payload);
+  return data;
+}
+
+export interface ObligationInput {
+  title: string;
+  description?: string | null;
+  owner_ids: string[];
+  due_at?: string | null;
+}
+
+/** Obrigações de um item de pauta (em aberto primeiro). */
+export async function listObligations(itemId: string): Promise<Commitment[]> {
+  const { data } = await api.get<Commitment[]>(`${BASE}/commitments/${itemId}/obligations`);
+  return data;
+}
+
+export async function createObligation(itemId: string, payload: ObligationInput): Promise<Commitment[]> {
+  const { data } = await api.post<Commitment[]>(`${BASE}/commitments/${itemId}/obligations`, payload);
   return data;
 }
 
@@ -206,6 +249,52 @@ export const OUTCOME_STYLES: Record<CommitmentOutcome, string> = {
   EXTENDED: "bg-indigo-50 text-indigo-800 ring-indigo-300",
 };
 
+export type CommitmentUpdateKind = "OBSERVACAO" | "ATUALIZACAO" | "CONCLUSAO" | "PRAZO";
+
+export const UPDATE_KIND_LABELS: Record<CommitmentUpdateKind, string> = {
+  OBSERVACAO: "Observação",
+  ATUALIZACAO: "Atualização",
+  CONCLUSAO: "Conclusão",
+  PRAZO: "Prazo alterado",
+};
+
+export const UPDATE_KIND_STYLES: Record<CommitmentUpdateKind, string> = {
+  OBSERVACAO: "bg-slate-100 text-slate-700 ring-slate-200",
+  ATUALIZACAO: "bg-amber-50 text-amber-900 ring-amber-200",
+  CONCLUSAO: "bg-emerald-50 text-emerald-800 ring-emerald-200",
+  PRAZO: "bg-sky-50 text-sky-800 ring-sky-200",
+};
+
+/** Andamento de um item (linha do tempo). */
+export interface CommitmentUpdate {
+  id: string;
+  commitment_id: string;
+  kind: CommitmentUpdateKind;
+  body: string;
+  author_id: string | null;
+  author_name: string | null;
+  meeting_id: string | null;
+  meeting_date: string | null;
+  created_at: string;
+}
+
+export async function listCommitmentUpdates(commitmentId: string): Promise<CommitmentUpdate[]> {
+  const { data } = await api.get<CommitmentUpdate[]>(`${BASE}/commitments/${commitmentId}/updates`);
+  return data;
+}
+
+export async function addCommitmentUpdate(
+  commitmentId: string,
+  payload: { kind: "OBSERVACAO" | "ATUALIZACAO"; body: string; meeting_id?: string | null },
+): Promise<CommitmentUpdate[]> {
+  const { data } = await api.post<CommitmentUpdate[]>(`${BASE}/commitments/${commitmentId}/updates`, payload);
+  return data;
+}
+
+export async function deleteCommitmentUpdate(updateId: string): Promise<void> {
+  await api.delete(`${BASE}/updates/${updateId}`);
+}
+
 export interface AgendaItem extends Commitment {
   occurrence_id: string;
   outcome: CommitmentOutcome;
@@ -215,6 +304,13 @@ export interface AgendaItem extends Commitment {
   extended_to_meeting_id: string | null;
   extended_to_date: string | null;
   came_from_date: string | null;
+  /** Andamentos do item (todas as reuniões) e o mais recente. */
+  updates_count: number;
+  last_update: CommitmentUpdate | null;
+  /** Resumo das obrigações do item (mostrado na linha da pauta). */
+  obligations_total: number;
+  obligations_open: number;
+  obligations_overdue: number;
 }
 
 export interface MeetingOption {
@@ -235,10 +331,10 @@ export async function addMeetingItem(
   payload: {
     title: string;
     description?: string | null;
-    due_at?: string | null;
-    owner_user_id?: string | null;
     external_participants?: string | null;
     project_id?: string | null;
+    /** Primeira obrigação do item (opcional). */
+    first_obligation?: ObligationInput | null;
   },
 ): Promise<AgendaItem[]> {
   const { data } = await api.post<AgendaItem[]>(`${BASE}/commitments/${meetingId}/items`, payload);
@@ -251,12 +347,37 @@ export async function setItemOutcome(
   meetingId: string,
   outcome: CommitmentOutcome,
   nextMeetingId?: string | null,
+  /** DONE: o que gerou a conclusão; PARTIAL/EXTENDED: o que avançou/falta (vira andamento). */
+  note?: string | null,
+  /** DONE: concluir junto as obrigações em aberto do item. */
+  completeObligations = false,
 ): Promise<AgendaItem[]> {
   const { data } = await api.post<AgendaItem[]>(
     `${BASE}/occurrences/${occurrenceId}/outcome`,
-    { outcome, next_meeting_id: nextMeetingId ?? null },
+    {
+      outcome,
+      next_meeting_id: nextMeetingId ?? null,
+      note: note ?? null,
+      complete_obligations: completeObligations,
+    },
     { params: { meeting_id: meetingId } },
   );
+  return data;
+}
+
+/** Leva para a pauta da reunião um compromisso que já existe (criado direto no calendário). */
+export async function linkMeetingItem(meetingId: string, commitmentId: string): Promise<AgendaItem[]> {
+  const { data } = await api.post<AgendaItem[]>(`${BASE}/commitments/${meetingId}/items/link`, {
+    commitment_id: commitmentId,
+  });
+  return data;
+}
+
+/** Compromissos em aberto que podem ir para a pauta (sem os que já estão na desta reunião). */
+export async function listOpenCommitments(params: { meetingId?: string; q?: string }): Promise<Commitment[]> {
+  const { data } = await api.get<Commitment[]>(`${BASE}/open-commitments`, {
+    params: { meeting_id: params.meetingId, q: params.q || undefined },
+  });
   return data;
 }
 

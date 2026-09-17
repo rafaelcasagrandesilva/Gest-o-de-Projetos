@@ -33,6 +33,8 @@ from app.models.project_agenda import (
     ProjectCommitmentAttachment,
     ProjectCommitmentOccurrence,
     ProjectCommitmentParticipant,
+    ProjectCommitmentUpdate,
+    CommitmentUpdateKind,
 )
 from app.models.user import User
 
@@ -103,6 +105,18 @@ class ProjectAgendaService:
             user_ids.update(p.user_id for p in (r.participants or []))
         nomes = await self._names(user_ids)
         projetos = await self._projects(project_ids)
+        pai_ids = {r.parent_id for r in rows if r.parent_id}
+        pais = (
+            dict(
+                (
+                    await self.db.execute(
+                        select(ProjectCommitment.id, ProjectCommitment.title).where(ProjectCommitment.id.in_(pai_ids))
+                    )
+                ).all()
+            )
+            if pai_ids
+            else {}
+        )
 
         out: list[dict] = []
         for r in rows:
@@ -110,6 +124,11 @@ class ProjectAgendaService:
             # Atrasado é o que TEM prazo, já passou e ninguém fechou. Compromisso sem data
             # nenhuma (backlog) nunca atrasa — só espera.
             atrasado = bool(prazo and prazo < agora and r.status in OPEN_STATUSES)
+            donos = [p.user_id for p in (r.participants or []) if p.is_owner]
+            if not donos and r.owner_user_id:
+                donos = [r.owner_user_id]
+            # O principal primeiro (é o que o calendário e os filtros antigos conhecem).
+            donos.sort(key=lambda u: (u != r.owner_user_id, nomes.get(u, "")))
             out.append(
                 {
                     "id": r.id,
@@ -125,7 +144,10 @@ class ProjectAgendaService:
                     "project_id": r.project_id,
                     "project_name": projetos.get(r.project_id) if r.project_id else None,
                     "owner_user_id": r.owner_user_id,
-                    "owner_name": nomes.get(r.owner_user_id) if r.owner_user_id else None,
+                    "owner_name": ", ".join(nomes.get(u, "—") for u in donos) or None,
+                    "owners": [{"user_id": u, "full_name": nomes.get(u, "—")} for u in donos],
+                    "parent_id": r.parent_id,
+                    "parent_title": pais.get(r.parent_id) if r.parent_id else None,
                     "external_participants": r.external_participants,
                     "status": r.status,
                     "completed_at": r.completed_at,
@@ -183,6 +205,9 @@ class ProjectAgendaService:
             q = q.where(ProjectCommitment.project_id == project_id)
         if kind:
             q = q.where(ProjectCommitment.kind == kind)
+        else:
+            # O ASSUNTO de pauta não tem data nem responsável: quem aparece são as obrigações.
+            q = q.where(ProjectCommitment.kind != CommitmentKind.ASSUNTO.value)
         if status:
             q = q.where(ProjectCommitment.status == status)
         if only_user_id is not None:
@@ -245,27 +270,67 @@ class ProjectAgendaService:
             if _as_utc(data["due_at"]) < _as_utc(data["starts_at"]):
                 raise HTTPException(status_code=400, detail="O prazo não pode ser anterior ao início.")
 
-    async def _set_participants(self, commitment: ProjectCommitment, user_ids: list[UUID] | None) -> None:
-        """Substitui a lista de participantes. O responsável entra sempre — ele participa do
-        que responde, e sem isso não veria o item no filtro "só os meus"."""
-        desejados = set(user_ids or [])
-        if commitment.owner_user_id:
-            desejados.add(commitment.owner_user_id)
-        if desejados:
-            existem = set(
-                (await self.db.execute(select(User.id).where(User.id.in_(desejados)))).scalars().all()
+    async def _set_people(
+        self,
+        commitment: ProjectCommitment,
+        *,
+        participant_ids: list[UUID] | None = None,
+        owner_ids: list[UUID] | None = None,
+    ) -> None:
+        """Grava participantes e RESPONSÁVEIS (participantes com `is_owner`).
+
+        `None` mantém o que já existe daquele grupo. O responsável sempre participa — é o que o
+        põe no "só os meus". `owner_user_id` guarda o principal (o primeiro da lista).
+        """
+        atuais = (
+            await self.db.execute(
+                select(ProjectCommitmentParticipant).where(
+                    ProjectCommitmentParticipant.commitment_id == commitment.id
+                )
             )
-            invalidos = desejados - existem
-            if invalidos:
+        ).scalars().all()
+        if owner_ids is None:
+            donos = [p.user_id for p in atuais if p.is_owner]
+            if not donos and commitment.owner_user_id:
+                donos = [commitment.owner_user_id]
+        else:
+            donos = list(dict.fromkeys(owner_ids))
+        # Mantendo os participantes, quem deixa de ser responsável sai junto: estava ali por ser
+        # responsável (senão continuaria vendo a obrigação no "só os meus").
+        participantes = (
+            {p.user_id for p in atuais if not p.is_owner}
+            if participant_ids is None
+            else set(participant_ids)
+        )
+        todos = participantes | set(donos)
+        if todos:
+            existem = set(
+                (await self.db.execute(select(User.id).where(User.id.in_(todos)))).scalars().all()
+            )
+            if todos - existem:
                 raise HTTPException(status_code=400, detail="Participante inexistente.")
         await self.db.execute(
             delete(ProjectCommitmentParticipant).where(
                 ProjectCommitmentParticipant.commitment_id == commitment.id
             )
         )
-        for uid in desejados:
-            self.db.add(ProjectCommitmentParticipant(commitment_id=commitment.id, user_id=uid))
+        for uid in todos:
+            self.db.add(
+                ProjectCommitmentParticipant(commitment_id=commitment.id, user_id=uid, is_owner=uid in donos)
+            )
+        if commitment.owner_user_id not in donos:
+            commitment.owner_user_id = donos[0] if donos else None
         await self.db.flush()
+        self.db.expire(commitment, ["participants"])
+
+    @staticmethod
+    def _owner_ids(data: dict) -> list[UUID] | None:
+        """`owner_ids` (vários) tem precedência; `owner_user_id` sozinho é o formato antigo."""
+        if data.get("owner_ids") is not None:
+            return list(data["owner_ids"])
+        if "owner_user_id" in data:
+            return [data["owner_user_id"]] if data["owner_user_id"] else []
+        return None
 
     async def create(self, *, data: dict, actor_id: UUID | None) -> ProjectCommitment:
         self._validate(data)
@@ -283,12 +348,15 @@ class ProjectAgendaService:
             owner_user_id=data.get("owner_user_id"),
             external_participants=(data.get("external_participants") or None),
             series_id=data.get("series_id"),
+            parent_id=data.get("parent_id"),
             status=CommitmentStatus.AGENDADO.value,
             created_by_id=actor_id,
         )
+        donos = self._owner_ids(data) or []
+        row.owner_user_id = donos[0] if donos else None
         self.db.add(row)
         await self.db.flush()
-        await self._set_participants(row, data.get("participant_ids"))
+        await self._set_people(row, participant_ids=data.get("participant_ids") or [], owner_ids=donos)
         return row
 
     async def update(self, *, commitment_id: UUID, data: dict) -> ProjectCommitment | None:
@@ -305,27 +373,187 @@ class ProjectAgendaService:
         self._validate(merged)
         for campo in (
             "kind", "title", "description", "starts_at", "due_at", "all_day", "duration_minutes",
-            "location", "modality", "project_id", "owner_user_id", "external_participants", "status",
+            "location", "modality", "project_id", "external_participants", "status",
         ):
             if campo in data:
                 setattr(row, campo, data[campo])
-        if "participant_ids" in data:
-            await self._set_participants(row, data["participant_ids"])
-        elif "owner_user_id" in data:
-            # Trocou o responsável: ele precisa entrar como participante do que passou a responder.
-            await self._set_participants(row, [p.user_id for p in (row.participants or [])])
+        donos = self._owner_ids(data)
+        if "participant_ids" in data or donos is not None:
+            await self._set_people(row, participant_ids=data.get("participant_ids"), owner_ids=donos)
         await self.db.flush()
         return row
 
-    async def complete(self, *, commitment_id: UUID, note: str | None) -> ProjectCommitment | None:
+    async def complete(
+        self,
+        *,
+        commitment_id: UUID,
+        note: str | None,
+        actor_id: UUID | None = None,
+        meeting_id: UUID | None = None,
+    ) -> ProjectCommitment | None:
         row = await self._load(commitment_id)
         if row is None:
             return None
+        texto = (note or "").strip() or None
         row.status = CommitmentStatus.CONCLUIDO.value
         row.completed_at = datetime.now(timezone.utc)
-        row.completion_note = (note or None)
+        row.completion_note = texto
+        if row.parent_id:
+            # Obrigação: a conclusão entra no histórico do ASSUNTO, dizendo qual obrigação foi.
+            corpo = f"«{row.title}» concluída" + (f": {texto}" if texto else ".")
+            self._registrar(row.parent_id, CommitmentUpdateKind.CONCLUSAO.value, corpo, meeting_id, actor_id)
+        elif texto:
+            self._registrar(row.id, CommitmentUpdateKind.CONCLUSAO.value, texto, meeting_id, actor_id)
         await self.db.flush()
         return row
+
+    async def reschedule(
+        self,
+        *,
+        commitment_id: UUID,
+        due_at: datetime,
+        reason: str | None,
+        actor_id: UUID | None,
+        meeting_id: UUID | None = None,
+    ) -> ProjectCommitment | None:
+        """Altera o prazo de uma obrigação e registra de → para (e o motivo) no histórico."""
+        row = await self._load(commitment_id)
+        if row is None:
+            return None
+        if row.status not in OPEN_STATUSES:
+            raise HTTPException(status_code=400, detail="Só obrigações em aberto têm o prazo alterado.")
+        antes = row.due_at
+        row.due_at = due_at
+        self._validate({"kind": row.kind, "title": row.title, "modality": row.modality,
+                        "starts_at": row.starts_at, "due_at": due_at})
+        de = _data_br(antes) if antes else "sem prazo"
+        motivo = (reason or "").strip()
+        corpo = f"«{row.title}»: prazo {de} → {_data_br(due_at)}" + (f" — {motivo}" if motivo else "")
+        self._registrar(row.parent_id or row.id, CommitmentUpdateKind.PRAZO.value, corpo, meeting_id, actor_id)
+        await self.db.flush()
+        return row
+
+    # ------------------------------------------------------------------ obrigações do item de pauta
+
+    async def create_obligation(
+        self, *, topic_id: UUID, data: dict, actor_id: UUID | None
+    ) -> ProjectCommitment:
+        topico = await self.db.get(ProjectCommitment, topic_id)
+        if topico is None or topico.kind != CommitmentKind.ASSUNTO.value:
+            raise HTTPException(status_code=400, detail="Item de pauta inválido.")
+        return await self.create(
+            data={
+                "kind": CommitmentKind.OBRIGACAO.value,
+                "title": data.get("title") or "",
+                "description": data.get("description"),
+                "due_at": data.get("due_at"),
+                "owner_ids": data.get("owner_ids") or [],
+                "project_id": topico.project_id,
+                "parent_id": topico.id,
+            },
+            actor_id=actor_id,
+        )
+
+    async def list_obligations(self, topic_id: UUID) -> list[ProjectCommitment]:
+        """Obrigações do item: em aberto primeiro, por prazo."""
+        rows = (
+            await self.db.execute(
+                select(ProjectCommitment)
+                .where(ProjectCommitment.parent_id == topic_id)
+                .options(
+                    selectinload(ProjectCommitment.participants),
+                    selectinload(ProjectCommitment.attachments),
+                )
+                .order_by(ProjectCommitment.due_at.asc().nulls_last(), ProjectCommitment.created_at.asc())
+            )
+        ).scalars().unique().all()
+        return sorted(rows, key=lambda r: r.status not in OPEN_STATUSES)
+
+    # ------------------------------------------------------------------ andamentos
+
+    def _registrar(
+        self, commitment_id: UUID, kind: str, body: str, meeting_id: UUID | None, author_id: UUID | None
+    ) -> ProjectCommitmentUpdate:
+        row = ProjectCommitmentUpdate(
+            commitment_id=commitment_id, kind=kind, body=body, meeting_id=meeting_id, author_id=author_id
+        )
+        self.db.add(row)
+        return row
+
+    async def updates_read(self, rows: list[ProjectCommitmentUpdate]) -> list[dict]:
+        nomes = await self._names({r.author_id for r in rows if r.author_id})
+        reuniao_ids = {r.meeting_id for r in rows if r.meeting_id}
+        reunioes = (
+            {
+                m.id: m
+                for m in (
+                    await self.db.execute(select(ProjectCommitment).where(ProjectCommitment.id.in_(reuniao_ids)))
+                ).scalars().all()
+            }
+            if reuniao_ids
+            else {}
+        )
+        return [
+            {
+                "id": r.id,
+                "commitment_id": r.commitment_id,
+                "kind": r.kind,
+                "body": r.body,
+                "author_id": r.author_id,
+                "author_name": nomes.get(r.author_id) if r.author_id else None,
+                "meeting_id": r.meeting_id,
+                "meeting_date": _meeting_date(reunioes.get(r.meeting_id)) if r.meeting_id else None,
+                "created_at": r.created_at,
+            }
+            for r in rows
+        ]
+
+    async def list_updates(self, commitment_id: UUID) -> list[dict]:
+        """Linha do tempo do item, do mais recente para o mais antigo."""
+        rows = (
+            await self.db.execute(
+                select(ProjectCommitmentUpdate)
+                .where(ProjectCommitmentUpdate.commitment_id == commitment_id)
+                .order_by(ProjectCommitmentUpdate.created_at.desc())
+            )
+        ).scalars().all()
+        return await self.updates_read(list(rows))
+
+    async def add_update(
+        self,
+        *,
+        commitment_id: UUID,
+        kind: str,
+        body: str,
+        meeting_id: UUID | None,
+        author_id: UUID | None,
+    ) -> ProjectCommitmentUpdate:
+        """Andamento registrado à mão (Observação ou Atualização). Conclusão nasce do concluir."""
+        if kind not in (CommitmentUpdateKind.OBSERVACAO.value, CommitmentUpdateKind.ATUALIZACAO.value):
+            raise HTTPException(status_code=400, detail="Tipo de andamento inválido.")
+        texto = (body or "").strip()
+        if not texto:
+            raise HTTPException(status_code=400, detail="Escreva o andamento.")
+        item = await self.db.get(ProjectCommitment, commitment_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Compromisso não encontrado.")
+        if meeting_id is not None:
+            reuniao = await self.db.get(ProjectCommitment, meeting_id)
+            if reuniao is None or reuniao.kind != CommitmentKind.REUNIAO.value:
+                raise HTTPException(status_code=400, detail="Reunião inválida.")
+        row = self._registrar(commitment_id, kind, texto, meeting_id, author_id)
+        await self.db.flush()
+        return row
+
+    async def delete_update(self, *, update_id: UUID, actor_id: UUID, can_delete_any: bool) -> None:
+        """Só quem escreveu apaga o próprio andamento (ou quem pode excluir na agenda)."""
+        row = await self.db.get(ProjectCommitmentUpdate, update_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Andamento não encontrado.")
+        if row.author_id != actor_id and not can_delete_any:
+            raise HTTPException(status_code=403, detail="Só quem registrou pode excluir este andamento.")
+        await self.db.delete(row)
+        await self.db.flush()
 
     async def reopen(self, *, commitment_id: UUID) -> ProjectCommitment | None:
         row = await self._load(commitment_id)
@@ -488,6 +716,38 @@ class ProjectAgendaService:
         }
 
         lidos = {d["id"]: d for d in await self.to_read([itens[i] for i in ids if i in itens])}
+
+        # Andamentos: quantos e o mais recente de cada item, para a pauta mostrar sem abrir.
+        andamentos = (
+            await self.db.execute(
+                select(ProjectCommitmentUpdate)
+                .where(ProjectCommitmentUpdate.commitment_id.in_(ids))
+                .order_by(ProjectCommitmentUpdate.created_at.desc())
+            )
+        ).scalars().all()
+        contagem: dict[UUID, int] = {}
+        ultimo: dict[UUID, ProjectCommitmentUpdate] = {}
+        for u in andamentos:
+            contagem[u.commitment_id] = contagem.get(u.commitment_id, 0) + 1
+            ultimo.setdefault(u.commitment_id, u)
+        ultimos_lidos = {d["commitment_id"]: d for d in await self.updates_read(list(ultimo.values()))}
+
+        # Resumo das obrigações de cada item — é o que a linha da pauta mostra.
+        agora = datetime.now(timezone.utc)
+        resumo: dict[UUID, dict[str, int]] = {}
+        for pai, status, prazo in (
+            await self.db.execute(
+                select(ProjectCommitment.parent_id, ProjectCommitment.status, ProjectCommitment.due_at).where(
+                    ProjectCommitment.parent_id.in_(ids)
+                )
+            )
+        ).all():
+            r = resumo.setdefault(pai, {"total": 0, "open": 0, "overdue": 0})
+            r["total"] += 1
+            if status in OPEN_STATUSES:
+                r["open"] += 1
+                if prazo and _as_utc(prazo) < agora:
+                    r["overdue"] += 1
         saida: list[dict] = []
         for occ in ocorrencias:
             item = lidos.get(occ.commitment_id)
@@ -512,13 +772,31 @@ class ProjectAgendaService:
                     "came_from_date": (
                         _meeting_date(reunioes.get(anterior.meeting_id)) if anterior else None
                     ),
+                    "updates_count": contagem.get(occ.commitment_id, 0),
+                    "obligations_total": resumo.get(occ.commitment_id, {}).get("total", 0),
+                    "obligations_open": resumo.get(occ.commitment_id, {}).get("open", 0),
+                    "obligations_overdue": resumo.get(occ.commitment_id, {}).get("overdue", 0),
+                    "last_update": ultimos_lidos.get(occ.commitment_id),
                 }
             )
         return saida
 
     async def add_agenda_item(self, *, meeting_id: UUID, data: dict, actor_id: UUID | None):
-        """Cria o item E a sua primeira passagem por esta reunião."""
-        item = await self.create(data={**data, "kind": "OBRIGACAO"}, actor_id=actor_id)
+        """Cria o item (ASSUNTO), a primeira obrigação dele (se veio) e a passagem por esta reunião."""
+        dados = dict(data)
+        primeira = dados.pop("first_obligation", None)
+        item = await self.create(
+            data={
+                "kind": CommitmentKind.ASSUNTO.value,
+                "title": dados.get("title") or "",
+                "description": dados.get("description"),
+                "external_participants": dados.get("external_participants"),
+                "project_id": dados.get("project_id"),
+            },
+            actor_id=actor_id,
+        )
+        if primeira and (primeira.get("title") or "").strip():
+            await self.create_obligation(topic_id=item.id, data=primeira, actor_id=actor_id)
         self.db.add(
             ProjectCommitmentOccurrence(
                 commitment_id=item.id, meeting_id=meeting_id, outcome=CommitmentOutcome.OPEN.value
@@ -527,8 +805,94 @@ class ProjectAgendaService:
         await self.db.flush()
         return item
 
+    async def link_to_meeting(self, *, meeting_id: UUID, commitment_id: UUID) -> None:
+        """Põe na pauta de uma reunião um compromisso criado FORA dela (direto no calendário).
+
+        Cria a passagem do item por essa reunião, como se ele tivesse vindo estendido: dali em
+        diante segue o mesmo ritmo (desfecho, estender para a próxima). O compromisso não muda.
+        """
+        reuniao = await self.db.get(ProjectCommitment, meeting_id)
+        if reuniao is None or reuniao.kind != CommitmentKind.REUNIAO.value:
+            raise HTTPException(status_code=400, detail="Reunião inválida.")
+        item = await self.db.get(ProjectCommitment, commitment_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Compromisso não encontrado.")
+        if item.kind == CommitmentKind.REUNIAO.value:
+            raise HTTPException(status_code=400, detail="Uma reunião não pode entrar na pauta de outra.")
+        if item.status not in OPEN_STATUSES:
+            raise HTTPException(status_code=400, detail="Só compromissos em aberto podem ir para a pauta.")
+        if item.parent_id:
+            # Obrigação de um item: quem vai para a pauta é o item.
+            item = await self.db.get(ProjectCommitment, item.parent_id)
+            commitment_id = item.id
+        elif item.kind != CommitmentKind.ASSUNTO.value:
+            # Compromisso avulso (criado no calendário): vira a primeira obrigação de um item novo.
+            topico = await self.create(
+                data={
+                    "kind": CommitmentKind.ASSUNTO.value,
+                    "title": item.title,
+                    "project_id": item.project_id,
+                    "external_participants": item.external_participants,
+                },
+                actor_id=item.created_by_id,
+            )
+            item.parent_id = topico.id
+            commitment_id = topico.id
+            await self.db.flush()
+        ja_existe = (
+            await self.db.execute(
+                select(ProjectCommitmentOccurrence.id).where(
+                    ProjectCommitmentOccurrence.commitment_id == commitment_id,
+                    ProjectCommitmentOccurrence.meeting_id == meeting_id,
+                )
+            )
+        ).scalars().first()
+        if ja_existe is not None:
+            raise HTTPException(status_code=400, detail="Este compromisso já está na pauta desta reunião.")
+        self.db.add(
+            ProjectCommitmentOccurrence(
+                commitment_id=commitment_id, meeting_id=meeting_id, outcome=CommitmentOutcome.OPEN.value
+            )
+        )
+        await self.db.flush()
+
+    async def open_for_meeting(self, *, meeting_id: UUID | None, search: str | None) -> list[ProjectCommitment]:
+        """Compromissos em aberto que podem ir para a pauta (fora os que já estão nela)."""
+        q = (
+            select(ProjectCommitment)
+            .options(
+                selectinload(ProjectCommitment.participants),
+                selectinload(ProjectCommitment.attachments),
+            )
+            .where(
+                ProjectCommitment.kind != CommitmentKind.REUNIAO.value,
+                ProjectCommitment.status.in_(OPEN_STATUSES),
+                # Obrigação de um item não vai sozinha: o item dela é que vai.
+                ProjectCommitment.parent_id.is_(None),
+            )
+        )
+        if meeting_id is not None:
+            na_pauta = select(ProjectCommitmentOccurrence.commitment_id).where(
+                ProjectCommitmentOccurrence.meeting_id == meeting_id
+            )
+            q = q.where(ProjectCommitment.id.not_in(na_pauta))
+        termo = (search or "").strip()
+        if termo:
+            q = q.where(ProjectCommitment.title.ilike(f"%{termo}%"))
+        q = q.order_by(
+            ProjectCommitment.due_at.asc().nulls_last(), ProjectCommitment.starts_at.asc().nulls_last()
+        ).limit(50)
+        return list((await self.db.execute(q)).scalars().unique().all())
+
     async def set_outcome(
-        self, *, occurrence_id: UUID, outcome: str, next_meeting_id: UUID | None = None
+        self,
+        *,
+        occurrence_id: UUID,
+        outcome: str,
+        next_meeting_id: UUID | None = None,
+        note: str | None = None,
+        actor_id: UUID | None = None,
+        complete_obligations: bool = False,
     ) -> dict:
         """Marca o desfecho do item NAQUELA reunião.
 
@@ -547,12 +911,31 @@ class ProjectAgendaService:
         if item is None:
             raise HTTPException(status_code=404, detail="Item não encontrado.")
 
+        texto = (note or "").strip() or None
         if outcome == CommitmentOutcome.DONE.value:
             item.status = CommitmentStatus.CONCLUIDO.value
             item.completed_at = datetime.now(timezone.utc)
+            item.completion_note = texto
         else:
             item.status = CommitmentStatus.AGENDADO.value
             item.completed_at = None
+            item.completion_note = None
+
+        # O texto da caixa vira andamento DAQUELA reunião: conclusão, ou o que avançou/falta.
+        if texto and outcome != CommitmentOutcome.OPEN.value:
+            tipo = (
+                CommitmentUpdateKind.CONCLUSAO.value
+                if outcome == CommitmentOutcome.DONE.value
+                else CommitmentUpdateKind.ATUALIZACAO.value
+            )
+            self._registrar(item.id, tipo, texto, occ.meeting_id, actor_id)
+
+        if outcome == CommitmentOutcome.DONE.value and complete_obligations:
+            for ob in await self.list_obligations(item.id):
+                if ob.status in OPEN_STATUSES:
+                    await self.complete(
+                        commitment_id=ob.id, note=None, actor_id=actor_id, meeting_id=occ.meeting_id
+                    )
 
         criada = False
         if outcome == CommitmentOutcome.EXTENDED.value:
@@ -582,7 +965,9 @@ class ProjectAgendaService:
                 criada = True
             # O prazo passa a ser a próxima reunião: é o que o time combina na prática
             # ("me traz até a reunião que vem"), e mantém o item cobrando na data certa.
-            if proxima.starts_at:
+            # O prazo das obrigações é de cada uma (altera-se explicitamente); só o item antigo,
+            # sem obrigações, herdava a data da próxima reunião.
+            if proxima.starts_at and item.kind != CommitmentKind.ASSUNTO.value:
                 item.due_at = proxima.starts_at
 
         await self.db.flush()
@@ -839,6 +1224,10 @@ class ProjectAgendaService:
             if await self.delete(commitment_id=o.id):
                 apagadas += 1
         return apagadas
+
+
+def _data_br(quando: datetime) -> str:
+    return _as_utc(quando).astimezone(BR_TZ).strftime("%d/%m/%Y")
 
 
 def _meeting_date(meeting) -> date | None:

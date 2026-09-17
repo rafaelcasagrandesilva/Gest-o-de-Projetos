@@ -12,7 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-CommitmentKindLiteral = Literal["REUNIAO", "OBRIGACAO", "EVENTO", "VISITA"]
+CommitmentKindLiteral = Literal["REUNIAO", "OBRIGACAO", "EVENTO", "VISITA", "ASSUNTO"]
 CommitmentStatusLiteral = Literal["AGENDADO", "CONCLUIDO", "CANCELADO", "ADIADO"]
 CommitmentModalityLiteral = Literal["PRESENCIAL", "VIRTUAL", "HIBRIDA"]
 
@@ -45,8 +45,13 @@ class CommitmentRead(BaseModel):
     modality: str | None = None
     project_id: UUID | None = None
     project_name: str | None = None
+    #: Responsável PRINCIPAL (o primeiro). `owners` traz todos; `owner_name` junta os nomes.
     owner_user_id: UUID | None = None
     owner_name: str | None = None
+    owners: list[CommitmentParticipantRead] = Field(default_factory=list)
+    #: Obrigação de um item de pauta: o item (ASSUNTO) a que pertence.
+    parent_id: UUID | None = None
+    parent_title: str | None = None
     external_participants: str | None = None
     status: str
     completed_at: datetime | None = None
@@ -75,6 +80,8 @@ class CommitmentCreate(BaseModel):
     project_id: UUID | None = None
     #: Opcional: numa reunião o responsável é quem convocou, e nem sempre há um.
     owner_user_id: UUID | None = None
+    #: Vários responsáveis (divide a obrigação). Tem precedência sobre `owner_user_id`.
+    owner_ids: list[UUID] | None = None
     participant_ids: list[UUID] = Field(default_factory=list)
     #: Quem não tem login (escritório, cliente, colaborador sem acesso).
     external_participants: str | None = Field(default=None, max_length=500)
@@ -95,13 +102,33 @@ class CommitmentUpdate(BaseModel):
     modality: CommitmentModalityLiteral | None = None
     project_id: UUID | None = None
     owner_user_id: UUID | None = None
+    owner_ids: list[UUID] | None = None
     participant_ids: list[UUID] | None = None
     external_participants: str | None = Field(default=None, max_length=500)
     status: CommitmentStatusLiteral | None = None
 
 
 class CommitmentComplete(BaseModel):
-    completion_note: str | None = None
+    completion_note: str | None = Field(default=None, max_length=5000)
+    #: Reunião em que foi concluída (o histórico diz onde).
+    meeting_id: UUID | None = None
+
+
+class CommitmentReschedule(BaseModel):
+    """Alterar o prazo de uma obrigação: novo prazo e, se quiser, o motivo."""
+
+    due_at: datetime
+    reason: str | None = Field(default=None, max_length=1000)
+    meeting_id: UUID | None = None
+
+
+class ObligationCreate(BaseModel):
+    """Obrigação de um item de pauta: o que fazer, quem (um ou mais) e até quando."""
+
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    owner_ids: list[UUID] = Field(default_factory=list)
+    due_at: datetime | None = None
 
 
 class AgendaCountersRead(BaseModel):
@@ -125,6 +152,30 @@ class AgendaUserRead(BaseModel):
 CommitmentOutcomeLiteral = Literal["OPEN", "DONE", "PARTIAL", "EXTENDED"]
 
 
+CommitmentUpdateKindLiteral = Literal["OBSERVACAO", "ATUALIZACAO", "CONCLUSAO", "PRAZO"]
+
+
+class CommitmentUpdateRead(BaseModel):
+    """Andamento de um item (linha do tempo)."""
+
+    id: UUID
+    commitment_id: UUID
+    kind: CommitmentUpdateKindLiteral
+    body: str
+    author_id: UUID | None = None
+    author_name: str | None = None
+    #: Reunião em que foi dito, quando foi.
+    meeting_id: UUID | None = None
+    meeting_date: date | None = None
+    created_at: datetime
+
+
+class CommitmentUpdateCreate(BaseModel):
+    kind: Literal["OBSERVACAO", "ATUALIZACAO"]
+    body: str = Field(min_length=1, max_length=5000)
+    meeting_id: UUID | None = None
+
+
 class AgendaItemRead(CommitmentRead):
     """Um item em pauta: o compromisso + o que aconteceu com ele NAQUELA reunião."""
 
@@ -136,23 +187,40 @@ class AgendaItemRead(CommitmentRead):
     extended_to_meeting_id: UUID | None = None
     extended_to_date: date | None = None
     came_from_date: date | None = None
+    #: Andamentos do item (todas as reuniões) e o mais recente, para a pauta mostrar sem abrir.
+    updates_count: int = 0
+    last_update: CommitmentUpdateRead | None = None
+    #: Resumo das obrigações do item (é o que a linha da pauta mostra).
+    obligations_total: int = 0
+    obligations_open: int = 0
+    obligations_overdue: int = 0
 
 
 class AgendaItemCreate(BaseModel):
-    """Uma linha da ata: assunto, ação, envolvidos, responsável e prazo."""
+    """Um item de pauta: o assunto, os envolvidos e (opcional) a primeira obrigação."""
 
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
-    due_at: datetime | None = None
-    owner_user_id: UUID | None = None
     external_participants: str | None = Field(default=None, max_length=500)
     project_id: UUID | None = None
+    first_obligation: ObligationCreate | None = None
 
 
 class AgendaItemOutcome(BaseModel):
     outcome: CommitmentOutcomeLiteral
     #: Obrigatório quando `outcome` é EXTENDED: para qual reunião o item foi levado.
     next_meeting_id: UUID | None = None
+    #: Texto da caixa: DONE = o que gerou a conclusão; PARTIAL/EXTENDED = o que avançou/falta.
+    #: Vira um andamento do item nesta reunião.
+    note: str | None = Field(default=None, max_length=5000)
+    #: DONE: conclui junto as obrigações ainda em aberto do item.
+    complete_obligations: bool = False
+
+
+class AgendaItemLink(BaseModel):
+    """Leva um compromisso que já existe para a pauta de uma reunião."""
+
+    commitment_id: UUID
 
 
 class MeetingOptionRead(BaseModel):

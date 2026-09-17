@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { isAxiosError } from "axios";
 import { formatApiError } from "@/utils/apiError";
 import { listProjects } from "@/services/projects";
+import { OwnerPicker } from "@/components/project-agenda/OwnerPicker";
 import {
   createCommitment,
   deleteSeriesFrom,
@@ -73,7 +74,13 @@ export function CommitmentModal({
   const [location, setLocation] = useState(commitment?.location ?? "");
   const [modality, setModality] = useState<CommitmentModality>(commitment?.modality ?? "PRESENCIAL");
   const [projectId, setProjectId] = useState(commitment?.project_id ?? "");
-  const [ownerId, setOwnerId] = useState(commitment?.owner_user_id ?? "");
+  const [ownerIds, setOwnerIds] = useState<string[]>(
+    commitment?.owners?.length
+      ? commitment.owners.map((o) => o.user_id)
+      : commitment?.owner_user_id
+        ? [commitment.owner_user_id]
+        : [],
+  );
   const [participantes, setParticipantes] = useState<string[]>(
     commitment?.participants.map((p) => p.user_id) ?? [],
   );
@@ -129,7 +136,7 @@ export function CommitmentModal({
         location: location.trim() || null,
         modality: temHora ? modality : null,
         project_id: projectId || null,
-        owner_user_id: ownerId || null,
+        owner_ids: ownerIds,
         participant_ids: participantes,
         external_participants: externos.trim() || null,
         ...(!editando && repetir && temHora
@@ -190,7 +197,8 @@ export function CommitmentModal({
 
         <div className="mt-4 space-y-3">
           <div className="flex flex-wrap gap-2">
-            {(Object.keys(KIND_LABELS) as CommitmentKind[]).map((k) => (
+            {/* "Item de pauta" nasce só dentro de uma reunião. */}
+            {(Object.keys(KIND_LABELS) as CommitmentKind[]).filter((k) => k !== "ASSUNTO").map((k) => (
               <button
                 key={k}
                 type="button"
@@ -296,17 +304,8 @@ export function CommitmentModal({
 
           <div className="flex flex-wrap items-end gap-3">
             <label className="min-w-[13rem] flex-1 text-xs font-medium text-slate-600">
-              Responsável {kind === "REUNIAO" ? "(quem convocou)" : ""}
-              <select
-                value={ownerId}
-                onChange={(e) => setOwnerId(e.target.value)}
-                className="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-              >
-                <option value="">Sem responsável</option>
-                {usuarios.map((u) => (
-                  <option key={u.id} value={u.id}>{u.full_name}</option>
-                ))}
-              </select>
+              {kind === "REUNIAO" ? "Responsável (quem convocou)" : "Responsáveis"}
+              <OwnerPicker users={usuarios} value={ownerIds} onChange={setOwnerIds} />
             </label>
             <label className="min-w-[13rem] flex-1 text-xs font-medium text-slate-600">
               Projeto (opcional)
