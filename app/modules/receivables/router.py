@@ -50,7 +50,9 @@ from app.schemas.advance_institution import (
 )
 from app.schemas.advance_settlement import (
     ManagementSummaryRead,
+    MassExtensionCreate,
     MassSettlementCreate,
+    ObligationExtensionCreate,
     ObligationRead,
     SettlementCreate,
     SettlementEventCreatedRead,
@@ -698,6 +700,80 @@ async def create_advance_settlement(
             movements=[m.model_dump() for m in payload.movements],
             created_by_id=actor.id,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return ObligationRead.model_validate(obligation)
+
+
+@invoices_router.post(
+    "/advance-settlements/{batch_item_id}/extensions",
+    response_model=ObligationRead,
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
+)
+async def extend_advance_settlement_due(
+    batch_item_id: UUID,
+    payload: ObligationExtensionCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> ObligationRead:
+    """Prorroga o vencimento da NF perante a instituição (o vencimento da NF não muda)."""
+    svc = AdvanceSettlementService(db)
+    try:
+        obligation = await svc.extend_due_date(
+            batch_item_id=batch_item_id,
+            new_due=payload.new_due,
+            reason=payload.reason,
+            cost_amount=payload.cost_amount,
+            cost_payment_date=payload.cost_payment_date,
+            created_by_id=actor.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return ObligationRead.model_validate(obligation)
+
+
+@invoices_router.post(
+    "/advance-settlements/extensions",
+    response_model=list[ObligationRead],
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
+)
+async def extend_advance_settlements_due(
+    payload: MassExtensionCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> list[ObligationRead]:
+    """Prorrogação em massa: várias NFs para a mesma data, um custo único (vai ao Contas a Pagar)."""
+    svc = AdvanceSettlementService(db)
+    try:
+        rows = await svc.extend_due_dates(
+            batch_item_ids=payload.batch_item_ids,
+            new_due=payload.new_due,
+            cost_amount=payload.cost_amount,
+            cost_payment_date=payload.cost_payment_date,
+            observation=payload.observation,
+            created_by_id=actor.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return [ObligationRead.model_validate(r) for r in rows]
+
+
+@invoices_router.delete(
+    "/advance-settlement-extensions/{extension_id}",
+    response_model=ObligationRead,
+    dependencies=[Depends(require_permission(INVOICES_UPDATE))],
+)
+async def undo_advance_settlement_extension(
+    extension_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> ObligationRead:
+    """Desfaz a prorrogação mais recente (o vencimento volta ao anterior)."""
+    svc = AdvanceSettlementService(db)
+    try:
+        obligation = await svc.undo_extension(extension_id=extension_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.commit()

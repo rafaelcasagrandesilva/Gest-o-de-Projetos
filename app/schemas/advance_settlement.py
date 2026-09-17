@@ -16,13 +16,51 @@ class SettlementMovementRead(ORMModel):
     id: UUID
     batch_item_id: UUID
     event_id: UUID | None = None
+    #: Principal (abate a obrigação).
     amount: float
+    #: Juros: o que foi pago acima do residual.
+    interest_amount: float = 0.0
     funding_source: FundingSource
     settled_at: date
     observation: str | None = None
     reversed_at: datetime | None = None
     reversal_reason: str | None = None
     created_at: datetime
+
+
+class ObligationExtensionRead(BaseModel):
+    id: UUID
+    #: Pedido à instituição (uma ou várias NFs, um custo só).
+    request_id: UUID | None = None
+    previous_due: date | None = None
+    new_due: date
+    reason: str | None = None
+    created_at: datetime
+    #: Custo do PEDIDO inteiro (não por NF), data do pagamento e se o título já foi pago.
+    custo: float = 0.0
+    custo_pago_em: date | None = None
+    custo_pago: bool = False
+    nfs_no_pedido: int = 1
+
+
+class ObligationExtensionCreate(BaseModel):
+    """Prorrogar o vencimento de UMA obrigação perante a instituição."""
+
+    new_due: date
+    reason: str | None = Field(default=None, max_length=1000)
+    #: Custo informado pela instituição — vira título no Contas a Pagar.
+    cost_amount: float = Field(default=0, ge=0)
+    cost_payment_date: date | None = None
+
+
+class MassExtensionCreate(BaseModel):
+    """Prorrogar VÁRIAS NFs (mesma instituição) para a mesma data, com um custo único."""
+
+    batch_item_ids: list[UUID] = Field(..., min_length=1)
+    new_due: date
+    cost_amount: float = Field(default=0, ge=0)
+    cost_payment_date: date | None = None
+    observation: str | None = Field(default=None, max_length=1000)
 
 
 class ObligationRead(BaseModel):
@@ -43,7 +81,18 @@ class ObligationRead(BaseModel):
     valor_liquidado: float
     valor_residual: float
     situacao: SituacaoLiquidacao
+    #: Vencimento VIGENTE perante a instituição (o da última prorrogação, se houver).
     vencimento: date | None = None
+    #: Vencimento da NF (base dos juros).
+    vencimento_original: date | None = None
+    prorrogada: bool = False
+    prorrogacoes: list[ObligationExtensionRead] = Field(default_factory=list)
+    #: Juros pagos (Σ das movimentações ativas) e indicadores sobre o valor da obrigação,
+    #: do vencimento original até o pagamento. Percentuais em fração (0.015 = 1,5%).
+    juros_pagos: float = 0.0
+    juros_percentual: float | None = None
+    juros_dias: int | None = None
+    juros_mensal: float | None = None
     dias_em_atraso: int = 0
     origens_resumo: str = ""
     movimentacoes: list[SettlementMovementRead] = Field(default_factory=list)
@@ -106,6 +155,7 @@ class SettlementEventMovementRead(BaseModel):
     nf_number: str | None = None
     client_name: str | None = None
     amount: float
+    interest_amount: float = 0.0
     funding_source: FundingSource
     funding_source_label: str
     observation: str | None = None
@@ -156,7 +206,7 @@ class ManagementSummaryRead(BaseModel):
 
 class TimelineEvent(BaseModel):
     date: date
-    tipo: str  # ANTECIPADA | VENCEU | LIQUIDACAO
+    tipo: str  # ANTECIPADA | PRORROGADA | VENCEU | LIQUIDACAO
     label: str
     amount: float | None = None
     origem: str | None = None

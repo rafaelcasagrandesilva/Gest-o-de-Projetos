@@ -178,6 +178,26 @@ class AnticipationRateResolver:
                 month = normalize_competencia(batch.receive_date)
                 costs[month] = costs.get(month, 0.0) + cost
                 by_inst[month][(batch.institution or "").strip() or UNKNOWN_INSTITUTION] += cost
+            # Custo das PRORROGAÇÕES (informado pela instituição, pago no dia do pedido): também é
+            # custo real de antecipação — entra no mês do pagamento. Pedidos desfeitos ficam fora.
+            from app.models.advance_obligation_extension import AdvanceExtensionRequest
+
+            pedidos = (
+                await self.session.execute(
+                    select(
+                        AdvanceExtensionRequest.cost_payment_date,
+                        AdvanceExtensionRequest.cost_amount,
+                        AdvanceExtensionRequest.institution_name,
+                    ).where(
+                        AdvanceExtensionRequest.reversed_at.is_(None),
+                        AdvanceExtensionRequest.cost_amount > 0,
+                    )
+                )
+            ).all()
+            for pago_em, valor, instituicao in pedidos:
+                month = normalize_competencia(pago_em)
+                costs[month] = costs.get(month, 0.0) + float(valor)
+                by_inst[month][(instituicao or "").strip() or UNKNOWN_INSTITUTION] += float(valor)
             self._costs = costs
             self._costs_by_institution = {m: dict(v) for m, v in by_inst.items()}
         return self._costs
