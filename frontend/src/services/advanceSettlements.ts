@@ -97,6 +97,19 @@ export interface ObligationExtension {
   custo_pago_em: string | null;
   custo_pago: boolean;
   nfs_no_pedido: number;
+  /** Taxa que o pedido custou: base (residual no dia do pedido), período (fração), dias
+   *  (média ponderada, em massa) e taxa mensal equivalente. `null` sem custo. */
+  taxa_base: number | null;
+  taxa_periodo: number | null;
+  taxa_dias: number | null;
+  taxa_mensal: number | null;
+  /** Parte DESTA NF no custo e a taxa dela — ESTIMATIVA quando o pedido tem várias NFs. */
+  custo_nf: number | null;
+  custo_nf_estimado: boolean;
+  taxa_nf_base: number | null;
+  taxa_nf_periodo: number | null;
+  taxa_nf_dias: number | null;
+  taxa_nf_mensal: number | null;
 }
 
 /**

@@ -88,6 +88,15 @@ class ExtensionCostTests(_Base):
                 self.assertEqual({r["vencimento"] for r in rows}, {date(2026, 9, 25)})
                 p = rows[0]["prorrogacoes"][-1]
                 self.assertEqual((p["custo"], p["nfs_no_pedido"], p["custo_pago"]), (1_234.56, 3, False))
+                # Taxa do pedido: 1.234,56 sobre 30.000 (3 NFs) em 15 dias (10/09 → 25/09).
+                self.assertEqual((p["taxa_base"], p["taxa_dias"]), (30_000.0, 15.0))
+                self.assertAlmostEqual(p["taxa_periodo"], 1_234.56 / 30_000, places=6)
+                self.assertAlmostEqual(p["taxa_mensal"], (1 + 1_234.56 / 30_000) ** 2 - 1, places=6)
+                # Estimativa por NF: mesmos valor e dias → partes iguais, somando o custo exato.
+                partes = [r["prorrogacoes"][-1]["custo_nf"] for r in rows]
+                self.assertAlmostEqual(sum(partes), 1_234.56, places=2)
+                self.assertTrue(all(r["prorrogacoes"][-1]["custo_nf_estimado"] for r in rows))
+                self.assertEqual(rows[0]["prorrogacoes"][-1]["taxa_nf_dias"], 15)
 
                 from sqlalchemy import select
                 titulo = (

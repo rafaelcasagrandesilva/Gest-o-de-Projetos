@@ -41,6 +41,20 @@ class ObligationExtensionRead(BaseModel):
     custo_pago_em: date | None = None
     custo_pago: bool = False
     nfs_no_pedido: int = 1
+    #: Taxa que o pedido custou: base (residual no dia do pedido, somado se em massa), taxa do
+    #: período (fração), dias (média ponderada) e taxa mensal equivalente (composta, 30 dias).
+    taxa_base: float | None = None
+    taxa_periodo: float | None = None
+    taxa_dias: float | None = None
+    taxa_mensal: float | None = None
+    #: Parte DESTA NF no custo do pedido e a taxa dela. Em pedido com várias NFs é ESTIMATIVA
+    #: (mesma taxa diária para todas: custo × valor×dias da NF ÷ Σ valor×dias).
+    custo_nf: float | None = None
+    custo_nf_estimado: bool = False
+    taxa_nf_base: float | None = None
+    taxa_nf_periodo: float | None = None
+    taxa_nf_dias: int | None = None
+    taxa_nf_mensal: float | None = None
 
 
 class ObligationExtensionCreate(BaseModel):

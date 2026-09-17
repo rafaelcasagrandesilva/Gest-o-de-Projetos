@@ -18,6 +18,7 @@ import {
   SITUACAO_META,
   type FundingSource,
   type ManagementSummary,
+  type ObligationExtension,
   type Obligation,
   type SettlementEvent,
   type SettlementEventDetail,
@@ -51,6 +52,30 @@ function formatDateBr(iso: string | null | undefined): string {
 function fmtPct(frac: number | null | undefined): string {
   if (frac == null) return "—";
   return `${(frac * 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+}
+
+/** "0,98% em 22 dias (≈ 1,34% a.m.)" — a taxa que a prorrogação custou PARA ESTA NF. */
+function taxaProrrogacao(p: ObligationExtension): string | null {
+  if (p.taxa_nf_periodo == null || p.taxa_nf_dias == null) return null;
+  return `${fmtPct(p.taxa_nf_periodo)} em ${p.taxa_nf_dias} dias${
+    p.taxa_nf_mensal != null ? ` (≈ ${fmtPct(p.taxa_nf_mensal)} a.m.)` : ""
+  }`;
+}
+
+/** Custo da prorrogação que cabe a esta NF (a estimativa, em pedido com várias). */
+function custoDaNf(p: ObligationExtension): number {
+  return p.custo_nf ?? (p.nfs_no_pedido > 1 ? 0 : p.custo);
+}
+
+function EstimativaTag() {
+  return (
+    <span
+      className="ml-1.5 rounded bg-amber-100 px-1 py-px align-middle text-[9px] font-semibold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200"
+      title="Prorrogação em conjunto: a instituição informa só o custo total. O valor desta NF é estimado supondo a mesma taxa diária para todas (valor × dias de cada NF)."
+    >
+      Estimativa
+    </span>
+  );
 }
 
 function todayIso(): string {
@@ -266,13 +291,16 @@ export function AdvanceSettlementsTab({
   // Card "Juros" das NFs no filtro: custo das prorrogações (cada pedido conta uma vez, mesmo em
   // massa) + juros pagos em atraso na liquidação. Some quando não há nada.
   const jurosFiltro = useMemo(() => {
-    const pedidos = new Map<string, number>();
+    let prorrogacao = 0;
     const nfs = new Set<string>();
     let atraso = 0;
     for (const o of filtered) {
+      // Cada NF soma a SUA parte do custo (estimada em pedido com várias) — filtrar algumas NFs
+      // de um pedido mostra só a parte delas.
       for (const p of o.prorrogacoes) {
-        if (p.request_id && p.custo > 0.005) {
-          pedidos.set(p.request_id, p.custo);
+        const parte = custoDaNf(p);
+        if (parte > 0.005) {
+          prorrogacao += parte;
           nfs.add(o.batch_item_id);
         }
       }
@@ -281,7 +309,6 @@ export function AdvanceSettlementsTab({
         nfs.add(o.batch_item_id);
       }
     }
-    const prorrogacao = [...pedidos.values()].reduce((t, v) => t + v, 0);
     return { total: prorrogacao + atraso, prorrogacao, atraso, quantidade: nfs.size };
   }, [filtered]);
   /** NFs na janela de prorrogação (uma, pelo botão da linha, ou várias, pela seleção). */
@@ -542,8 +569,11 @@ export function AdvanceSettlementsTab({
                           return [
                             `Prorrogada: ${formatDateBr(o.vencimento_original)} → ${formatDateBr(o.vencimento)}`,
                             ult && ult.custo > 0
-                              ? `custo ${formatCurrency(ult.custo)}${ult.nfs_no_pedido > 1 ? ` (pedido com ${ult.nfs_no_pedido} NFs)` : ""}`
+                              ? ult.nfs_no_pedido > 1
+                                ? `custo estimado ${formatCurrency(custoDaNf(ult))} (de ${formatCurrency(ult.custo)} do pedido com ${ult.nfs_no_pedido} NFs)`
+                                : `custo ${formatCurrency(ult.custo)}`
                               : null,
+                            ult ? taxaProrrogacao(ult) : null,
                             ult?.reason ?? null,
                           ]
                             .filter(Boolean)
@@ -745,12 +775,26 @@ function ExtendDueModal({
                       {p.custo > 0 ? (
                         <span className="text-slate-500">
                           {" "}
-                          · custo {formatCurrency(p.custo)}
-                          {p.nfs_no_pedido > 1 ? ` (pedido com ${p.nfs_no_pedido} NFs)` : ""}
+                          · custo {p.nfs_no_pedido > 1 ? "estimado " : ""}
+                          {formatCurrency(custoDaNf(p))}
+                          {p.nfs_no_pedido > 1 ? <EstimativaTag /> : null}
                           {p.custo_pago ? " · pago" : ""}
                         </span>
                       ) : null}
                       {p.reason ? <span className="text-slate-500"> · {p.reason}</span> : null}
+                      {taxaProrrogacao(p) ? (
+                        <span
+                          className="mt-0.5 block text-xs text-rose-700"
+                          title={`Custo ÷ o que se devia da NF no dia do pedido (${formatCurrency(p.taxa_nf_base ?? 0)}), do vencimento anterior ao novo`}
+                        >
+                          Taxa: {taxaProrrogacao(p)}
+                        </span>
+                      ) : null}
+                      {p.nfs_no_pedido > 1 ? (
+                        <span className="mt-0.5 block text-[11px] text-slate-400">
+                          Pedido com {p.nfs_no_pedido} NFs · custo total {formatCurrency(p.custo)}
+                        </span>
+                      ) : null}
                     </span>
                     {p.id === ultima?.id ? (
                       <button

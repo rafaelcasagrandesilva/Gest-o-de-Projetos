@@ -335,7 +335,8 @@ class AdvanceSettlementService:
                             "new_due": e.new_due,
                             "reason": e.reason,
                             "created_at": e.created_at,
-                            **(pedidos.get(e.request_id) or {}),
+                            **{k: v for k, v in (pedidos.get(e.request_id) or {}).items() if k != "por_nf"},
+                            **((pedidos.get(e.request_id) or {}).get("por_nf", {}).get(item.id) or {}),
                         }
                         for e in prorrogacoes
                     ],
@@ -804,15 +805,96 @@ class AdvanceSettlementService:
                     )
                 ).all()
             }
+        taxas = await self._requests_rate(pedidos)
         return {
             p.id: {
                 "custo": float(_money(p.cost_amount)),
                 "custo_pago_em": p.cost_payment_date,
                 "custo_pago": pagos.get(p.payable_snapshot_id, False) if p.payable_snapshot_id else False,
                 "nfs_no_pedido": int(contagem.get(p.id, 0)),
+                **taxas.get(p.id, {}),
             }
             for p in pedidos
         }
+
+    async def _requests_rate(self, pedidos: list[AdvanceExtensionRequest]) -> dict[UUID, dict]:
+        """Taxa que cada pedido de prorrogação custou.
+
+        Base de cada NF = o que ainda se devia no dia do pedido (valor da obrigação − liquidações
+        ativas até aquela data); dias = do vencimento anterior (na 1ª, o original) ao novo.
+        Taxa do período = custo ÷ Σ bases; dias = média ponderada pelas bases; taxa mensal =
+        equivalente composta (mês de 30 dias). Pedido em massa vira UMA taxa para o conjunto.
+        """
+        com_custo = [p for p in pedidos if _money(p.cost_amount) > _TOL]
+        if not com_custo:
+            return {}
+        linhas = (
+            await self.db.execute(
+                select(
+                    AdvanceObligationExtension.request_id,
+                    AdvanceObligationExtension.batch_item_id,
+                    AdvanceObligationExtension.previous_due,
+                    AdvanceObligationExtension.new_due,
+                    ReceivableAdvanceBatchItem.advanced_amount,
+                )
+                .join(ReceivableAdvanceBatchItem, ReceivableAdvanceBatchItem.id == AdvanceObligationExtension.batch_item_id)
+                .where(AdvanceObligationExtension.request_id.in_([p.id for p in com_custo]))
+            )
+        ).all()
+        mv_map = await self._movements_for_items(list({l.batch_item_id for l in linhas}))
+        por_pedido = {p.id: p for p in com_custo}
+        acumulado: dict[UUID, list[tuple[UUID, Decimal, int]]] = {}
+        for req_id, item_id, antes, depois, valor in linhas:
+            pedido = por_pedido[req_id]
+            dia_pedido = pedido.created_at.date() if pedido.created_at else pedido.cost_payment_date
+            pago_ate = sum(
+                (
+                    _money(m.amount)
+                    for m in mv_map.get(item_id, [])
+                    if m.reversed_at is None and m.settled_at <= dia_pedido
+                ),
+                Decimal("0.00"),
+            )
+            base = max(_money(valor) - pago_ate, Decimal("0.00"))
+            dias = (depois - antes).days if antes else 0
+            if base > _TOL and dias > 0:
+                acumulado.setdefault(req_id, []).append((item_id, base, dias))
+        out: dict[UUID, dict] = {}
+        for req_id, partes in acumulado.items():
+            custo = _money(por_pedido[req_id].cost_amount)
+            base_total = sum((b for _, b, _ in partes), Decimal("0.00"))
+            valor_dias = sum((b * d for _, b, d in partes), Decimal("0"))
+            dias_medios = float(valor_dias / base_total)
+            pct = float(custo / base_total)
+            # ESTIMATIVA por NF (engenharia reversa): a instituição informa só o custo do pedido;
+            # supondo a mesma taxa diária para todas, cada NF custa base × dias × taxa. Com uma
+            # NF só, o custo dela é o próprio custo do pedido (exato).
+            por_nf: dict[UUID, dict] = {}
+            restante = custo
+            for n, (item_id, base, dias) in enumerate(partes):
+                parte = (
+                    restante
+                    if n == len(partes) - 1
+                    else (custo * base * dias / valor_dias).quantize(_CENT)
+                )
+                restante -= parte
+                p_nf = float(parte / base)
+                por_nf[item_id] = {
+                    "custo_nf": float(parte),
+                    "custo_nf_estimado": len(partes) > 1,
+                    "taxa_nf_base": float(base),
+                    "taxa_nf_periodo": round(p_nf, 6),
+                    "taxa_nf_dias": dias,
+                    "taxa_nf_mensal": round((1 + p_nf) ** (30 / dias) - 1, 6),
+                }
+            out[req_id] = {
+                "taxa_base": float(base_total.quantize(_CENT)),
+                "taxa_periodo": round(pct, 6),
+                "taxa_dias": round(dias_medios, 1),
+                "taxa_mensal": round((1 + pct) ** (30 / dias_medios) - 1, 6) if dias_medios > 0 else None,
+                "por_nf": por_nf,
+            }
+        return out
 
     async def extend_due_dates(
         self,
