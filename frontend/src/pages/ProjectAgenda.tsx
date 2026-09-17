@@ -7,6 +7,8 @@ import { formatApiError } from "@/utils/apiError";
 import { canPreviewInBrowser, saveBlobAsFile, viewFileInNewTab } from "@/utils/fileView";
 import { CommitmentModal } from "@/components/project-agenda/CommitmentModal";
 import { MeetingAgendaItems } from "@/components/project-agenda/MeetingAgendaItems";
+import { ConcludeDialog, LinkToMeetingDialog } from "@/components/project-agenda/AgendaDialogs";
+import { CommitmentUpdates } from "@/components/project-agenda/CommitmentUpdates";
 import {
   commitmentAttachmentUrl,
   completeCommitment,
@@ -199,13 +201,9 @@ export function ProjectAgenda() {
         ? `Semana de ${inicioDaSemana(referencia).toLocaleDateString("pt-BR")}`
         : `${MESES[referencia.getMonth()]} de ${referencia.getFullYear()}`;
 
-  async function concluir(c: Commitment) {
-    const nota = window.prompt("Observação da conclusão (opcional):", "");
-    if (nota === null) return;
-    await completeCommitment(c.id, nota.trim() || null);
-    setDetalhe(null);
-    await carregar();
-  }
+  /** Compromisso aguardando a caixa de conclusão / a escolha da reunião. */
+  const [concluindo, setConcluindo] = useState<Commitment | null>(null);
+  const [levando, setLevando] = useState<Commitment | null>(null);
 
   async function baixarAnexo(c: Commitment, attId: string, nome: string, mime: string | null) {
     const buscar = async () => {
@@ -411,7 +409,8 @@ export function ProjectAgenda() {
             setDetalhe(null);
             setModalAberto(true);
           }}
-          onConcluir={() => void concluir(detalhe)}
+          onConcluir={() => setConcluindo(detalhe)}
+          onLevarReuniao={() => setLevando(detalhe)}
           onReabrir={async () => {
             await reopenCommitment(detalhe.id);
             setDetalhe(null);
@@ -425,6 +424,31 @@ export function ProjectAgenda() {
           }}
           onAnexo={(attId, nome, mime) => void baixarAnexo(detalhe, attId, nome, mime)}
           onRecarregar={carregar}
+        />
+      ) : null}
+
+      {concluindo ? (
+        <ConcludeDialog
+          itemTitle={concluindo.title}
+          onClose={() => setConcluindo(null)}
+          onConfirm={async (nota) => {
+            await completeCommitment(concluindo.id, nota);
+            setConcluindo(null);
+            setDetalhe(null);
+            await carregar();
+          }}
+        />
+      ) : null}
+
+      {levando ? (
+        <LinkToMeetingDialog
+          commitment={levando}
+          onClose={() => setLevando(null)}
+          onLinked={async () => {
+            setLevando(null);
+            setDetalhe(null);
+            await carregar();
+          }}
         />
       ) : null}
     </div>
@@ -519,6 +543,7 @@ function DetalheCompromisso({
   onClose,
   onEditar,
   onConcluir,
+  onLevarReuniao,
   onReabrir,
   onExcluir,
   onAnexo,
@@ -529,6 +554,7 @@ function DetalheCompromisso({
   onClose: () => void;
   onEditar: () => void;
   onConcluir: () => void;
+  onLevarReuniao: () => void;
   onReabrir: () => void | Promise<void>;
   onExcluir: () => void | Promise<void>;
   onAnexo: (attId: string, nome: string, mime: string | null) => void;
@@ -567,6 +593,11 @@ function DetalheCompromisso({
               {KIND_LABELS[c.kind]}
             </span>
             <h3 className="mt-1 text-lg font-semibold text-slate-900">{c.title}</h3>
+            {c.parent_title ? (
+              <p className="text-xs text-slate-500">
+                Obrigação do item de pauta <span className="font-medium text-slate-700">{c.parent_title}</span>
+              </p>
+            ) : null}
           </div>
           <button type="button" onClick={onClose} className="rounded px-2 py-1 text-slate-400 hover:bg-slate-100">
             ✕
@@ -593,7 +624,9 @@ function DetalheCompromisso({
           ) : null}
           {c.owner_name ? (
             <div>
-              <dt className="text-[10px] uppercase tracking-wide text-slate-500">Responsável</dt>
+              <dt className="text-[10px] uppercase tracking-wide text-slate-500">
+                {c.owners.length > 1 ? "Responsáveis" : "Responsável"}
+              </dt>
               <dd className="text-slate-800">{c.owner_name}</dd>
             </div>
           ) : null}
@@ -639,7 +672,16 @@ function DetalheCompromisso({
           </div>
         ) : null}
 
-        {c.completion_note ? (
+        {/* Reunião mostra a pauta; os demais compromissos, a linha do tempo de andamentos
+            (que já inclui a conclusão). */}
+        {c.kind !== "REUNIAO" ? (
+          <div className="mt-4">
+            <p className="mb-1.5 text-[10px] uppercase tracking-wide text-slate-500">
+              {c.parent_id ? "Histórico do item de pauta" : "Andamentos"}
+            </p>
+            <CommitmentUpdates commitmentId={c.parent_id ?? c.id} podeEditar={podeEditar} />
+          </div>
+        ) : c.completion_note ? (
           <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
             <strong>Concluído:</strong> {c.completion_note}
           </p>
@@ -714,6 +756,12 @@ function DetalheCompromisso({
             <button type="button" onClick={() => void onExcluir()} className="rounded-lg px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50">
               Excluir
             </button>
+            {/* Obrigação criada direto no calendário que precisa ser discutida numa reunião. */}
+            {c.kind !== "REUNIAO" && c.status !== "CONCLUIDO" && c.status !== "CANCELADO" ? (
+              <button type="button" onClick={onLevarReuniao} className="rounded-lg px-3 py-1.5 text-sm font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50">
+                Levar para reunião
+              </button>
+            ) : null}
             <button type="button" onClick={onEditar} className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
               Editar
             </button>

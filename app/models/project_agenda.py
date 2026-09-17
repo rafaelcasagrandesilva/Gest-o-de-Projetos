@@ -23,6 +23,9 @@ class CommitmentKind(str, enum.Enum):
     OBRIGACAO = "OBRIGACAO"
     EVENTO = "EVENTO"
     VISITA = "VISITA"
+    #: Item de pauta: o ASSUNTO tratado nas reuniões. Não tem responsável nem prazo próprios —
+    #: quem cobra são as obrigações filhas (`parent_id`). Não aparece sozinho no calendário.
+    ASSUNTO = "ASSUNTO"
 
 
 class CommitmentStatus(str, enum.Enum):
@@ -94,6 +97,11 @@ class ProjectCommitment(TimestampUUIDMixin, Base):
     # compromisso de verdade, com ata, participantes e pauta próprios — e remarcar uma não mexe
     # nas outras.
     series_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True, index=True)
+    # Obrigação de um item de pauta: aponta para o ASSUNTO. Cada obrigação é um compromisso de
+    # verdade (calendário, atrasados, "só os meus" de cada responsável).
+    parent_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("project_commitments.id", ondelete="CASCADE"), nullable=True, index=True
+    )
 
     participants: Mapped[list["ProjectCommitmentParticipant"]] = relationship(
         back_populates="commitment", cascade="all, delete-orphan"
@@ -117,6 +125,8 @@ class ProjectCommitmentParticipant(TimestampUUIDMixin, Base):
     user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
+    # Responsável (pode haver mais de um): divide a obrigação e é cobrado por ela.
+    is_owner: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     commitment: Mapped["ProjectCommitment"] = relationship(back_populates="participants")
 
@@ -182,4 +192,39 @@ class ProjectCommitmentOccurrence(TimestampUUIDMixin, Base):
     )
     outcome: Mapped[str] = mapped_column(
         String(16), nullable=False, default=CommitmentOutcome.OPEN.value, server_default="OPEN"
+    )
+
+
+class CommitmentUpdateKind(str, enum.Enum):
+    """Tipo de andamento registrado num item."""
+
+    OBSERVACAO = "OBSERVACAO"  # palpite, discussão, contexto
+    ATUALIZACAO = "ATUALIZACAO"  # o que avançou / o que falta
+    CONCLUSAO = "CONCLUSAO"  # o que gerou a conclusão
+    PRAZO = "PRAZO"  # prazo de uma obrigação alterado (de → para, e o motivo)
+
+
+class ProjectCommitmentUpdate(TimestampUUIDMixin, Base):
+    """Andamento de um item — a linha do tempo do que foi dito e feito sobre ele.
+
+    Antes tudo ia para o campo "Ação" (a descrição), escrito à mão e sem data. Aqui cada registro
+    tem autor, data e, quando foi dito numa reunião, QUAL reunião — então a pauta de 16/09 mostra
+    o que se falou em 16/09, e o item carrega o histórico inteiro de uma reunião para a outra.
+
+    Registros são o histórico: reabrir o item não apaga a conclusão que já foi registrada.
+    """
+
+    __tablename__ = "project_commitment_updates"
+
+    commitment_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("project_commitments.id", ondelete="CASCADE"), index=True
+    )
+    # Reunião em que foi dito (opcional: andamento registrado fora de reunião).
+    meeting_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("project_commitments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default=CommitmentUpdateKind.OBSERVACAO.value)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    author_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

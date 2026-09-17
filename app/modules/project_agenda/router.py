@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_permission
+from app.api.deps import get_current_user, require_permission, user_has_permission
 from app.core.permission_codes import (
     PROJECT_AGENDA_CREATE,
     PROJECT_AGENDA_DELETE,
@@ -28,6 +28,7 @@ from app.models.user import User
 from app.schemas.project_agenda import (
     AgendaCountersRead,
     AgendaItemCreate,
+    AgendaItemLink,
     AgendaItemOutcome,
     AgendaItemRead,
     AgendaUserRead,
@@ -35,8 +36,12 @@ from app.schemas.project_agenda import (
     CommitmentComplete,
     CommitmentCreate,
     CommitmentRead,
+    CommitmentReschedule,
     CommitmentUpdate,
+    CommitmentUpdateCreate,
+    CommitmentUpdateRead,
     MeetingOptionRead,
+    ObligationCreate,
     SeriesExtend,
     SeriesSummaryRead,
 )
@@ -176,6 +181,144 @@ async def add_meeting_item(
 
 
 @router.post(
+    "/commitments/{commitment_id}/items/link",
+    response_model=list[AgendaItemRead],
+    status_code=201,
+    dependencies=_update,
+)
+async def link_meeting_item(
+    commitment_id: UUID,
+    payload: AgendaItemLink,
+    db: AsyncSession = Depends(get_db),
+) -> list[AgendaItemRead]:
+    """Leva para a pauta desta reunião um compromisso que já existe (criado no calendário)."""
+    svc = ProjectAgendaService(db)
+    await svc.link_to_meeting(meeting_id=commitment_id, commitment_id=payload.commitment_id)
+    await db.commit()
+    return [AgendaItemRead.model_validate(d) for d in await svc.agenda_items(commitment_id)]
+
+
+@router.post("/commitments/{commitment_id}/reschedule", response_model=CommitmentRead, dependencies=_update)
+async def reschedule_commitment(
+    commitment_id: UUID,
+    payload: CommitmentReschedule,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> CommitmentRead:
+    """Altera o prazo de uma obrigação; de → para e o motivo vão para o histórico do item."""
+    svc = ProjectAgendaService(db)
+    row = await svc.reschedule(
+        commitment_id=commitment_id,
+        due_at=payload.due_at,
+        reason=payload.reason,
+        actor_id=actor.id,
+        meeting_id=payload.meeting_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Compromisso não encontrado.")
+    await db.commit()
+    return await _one(svc, commitment_id)
+
+
+@router.get(
+    "/commitments/{commitment_id}/obligations",
+    response_model=list[CommitmentRead],
+    dependencies=_read,
+)
+async def list_item_obligations(
+    commitment_id: UUID, db: AsyncSession = Depends(get_db)
+) -> list[CommitmentRead]:
+    """Obrigações de um item de pauta (em aberto primeiro)."""
+    svc = ProjectAgendaService(db)
+    return [CommitmentRead.model_validate(d) for d in await svc.to_read(await svc.list_obligations(commitment_id))]
+
+
+@router.post(
+    "/commitments/{commitment_id}/obligations",
+    response_model=list[CommitmentRead],
+    status_code=201,
+    dependencies=_create,
+)
+async def create_item_obligation(
+    commitment_id: UUID,
+    payload: ObligationCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> list[CommitmentRead]:
+    """Nova obrigação dentro do item de pauta (um ou mais responsáveis)."""
+    svc = ProjectAgendaService(db)
+    await svc.create_obligation(topic_id=commitment_id, data=payload.model_dump(), actor_id=actor.id)
+    await db.commit()
+    return [CommitmentRead.model_validate(d) for d in await svc.to_read(await svc.list_obligations(commitment_id))]
+
+
+@router.get(
+    "/commitments/{commitment_id}/updates",
+    response_model=list[CommitmentUpdateRead],
+    dependencies=_read,
+)
+async def list_commitment_updates(
+    commitment_id: UUID, db: AsyncSession = Depends(get_db)
+) -> list[CommitmentUpdateRead]:
+    """Linha do tempo do item (mais recente primeiro)."""
+    return [
+        CommitmentUpdateRead.model_validate(d)
+        for d in await ProjectAgendaService(db).list_updates(commitment_id)
+    ]
+
+
+@router.post(
+    "/commitments/{commitment_id}/updates",
+    response_model=list[CommitmentUpdateRead],
+    status_code=201,
+    dependencies=_update,
+)
+async def add_commitment_update(
+    commitment_id: UUID,
+    payload: CommitmentUpdateCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> list[CommitmentUpdateRead]:
+    """Registra um andamento (observação ou atualização), opcionalmente ligado à reunião."""
+    svc = ProjectAgendaService(db)
+    await svc.add_update(
+        commitment_id=commitment_id,
+        kind=payload.kind,
+        body=payload.body,
+        meeting_id=payload.meeting_id,
+        author_id=actor.id,
+    )
+    await db.commit()
+    return [CommitmentUpdateRead.model_validate(d) for d in await svc.list_updates(commitment_id)]
+
+
+@router.delete("/updates/{update_id}", status_code=204, dependencies=_update)
+async def delete_commitment_update(
+    update_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> None:
+    await ProjectAgendaService(db).delete_update(
+        update_id=update_id,
+        actor_id=actor.id,
+        can_delete_any=user_has_permission(actor, PROJECT_AGENDA_DELETE),
+    )
+    await db.commit()
+
+
+@router.get("/open-commitments", response_model=list[CommitmentRead], dependencies=_list)
+async def list_open_commitments(
+    meeting_id: UUID | None = Query(default=None, description="Exclui os que já estão na pauta desta reunião"),
+    q: str | None = Query(default=None, max_length=100),
+    db: AsyncSession = Depends(get_db),
+) -> list[CommitmentRead]:
+    """Compromissos em aberto que podem ser levados para a pauta de uma reunião."""
+    svc = ProjectAgendaService(db)
+    rows = await svc.open_for_meeting(meeting_id=meeting_id, search=q)
+    return [CommitmentRead.model_validate(d) for d in await svc.to_read(rows)]
+
+
+@router.post(
     "/occurrences/{occurrence_id}/outcome",
     response_model=list[AgendaItemRead],
     dependencies=_update,
@@ -185,6 +328,7 @@ async def set_item_outcome(
     payload: AgendaItemOutcome,
     meeting_id: UUID = Query(...),
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> list[AgendaItemRead]:
     """Marca o desfecho do item nesta reunião: concluído, parcial ou estendido para a próxima."""
     svc = ProjectAgendaService(db)
@@ -192,6 +336,9 @@ async def set_item_outcome(
         occurrence_id=occurrence_id,
         outcome=payload.outcome,
         next_meeting_id=payload.next_meeting_id,
+        note=payload.note,
+        actor_id=actor.id,
+        complete_obligations=payload.complete_obligations,
     )
     await db.commit()
     return [AgendaItemRead.model_validate(d) for d in await svc.agenda_items(meeting_id)]
@@ -216,10 +363,16 @@ async def complete_commitment(
     commitment_id: UUID,
     payload: CommitmentComplete,
     db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> CommitmentRead:
     """Fecha o ciclo da obrigação atribuída: quem entregou marca como concluído."""
     svc = ProjectAgendaService(db)
-    if await svc.complete(commitment_id=commitment_id, note=payload.completion_note) is None:
+    if await svc.complete(
+        commitment_id=commitment_id,
+        note=payload.completion_note,
+        actor_id=actor.id,
+        meeting_id=payload.meeting_id,
+    ) is None:
         raise HTTPException(status_code=404, detail="Compromisso não encontrado.")
     await db.commit()
     return await _one(svc, commitment_id)

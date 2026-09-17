@@ -75,6 +75,7 @@ from app.models.project_agenda import (  # noqa: F401
     ProjectCommitmentAttachment,
     ProjectCommitmentOccurrence,
     ProjectCommitmentParticipant,
+    ProjectCommitmentUpdate,
 )
 
 __all__ = [

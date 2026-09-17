@@ -224,6 +224,29 @@ export function AdvanceSettlementsTab({
     });
   }, [obligations, fSituacao, fInstitution, fClient, fNf, fSgc, periodMode, period]);
 
+  // Primeiro card = o que está NA TELA (todos os filtros aplicados), para o número bater com a
+  // tabela. O título é o próprio filtro, e o valor depende dele (decisão do Rafael):
+  // Todas = coluna Valor; Liquidadas = coluna Liquidado; demais = coluna Residual (o que falta pagar).
+  const resumoFiltro = useMemo(() => {
+    const soma = (f: (o: Obligation) => number) => filtered.reduce((t, o) => t + (f(o) || 0), 0);
+    const porFiltro: Record<FiltroSituacao, { label: string; medida: string; valor: (o: Obligation) => number }> = {
+      ALL: { label: "Todas", medida: "valor das NFs", valor: (o) => o.valor_total },
+      NAO_LIQUIDADA: { label: "Não liquidadas", medida: "a liquidar", valor: (o) => o.valor_residual },
+      EM_ABERTO: { label: "Em aberto", medida: "a liquidar", valor: (o) => o.valor_residual },
+      PARCIALMENTE_LIQUIDADA: { label: "Parcialmente liquidadas", medida: "a liquidar", valor: (o) => o.valor_residual },
+      VENCIDA: { label: "Vencidas", medida: "a liquidar", valor: (o) => o.valor_residual },
+      LIQUIDADA: { label: "Liquidadas", medida: "liquidado", valor: (o) => o.valor_liquidado },
+    };
+    const f = porFiltro[fSituacao];
+    return {
+      label: f.label,
+      medida: f.medida,
+      valor: soma(f.valor),
+      quantidade: filtered.length,
+      liquidadas: fSituacao === "LIQUIDADA",
+    };
+  }, [filtered, fSituacao]);
+
   // Ordenação por coluna (mesmo padrão do CAP): aplicada sobre o conjunto já filtrado.
   const { sortedRows, headerSort } = useTableSort(filtered, OBLIGATION_SORT_COLUMNS, {
     defaultCompare: defaultObligationSort,
@@ -248,15 +271,18 @@ export function AdvanceSettlementsTab({
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
 
-      {/* Cards: consomem EXCLUSIVAMENTE os KPIs do backend (sem somatório em React). */}
+      {/* O primeiro card acompanha os filtros (é a soma das linhas da tabela); os demais são os
+          KPIs gerais do backend, que não mudam com o filtro. */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        {/* O card que responde "quanto ainda devo à instituição": inclui vencidas e parciais,
-            porque quem vai quitar precisa do total, não do recorte por atraso. */}
         <Kpi
-          label="A liquidar"
-          value={kpis ? formatCurrency(kpis.valor_nao_liquidado) : "—"}
-          accent="text-amber-700"
-          hint={kpis ? `${kpis.nfs_nao_liquidadas} NF(s) não liquidada(s)` : undefined}
+          label={resumoFiltro.label}
+          value={loading ? "—" : formatCurrency(resumoFiltro.valor)}
+          accent={resumoFiltro.liquidadas ? "text-emerald-700" : "text-amber-700"}
+          hint={
+            loading
+              ? undefined
+              : `${resumoFiltro.quantidade} ${resumoFiltro.quantidade === 1 ? "NF" : "NFs"} · ${resumoFiltro.medida}`
+          }
         />
         <Kpi label="NFs pendentes" value={kpis ? String(kpis.nfs_pendentes) : "—"} />
         <Kpi label="NFs vencidas" value={kpis ? String(kpis.nfs_vencidas) : "—"} accent="text-red-700" />
