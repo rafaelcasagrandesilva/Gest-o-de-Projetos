@@ -169,7 +169,8 @@ export function AdvanceSettlementsTab({
   const [error, setError] = useState<string | null>(null);
 
   // Filtros: aplicados APENAS sobre o conjunto já carregado (dados já vêm prontos do backend).
-  const [fSituacao, setFSituacao] = useState<FiltroSituacao>("ALL");
+  // Abre em "Não liquidadas": é o que se trabalha nesta tela; as demais ficam a um clique.
+  const [fSituacao, setFSituacao] = useState<FiltroSituacao>("NAO_LIQUIDADA");
   /** Só as NFs com custo: prorrogadas ou com juros por atraso. */
   const [fJuros, setFJuros] = useState<FiltroJuros>("ALL");
   const [fClient, setFClient] = useState("");
