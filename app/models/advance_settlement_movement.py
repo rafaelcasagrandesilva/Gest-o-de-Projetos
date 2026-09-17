@@ -83,8 +83,13 @@ class AdvanceSettlementMovement(TimestampUUIDMixin, Base):
         nullable=False,
         index=True,
     )
-    # Valor DESTA movimentação (parcial). Sempre > 0.
+    # PRINCIPAL desta movimentação: a parte que abate o valor da obrigação (≥ 0).
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    # JUROS: o que foi pago ACIMA do residual (NF prorrogada ou paga em atraso). Não abate a
+    # obrigação; o pago de fato é amount + interest_amount (é o que sai do Repasse).
+    interest_amount: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), nullable=False, default=Decimal("0.00"), server_default="0"
+    )
     funding_source: Mapped[AdvanceFundingSource] = mapped_column(
         ADVANCE_FUNDING_SOURCE_DB, nullable=False, index=True
     )

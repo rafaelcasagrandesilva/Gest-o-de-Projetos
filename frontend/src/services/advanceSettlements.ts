@@ -40,7 +40,10 @@ export interface SettlementMovement {
   id: string;
   batch_item_id: string;
   event_id: string | null;
+  /** Principal (abate a obrigação). */
   amount: number;
+  /** Juros: o que foi pago acima do residual. */
+  interest_amount: number;
   funding_source: FundingSource;
   settled_at: string;
   observation: string | null;
@@ -65,10 +68,62 @@ export interface Obligation {
   valor_liquidado: number;
   valor_residual: number;
   situacao: SituacaoLiquidacao;
+  /** Vencimento VIGENTE perante a instituição (o da última prorrogação, se houver). */
   vencimento: string | null;
+  /** Vencimento da NF — base do cálculo dos juros. */
+  vencimento_original: string | null;
+  prorrogada: boolean;
+  prorrogacoes: ObligationExtension[];
+  /** Juros pagos e indicadores (frações: 0.015 = 1,5%), do vencimento original ao pagamento. */
+  juros_pagos: number;
+  juros_percentual: number | null;
+  juros_dias: number | null;
+  juros_mensal: number | null;
   dias_em_atraso: number;
   origens_resumo: string;
   movimentacoes: SettlementMovement[];
+}
+
+export interface ObligationExtension {
+  id: string;
+  /** Pedido à instituição (uma ou várias NFs, custo único). */
+  request_id: string | null;
+  previous_due: string | null;
+  new_due: string;
+  reason: string | null;
+  created_at: string;
+  /** Custo do PEDIDO inteiro (não por NF). */
+  custo: number;
+  custo_pago_em: string | null;
+  custo_pago: boolean;
+  nfs_no_pedido: number;
+}
+
+/**
+ * Prorroga UMA ou VÁRIAS NFs (mesma instituição) para a mesma data. O custo informado pela
+ * instituição vira um título no Contas a Pagar. O vencimento da NF não muda.
+ */
+export async function extendObligationsDue(payload: {
+  batch_item_ids: string[];
+  new_due: string;
+  cost_amount: number;
+  cost_payment_date: string;
+  observation?: string | null;
+}): Promise<Obligation[]> {
+  const { data } = await api.post<Obligation[]>("/invoices/advance-settlements/extensions", payload);
+  return data;
+}
+
+/** Desfaz a prorrogação mais recente — o pedido inteiro (todas as NFs) e o título do custo. */
+export async function undoObligationExtension(extensionId: string): Promise<Obligation> {
+  const { data } = await api.delete<Obligation>(`/invoices/advance-settlement-extensions/${extensionId}`);
+  return data;
+}
+
+/** Taxa mensal equivalente (composta, mês de 30 dias) de um percentual pago em `dias`. */
+export function jurosMensal(percentual: number, dias: number): number | null {
+  if (!(dias > 0) || !(percentual > 0)) return null;
+  return Math.pow(1 + percentual, 30 / dias) - 1;
 }
 
 export interface SettlementKpis {
@@ -145,7 +200,7 @@ export interface ManagementSummary {
 
 export interface TimelineEvent {
   date: string;
-  tipo: string; // ANTECIPADA | VENCEU | LIQUIDACAO
+  tipo: string; // ANTECIPADA | PRORROGADA | VENCEU | LIQUIDACAO
   label: string;
   amount: number | null;
   origem: string | null;
@@ -205,7 +260,9 @@ export interface SettlementEventMovement {
   id: string;
   nf_number: string | null;
   client_name: string | null;
+  /** Principal; o pago é amount + interest_amount. */
   amount: number;
+  interest_amount: number;
   funding_source: FundingSource;
   funding_source_label: string;
   observation: string | null;

@@ -21,6 +21,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.advance_institution import AdvanceInstitution
+from app.models.advance_obligation_extension import AdvanceExtensionRequest, AdvanceObligationExtension
 from app.models.advance_repasse_ledger import RepasseLedgerSource
 from app.models.advance_settlement_event import (
     AdvanceSettlementEvent,
@@ -89,6 +90,25 @@ def derive_situacao(*, valor_total: Decimal, valor_liquidado: Decimal, venciment
     return EM_ABERTO
 
 
+def juros_indicadores(
+    *, juros: Decimal, valor_total: Decimal, vencimento_original: date | None, pago_em: date | None
+) -> dict:
+    """Percentual dos juros sobre o valor da obrigação, no período entre o VENCIMENTO ORIGINAL e o
+    pagamento, e a taxa mensal equivalente (composta, mês de 30 dias)."""
+    if juros <= _TOL or valor_total <= _TOL:
+        return {"juros_percentual": None, "juros_dias": None, "juros_mensal": None}
+    pct = juros / valor_total
+    dias = (pago_em - vencimento_original).days if (pago_em and vencimento_original) else None
+    mensal = None
+    if dias and dias > 0:
+        mensal = float(Decimal(str((1 + float(pct)) ** (30 / dias) - 1)).quantize(Decimal("0.0001")))
+    return {
+        "juros_percentual": float(pct.quantize(Decimal("0.0001"))),
+        "juros_dias": dias,
+        "juros_mensal": mensal,
+    }
+
+
 def origens_resumo(movements: list[AdvanceSettlementMovement]) -> str:
     """Resumo legível das origens ATIVAS, por valor desc. Ex.: 'Repasse + Caixa'."""
     totals: dict[AdvanceFundingSource, Decimal] = {}
@@ -153,6 +173,31 @@ class AdvanceSettlementService:
             out.setdefault(m.batch_item_id, []).append(m)
         return out
 
+    async def _extensions_for_items(self, item_ids: list[UUID]) -> dict[UUID, list[AdvanceObligationExtension]]:
+        """Prorrogações ATIVAS por obrigação, da mais antiga para a mais recente."""
+        if not item_ids:
+            return {}
+        rows = (
+            await self.db.execute(
+                select(AdvanceObligationExtension)
+                .where(
+                    AdvanceObligationExtension.batch_item_id.in_(item_ids),
+                    AdvanceObligationExtension.reversed_at.is_(None),
+                )
+                .order_by(AdvanceObligationExtension.created_at.asc())
+            )
+        ).scalars().all()
+        out: dict[UUID, list[AdvanceObligationExtension]] = {}
+        for e in rows:
+            out.setdefault(e.batch_item_id, []).append(e)
+        return out
+
+    @staticmethod
+    def _juros(movements: list[AdvanceSettlementMovement]) -> Decimal:
+        return sum(
+            (_money(m.interest_amount) for m in movements if m.reversed_at is None), Decimal("0.00")
+        ).quantize(_CENT)
+
     @staticmethod
     def _liquidado(movements: list[AdvanceSettlementMovement]) -> Decimal:
         return sum((_money(m.amount) for m in movements if m.reversed_at is None), Decimal("0.00")).quantize(_CENT)
@@ -163,6 +208,7 @@ class AdvanceSettlementService:
             "batch_item_id": m.batch_item_id,
             "event_id": m.event_id,
             "amount": float(_money(m.amount)),
+            "interest_amount": float(_money(m.interest_amount)),
             "funding_source": m.funding_source.value,
             "settled_at": m.settled_at,
             "observation": m.observation,
@@ -210,6 +256,8 @@ class AdvanceSettlementService:
             selected.append((item, batch, inv, proj, profile, inst_id))
 
         mv_map = await self._movements_for_items([it.id for it, *_ in selected])
+        ext_map = await self._extensions_for_items([it.id for it, *_ in selected])
+        pedidos = await self._requests_info({e.request_id for es in ext_map.values() for e in es if e.request_id})
 
         out: list[dict] = []
         for item, batch, inv, proj, profile, inst_id in selected:
@@ -224,7 +272,21 @@ class AdvanceSettlementService:
             # O vencimento da obrigação perante a instituição é o vencimento de CADA NF
             # (invoice.due_date) — não a data da operação/borderô. A devolução à instituição
             # acontece no vencimento da nota, controlada aqui na Liquidação.
-            vencimento = inv.due_date
+            # Prorrogação acordada com a instituição: o vencimento VIGENTE é o da última; o da NF
+            # continua sendo o ORIGINAL (base dos juros).
+            vencimento_original = inv.due_date
+            prorrogacoes = ext_map.get(item.id, [])
+            vencimento = prorrogacoes[-1].new_due if prorrogacoes else vencimento_original
+            juros = self._juros(movements)
+            pagamentos_com_juros = [
+                m.settled_at for m in movements if m.reversed_at is None and _money(m.interest_amount) > _TOL
+            ]
+            indicadores = juros_indicadores(
+                juros=juros,
+                valor_total=valor_total,
+                vencimento_original=vencimento_original,
+                pago_em=max(pagamentos_com_juros) if pagamentos_com_juros else None,
+            )
             sit = derive_situacao(
                 valor_total=valor_total,
                 valor_liquidado=valor_liquidado,
@@ -263,6 +325,22 @@ class AdvanceSettlementService:
                     "situacao": sit,
                     "receive_date": batch.receive_date,
                     "vencimento": vencimento,
+                    "vencimento_original": vencimento_original,
+                    "prorrogada": bool(prorrogacoes),
+                    "prorrogacoes": [
+                        {
+                            "id": e.id,
+                            "request_id": e.request_id,
+                            "previous_due": e.previous_due,
+                            "new_due": e.new_due,
+                            "reason": e.reason,
+                            "created_at": e.created_at,
+                            **(pedidos.get(e.request_id) or {}),
+                        }
+                        for e in prorrogacoes
+                    ],
+                    "juros_pagos": float(juros),
+                    **indicadores,
                     "dias_em_atraso": dias_em_atraso,
                     "origens_resumo": origens_resumo(movements),
                     "movimentacoes": [self._movement_dict(m) for m in movements],
@@ -356,18 +434,34 @@ class AdvanceSettlementService:
         inst_id = next(iter(inst_ids))
 
         # (a) sobre-liquidação por obrigação (agrupa as novas parcelas por batch_item).
+        # O que passar do residual é JUROS — aceito só se a NF foi prorrogada ou está sendo paga
+        # depois do vencimento original; senão continua bloqueado (evita erro de digitação).
         by_item: dict[UUID, list[dict]] = {}
         for p in parsed:
             by_item.setdefault(p["item"].id, []).append(p)
+        prorrogadas = await self._extensions_for_items(list(by_item.keys()))
         for item_id, rows in by_item.items():
             valor_total = _money(rows[0]["item"].advanced_amount)
             existing = self._liquidado(await self._movements_for_item(item_id))
+            restante = max(valor_total - existing, Decimal("0.00")).quantize(_CENT)
             add_sum = sum((r["amount"] for r in rows), Decimal("0.00")).quantize(_CENT)
-            if existing + add_sum > valor_total + _TOL:
-                disponivel = (valor_total - existing).quantize(_CENT)
-                raise ValueError(
-                    f"Liquidação excede o valor da obrigação. Residual disponível: {disponivel:.2f}."
+            if add_sum > restante + _TOL:
+                inv = await self.db.get(ReceivableInvoice, rows[0]["item"].invoice_id)
+                vencimento_original = inv.due_date if inv is not None else None
+                em_atraso = vencimento_original is not None and any(
+                    r["settled_at"] > vencimento_original for r in rows
                 )
+                if not (prorrogadas.get(item_id) or em_atraso):
+                    raise ValueError(
+                        f"Liquidação excede o valor da obrigação. Residual disponível: {restante:.2f}. "
+                        "Valor acima do residual só é aceito (como juros) em NF prorrogada ou paga após o vencimento."
+                    )
+            # Distribui: cada parcela abate o principal até zerar o residual; o resto é juros.
+            for r in rows:
+                principal = min(r["amount"], restante)
+                r["principal"] = principal.quantize(_CENT)
+                r["interest"] = (r["amount"] - principal).quantize(_CENT)
+                restante = (restante - principal).quantize(_CENT)
 
         # (b) saldo do repasse (só parcelas SALDO_REPASSE; escopo do evento).
         repasse_sum = sum(
@@ -420,7 +514,8 @@ class AdvanceSettlementService:
                 invoice_id=p["item"].invoice_id,
                 institution_id=inst_id,
                 event_id=event.id,
-                amount=p["amount"],
+                amount=p["principal"],
+                interest_amount=p["interest"],
                 funding_source=p["fs"],
                 settled_at=p["settled_at"],
                 observation=p["obs"],
@@ -608,6 +703,7 @@ class AdvanceSettlementService:
                     "nf_number": nf,
                     "client_name": client,
                     "amount": float(_money(m.amount)),
+                    "interest_amount": float(_money(m.interest_amount)),
                     "funding_source": m.funding_source.value,
                     "funding_source_label": FUNDING_SOURCE_LABELS.get(m.funding_source, m.funding_source.value),
                     "observation": m.observation,
@@ -674,6 +770,223 @@ class AdvanceSettlementService:
 
     async def _movements_for_item(self, item_id: UUID) -> list[AdvanceSettlementMovement]:
         return (await self._movements_for_items([item_id])).get(item_id, [])
+
+    # --- prorrogação de vencimento ---------------------------------------------
+
+    async def _requests_info(self, request_ids: set[UUID]) -> dict[UUID, dict]:
+        """Custo e alcance de cada pedido de prorrogação (para a lista e o card de juros)."""
+        if not request_ids:
+            return {}
+        pedidos = (
+            await self.db.execute(select(AdvanceExtensionRequest).where(AdvanceExtensionRequest.id.in_(request_ids)))
+        ).scalars().all()
+        contagem = dict(
+            (
+                await self.db.execute(
+                    select(AdvanceObligationExtension.request_id, func.count())
+                    .where(AdvanceObligationExtension.request_id.in_(request_ids))
+                    .group_by(AdvanceObligationExtension.request_id)
+                )
+            ).all()
+        )
+        pagos: dict[UUID, bool] = {}
+        titulo_ids = {p.payable_snapshot_id for p in pedidos if p.payable_snapshot_id}
+        if titulo_ids:
+            from app.models.payable_snapshot import PayableSnapshot
+
+            pagos = {
+                tid: bool(paid) or float(amount_paid or 0) > 0
+                for tid, paid, amount_paid in (
+                    await self.db.execute(
+                        select(PayableSnapshot.id, PayableSnapshot.paid, PayableSnapshot.amount_paid).where(
+                            PayableSnapshot.id.in_(titulo_ids)
+                        )
+                    )
+                ).all()
+            }
+        return {
+            p.id: {
+                "custo": float(_money(p.cost_amount)),
+                "custo_pago_em": p.cost_payment_date,
+                "custo_pago": pagos.get(p.payable_snapshot_id, False) if p.payable_snapshot_id else False,
+                "nfs_no_pedido": int(contagem.get(p.id, 0)),
+            }
+            for p in pedidos
+        }
+
+    async def extend_due_dates(
+        self,
+        *,
+        batch_item_ids: list[UUID],
+        new_due: date,
+        cost_amount: float | Decimal = 0,
+        cost_payment_date: date | None = None,
+        observation: str | None = None,
+        created_by_id: UUID | None = None,
+        today: date | None = None,
+    ) -> list[dict]:
+        """Prorroga UMA ou VÁRIAS NFs para a mesma data, num único pedido à instituição.
+
+        O custo informado pela instituição (do pedido inteiro) vira um título no Contas a Pagar,
+        com vencimento na data do pagamento do custo. O vencimento das NFs não muda.
+        """
+        today = today or date.today()
+        ids = list(dict.fromkeys(batch_item_ids))
+        if not ids:
+            raise ValueError("Selecione ao menos uma NF.")
+        custo = _money(cost_amount)
+        if custo < 0:
+            raise ValueError("O custo da prorrogação não pode ser negativo.")
+        todas = {o["batch_item_id"]: o for o in await self.list_obligations(today=today)}
+        obrigacoes = []
+        for i in ids:
+            o = todas.get(i)
+            if o is None:
+                raise ValueError("Obrigação não encontrada.")
+            if o["situacao"] == LIQUIDADA:
+                raise ValueError(f"NF {o['invoice_number'] or '—'} já liquidada: não há vencimento a prorrogar.")
+            atual = o["vencimento"]
+            if atual is not None and new_due <= atual:
+                raise ValueError(
+                    f"NF {o['invoice_number'] or '—'}: a nova data deve ser posterior ao vencimento atual "
+                    f"({atual.strftime('%d/%m/%Y')})."
+                )
+            obrigacoes.append(o)
+        instituicoes = {o["institution_id"] for o in obrigacoes}
+        if len(instituicoes) != 1:
+            raise ValueError("Uma prorrogação deve conter NFs de uma única instituição.")
+        inst_id = next(iter(instituicoes))
+        inst_nome = obrigacoes[0]["institution"]
+        if inst_id is not None:
+            inst = await self.db.get(AdvanceInstitution, inst_id)
+            if inst is not None:
+                inst_nome = inst.name
+
+        pedido = AdvanceExtensionRequest(
+            institution_id=inst_id,
+            institution_name=inst_nome,
+            new_due=new_due,
+            cost_amount=custo,
+            cost_payment_date=cost_payment_date or today,
+            observation=(observation or "").strip() or None,
+            created_by_id=created_by_id,
+        )
+        self.db.add(pedido)
+        await self.db.flush()
+        for o in obrigacoes:
+            self.db.add(
+                AdvanceObligationExtension(
+                    batch_item_id=o["batch_item_id"],
+                    request_id=pedido.id,
+                    previous_due=o["vencimento"],
+                    new_due=new_due,
+                    reason=pedido.observation,
+                    created_by_id=created_by_id,
+                )
+            )
+
+        if custo > _TOL:
+            from app.models.payable_snapshot import PayableSnapshotType
+            from app.services.payable_snapshot_service import PayableSnapshotService
+
+            nfs = sorted({o["invoice_number"] or "—" for o in obrigacoes})
+            rotulo_nfs = ("NF " if len(nfs) == 1 else "NFs ") + ", ".join(nfs)
+            # A instituição vai no NOME: é o que a busca do Contas a Pagar encontra ("Lepta").
+            nome = f"Custo de prorrogação · {inst_nome or 'Instituição'} — {rotulo_nfs}"
+            titulo = await PayableSnapshotService(self.db).create_manual(
+                month=pedido.cost_payment_date,
+                name=nome[:255],
+                category="Custo de prorrogação",
+                cost_center="Financeiro",
+                amount=float(custo),
+                due_date=pedido.cost_payment_date,
+                observation=(
+                    f"Prorrogação para {new_due.strftime('%d/%m/%Y')} — {rotulo_nfs}"
+                    + (f". {pedido.observation}" if pedido.observation else "")
+                ),
+                snapshot_type=PayableSnapshotType.ANTECIPACAO_OPERACAO,
+                ref_id=pedido.id,
+            )
+            pedido.payable_snapshot_id = titulo.id
+        await self.db.flush()
+        atualizadas = {o["batch_item_id"]: o for o in await self.list_obligations(today=today)}
+        return [atualizadas[i] for i in ids if i in atualizadas]
+
+    async def extend_due_date(
+        self,
+        *,
+        batch_item_id: UUID,
+        new_due: date,
+        reason: str | None = None,
+        cost_amount: float | Decimal = 0,
+        cost_payment_date: date | None = None,
+        created_by_id: UUID | None = None,
+        today: date | None = None,
+    ) -> dict:
+        """Prorroga uma NF (atalho do pedido com uma NF só)."""
+        return (
+            await self.extend_due_dates(
+                batch_item_ids=[batch_item_id],
+                new_due=new_due,
+                cost_amount=cost_amount,
+                cost_payment_date=cost_payment_date,
+                observation=reason,
+                created_by_id=created_by_id,
+                today=today,
+            )
+        )[0]
+
+    async def undo_extension(self, *, extension_id: UUID, today: date | None = None) -> dict:
+        """Desfaz uma prorrogação — o PEDIDO inteiro (todas as NFs dele) e o título do custo.
+
+        Só vale se, em cada NF do pedido, ele for a prorrogação mais recente, e se o título no
+        Contas a Pagar ainda não teve pagamento (estorne o pagamento antes).
+        """
+        from datetime import datetime, timezone
+
+        ext = await self.db.get(AdvanceObligationExtension, extension_id)
+        if ext is None or ext.reversed_at is not None:
+            raise ValueError("Prorrogação não encontrada.")
+        if ext.request_id is None:
+            alvo = [ext]
+            pedido = None
+        else:
+            pedido = await self.db.get(AdvanceExtensionRequest, ext.request_id)
+            alvo = list(
+                (
+                    await self.db.execute(
+                        select(AdvanceObligationExtension).where(
+                            AdvanceObligationExtension.request_id == ext.request_id,
+                            AdvanceObligationExtension.reversed_at.is_(None),
+                        )
+                    )
+                ).scalars().all()
+            )
+        ativas = await self._extensions_for_items([e.batch_item_id for e in alvo])
+        for e in alvo:
+            lista = ativas.get(e.batch_item_id, [])
+            if not lista or lista[-1].id != e.id:
+                raise ValueError("Só a prorrogação mais recente pode ser desfeita.")
+
+        agora = datetime.now(timezone.utc)
+        if pedido is not None and pedido.payable_snapshot_id:
+            from app.models.payable_snapshot import PayableSnapshot
+            from app.services.payable_snapshot_service import PayableSnapshotService
+
+            titulo = await self.db.get(PayableSnapshot, pedido.payable_snapshot_id)
+            if titulo is not None:
+                if titulo.paid or float(titulo.amount_paid or 0) > 0:
+                    raise ValueError(
+                        "O custo desta prorrogação já foi pago no Contas a Pagar. Estorne o pagamento antes de desfazer."
+                    )
+                await PayableSnapshotService(self.db).delete_row(row=titulo)
+            pedido.payable_snapshot_id = None
+        if pedido is not None:
+            pedido.reversed_at = agora
+        for e in alvo:
+            e.reversed_at = agora
+        await self.db.flush()
+        return await self.get_obligation(ext.batch_item_id, today=today)  # type: ignore[return-value]
 
     # --- estorno de movimentação ----------------------------------------------
 
@@ -820,6 +1133,12 @@ class AdvanceSettlementService:
         if o.get("receive_date") is not None:
             events.append({"date": o["receive_date"], "order": 0, "tipo": "ANTECIPADA",
                            "label": "Antecipada", "amount": float(valor_total), "origem": None, "estornada": False})
+        for e in o.get("prorrogacoes") or []:
+            de = e["previous_due"].strftime("%d/%m/%Y") if e["previous_due"] else "—"
+            events.append({"date": e["created_at"].date(), "order": 1, "tipo": "PRORROGADA",
+                           "label": f"Vencimento prorrogado: {de} → {e['new_due'].strftime('%d/%m/%Y')}"
+                                    + (f" ({e['reason']})" if e["reason"] else ""),
+                           "amount": None, "origem": None, "estornada": False})
         if o["vencimento"] is not None and o["vencimento"] <= today:
             events.append({"date": o["vencimento"], "order": 1, "tipo": "VENCEU",
                            "label": "Venceu", "amount": None, "origem": None, "estornada": False})
@@ -849,6 +1168,9 @@ class AdvanceSettlementService:
             else:
                 running += amt
                 label = "Liquidada" if running >= valor_total - _TOL else "Liquidação parcial"
+            juros_mv = _money(m.get("interest_amount"))
+            if juros_mv > _TOL:
+                label = f"{label} · juros {float(juros_mv):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             events.append({"date": m["settled_at"], "order": 2, "tipo": "LIQUIDACAO",
                            "label": label, "amount": float(amt), "origem": origem, "estornada": reversed_,
                            "evento_number": event_number.get(m.get("event_id"))})
