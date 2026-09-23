@@ -16,7 +16,7 @@ from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.models.project_operational import ProjectLabor
 from app.models.user import User
 from app.repositories.employees import EmployeeRepository
-from app.schemas.employees import EmployeeRead
+from app.schemas.employees import EmployeeRead, HourlyReferenceRead
 from app.services.audit_service import AuditService
 from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_total_cost
 from app.services.payable_snapshot_service import PayableSnapshotService
@@ -104,6 +104,74 @@ class EmployeesService:
             nome = (cc or "").strip()
             if nome:
                 out.setdefault(emp_id, set()).add(nome)
+        return out
+
+    #: 8h × 22 dias — base do salário de REFERÊNCIA de quem recebe por hora.
+    REFERENCE_HOURS_PER_MONTH = 8 * 22
+
+    async def hourly_references(self, employees: list) -> dict:
+        """Salário de referência (valor-hora × 176h) de quem recebe por hora, por colaborador.
+
+        Só EXIBIÇÃO na relação de colaboradores (pedido da diretoria: "quanto seria o salário").
+        Não grava nada e não alimenta custo algum — Mão de Obra, Contas a Pagar e folha seguem
+        vindo do que o gestor lança no projeto.
+
+        Fonte do valor-hora: as alocações ATIVAS com horas definidas (uma linha por contrato);
+        na falta, o cadastro PJ com horas/mês (ali `salary_base` já é valor-hora).
+        """
+        ids = [e.id for e in employees if e is not None and e.id is not None]
+        if not ids:
+            return {}
+        from app.models.employee_assignment import AssignmentStatus, EmployeeAssignment
+        from app.models.project import Project
+
+        horas = float(self.REFERENCE_HOURS_PER_MONTH)
+        out: dict = {}
+        rows = (
+            await self.session.execute(
+                select(
+                    EmployeeAssignment.employee_id,
+                    EmployeeAssignment.salary_base,
+                    EmployeeAssignment.cost_center,
+                    Project.name,
+                )
+                .outerjoin(Project, Project.id == EmployeeAssignment.project_id)
+                .where(
+                    EmployeeAssignment.employee_id.in_(ids),
+                    EmployeeAssignment.status == AssignmentStatus.ATIVA,
+                    EmployeeAssignment.hours_per_month.is_not(None),
+                    EmployeeAssignment.salary_base.is_not(None),
+                )
+                .order_by(EmployeeAssignment.created_at)
+            )
+        ).all()
+        for emp_id, valor_hora, cc, projeto in rows:
+            v = float(valor_hora)
+            if v <= 0:
+                continue
+            out.setdefault(emp_id, []).append(
+                {
+                    "hourly_rate": v,
+                    "reference_hours": horas,
+                    "monthly_reference": round(v * horas, 2),
+                    "cost_center": (cc or "").strip() or None,
+                    "project_name": (projeto or "").strip() or None,
+                }
+            )
+        for emp in employees:
+            if emp.id in out or emp.employment_type != "PJ":
+                continue
+            if emp.salary_base and emp.pj_hours_per_month and float(emp.pj_hours_per_month) > 0:
+                v = float(emp.salary_base)
+                out[emp.id] = [
+                    {
+                        "hourly_rate": v,
+                        "reference_hours": horas,
+                        "monthly_reference": round(v * horas, 2),
+                        "cost_center": None,
+                        "project_name": None,
+                    }
+                ]
         return out
 
     async def labor_kinds(self, employee_ids: list, *, competencia: date) -> dict:
@@ -213,11 +281,13 @@ class EmployeesService:
             tc = calculate_pj_total_cost(emp)
         alocados = (await self.active_assignment_cost_centers([emp.id])).get(emp.id)
         kinds = await self.labor_kinds([emp.id], competencia=competencia)
+        referencias = (await self.hourly_references([emp])).get(emp.id, [])
         base = EmployeeRead.model_validate(emp)
         return base.model_copy(
             update={
                 "total_cost": tc,
                 "cost_centers": self._merge_cost_centers(emp.cost_center, alocados),
+                "hourly_reference": [HourlyReferenceRead(**r) for r in referencias],
                 **kinds.get(emp.id, {}),
             }
         )
@@ -246,6 +316,7 @@ class EmployeesService:
         y, m = competencia.year, competencia.month
         centros = await self.active_assignment_cost_centers([e.id for e in rows])
         kinds = await self.labor_kinds([e.id for e in rows], competencia=competencia)
+        referencias = await self.hourly_references(rows)
         out: list[EmployeeRead] = []
         for emp in rows:
             if emp.employment_type == "CLT":
@@ -257,6 +328,9 @@ class EmployeesService:
                     update={
                         "total_cost": tc,
                         "cost_centers": self._merge_cost_centers(emp.cost_center, centros.get(emp.id)),
+                        "hourly_reference": [
+                            HourlyReferenceRead(**r) for r in referencias.get(emp.id, [])
+                        ],
                         **kinds.get(emp.id, {}),
                     }
                 )

@@ -91,6 +91,33 @@ const emptyForm: FormState = {
   _original_cost_center: undefined,
 };
 
+/**
+ * "Salário base" da relação. Quem recebe por HORA não tem salário no cadastro — mostra-se a
+ * REFERÊNCIA valor-hora × 8h × 22 dias, em itálico, uma linha por contrato. É só leitura: não
+ * é gravada e não entra em custo de projeto, Contas a Pagar nem folha.
+ */
+function SalarioBaseCell({ employee }: { employee: Employee }) {
+  const refs = employee.hourly_reference ?? [];
+  if (refs.length === 0) return <Money value={employee.salary_base} />;
+  const brl = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return (
+    <div
+      className="space-y-1"
+      title="Referência para quem recebe por hora: valor-hora × 8h × 22 dias. Não entra nos custos dos projetos."
+    >
+      {refs.map((r, i) => (
+        <div key={i}>
+          <Money value={r.monthly_reference} className="italic text-slate-500" />
+          <p className="text-right text-[10px] leading-tight text-slate-400">
+            {brl(r.hourly_rate)}/h × {r.reference_hours}h
+            {refs.length > 1 && (r.project_name || r.cost_center) ? ` · ${r.project_name ?? r.cost_center}` : ""}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function parseOptionalMoney(s: string): number | null {
   const t = s.trim();
   if (t === "") return null;
@@ -931,7 +958,7 @@ export function Employees() {
                     {canSeeSensitive && (
                       <>
                         <td className="px-4 py-3 text-slate-700">
-                          <Money value={emp.salary_base} />
+                          <SalarioBaseCell employee={emp} />
                         </td>
                         <td className="px-4 py-3 font-medium text-slate-900">
                           <Money value={emp.total_cost} />
