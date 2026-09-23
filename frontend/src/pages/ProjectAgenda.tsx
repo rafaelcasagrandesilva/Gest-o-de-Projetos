@@ -9,16 +9,21 @@ import { CommitmentModal } from "@/components/project-agenda/CommitmentModal";
 import { MeetingAgendaItems } from "@/components/project-agenda/MeetingAgendaItems";
 import { ConcludeDialog, LinkToMeetingDialog } from "@/components/project-agenda/AgendaDialogs";
 import { CommitmentUpdates } from "@/components/project-agenda/CommitmentUpdates";
+import { AgendaMeetingsInfo, ItemObligations } from "@/components/project-agenda/ItemObligations";
 import {
   commitmentAttachmentUrl,
   completeCommitment,
   deleteCommitment,
   fetchAgendaCounters,
+  fetchCommitment,
   KIND_LABELS,
   KIND_STYLES,
+  listAgendaUsers,
   listCommitments,
   reopenCommitment,
   type AgendaCounters,
+  type AgendaMeetingRef,
+  type AgendaUser,
   type Commitment,
 } from "@/services/projectAgenda";
 
@@ -66,6 +71,10 @@ function quando(c: Commitment): Date | null {
   const raw = c.starts_at ?? c.due_at;
   return raw ? new Date(raw) : null;
 }
+/** Ainda cobra: não foi concluído nem cancelado. */
+function emAberto(c: Commitment): boolean {
+  return c.status !== "CONCLUIDO" && c.status !== "CANCELADO";
+}
 function hora(c: Commitment): string {
   // Hora só faz sentido no que ACONTECE numa hora. Uma obrigação tem prazo, e o 23:59 que o
   // formulário grava como fim do dia é detalhe técnico — mostrá-lo seria ruído na tela.
@@ -75,6 +84,19 @@ function hora(c: Commitment): string {
 function dataBr(raw: string | null): string {
   if (!raw) return "—";
   return new Date(raw).toLocaleDateString("pt-BR");
+}
+/** A pauta que mais interessa: a próxima reunião em que o item está; senão, a última em que passou. */
+function pautaDeReferencia(c: Commitment): { pauta: AgendaMeetingRef; futura: boolean } | null {
+  const pautas = c.agenda_meetings ?? [];
+  if (pautas.length === 0) return null;
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  const proxima = pautas.find((p) => p.meeting_starts_at && new Date(p.meeting_starts_at) >= hoje);
+  return proxima ? { pauta: proxima, futura: true } : { pauta: pautas[pautas.length - 1], futura: false };
+}
+function diaMes(raw: string | null): string {
+  if (!raw) return "—";
+  return new Date(raw).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
 }
 
 function Contador({ label, valor, meus, destaque }: { label: string; valor: number; meus: number; destaque?: boolean }) {
@@ -108,7 +130,9 @@ function Chip({ c, onClick }: { c: Commitment; onClick: () => void }) {
         e.stopPropagation();
         onClick();
       }}
-      title={`${KIND_LABELS[c.kind]} — ${c.title}${c.owner_name ? ` · ${c.owner_name}` : ""}`}
+      title={`${KIND_LABELS[c.kind]} — ${c.title}${c.owner_name ? ` · ${c.owner_name}` : ""}${
+        pautaDeReferencia(c) ? ` · pauta de ${diaMes(pautaDeReferencia(c)!.pauta.meeting_starts_at)}` : ""
+      }`}
       className={`block w-full truncate rounded px-1.5 py-0.5 text-left text-[11px] ring-1 hover:brightness-95 ${
         concluido ? "bg-slate-100 text-slate-500 line-through ring-slate-200" : KIND_STYLES[c.kind]
       }`}
@@ -128,6 +152,8 @@ export function ProjectAgenda() {
   const [vista, setVista] = useState<Vista>("mes");
   const [referencia, setReferencia] = useState(new Date());
   const [soMeus, setSoMeus] = useState(false);
+  /** Lista abre só com o que está em aberto; os concluídos (riscados) aparecem sob demanda. */
+  const [verConcluidos, setVerConcluidos] = useState(false);
   const [itens, setItens] = useState<Commitment[]>([]);
   const [contadores, setContadores] = useState<AgendaCounters | null>(null);
   const [carregando, setCarregando] = useState(true);
@@ -268,6 +294,12 @@ export function ProjectAgenda() {
             <input type="checkbox" checked={soMeus} onChange={(e) => setSoMeus(e.target.checked)} />
             Só os meus
           </label>
+          {vista === "lista" ? (
+            <label className="flex items-center gap-1.5 text-sm text-slate-700">
+              <input type="checkbox" checked={verConcluidos} onChange={(e) => setVerConcluidos(e.target.checked)} />
+              Mostrar concluídos
+            </label>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-slate-700">{titulo}</span>
@@ -306,7 +338,11 @@ export function ProjectAgenda() {
       {carregando && itens.length === 0 ? (
         <p className="py-10 text-center text-sm text-slate-500">Carregando…</p>
       ) : vista === "lista" ? (
-        <ListaAgenda itens={itens} semData={semData} onAbrir={setDetalhe} />
+        <ListaAgenda
+          itens={verConcluidos ? itens : itens.filter(emAberto)}
+          semData={verConcluidos ? semData : semData.filter(emAberto)}
+          onAbrir={setDetalhe}
+        />
       ) : (
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
           <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
@@ -423,7 +459,16 @@ export function ProjectAgenda() {
             await carregar();
           }}
           onAnexo={(attId, nome, mime) => void baixarAnexo(detalhe, attId, nome, mime)}
-          onRecarregar={carregar}
+          onRecarregar={async () => {
+            await carregar();
+            // O detalhe acompanha o que mudou dentro dele (obrigação concluída, prazo novo…);
+            // se a própria obrigação foi excluída, fecha.
+            try {
+              setDetalhe(await fetchCommitment(detalhe.id));
+            } catch {
+              setDetalhe(null);
+            }
+          }}
         />
       ) : null}
 
@@ -446,12 +491,36 @@ export function ProjectAgenda() {
           onClose={() => setLevando(null)}
           onLinked={async () => {
             setLevando(null);
-            setDetalhe(null);
             await carregar();
+            // Continua aberto, já mostrando a pauta em que o item entrou.
+            if (detalhe?.id === levando.id) {
+              try {
+                setDetalhe(await fetchCommitment(levando.id));
+              } catch {
+                setDetalhe(null);
+              }
+            }
           }}
         />
       ) : null}
     </div>
+  );
+}
+
+/** "Na pauta 30/09" / "Passou na pauta 23/09" — responde de relance se o item já está numa reunião. */
+function SeloPauta({ c }: { c: Commitment }) {
+  if (c.kind === "REUNIAO") return null;
+  const ref = pautaDeReferencia(c);
+  if (!ref) return null;
+  return (
+    <span
+      title={ref.pauta.meeting_title}
+      className={`rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ${
+        ref.futura ? "bg-indigo-50 text-indigo-800 ring-indigo-200" : "bg-slate-50 text-slate-500 ring-slate-200"
+      }`}
+    >
+      {ref.futura ? "Na pauta" : "Passou na pauta"} {diaMes(ref.pauta.meeting_starts_at)}
+    </span>
   );
 }
 
@@ -511,6 +580,7 @@ function ListaAgenda({
                   {c.attachments.length ? (
                     <span className="text-[10px] text-slate-400">{c.attachments.length} anexo(s)</span>
                   ) : null}
+                  <SeloPauta c={c} />
                 </button>
               </li>
             ))}
@@ -562,6 +632,17 @@ function DetalheCompromisso({
 }) {
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [usuarios, setUsuarios] = useState<AgendaUser[]>([]);
+  /** Muda a cada alteração nas obrigações para o histórico recarregar. */
+  const [versao, setVersao] = useState(0);
+  /** Obrigação de item de pauta: as ações dela moram no painel do item, igual à pauta. */
+  const doItem = Boolean(c.parent_id);
+  const pautaFutura = pautaDeReferencia(c)?.futura ?? false;
+
+  useEffect(() => {
+    if (!doItem) return;
+    void listAgendaUsers().then(setUsuarios).catch(() => setUsuarios([]));
+  }, [doItem]);
 
   async function enviarAnexo(file: File, ata: boolean) {
     setEnviando(true);
@@ -578,13 +659,73 @@ function DetalheCompromisso({
     }
   }
 
+  const blocoAnexos = (
+    <div className="mt-4">
+      <p className="text-[10px] uppercase tracking-wide text-slate-500">Anexos</p>
+      {c.attachments.length ? (
+        <ul className="mt-1 divide-y divide-slate-100 rounded-lg border border-slate-200">
+          {c.attachments.map((a) => (
+            <li key={a.id} className="flex items-center justify-between gap-2 px-2 py-1.5 text-sm">
+              <span className="truncate text-slate-700">
+                {a.is_minutes ? (
+                  <span className="mr-1.5 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-800">
+                    ATA
+                  </span>
+                ) : null}
+                {a.file_name}
+              </span>
+              <button
+                type="button"
+                onClick={() => onAnexo(a.id, a.file_name, a.mime_type)}
+                className="shrink-0 rounded px-2 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50"
+              >
+                Ver
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-xs text-slate-500">Nenhum anexo. A ata da reunião entra aqui.</p>
+      )}
+      {podeEditar ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <label className="cursor-pointer rounded-lg px-2 py-1 font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50">
+            {enviando ? "Enviando…" : "Anexar ata"}
+            <input
+              type="file"
+              className="hidden"
+              disabled={enviando}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void enviarAnexo(f, true);
+              }}
+            />
+          </label>
+          <label className="cursor-pointer rounded-lg px-2 py-1 font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
+            Anexar outro documento
+            <input
+              type="file"
+              className="hidden"
+              disabled={enviando}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void enviarAnexo(f, false);
+              }}
+            />
+          </label>
+        </div>
+      ) : null}
+      {erro ? <p className="mt-2 text-xs text-red-700">{erro}</p> : null}
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-4">
       {/* Reunião abre mais larga: é ela que carrega a tabela de encaminhamentos, e apertá-la
           numa caixa estreita obrigava a rolar na horizontal para ler a própria ata. */}
       <div
         className={`my-8 w-full rounded-xl bg-white p-6 shadow-xl ${
-          c.kind === "REUNIAO" ? "max-w-5xl" : "max-w-2xl"
+          c.kind === "REUNIAO" ? "max-w-5xl" : doItem ? "max-w-6xl" : "max-w-2xl"
         }`}
       >
         <div className="flex items-start justify-between gap-3">
@@ -604,178 +745,176 @@ function DetalheCompromisso({
           </button>
         </div>
 
-        <dl className="mt-5 grid grid-cols-2 gap-x-8 gap-y-4 text-sm sm:grid-cols-3">
-          {c.starts_at ? (
-            <div>
-              <dt className="text-[10px] uppercase tracking-wide text-slate-500">Quando</dt>
-              <dd className="text-slate-800">
-                {dataBr(c.starts_at)} {hora(c)}
-                {c.duration_minutes ? ` · ${c.duration_minutes} min` : ""}
-              </dd>
-            </div>
-          ) : null}
-          {c.due_at ? (
-            <div>
-              <dt className="text-[10px] uppercase tracking-wide text-slate-500">Prazo</dt>
-              <dd className={c.is_overdue ? "font-medium text-rose-700" : "text-slate-800"}>
-                {dataBr(c.due_at)} {c.is_overdue ? "· atrasado" : ""}
-              </dd>
-            </div>
-          ) : null}
-          {c.owner_name ? (
-            <div>
-              <dt className="text-[10px] uppercase tracking-wide text-slate-500">
-                {c.owners.length > 1 ? "Responsáveis" : "Responsável"}
-              </dt>
-              <dd className="text-slate-800">{c.owner_name}</dd>
-            </div>
-          ) : null}
-          {c.location ? (
-            <div>
-              <dt className="text-[10px] uppercase tracking-wide text-slate-500">Local</dt>
-              <dd className="text-slate-800">{c.location}</dd>
-            </div>
-          ) : null}
-          {c.project_name ? (
-            <div>
-              <dt className="text-[10px] uppercase tracking-wide text-slate-500">Projeto</dt>
-              <dd className="text-slate-800">{c.project_name}</dd>
-            </div>
-          ) : null}
-          <div>
-            <dt className="text-[10px] uppercase tracking-wide text-slate-500">Situação</dt>
-            <dd className="text-slate-800">{c.status === "CONCLUIDO" ? "Concluído" : "Agendado"}</dd>
-          </div>
-        </dl>
-
-        {c.description ? (
-          <p className="mt-3 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
-            {c.description}
-          </p>
-        ) : null}
-
-        {c.participants.length ? (
-          <div className="mt-3">
-            <p className="text-[10px] uppercase tracking-wide text-slate-500">Participantes</p>
-            <div className="mt-1 flex flex-wrap gap-1.5">
-              {c.participants.map((p) => (
-                <span key={p.user_id} className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
-                  {p.full_name}
-                </span>
-              ))}
-              {c.external_participants ? (
-                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800 ring-1 ring-amber-200">
-                  {c.external_participants}
-                </span>
+        {/* Obrigação de item abre larga e em DUAS colunas: à esquerda o que ela é (prazo, pauta,
+            anexos); à direita o que se faz no item (obrigações e histórico). Numa coluna só, a
+            janela ficava estreita e comprida, com a lateral da tela sobrando. */}
+        <div className={doItem ? "lg:grid lg:grid-cols-5 lg:gap-6" : ""}>
+          <div className={doItem ? "lg:col-span-2" : ""}>
+            <dl
+              className={`mt-5 grid grid-cols-2 gap-x-8 gap-y-4 text-sm ${doItem ? "" : "sm:grid-cols-3"}`}
+            >
+              {c.starts_at ? (
+                <div>
+                  <dt className="text-[10px] uppercase tracking-wide text-slate-500">Quando</dt>
+                  <dd className="text-slate-800">
+                    {dataBr(c.starts_at)} {hora(c)}
+                    {c.duration_minutes ? ` · ${c.duration_minutes} min` : ""}
+                  </dd>
+                </div>
               ) : null}
-            </div>
+              {c.due_at ? (
+                <div>
+                  <dt className="text-[10px] uppercase tracking-wide text-slate-500">Prazo</dt>
+                  <dd className={c.is_overdue ? "font-medium text-rose-700" : "text-slate-800"}>
+                    {dataBr(c.due_at)} {c.is_overdue ? "· atrasado" : ""}
+                  </dd>
+                </div>
+              ) : null}
+              {c.owner_name ? (
+                <div>
+                  <dt className="text-[10px] uppercase tracking-wide text-slate-500">
+                    {c.owners.length > 1 ? "Responsáveis" : "Responsável"}
+                  </dt>
+                  <dd className="text-slate-800">{c.owner_name}</dd>
+                </div>
+              ) : null}
+              {c.location ? (
+                <div>
+                  <dt className="text-[10px] uppercase tracking-wide text-slate-500">Local</dt>
+                  <dd className="text-slate-800">{c.location}</dd>
+                </div>
+              ) : null}
+              {c.project_name ? (
+                <div>
+                  <dt className="text-[10px] uppercase tracking-wide text-slate-500">Projeto</dt>
+                  <dd className="text-slate-800">{c.project_name}</dd>
+                </div>
+              ) : null}
+              <div>
+                <dt className="text-[10px] uppercase tracking-wide text-slate-500">Situação</dt>
+                <dd className="text-slate-800">{c.status === "CONCLUIDO" ? "Concluído" : "Agendado"}</dd>
+              </div>
+            </dl>
+
+            {/* Na obrigação de item a descrição já aparece na linha "esta" do painel. */}
+            {c.description && !doItem ? (
+              <p className="mt-3 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                {c.description}
+              </p>
+            ) : null}
+
+            {c.participants.length ? (
+              <div className="mt-3">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">Participantes</p>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {c.participants.map((p) => (
+                    <span key={p.user_id} className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
+                      {p.full_name}
+                    </span>
+                  ))}
+                  {c.external_participants ? (
+                    <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800 ring-1 ring-amber-200">
+                      {c.external_participants}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Em que reunião(ões) o item está — a mesma informação que a pauta mostra. */}
+            {c.kind !== "REUNIAO" ? (
+              <div className="mt-4">
+                <p className="mb-1.5 text-[10px] uppercase tracking-wide text-slate-500">Em pauta</p>
+                <AgendaMeetingsInfo pautas={c.agenda_meetings ?? []} />
+              </div>
+            ) : null}
+
+            {doItem ? blocoAnexos : null}
           </div>
-        ) : null}
 
-        {/* Reunião mostra a pauta; os demais compromissos, a linha do tempo de andamentos
-            (que já inclui a conclusão). */}
-        {c.kind !== "REUNIAO" ? (
-          <div className="mt-4">
-            <p className="mb-1.5 text-[10px] uppercase tracking-wide text-slate-500">
-              {c.parent_id ? "Histórico do item de pauta" : "Andamentos"}
-            </p>
-            <CommitmentUpdates commitmentId={c.parent_id ?? c.id} podeEditar={podeEditar} />
-          </div>
-        ) : c.completion_note ? (
-          <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-            <strong>Concluído:</strong> {c.completion_note}
-          </p>
-        ) : null}
+          <div className={doItem ? "lg:col-span-3" : ""}>
 
-        {/* Uma reunião não termina nela: gera encaminhamentos. O bloco fica logo abaixo da ata,
-            que é de onde eles saem. */}
-        {c.kind === "REUNIAO" ? (
-          <MeetingAgendaItems meeting={c} podeEditar={podeEditar} onChanged={onRecarregar} />
-        ) : null}
-
-        <div className="mt-4">
-          <p className="text-[10px] uppercase tracking-wide text-slate-500">Anexos</p>
-          {c.attachments.length ? (
-            <ul className="mt-1 divide-y divide-slate-100 rounded-lg border border-slate-200">
-              {c.attachments.map((a) => (
-                <li key={a.id} className="flex items-center justify-between gap-2 px-2 py-1.5 text-sm">
-                  <span className="truncate text-slate-700">
-                    {a.is_minutes ? (
-                      <span className="mr-1.5 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-800">
-                        ATA
-                      </span>
-                    ) : null}
-                    {a.file_name}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onAnexo(a.id, a.file_name, a.mime_type)}
-                    className="shrink-0 rounded px-2 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50"
-                  >
-                    Ver
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-1 text-xs text-slate-500">Nenhum anexo. A ata da reunião entra aqui.</p>
-          )}
-          {podeEditar ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-              <label className="cursor-pointer rounded-lg px-2 py-1 font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50">
-                {enviando ? "Enviando…" : "Anexar ata"}
-                <input
-                  type="file"
-                  className="hidden"
-                  disabled={enviando}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void enviarAnexo(f, true);
+            {/* Obrigação de um item: o MESMO painel da pauta — todas as obrigações do item, com
+                concluir, alterar prazo, editar, reabrir, excluir e "+ Nova obrigação". */}
+            {doItem && c.parent_id ? (
+              <div className="mt-4 rounded-lg border border-slate-200 p-3">
+                <p className="mb-2 text-xs text-slate-500">
+                  Item de pauta <span className="font-medium text-slate-800">{c.parent_title}</span>
+                </p>
+                <ItemObligations
+                  itemId={c.parent_id}
+                  users={usuarios}
+                  podeEditar={podeEditar}
+                  destaqueId={c.id}
+                  onChanged={async () => {
+                    setVersao((v) => v + 1);
+                    await onRecarregar();
                   }}
                 />
-              </label>
-              <label className="cursor-pointer rounded-lg px-2 py-1 font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
-                Anexar outro documento
-                <input
-                  type="file"
-                  className="hidden"
-                  disabled={enviando}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void enviarAnexo(f, false);
-                  }}
-                />
-              </label>
-            </div>
-          ) : null}
-          {erro ? <p className="mt-2 text-xs text-red-700">{erro}</p> : null}
+              </div>
+            ) : null}
+
+            {/* Reunião mostra a pauta; os demais compromissos, a linha do tempo de andamentos
+                (que já inclui a conclusão). */}
+            {c.kind !== "REUNIAO" ? (
+              <div className="mt-4">
+                <p className="mb-1.5 text-[10px] uppercase tracking-wide text-slate-500">
+                  {c.parent_id ? "Histórico do item de pauta" : "Andamentos"}
+                </p>
+                <CommitmentUpdates key={versao} commitmentId={c.parent_id ?? c.id} podeEditar={podeEditar} />
+              </div>
+            ) : c.completion_note ? (
+              <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                <strong>Concluído:</strong> {c.completion_note}
+              </p>
+            ) : null}
+
+            {/* Uma reunião não termina nela: gera encaminhamentos. O bloco fica logo abaixo da ata,
+                que é de onde eles saem. */}
+            {c.kind === "REUNIAO" ? (
+              <MeetingAgendaItems meeting={c} podeEditar={podeEditar} onChanged={onRecarregar} />
+            ) : null}
+
+            {doItem ? null : blocoAnexos}
+          </div>
         </div>
 
-        {podeEditar ? (
-          <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+          {/* Obrigação de item: excluir/editar/concluir/reabrir ficam na linha "esta" do painel
+              acima — o mesmo lugar da pauta. Aqui sobra só levar o item para uma reunião. */}
+          {podeEditar && !doItem ? (
             <button type="button" onClick={() => void onExcluir()} className="rounded-lg px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50">
               Excluir
             </button>
-            {/* Obrigação criada direto no calendário que precisa ser discutida numa reunião. */}
-            {c.kind !== "REUNIAO" && c.status !== "CONCLUIDO" && c.status !== "CANCELADO" ? (
-              <button type="button" onClick={onLevarReuniao} className="rounded-lg px-3 py-1.5 text-sm font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50">
-                Levar para reunião
-              </button>
-            ) : null}
-            <button type="button" onClick={onEditar} className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
-              Editar
+          ) : null}
+          {/* Levar o item (ou o compromisso avulso) para a pauta de uma reunião. */}
+          {podeEditar && c.kind !== "REUNIAO" && c.status !== "CONCLUIDO" && c.status !== "CANCELADO" ? (
+            <button type="button" onClick={onLevarReuniao} className="rounded-lg px-3 py-1.5 text-sm font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50">
+              {pautaFutura ? "Levar para outra reunião" : "Levar para reunião"}
             </button>
-            {c.status === "CONCLUIDO" ? (
-              <button type="button" onClick={() => void onReabrir()} className="rounded-lg px-3 py-1.5 text-sm font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50">
-                Reabrir
+          ) : null}
+          {podeEditar && !doItem ? (
+            <>
+              <button type="button" onClick={onEditar} className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
+                Editar
               </button>
-            ) : (
-              <button type="button" onClick={onConcluir} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">
-                Concluir
-              </button>
-            )}
-          </div>
-        ) : null}
+              {c.status === "CONCLUIDO" ? (
+                <button type="button" onClick={() => void onReabrir()} className="rounded-lg px-3 py-1.5 text-sm font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50">
+                  Reabrir
+                </button>
+              ) : (
+                <button type="button" onClick={onConcluir} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">
+                  Concluir
+                </button>
+              )}
+            </>
+          ) : null}
+          {doItem || !podeEditar ? (
+            <button type="button" onClick={onClose} className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
+              Fechar
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );

@@ -20,7 +20,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.core.config import settings
 from app.models.project import Project
@@ -118,6 +118,8 @@ class ProjectAgendaService:
             else {}
         )
 
+        pautas = await self._agenda_meetings(rows)
+
         out: list[dict] = []
         for r in rows:
             prazo = _as_utc(r.due_at) or _as_utc(r.starts_at)
@@ -170,9 +172,50 @@ class ProjectAgendaService:
                     ],
                     "series_id": r.series_id,
                     "created_by_id": r.created_by_id,
+                    "agenda_meetings": (
+                        [] if r.kind == CommitmentKind.REUNIAO.value else pautas.get(r.parent_id or r.id, [])
+                    ),
                 }
             )
         return out
+
+    async def _agenda_meetings(self, rows: list[ProjectCommitment]) -> dict[UUID, list[dict]]:
+        """Por ASSUNTO: as reuniões em cuja pauta ele passou, em ordem de data.
+
+        Obrigação responde pelo item dela (quem entra na pauta é o item). É o que deixa o
+        calendário e a lista dizerem "já está na pauta de 23/09" sem abrir a reunião.
+        """
+        topicos = {r.parent_id or r.id for r in rows if r.kind != CommitmentKind.REUNIAO.value}
+        if not topicos:
+            return {}
+        reuniao = aliased(ProjectCommitment)
+        linhas = (
+            await self.db.execute(
+                select(
+                    ProjectCommitmentOccurrence.commitment_id,
+                    ProjectCommitmentOccurrence.id,
+                    ProjectCommitmentOccurrence.outcome,
+                    reuniao.id,
+                    reuniao.title,
+                    reuniao.starts_at,
+                )
+                .join(reuniao, reuniao.id == ProjectCommitmentOccurrence.meeting_id)
+                .where(ProjectCommitmentOccurrence.commitment_id.in_(topicos))
+                .order_by(reuniao.starts_at.asc().nulls_last(), ProjectCommitmentOccurrence.created_at.asc())
+            )
+        ).all()
+        saida: dict[UUID, list[dict]] = {}
+        for topico, occ_id, desfecho, meeting_id, titulo, quando in linhas:
+            saida.setdefault(topico, []).append(
+                {
+                    "occurrence_id": occ_id,
+                    "meeting_id": meeting_id,
+                    "meeting_title": titulo,
+                    "meeting_starts_at": quando,
+                    "outcome": desfecho,
+                }
+            )
+        return saida
 
     async def list_between(
         self,
