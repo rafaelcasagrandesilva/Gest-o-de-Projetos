@@ -245,6 +245,10 @@ export function AdvanceSettlementsTab({
       // tudo menos o que já foi liquidado (em aberto, parcial e vencida juntas).
       if (fSituacao === "NAO_LIQUIDADA") {
         if (o.situacao === "LIQUIDADA") return false;
+      } else if (fSituacao === "VENCIDA") {
+        // Vencida = venceu e ainda falta pagar, INCLUSIVE a parcialmente liquidada — mesma regra
+        // do card "NFs vencidas" (dias em atraso), para a lista e o total baterem com ele.
+        if (!(o.dias_em_atraso > 0)) return false;
       } else if (fSituacao !== "ALL" && o.situacao !== fSituacao) {
         return false;
       }
