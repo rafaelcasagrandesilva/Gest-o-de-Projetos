@@ -32,6 +32,16 @@ class CommitmentAttachmentRead(BaseModel):
     created_at: datetime
 
 
+class AgendaMeetingRefRead(BaseModel):
+    """Uma passagem do item (ASSUNTO) pela pauta de uma reunião."""
+
+    occurrence_id: UUID
+    meeting_id: UUID
+    meeting_title: str
+    meeting_starts_at: datetime | None = None
+    outcome: str
+
+
 class CommitmentRead(BaseModel):
     id: UUID
     kind: str
@@ -63,6 +73,8 @@ class CommitmentRead(BaseModel):
     participants: list[CommitmentParticipantRead] = Field(default_factory=list)
     attachments: list[CommitmentAttachmentRead] = Field(default_factory=list)
     created_by_id: UUID | None = None
+    #: Pautas em que o item passou (obrigação responde pelo item dela). Vazio = fora de pauta.
+    agenda_meetings: list[AgendaMeetingRefRead] = Field(default_factory=list)
 
 
 class CommitmentCreate(BaseModel):

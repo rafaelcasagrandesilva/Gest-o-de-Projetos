@@ -271,6 +271,8 @@ export function LinkToMeetingDialog({
 }) {
   const [reunioes, setReunioes] = useState<MeetingOption[] | null>(null);
   const [escolhida, setEscolhida] = useState<string>("");
+  /** Reuniões em cuja pauta o item já está — aparecem, mas não dá para escolher de novo. */
+  const jaNaPauta = new Set((commitment.agenda_meetings ?? []).map((p) => p.meeting_id));
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -278,7 +280,8 @@ export function LinkToMeetingDialog({
     void listUpcomingMeetings()
       .then((rows) => {
         setReunioes(rows);
-        if (rows[0]) setEscolhida(rows[0].id);
+        const livre = rows.find((r) => !jaNaPauta.has(r.id));
+        if (livre) setEscolhida(livre.id);
       })
       .catch(() => setReunioes([]));
   }, []);
@@ -329,15 +332,33 @@ export function LinkToMeetingDialog({
         </p>
       ) : (
         <ul className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
-          {reunioes.map((r) => (
-            <li key={r.id}>
-              <label className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-slate-50">
-                <input type="radio" name="reuniao" checked={escolhida === r.id} onChange={() => setEscolhida(r.id)} />
-                <span className="w-24 shrink-0 tabular-nums text-slate-600">{dataBr(r.starts_at)}</span>
-                <span className="truncate text-slate-800">{r.title}</span>
-              </label>
-            </li>
-          ))}
+          {reunioes.map((r) => {
+            const ja = jaNaPauta.has(r.id);
+            return (
+              <li key={r.id}>
+                <label
+                  className={`flex items-center gap-3 px-3 py-2 text-sm ${
+                    ja ? "cursor-not-allowed bg-slate-50 text-slate-400" : "cursor-pointer hover:bg-slate-50"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="reuniao"
+                    disabled={ja}
+                    checked={escolhida === r.id}
+                    onChange={() => setEscolhida(r.id)}
+                  />
+                  <span className="w-24 shrink-0 tabular-nums text-slate-600">{dataBr(r.starts_at)}</span>
+                  <span className={`truncate ${ja ? "text-slate-400" : "text-slate-800"}`}>{r.title}</span>
+                  {ja ? (
+                    <span className="ml-auto shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200">
+                      já está na pauta
+                    </span>
+                  ) : null}
+                </label>
+              </li>
+            );
+          })}
         </ul>
       )}
       {erro ? <p className="mt-2 text-xs text-red-700">{erro}</p> : null}

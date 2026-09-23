@@ -57,6 +57,15 @@ export interface CommitmentAttachment {
   created_at: string;
 }
 
+/** Uma passagem do item pela pauta de uma reunião. */
+export interface AgendaMeetingRef {
+  occurrence_id: string;
+  meeting_id: string;
+  meeting_title: string;
+  meeting_starts_at: string | null;
+  outcome: CommitmentOutcome;
+}
+
 export interface Commitment {
   id: string;
   kind: CommitmentKind;
@@ -89,6 +98,8 @@ export interface Commitment {
   participants: CommitmentParticipant[];
   attachments: CommitmentAttachment[];
   created_by_id: string | null;
+  /** Pautas em que o item passou (a obrigação responde pelo item dela). Vazio = fora de pauta. */
+  agenda_meetings: AgendaMeetingRef[];
 }
 
 export interface AgendaCounters {
@@ -146,6 +157,11 @@ export async function listCommitments(params: {
   status?: string;
 }): Promise<Commitment[]> {
   const { data } = await api.get<Commitment[]>(`${BASE}/commitments`, { params });
+  return data;
+}
+
+export async function fetchCommitment(id: string): Promise<Commitment> {
+  const { data } = await api.get<Commitment>(`${BASE}/commitments/${id}`);
   return data;
 }
 

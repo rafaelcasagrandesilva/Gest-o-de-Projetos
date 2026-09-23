@@ -17,7 +17,7 @@ import {
  *
  * Substitui o hábito de acumular tudo no campo "Ação": cada registro tem tipo, autor, data e a
  * reunião em que foi dito. Conclusões entram sozinhas, pela caixa de concluir; aqui se registram
- * Observações (palpite, discussão) e Atualizações (o que avançou / o que falta).
+ * Atualizações (o que avançou / o que falta). Observações antigas seguem visíveis no histórico.
  */
 
 function dataHora(raw: string): string {
@@ -64,7 +64,6 @@ export function CommitmentUpdates({
   const { user } = useAuth();
   const podeExcluirQualquer = hasPermission(user?.permission_names, "project_agenda.delete");
   const [lista, setLista] = useState<CommitmentUpdate[] | null>(null);
-  const [tipo, setTipo] = useState<"OBSERVACAO" | "ATUALIZACAO">("OBSERVACAO");
   const [texto, setTexto] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -87,7 +86,7 @@ export function CommitmentUpdates({
     setSalvando(true);
     setErro(null);
     try {
-      setLista(await addCommitmentUpdate(commitmentId, { kind: tipo, body: texto.trim(), meeting_id: meetingId }));
+      setLista(await addCommitmentUpdate(commitmentId, { kind: "ATUALIZACAO", body: texto.trim(), meeting_id: meetingId }));
       setTexto("");
       await onChanged?.();
     } catch (e) {
@@ -112,29 +111,14 @@ export function CommitmentUpdates({
     <div>
       {podeEditar ? (
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="mb-2 inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
-            {(["OBSERVACAO", "ATUALIZACAO"] as const).map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setTipo(k)}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-                  tipo === k ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"
-                }`}
-              >
-                {UPDATE_KIND_LABELS[k]}
-              </button>
-            ))}
-          </div>
+          {/* Só "Atualização": Observação × Atualização ficava ambíguo na prática. As
+              observações antigas continuam no histórico com a etiqueta delas. */}
+          <p className="mb-1.5 text-xs font-medium text-slate-600">Atualização</p>
           <textarea
             rows={3}
             value={texto}
             onChange={(e) => setTexto(e.target.value)}
-            placeholder={
-              tipo === "OBSERVACAO"
-                ? "Palpite, discussão ou contexto levantado sobre o item…"
-                : "O que avançou e o que ainda falta…"
-            }
+            placeholder="O que avançou e o que ainda falta…"
             className="block w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm"
           />
           <div className="mt-2 flex items-center justify-between gap-2">
@@ -147,7 +131,7 @@ export function CommitmentUpdates({
               onClick={() => void registrar()}
               className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
             >
-              {salvando ? "Registrando…" : "Registrar andamento"}
+              {salvando ? "Registrando…" : "Registrar atualização"}
             </button>
           </div>
         </div>
