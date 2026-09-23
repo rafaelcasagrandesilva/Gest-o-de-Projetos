@@ -13,6 +13,22 @@ from app.utils.date_utils import normalize_competencia
 from app.schemas.common import UUIDTimestampRead
 
 
+class HourlyReferenceRead(BaseModel):
+    """Salário de REFERÊNCIA de quem recebe por hora: valor-hora × 8h × 22 dias.
+
+    Só para leitura na relação de colaboradores. Não é gravado e nenhum cálculo de custo
+    (projeto, Contas a Pagar, folha) o usa — os custos continuam vindo do que o gestor lança.
+    """
+
+    hourly_rate: float
+    reference_hours: float
+    monthly_reference: float
+    #: Centro de Custo do contrato de onde saiu o valor-hora (None = cadastro do colaborador).
+    cost_center: str | None = None
+    #: Projeto do contrato — distingue dois contratos no mesmo centro.
+    project_name: str | None = None
+
+
 class EmployeeRead(UUIDTimestampRead):
     full_name: str
     email: EmailStr | None = None
@@ -47,6 +63,9 @@ class EmployeeRead(UUIDTimestampRead):
     extra_hours_100: float = 0
     pj_hours_per_month: float | None = None
     pj_additional_cost: float = 0
+    #: Quem recebe por hora: salário de referência (8h × 22 dias) por contrato. Só exibição;
+    #: sensível (omitido sem employees.sensitive). None/vazio = não recebe por hora.
+    hourly_reference: list[HourlyReferenceRead] | None = Field(default_factory=list)
 
 
 class EmployeeCreate(BaseModel):

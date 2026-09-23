@@ -82,6 +82,7 @@ EMPLOYEE_SENSITIVE_FIELDS: tuple[str, ...] = (
     "pj_hours_per_month",
     "pix_key",
     "pix_key_type",
+    "hourly_reference",
 )
 VEHICLE_SENSITIVE_FIELDS: tuple[str, ...] = ("monthly_cost",)
 # Ativos (Patrimônio): valor de aquisição/contábil do item. Os agregados do dashboard patrimonial

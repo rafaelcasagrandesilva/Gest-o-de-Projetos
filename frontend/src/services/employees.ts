@@ -1,6 +1,15 @@
 import { isAxiosError } from "axios";
 import { api } from "./api";
 
+/** Salário de REFERÊNCIA de quem recebe por hora (valor-hora × 8h × 22 dias). Só exibição. */
+export interface HourlyReference {
+  hourly_rate: number;
+  reference_hours: number;
+  monthly_reference: number;
+  cost_center: string | null;
+  project_name: string | null;
+}
+
 export interface Employee {
   id: string;
   created_at: string;
@@ -34,6 +43,8 @@ export interface Employee {
   extra_hours_100: number;
   pj_hours_per_month: number | null;
   pj_additional_cost: number;
+  /** Quem recebe por hora: referência por contrato. Omitido sem employees.sensitive. */
+  hourly_reference?: HourlyReference[] | null;
 }
 
 export interface EmployeeCreate {
