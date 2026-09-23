@@ -305,7 +305,14 @@ class AdvanceSettlementService:
                 continue
             if sgc_number is not None and int(batch.sgc_number) != int(sgc_number):
                 continue
-            if situacao and sit != situacao.strip().upper():
+            filtro = (situacao or "").strip().upper()
+            if filtro == VENCIDA:
+                # "Vencida" como FILTRO = tudo que venceu e ainda tem saldo, inclusive a
+                # parcialmente liquidada — a mesma regra do KPI "NFs vencidas" (dias_em_atraso).
+                # Filtrar pela situação derivada escondia a parcial vencida e o total não batia.
+                if dias_em_atraso <= 0:
+                    continue
+            elif filtro and sit != filtro:
                 continue
             out.append(
                 {
