@@ -99,7 +99,6 @@ const emptyForm: FormState = {
 function SalarioBaseCell({ employee }: { employee: Employee }) {
   const refs = employee.hourly_reference ?? [];
   if (refs.length === 0) return <Money value={employee.salary_base} />;
-  const brl = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   return (
     <div
       className="space-y-1"
@@ -109,7 +108,7 @@ function SalarioBaseCell({ employee }: { employee: Employee }) {
         <div key={i}>
           <Money value={r.monthly_reference} className="italic text-slate-500" />
           <p className="text-right text-[10px] leading-tight text-slate-400">
-            {brl(r.hourly_rate)}/h × {r.reference_hours}h
+            {formatCurrencyOrDash(r.hourly_rate)}/h × {r.reference_hours}h
             {refs.length > 1 && (r.project_name || r.cost_center) ? ` · ${r.project_name ?? r.cost_center}` : ""}
           </p>
         </div>
