@@ -240,6 +240,7 @@ LEGAL_CASE_SENSITIVE_FIELDS: tuple[str, ...] = (
 LEGAL_PERSON_SENSITIVE_FIELDS: tuple[str, ...] = (
     "severance_amount",
     "fgts_balance",
+    "art477_fine",
     "total_claimed",
     "total_considered",
     "total_agreed",

@@ -114,6 +114,7 @@ class LegalPersonBase(BaseModel):
     termination_date: date | None = None
     severance_amount: float | None = None
     fgts_balance: float | None = None
+    art477_fine: float | None = None
     notes: str | None = None
     is_active: bool = True
 
@@ -135,6 +136,7 @@ class LegalPersonUpdate(BaseModel):
     termination_date: date | None = None
     severance_amount: float | None = None
     fgts_balance: float | None = None
+    art477_fine: float | None = None
     notes: str | None = None
     is_active: bool | None = None
 

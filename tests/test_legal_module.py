@@ -302,7 +302,7 @@ class ChangeLogTests(unittest.TestCase):
     def test_money_fields_are_marked_sensitive(self):
         from app.services.legal_service import MONEY_FIELDS
 
-        for f in ("amount_claimed", "amount_considered", "amount_agreed", "severance_amount"):
+        for f in ("amount_claimed", "amount_considered", "amount_agreed", "severance_amount", "art477_fine"):
             self.assertIn(f, MONEY_FIELDS)
         # Campos estruturais NÃO são redigidos no histórico.
         for f in ("status", "company", "project", "notes"):
@@ -559,6 +559,31 @@ class RestoreIsNotOneWayTests(unittest.TestCase):
             dep = getattr(R, name)[0].dependency
             codes = set(inspect.getclosurevars(dep).nonlocals.get("codes", ()))
             self.assertEqual(codes, {delete_code, update_code}, name)
+
+
+class SensitiveWriteGuardTests(unittest.TestCase):
+    """PATCH de quem não vê os valores não pode apagá-los (o formulário os recebe redigidos)."""
+
+    def test_person_patch_drops_money_without_sensitive(self):
+        from app.modules.legal.router import _strip_sensitive_writes
+
+        data = {"notes": "x", "severance_amount": None, "fgts_balance": None, "art477_fine": 10.0}
+        out = _strip_sensitive_writes("legal_person", data, _user(pc.LEGAL_PERSONS_UPDATE))
+        self.assertEqual(out, {"notes": "x"})
+
+    def test_person_patch_keeps_money_with_sensitive(self):
+        from app.modules.legal.router import _strip_sensitive_writes
+
+        data = {"severance_amount": 2451.28, "art477_fine": 3060.14}
+        user = _user(pc.LEGAL_PERSONS_UPDATE, pc.LEGAL_PERSONS_SENSITIVE)
+        self.assertEqual(_strip_sensitive_writes("legal_person", data, user), data)
+
+    def test_case_patch_drops_money_without_sensitive(self):
+        from app.modules.legal.router import _strip_sensitive_writes
+
+        data = {"city": "Rio", "amount_pending": None, "agreement_terms": None}
+        out = _strip_sensitive_writes("legal_case", data, _user(pc.LEGAL_CASES_UPDATE))
+        self.assertEqual(out, {"city": "Rio"})
 
 
 if __name__ == "__main__":

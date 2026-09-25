@@ -16,6 +16,7 @@ import {
   inputClass,
 } from "@/components/legal/LegalAdminPieces";
 import { formatApiError } from "@/utils/apiError";
+import { formatCurrencyInputFromApi, parseCurrencyInput } from "@/utils/currency";
 import {
   LEGAL_STATUS_LABELS,
   LEGAL_TYPE_LABELS,
@@ -97,11 +98,47 @@ function orNull(v: string): string | null {
 }
 
 function numOrNull(v: string): number | null {
-  const t = v.replace(/\./g, "").replace(",", ".").trim();
-  if (!t) return null;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : null;
+  // parseCurrencyInput entende "85.497,52" (digitado) e "85497.52" (colado): tratar todo ponto
+  // como milhar transformava 85497.52 em 8.549.752 ao salvar.
+  return v.trim() ? parseCurrencyInput(v) : null;
 }
+
+/** Nome amigável do campo no histórico (o backend grava o nome técnico da coluna). */
+const HISTORY_FIELD_LABELS: Record<string, string> = {
+  full_name: "Nome",
+  cpf: "CPF",
+  company: "Empresa",
+  project: "Projeto/Contrato",
+  client: "Cliente",
+  role: "Cargo",
+  admission_date: "Admissão",
+  termination_date: "Desligamento",
+  severance_amount: "Valor da rescisão",
+  fgts_balance: "Saldo FGTS",
+  art477_fine: "Multa art. 477",
+  notes: "Observações",
+  case_number: "Número do processo",
+  jusbrasil_url: "Link JusBrasil",
+  person_id: "Pessoa vinculada",
+  status: "Status",
+  case_type: "Tipo",
+  nature: "Classe processual",
+  uf: "UF",
+  court: "Foro",
+  city: "Comarca",
+  claimant_name: "Reclamante",
+  defendant_name: "Reclamado",
+  amount_claimed: "Valor da causa",
+  amount_considered: "Valor considerado",
+  amount_agreed: "Valor acordado",
+  amount_paid: "Valor pago",
+  amount_pending: "Saldo pendente",
+  agreement_terms: "Condições do acordo",
+  last_movement: "Última movimentação",
+  last_movement_date: "Data da última movimentação",
+  hearing_date: "Audiência",
+  distribution_date: "Distribuição",
+};
 
 export function LegalAdmin() {
   const { user } = useAuth();
@@ -226,7 +263,7 @@ function HistoryPanel({ entityType, title }: { entityType: string; title: string
                   <span className="font-medium text-slate-800">{ACTION_LABEL[l.action] ?? l.action}</span>
                   {l.field ? (
                     <span>
-                      <span className="font-medium">{l.field}</span>: {l.old_value ?? "—"} →{" "}
+                      <span className="font-medium">{HISTORY_FIELD_LABELS[l.field] ?? l.field}</span>: {l.old_value ?? "—"} →{" "}
                       {l.new_value ?? "—"}
                     </span>
                   ) : null}
@@ -384,8 +421,15 @@ function PersonForm({
   const [admission, setAdmission] = useState(person?.admission_date ?? "");
   const [termination, setTermination] = useState(person?.termination_date ?? "");
   const [notes, setNotes] = useState(person?.notes ?? "");
+  const [severance, setSeverance] = useState(formatCurrencyInputFromApi(person?.severance_amount));
+  const [fgts, setFgts] = useState(formatCurrencyInputFromApi(person?.fgts_balance));
+  const [fine477, setFine477] = useState(formatCurrencyInputFromApi(person?.art477_fine));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Sem Dados sensíveis os valores chegam redigidos (null): os campos nem aparecem e o payload
+  // não os envia — reenviar null apagaria o valor real.
+  const { user } = useAuth();
+  const canSeeValues = hasPermission(user?.permission_names, "legal_persons.sensitive");
 
   const [companies, setCompanies] = useState<string[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
@@ -418,6 +462,13 @@ function PersonForm({
       admission_date: orNull(admission),
       termination_date: orNull(termination),
       notes: orNull(notes),
+      ...(canSeeValues
+        ? {
+            severance_amount: numOrNull(severance),
+            fgts_balance: numOrNull(fgts),
+            art477_fine: numOrNull(fine477),
+          }
+        : {}),
     };
     try {
       if (person) await updateLegalPerson(person.id, payload);
@@ -473,6 +524,19 @@ function PersonForm({
       <Field label="Desligamento">
         <input type="date" className={inputClass} value={termination} onChange={(e) => setTermination(e.target.value)} />
       </Field>
+      {canSeeValues ? (
+        <>
+          <Field label="Valor da rescisão">
+            <input className={inputClass} inputMode="decimal" value={severance} onChange={(e) => setSeverance(e.target.value)} placeholder="0,00" />
+          </Field>
+          <Field label="Saldo FGTS">
+            <input className={inputClass} inputMode="decimal" value={fgts} onChange={(e) => setFgts(e.target.value)} placeholder="0,00" />
+          </Field>
+          <Field label="Multa art. 477" hint="Multa por atraso no pagamento da rescisão.">
+            <input className={inputClass} inputMode="decimal" value={fine477} onChange={(e) => setFine477(e.target.value)} placeholder="0,00" />
+          </Field>
+        </>
+      ) : null}
       <Field label="Observações" wide>
         <textarea className={inputClass} rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
       </Field>
@@ -630,13 +694,25 @@ function CaseForm({
   const [claimant, setClaimant] = useState(c?.claimant_name ?? "");
   const [defendant, setDefendant] = useState(c?.defendant_name ?? "");
   const [url, setUrl] = useState(c?.jusbrasil_url ?? "");
-  const [claimed, setClaimed] = useState(c?.amount_claimed?.toString() ?? "");
-  const [considered, setConsidered] = useState(c?.amount_considered?.toString() ?? "");
-  const [agreed, setAgreed] = useState(c?.amount_agreed?.toString() ?? "");
-  const [paid, setPaid] = useState(c?.amount_paid?.toString() ?? "");
+  const [client, setClient] = useState(c?.client ?? "");
+  const [city, setCity] = useState(c?.city ?? "");
+  const [nature, setNature] = useState(c?.nature ?? "");
+  const [distributionDate, setDistributionDate] = useState(c?.distribution_date ?? "");
+  const [hearingDate, setHearingDate] = useState(c?.hearing_date ?? "");
+  const [lastMovementDate, setLastMovementDate] = useState(c?.last_movement_date ?? "");
+  const [lastMovement, setLastMovement] = useState(c?.last_movement ?? "");
+  const [claimed, setClaimed] = useState(formatCurrencyInputFromApi(c?.amount_claimed));
+  const [considered, setConsidered] = useState(formatCurrencyInputFromApi(c?.amount_considered));
+  const [agreed, setAgreed] = useState(formatCurrencyInputFromApi(c?.amount_agreed));
+  const [paid, setPaid] = useState(formatCurrencyInputFromApi(c?.amount_paid));
+  const [pending, setPending] = useState(formatCurrencyInputFromApi(c?.amount_pending));
+  const [agreementTerms, setAgreementTerms] = useState(c?.agreement_terms ?? "");
   const [notes, setNotes] = useState(c?.notes ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Mesmo cuidado do formulário de Pessoa: sem Dados sensíveis não mostra nem envia valores.
+  const { user } = useAuth();
+  const canSeeValues = hasPermission(user?.permission_names, "legal_cases.sensitive");
 
   const [people, setPeople] = useState<LegalPerson[]>([]);
   const [facets, setFacets] = useState<LegalFacets | null>(null);
@@ -671,11 +747,24 @@ function CaseForm({
       claimant_name: orNull(claimant),
       defendant_name: orNull(defendant),
       jusbrasil_url: orNull(url),
-      amount_claimed: numOrNull(claimed),
-      amount_considered: numOrNull(considered),
-      amount_agreed: numOrNull(agreed),
-      amount_paid: numOrNull(paid),
+      client: orNull(client),
+      city: orNull(city),
+      nature: orNull(nature),
+      distribution_date: orNull(distributionDate),
+      hearing_date: orNull(hearingDate),
+      last_movement_date: orNull(lastMovementDate),
+      last_movement: orNull(lastMovement),
       notes: orNull(notes),
+      ...(canSeeValues
+        ? {
+            amount_claimed: numOrNull(claimed),
+            amount_considered: numOrNull(considered),
+            amount_agreed: numOrNull(agreed),
+            amount_paid: numOrNull(paid),
+            amount_pending: numOrNull(pending),
+            agreement_terms: orNull(agreementTerms),
+          }
+        : {}),
     };
     try {
       if (c) await updateLegalCase(c.id, payload);
@@ -759,6 +848,20 @@ function CaseForm({
           ))}
         </datalist>
       </Field>
+      <Field label="Cliente">
+        <input className={inputClass} list="case-clients" value={client} onChange={(e) => setClient(e.target.value)} />
+        <datalist id="case-clients">
+          {(facets?.clients ?? []).map((x) => (
+            <option key={x} value={x} />
+          ))}
+        </datalist>
+      </Field>
+      <Field label="Comarca">
+        <input className={inputClass} value={city} onChange={(e) => setCity(e.target.value)} />
+      </Field>
+      <Field label="Classe processual">
+        <input className={inputClass} value={nature} onChange={(e) => setNature(e.target.value)} />
+      </Field>
       <Field label="Reclamante">
         <input className={inputClass} value={claimant} onChange={(e) => setClaimant(e.target.value)} />
       </Field>
@@ -768,18 +871,40 @@ function CaseForm({
       <Field label="Link do JusBrasil" wide>
         <input className={inputClass} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
       </Field>
-      <Field label="Valor da causa">
-        <input className={inputClass} value={claimed} onChange={(e) => setClaimed(e.target.value)} placeholder="0,00" />
+      <Field label="Distribuição">
+        <input type="date" className={inputClass} value={distributionDate} onChange={(e) => setDistributionDate(e.target.value)} />
       </Field>
-      <Field label="Valor considerado" hint="0 quando o processo espelha outro já contabilizado.">
-        <input className={inputClass} value={considered} onChange={(e) => setConsidered(e.target.value)} placeholder="0,00" />
+      <Field label="Audiência">
+        <input type="date" className={inputClass} value={hearingDate} onChange={(e) => setHearingDate(e.target.value)} />
       </Field>
-      <Field label="Valor acordado">
-        <input className={inputClass} value={agreed} onChange={(e) => setAgreed(e.target.value)} placeholder="0,00" />
+      <Field label="Data da última movimentação">
+        <input type="date" className={inputClass} value={lastMovementDate} onChange={(e) => setLastMovementDate(e.target.value)} />
       </Field>
-      <Field label="Valor pago">
-        <input className={inputClass} value={paid} onChange={(e) => setPaid(e.target.value)} placeholder="0,00" />
+      <Field label="Última movimentação" wide>
+        <textarea className={inputClass} rows={2} value={lastMovement} onChange={(e) => setLastMovement(e.target.value)} />
       </Field>
+      {canSeeValues ? (
+        <>
+          <Field label="Valor da causa">
+            <input className={inputClass} inputMode="decimal" value={claimed} onChange={(e) => setClaimed(e.target.value)} placeholder="0,00" />
+          </Field>
+          <Field label="Valor considerado" hint="0 quando o processo espelha outro já contabilizado.">
+            <input className={inputClass} inputMode="decimal" value={considered} onChange={(e) => setConsidered(e.target.value)} placeholder="0,00" />
+          </Field>
+          <Field label="Valor acordado">
+            <input className={inputClass} inputMode="decimal" value={agreed} onChange={(e) => setAgreed(e.target.value)} placeholder="0,00" />
+          </Field>
+          <Field label="Valor pago">
+            <input className={inputClass} inputMode="decimal" value={paid} onChange={(e) => setPaid(e.target.value)} placeholder="0,00" />
+          </Field>
+          <Field label="Saldo pendente">
+            <input className={inputClass} inputMode="decimal" value={pending} onChange={(e) => setPending(e.target.value)} placeholder="0,00" />
+          </Field>
+          <Field label="Condições do acordo" wide>
+            <textarea className={inputClass} rows={2} value={agreementTerms} onChange={(e) => setAgreementTerms(e.target.value)} />
+          </Field>
+        </>
+      ) : null}
       <Field label="Observações" wide>
         <textarea className={inputClass} rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
       </Field>

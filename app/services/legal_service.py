@@ -92,6 +92,7 @@ MONEY_FIELDS: frozenset[str] = frozenset(
         "agreement_terms",
         "severance_amount",
         "fgts_balance",
+        "art477_fine",
     }
 )
 

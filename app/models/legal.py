@@ -99,6 +99,8 @@ class LegalPerson(TimestampUUIDMixin, Base):
     # Valores da RESCISÃO (relação de emprego), distintos dos valores do processo.
     severance_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     fgts_balance: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # Multa por atraso no pagamento da rescisão (art. 477, §8º da CLT).
+    art477_fine: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
 
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)

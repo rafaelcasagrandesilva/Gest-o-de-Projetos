@@ -65,6 +65,7 @@ export type LegalPerson = {
   termination_date: string | null;
   severance_amount: number | null;
   fgts_balance: number | null;
+  art477_fine: number | null;
   notes: string | null;
   is_active: boolean;
   case_count: number;
@@ -235,6 +236,7 @@ export type LegalPersonInput = {
   termination_date?: string | null;
   severance_amount?: number | null;
   fgts_balance?: number | null;
+  art477_fine?: number | null;
   notes?: string | null;
 };
 
@@ -256,6 +258,13 @@ export type LegalCaseInput = {
   amount_agreed?: number | null;
   amount_paid?: number | null;
   amount_pending?: number | null;
+  agreement_terms?: string | null;
+  nature?: string | null;
+  city?: string | null;
+  last_movement?: string | null;
+  last_movement_date?: string | null;
+  hearing_date?: string | null;
+  distribution_date?: string | null;
   notes?: string | null;
 };
 

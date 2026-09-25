@@ -33,7 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_permission
-from app.api.sensitive import redact_for, sensitive_include
+from app.api.sensitive import SENSITIVE_SPECS, redact_for, sensitive_include
 from app.core.permission_codes import (
     LEGAL_CASES_CREATE,
     LEGAL_CASES_DELETE,
@@ -161,6 +161,18 @@ _history = [
         )
     )
 ]
+
+
+def _strip_sensitive_writes(resource: str, data: dict, user: User) -> dict:
+    """Remove do PATCH os campos monetários que o usuário não pode VER.
+
+    Sem `<recurso>.sensitive` o formulário recebe esses valores como `null` (redigidos); se os
+    reenviasse, apagaria o valor real. Quem não vê o valor também não o altera.
+    """
+    if sensitive_include(resource, user):
+        return data
+    hidden = set(SENSITIVE_SPECS[resource].fields)
+    return {k: v for k, v in data.items() if k not in hidden}
 
 
 def _case_read(case: LegalCase) -> LegalCaseRead:
@@ -321,9 +333,8 @@ async def update_case(
     user: User = Depends(get_current_user),
 ) -> LegalCaseRead:
     try:
-        row = await LegalService(db).update_case(
-            case_id, payload.model_dump(exclude_unset=True), actor=user
-        )
+        data = _strip_sensitive_writes("legal_case", payload.model_dump(exclude_unset=True), user)
+        row = await LegalService(db).update_case(case_id, data, actor=user)
     except LookupError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except IntegrityError as e:
@@ -504,7 +515,8 @@ async def update_person(
 ) -> LegalPersonRead:
     svc = LegalService(db)
     try:
-        await svc.update_person(person_id, payload.model_dump(exclude_unset=True), actor=user)
+        data = _strip_sensitive_writes("legal_person", payload.model_dump(exclude_unset=True), user)
+        await svc.update_person(person_id, data, actor=user)
     except LookupError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except IntegrityError as e:

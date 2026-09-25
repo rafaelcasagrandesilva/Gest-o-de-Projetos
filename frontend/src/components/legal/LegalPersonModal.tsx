@@ -63,6 +63,9 @@ export function LegalPersonModal({
               <DetailRow label="Saldo FGTS">
                 <DetailMoney value={person.fgts_balance} />
               </DetailRow>
+              <DetailRow label="Multa art. 477">
+                <DetailMoney value={person.art477_fine} />
+              </DetailRow>
             </dl>
           </section>
 
