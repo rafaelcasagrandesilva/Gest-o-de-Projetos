@@ -114,6 +114,7 @@ class LegalPersonBase(BaseModel):
     termination_date: date | None = None
     severance_amount: float | None = None
     fgts_balance: float | None = None
+    art477_fine: float | None = None
     notes: str | None = None
     is_active: bool = True
 
@@ -135,6 +136,7 @@ class LegalPersonUpdate(BaseModel):
     termination_date: date | None = None
     severance_amount: float | None = None
     fgts_balance: float | None = None
+    art477_fine: float | None = None
     notes: str | None = None
     is_active: bool | None = None
 
@@ -149,6 +151,21 @@ class LegalPersonRead(ORMModel, LegalPersonBase):
     total_agreed: float | None = None
     total_paid: float | None = None
     total_pending: float | None = None
+
+
+class LegalPersonDocumentRead(ORMModel):
+    """Documento anexado ao desligado (o binário é servido pela rota de download)."""
+
+    id: UUID
+    person_id: UUID
+    category: str
+    category_label: str
+    title: str
+    original_filename: str
+    content_type: str | None = None
+    size_bytes: int = 0
+    uploaded_by_email: str | None = None
+    uploaded_at: datetime
 
 
 class LegalPersonDetail(LegalPersonRead):

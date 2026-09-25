@@ -20,12 +20,14 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
     UploadFile,
     status,
 )
+from fastapi.responses import FileResponse
 from datetime import datetime
 
 from sqlalchemy import select
@@ -33,7 +35,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_permission
-from app.api.sensitive import redact_for, sensitive_include
+from app.api.sensitive import SENSITIVE_SPECS, redact_for, sensitive_include
 from app.core.permission_codes import (
     LEGAL_CASES_CREATE,
     LEGAL_CASES_DELETE,
@@ -52,6 +54,7 @@ from app.core.permission_codes import (
     LEGAL_PERSONS_LIST,
     LEGAL_PERSONS_READ,
     LEGAL_PERSONS_REFERENCE,
+    LEGAL_PERSONS_SENSITIVE,
     LEGAL_PERSONS_UPDATE,
     LEGAL_PROJECTS_CREATE,
     LEGAL_PROJECTS_DELETE,
@@ -60,7 +63,15 @@ from app.core.permission_codes import (
     WORKSPACE_LEGAL_ACCESS,
 )
 from app.database.session import get_db
-from app.models.legal import LegalCase, LegalChangeLog, LegalImportRun, LegalPerson
+from app.core.config import settings
+from app.models.legal import (
+    LegalCase,
+    LegalChangeLog,
+    LegalImportRun,
+    LegalPerson,
+    LegalPersonDocument,
+    LegalPersonDocumentCategory,
+)
 from app.models.user import User
 from app.schemas.legal import (
     LegalCaseCreate,
@@ -74,6 +85,7 @@ from app.schemas.legal import (
     LegalOverview,
     LegalPersonCreate,
     LegalPersonDetail,
+    LegalPersonDocumentRead,
     LegalPersonRead,
     LegalPersonUpdate,
     LegalProjectCreate,
@@ -102,7 +114,14 @@ from app.services.legal_operation_service import (
     LegalWorkService,
 )
 from app.models.legal_operation import LegalTimelineEntryType
-from app.services.legal_service import MONEY_FIELDS, CaseFilters, LegalService, PersonFilters
+from app.services.legal_service import (
+    DOCUMENT_CATEGORY_LABELS,
+    MONEY_FIELDS,
+    CaseFilters,
+    LegalService,
+    PersonFilters,
+)
+from app.utils.media_type import resolve_media_type
 
 router = APIRouter()
 
@@ -129,6 +148,9 @@ _persons_create = [Depends(require_permission(LEGAL_PERSONS_CREATE))]
 _persons_update = [Depends(require_permission(LEGAL_PERSONS_UPDATE))]
 _persons_delete = [Depends(require_permission(LEGAL_PERSONS_DELETE))]
 _persons_restore = [Depends(require_permission(LEGAL_PERSONS_UPDATE, LEGAL_PERSONS_DELETE))]
+# Abrir o arquivo exige Dados sensíveis: rescisão, FGTS e comprovantes trazem os valores que a
+# API já omite de quem não tem `legal_persons.sensitive` — o PDF não pode ser o atalho.
+_persons_documents_open = [Depends(require_permission(LEGAL_PERSONS_SENSITIVE))]
 
 # Catálogos (Administração). Listar é liberado a quem enxerga Processos/Desligados também: são o
 # vocabulário dos filtros dessas telas — sem isso os combos ficariam vazios.
@@ -161,6 +183,18 @@ _history = [
         )
     )
 ]
+
+
+def _strip_sensitive_writes(resource: str, data: dict, user: User) -> dict:
+    """Remove do PATCH os campos monetários que o usuário não pode VER.
+
+    Sem `<recurso>.sensitive` o formulário recebe esses valores como `null` (redigidos); se os
+    reenviasse, apagaria o valor real. Quem não vê o valor também não o altera.
+    """
+    if sensitive_include(resource, user):
+        return data
+    hidden = set(SENSITIVE_SPECS[resource].fields)
+    return {k: v for k, v in data.items() if k not in hidden}
 
 
 def _case_read(case: LegalCase) -> LegalCaseRead:
@@ -321,9 +355,8 @@ async def update_case(
     user: User = Depends(get_current_user),
 ) -> LegalCaseRead:
     try:
-        row = await LegalService(db).update_case(
-            case_id, payload.model_dump(exclude_unset=True), actor=user
-        )
+        data = _strip_sensitive_writes("legal_case", payload.model_dump(exclude_unset=True), user)
+        row = await LegalService(db).update_case(case_id, data, actor=user)
     except LookupError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except IntegrityError as e:
@@ -504,7 +537,8 @@ async def update_person(
 ) -> LegalPersonRead:
     svc = LegalService(db)
     try:
-        await svc.update_person(person_id, payload.model_dump(exclude_unset=True), actor=user)
+        data = _strip_sensitive_writes("legal_person", payload.model_dump(exclude_unset=True), user)
+        await svc.update_person(person_id, data, actor=user)
     except LookupError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except IntegrityError as e:
@@ -561,6 +595,119 @@ async def restore_person(
     except LookupError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     return await _person_response(svc, person_id, user)
+
+
+# ---------------------------------------------------------------------------
+# Documentos do desligado (rescisão, FGTS, ponto, comprovantes…)
+# ---------------------------------------------------------------------------
+
+
+def _document_read(row: LegalPersonDocument) -> LegalPersonDocumentRead:
+    return LegalPersonDocumentRead(
+        id=row.id,
+        person_id=row.person_id,
+        category=row.category,
+        category_label=DOCUMENT_CATEGORY_LABELS.get(row.category, row.category),
+        title=row.title,
+        original_filename=row.original_filename,
+        content_type=row.content_type,
+        size_bytes=row.size_bytes,
+        uploaded_by_email=row.uploaded_by_email,
+        uploaded_at=row.uploaded_at,
+    )
+
+
+@router.get(
+    "/persons/{person_id}/documents",
+    response_model=list[LegalPersonDocumentRead],
+    dependencies=_persons_read + _workspace,
+)
+async def list_person_documents(
+    person_id: UUID, db: AsyncSession = Depends(get_db)
+) -> list[LegalPersonDocumentRead]:
+    try:
+        rows = await LegalService(db).list_person_documents(person_id)
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return [_document_read(r) for r in rows]
+
+
+@router.post(
+    "/persons/{person_id}/documents",
+    response_model=LegalPersonDocumentRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=_persons_update + _workspace,
+)
+async def upload_person_document(
+    person_id: UUID,
+    file: UploadFile = File(...),
+    category: LegalPersonDocumentCategory = Form(default=LegalPersonDocumentCategory.OUTRO),
+    title: str | None = Form(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> LegalPersonDocumentRead:
+    body = await file.read()
+    if not body:
+        raise HTTPException(status_code=400, detail="O arquivo está vazio.")
+    limit = settings.legal_document_max_bytes
+    if len(body) > limit:
+        raise HTTPException(
+            status_code=413, detail=f"Arquivo excede o limite de {limit // (1024 * 1024)} MB."
+        )
+    try:
+        row = await LegalService(db).save_person_document(
+            person_id,
+            category=category.value,
+            title=title,
+            file_name=(file.filename or "arquivo").strip() or "arquivo",
+            content_type=file.content_type,
+            body=body,
+            actor=user,
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return _document_read(row)
+
+
+@router.get(
+    "/persons/{person_id}/documents/{document_id}/download",
+    dependencies=_persons_read + _persons_documents_open + _workspace,
+)
+async def download_person_document(
+    person_id: UUID, document_id: UUID, db: AsyncSession = Depends(get_db)
+) -> FileResponse:
+    svc = LegalService(db)
+    row = await svc.get_person_document(person_id, document_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
+    path = svc.document_disk_path(row)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Arquivo não encontrado no armazenamento do servidor. Reenvie o documento.",
+        )
+    return FileResponse(
+        path,
+        media_type=resolve_media_type(row.content_type, row.original_filename),
+        filename=row.original_filename,
+    )
+
+
+@router.post(
+    "/persons/{person_id}/documents/{document_id}/deactivate",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=_persons_restore + _workspace,
+)
+async def deactivate_person_document(
+    person_id: UUID,
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    try:
+        await LegalService(db).deactivate_person_document(person_id, document_id, actor=user)
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 
 # ---------------------------------------------------------------------------

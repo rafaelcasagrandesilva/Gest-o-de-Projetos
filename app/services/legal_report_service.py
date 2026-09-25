@@ -202,6 +202,7 @@ class LegalReportService:
                 "valor_pendente_total": _money(t["total_pending"], include=include_cases_sensitive),
                 "rescisao": _money(p.severance_amount, include=include_persons_sensitive),
                 "fgts": _money(p.fgts_balance, include=include_persons_sensitive),
+                "multa_477": _money(p.art477_fine, include=include_persons_sensitive),
                 "observacoes": p.notes,
             }
             for p, t in people

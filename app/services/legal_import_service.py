@@ -142,6 +142,7 @@ FIELD_LABELS: dict[str, str] = {
     "termination_date": "Desligamento",
     "severance_amount": "Rescisão",
     "fgts_balance": "Saldo FGTS",
+    "art477_fine": "Multa art. 477",
     "notes": "Observações",
     "case_number": "Número do processo",
     "jusbrasil_url": "Link JusBrasil",

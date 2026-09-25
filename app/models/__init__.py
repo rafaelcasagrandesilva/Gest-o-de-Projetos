@@ -43,6 +43,8 @@ from app.models.legal import (
     LegalImportRun,
     LegalEntityType,
     LegalPerson,
+    LegalPersonDocument,
+    LegalPersonDocumentCategory,
     LegalProject,
 )
 from app.models.legal_operation import (

@@ -99,6 +99,7 @@ _LEGAL_SHEETS: list[tuple[str, str, list[Col]]] = [
             Col("Valor pendente (total)", "valor_pendente_total", money=True),
             Col("Rescisão", "rescisao", money=True),
             Col("Saldo FGTS", "fgts", money=True),
+            Col("Multa art. 477", "multa_477", money=True),
             Col("Situação do cadastro", "situacao_cadastro"),
             Col("Observações", "observacoes"),
         ],

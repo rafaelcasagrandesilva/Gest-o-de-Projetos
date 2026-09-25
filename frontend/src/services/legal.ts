@@ -1,4 +1,6 @@
 import { api } from "@/services/api";
+import { hydrateBlobError } from "@/utils/apiError";
+import { saveBlobAsFile, viewFileInNewTab } from "@/utils/fileView";
 
 /**
  * Workspace Jurídico — Processos e Pessoas.
@@ -65,6 +67,7 @@ export type LegalPerson = {
   termination_date: string | null;
   severance_amount: number | null;
   fgts_balance: number | null;
+  art477_fine: number | null;
   notes: string | null;
   is_active: boolean;
   case_count: number;
@@ -235,6 +238,7 @@ export type LegalPersonInput = {
   termination_date?: string | null;
   severance_amount?: number | null;
   fgts_balance?: number | null;
+  art477_fine?: number | null;
   notes?: string | null;
 };
 
@@ -256,6 +260,13 @@ export type LegalCaseInput = {
   amount_agreed?: number | null;
   amount_paid?: number | null;
   amount_pending?: number | null;
+  agreement_terms?: string | null;
+  nature?: string | null;
+  city?: string | null;
+  last_movement?: string | null;
+  last_movement_date?: string | null;
+  hearing_date?: string | null;
+  distribution_date?: string | null;
   notes?: string | null;
 };
 
@@ -299,6 +310,85 @@ export async function updateLegalPerson(id: string, data: Partial<LegalPersonInp
 export async function setLegalPersonActive(id: string, active: boolean): Promise<LegalPerson> {
   const action = active ? "restore" : "deactivate";
   return (await api.post<LegalPerson>(`/legal/persons/${id}/${action}`)).data;
+}
+
+// ---------------------------------------------------------------------------
+// Documentos do desligado — mesmo mecanismo dos documentos de projeto (arquivo no volume
+// persistente, "Ver" + "Baixar", remoção lógica).
+// ---------------------------------------------------------------------------
+
+export type LegalPersonDocumentCategory =
+  | "RESCISAO"
+  | "MULTA_477"
+  | "FGTS"
+  | "CONTRATO_TRABALHO"
+  | "CONTROLE_PONTO"
+  | "COMPROVANTE_PAGAMENTO"
+  | "OUTRO";
+
+export const LEGAL_PERSON_DOCUMENT_CATEGORIES: { value: LegalPersonDocumentCategory; label: string }[] = [
+  { value: "RESCISAO", label: "Rescisão" },
+  { value: "MULTA_477", label: "Multa art. 477" },
+  { value: "FGTS", label: "FGTS" },
+  { value: "CONTRATO_TRABALHO", label: "Contrato de trabalho" },
+  { value: "CONTROLE_PONTO", label: "Controle de ponto" },
+  { value: "COMPROVANTE_PAGAMENTO", label: "Comprovante de pagamento" },
+  { value: "OUTRO", label: "Outros" },
+];
+
+export type LegalPersonDocument = {
+  id: string;
+  person_id: string;
+  category: LegalPersonDocumentCategory;
+  category_label: string;
+  title: string;
+  original_filename: string;
+  content_type: string | null;
+  size_bytes: number;
+  uploaded_by_email: string | null;
+  uploaded_at: string;
+};
+
+export async function listLegalPersonDocuments(personId: string): Promise<LegalPersonDocument[]> {
+  return (await api.get<LegalPersonDocument[]>(`/legal/persons/${personId}/documents`)).data;
+}
+
+export async function uploadLegalPersonDocument(
+  personId: string,
+  payload: { category: LegalPersonDocumentCategory; title?: string; file: File },
+): Promise<LegalPersonDocument> {
+  const form = new FormData();
+  form.append("file", payload.file);
+  form.append("category", payload.category);
+  if (payload.title?.trim()) form.append("title", payload.title.trim());
+  const { data } = await api.post<LegalPersonDocument>(`/legal/persons/${personId}/documents`, form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
+}
+
+async function fetchLegalPersonDocumentBlob(doc: LegalPersonDocument): Promise<Blob> {
+  try {
+    const resp = await api.get<Blob>(`/legal/persons/${doc.person_id}/documents/${doc.id}/download`, {
+      responseType: "blob",
+    });
+    return resp.data;
+  } catch (e) {
+    throw await hydrateBlobError(e);
+  }
+}
+
+export async function viewLegalPersonDocument(doc: LegalPersonDocument): Promise<void> {
+  await viewFileInNewTab(() => fetchLegalPersonDocumentBlob(doc));
+}
+
+export async function downloadLegalPersonDocument(doc: LegalPersonDocument): Promise<void> {
+  saveBlobAsFile(await fetchLegalPersonDocumentBlob(doc), doc.original_filename || doc.title);
+}
+
+/** Baixa LÓGICA — o arquivo continua guardado no servidor. */
+export async function deactivateLegalPersonDocument(doc: LegalPersonDocument): Promise<void> {
+  await api.post(`/legal/persons/${doc.person_id}/documents/${doc.id}/deactivate`);
 }
 
 export async function createLegalCase(data: LegalCaseInput): Promise<LegalCase> {

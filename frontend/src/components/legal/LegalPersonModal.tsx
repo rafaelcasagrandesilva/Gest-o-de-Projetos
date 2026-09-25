@@ -1,4 +1,5 @@
 import { Money } from "@/components/Money";
+import { LegalPersonDocuments } from "@/components/legal/LegalPersonDocuments";
 import { DetailMoney, DetailRow, StatusPill, formatCount, formatDateBR } from "@/components/legal/LegalPanelPieces";
 import { LEGAL_STATUS_LABELS, type LegalCase, type LegalPersonDetail } from "@/services/legal";
 
@@ -62,6 +63,9 @@ export function LegalPersonModal({
               </DetailRow>
               <DetailRow label="Saldo FGTS">
                 <DetailMoney value={person.fgts_balance} />
+              </DetailRow>
+              <DetailRow label="Multa art. 477">
+                <DetailMoney value={person.art477_fine} />
               </DetailRow>
             </dl>
           </section>
@@ -164,6 +168,11 @@ export function LegalPersonModal({
                 </table>
               </div>
             )}
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Documentos</h3>
+            <LegalPersonDocuments personId={person.id} />
           </section>
 
           {person.notes ? (

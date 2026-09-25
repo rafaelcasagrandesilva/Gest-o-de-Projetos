@@ -13,13 +13,16 @@ valor (mesma origem contabilizada duas vezes), o duplicado entra como 0 e não i
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from uuid import UUID
+from pathlib import Path
+from uuid import UUID, uuid4
 
 from sqlalchemy import ColumnElement, Select, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.legal import (
     LegalCase,
     LegalCaseStatus,
@@ -29,6 +32,8 @@ from app.models.legal import (
     LegalCompany,
     LegalEntityType,
     LegalPerson,
+    LegalPersonDocument,
+    LegalPersonDocumentCategory,
     LegalProject,
 )
 from app.schemas.legal import (
@@ -58,6 +63,17 @@ TYPE_LABELS: dict[str, str] = {
     LegalCaseType.CIVEL.value: "Cível",
     LegalCaseType.TRIBUTARIO.value: "Tributário",
     LegalCaseType.OUTRO.value: "Outro",
+}
+
+# Categorias dos documentos do desligado, na ordem em que aparecem no seletor.
+DOCUMENT_CATEGORY_LABELS: dict[str, str] = {
+    LegalPersonDocumentCategory.RESCISAO.value: "Rescisão",
+    LegalPersonDocumentCategory.MULTA_477.value: "Multa art. 477",
+    LegalPersonDocumentCategory.FGTS.value: "FGTS",
+    LegalPersonDocumentCategory.CONTRATO_TRABALHO.value: "Contrato de trabalho",
+    LegalPersonDocumentCategory.CONTROLE_PONTO.value: "Controle de ponto",
+    LegalPersonDocumentCategory.COMPROVANTE_PAGAMENTO.value: "Comprovante de pagamento",
+    LegalPersonDocumentCategory.OUTRO.value: "Outros",
 }
 
 # Ordem canônica dos status (ciclo de vida do processo) — usada nos chips e no gráfico.
@@ -92,6 +108,7 @@ MONEY_FIELDS: frozenset[str] = frozenset(
         "agreement_terms",
         "severance_amount",
         "fgts_balance",
+        "art477_fine",
     }
 )
 
@@ -576,6 +593,114 @@ class LegalService:
         await self.session.commit()
         await self.session.refresh(row)
         return row
+
+    # -- Documentos do desligado (arquivo em disco, raiz persistente) ----------------------
+
+    @staticmethod
+    def document_base_dir() -> Path:
+        base = Path(settings.legal_document_dir).resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+
+    def document_disk_path(self, row: LegalPersonDocument) -> Path:
+        return (self.document_base_dir() / row.storage_path).resolve()
+
+    @staticmethod
+    def _document_label(row: LegalPersonDocument) -> str:
+        category = DOCUMENT_CATEGORY_LABELS.get(row.category, row.category)
+        return f"{category} — {row.original_filename}"
+
+    async def list_person_documents(self, person_id: UUID) -> list[LegalPersonDocument]:
+        if await self.session.get(LegalPerson, person_id) is None:
+            raise LookupError("Pessoa não encontrada.")
+        stmt = (
+            select(LegalPersonDocument)
+            .where(
+                LegalPersonDocument.person_id == person_id,
+                LegalPersonDocument.is_active.is_(True),
+            )
+            .order_by(LegalPersonDocument.uploaded_at.desc())
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def save_person_document(
+        self,
+        person_id: UUID,
+        *,
+        category: str,
+        title: str | None,
+        file_name: str,
+        content_type: str | None,
+        body: bytes,
+        actor=None,
+    ) -> LegalPersonDocument:
+        if await self.session.get(LegalPerson, person_id) is None:
+            raise LookupError("Pessoa não encontrada.")
+        # Alguns navegadores/sistemas mandam o caminho junto ("C:\\pasta\\TRCT.pdf"): fica o nome.
+        file_name = file_name.replace("\\", "/").rsplit("/", 1)[-1].strip() or "arquivo"
+        file_id = uuid4()
+        # Só a extensão vem do nome enviado, e saneada: o caminho em disco é sempre <uuid><ext>.
+        ext = Path(file_name).suffix.lower()
+        if not (ext[1:].isalnum() and len(ext) <= 10):
+            ext = ""
+        folder = self.document_base_dir() / str(person_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / f"{file_id}{ext}"
+        dest.write_bytes(body)
+        row = LegalPersonDocument(
+            id=file_id,
+            person_id=person_id,
+            category=category,
+            title=((title or "").strip() or file_name)[:255],
+            original_filename=file_name[:255],
+            content_type=(content_type or None) and content_type[:128],
+            size_bytes=len(body),
+            storage_path=str(dest.relative_to(self.document_base_dir())),
+            uploaded_by_id=getattr(actor, "id", None),
+            uploaded_by_email=getattr(actor, "email", None),
+            uploaded_at=datetime.now(timezone.utc),
+            is_active=True,
+        )
+        self.session.add(row)
+        self._log(
+            entity_type=LegalEntityType.PERSON,
+            entity_id=person_id,
+            action=LegalChangeAction.UPDATE,
+            actor=actor,
+            field_name="document",
+            new=self._document_label(row),
+        )
+        await self.session.commit()
+        await self.session.refresh(row)
+        return row
+
+    async def get_person_document(
+        self, person_id: UUID, document_id: UUID
+    ) -> LegalPersonDocument | None:
+        stmt = select(LegalPersonDocument).where(
+            LegalPersonDocument.id == document_id,
+            LegalPersonDocument.person_id == person_id,
+            LegalPersonDocument.is_active.is_(True),
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def deactivate_person_document(
+        self, person_id: UUID, document_id: UUID, *, actor=None
+    ) -> None:
+        """Baixa LÓGICA: o documento sai da lista, mas registro e arquivo em disco ficam."""
+        row = await self.get_person_document(person_id, document_id)
+        if row is None:
+            raise LookupError("Documento não encontrado.")
+        row.is_active = False
+        self._log(
+            entity_type=LegalEntityType.PERSON,
+            entity_id=person_id,
+            action=LegalChangeAction.UPDATE,
+            actor=actor,
+            field_name="document",
+            old=self._document_label(row),
+        )
+        await self.session.commit()
 
     async def set_person_active(self, person_id: UUID, *, active: bool, actor=None) -> LegalPerson:
         """Baixa LÓGICA. Os processos vinculados NÃO são desativados junto — desativar uma pessoa
