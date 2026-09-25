@@ -68,6 +68,10 @@ class Settings(BaseSettings):
         default=25 * 1024 * 1024, alias="PROJECT_AGENDA_ATTACHMENT_MAX_BYTES"
     )
 
+    # Documentos do desligado no Jurídico (rescisão, FGTS, ponto, comprovantes…).
+    legal_document_dir: str = Field(default="var/legal_documents", alias="LEGAL_DOCUMENT_DIR")
+    legal_document_max_bytes: int = Field(default=25 * 1024 * 1024, alias="LEGAL_DOCUMENT_MAX_BYTES")
+
     @field_validator("jwt_secret_key", "jwt_algorithm", mode="before")
     @classmethod
     def strip_secrets(cls, v: str) -> str:
@@ -125,6 +129,7 @@ class Settings(BaseSettings):
             "project_document_dir": "project_documents",
             "payment_component_attachment_dir": "payment_component_attachments",
             "project_agenda_attachment_dir": "project_agenda_attachments",
+            "legal_document_dir": "legal_documents",
         }
         for field, subdir in derived.items():
             if field not in self.model_fields_set:
@@ -150,6 +155,8 @@ class Settings(BaseSettings):
             "ASSET_UPLOAD_DIR": Path(self.asset_upload_dir),
             "PROJECT_DOCUMENT_DIR": Path(self.project_document_dir),
             "PAYMENT_COMPONENT_ATTACHMENT_DIR": Path(self.payment_component_attachment_dir),
+            "PROJECT_AGENDA_ATTACHMENT_DIR": Path(self.project_agenda_attachment_dir),
+            "LEGAL_DOCUMENT_DIR": Path(self.legal_document_dir),
         }
 
     def is_production(self) -> bool:

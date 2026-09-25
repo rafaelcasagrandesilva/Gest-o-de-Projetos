@@ -4,6 +4,7 @@ import { hasPermission } from "@/permissions";
 import { useAuth } from "@/context/AuthContext";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import { Money } from "@/components/Money";
+import { LegalPersonDocuments } from "@/components/legal/LegalPersonDocuments";
 import {
   ActiveBadge,
   AdminTable,
@@ -117,6 +118,7 @@ const HISTORY_FIELD_LABELS: Record<string, string> = {
   fgts_balance: "Saldo FGTS",
   art477_fine: "Multa art. 477",
   notes: "Observações",
+  document: "Documento",
   case_number: "Número do processo",
   jusbrasil_url: "Link JusBrasil",
   person_id: "Pessoa vinculada",
@@ -540,6 +542,14 @@ function PersonForm({
       <Field label="Observações" wide>
         <textarea className={inputClass} rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
       </Field>
+      <div className="flex min-w-0 flex-col gap-1 border-t border-slate-100 pt-3 sm:col-span-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Documentos</span>
+        {person ? (
+          <LegalPersonDocuments personId={person.id} allowUpload />
+        ) : (
+          <p className="text-sm text-slate-400">Salve o cadastro para anexar documentos.</p>
+        )}
+      </div>
     </FormModal>
   );
 }

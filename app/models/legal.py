@@ -16,13 +16,14 @@ não há campo para dessincronizar quando os processos mudarem.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
     Date,
+    DateTime,
     Enum as SAEnum,
     ForeignKey,
     Integer,
@@ -105,11 +106,59 @@ class LegalPerson(TimestampUUIDMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
+    documents: Mapped[list["LegalPersonDocument"]] = relationship(
+        back_populates="person", lazy="noload"
+    )
     cases: Mapped[list["LegalCase"]] = relationship(
         back_populates="person",
         order_by="LegalCase.case_number",
         lazy="selectin",
     )
+
+
+class LegalPersonDocumentCategory(str, Enum):
+    RESCISAO = "RESCISAO"
+    MULTA_477 = "MULTA_477"
+    FGTS = "FGTS"
+    CONTRATO_TRABALHO = "CONTRATO_TRABALHO"
+    CONTROLE_PONTO = "CONTROLE_PONTO"
+    COMPROVANTE_PAGAMENTO = "COMPROVANTE_PAGAMENTO"
+    OUTRO = "OUTRO"
+
+
+class LegalPersonDocument(TimestampUUIDMixin, Base):
+    """Documento anexado ao cadastro do desligado (rescisão, FGTS, ponto, comprovantes…).
+
+    Mesmo mecanismo dos documentos de projeto: o binário mora em disco, na raiz persistente
+    (`settings.legal_document_dir`), e aqui fica só o caminho relativo. "Remover" é baixa lógica —
+    o arquivo e o registro são preservados, como todo dado do Jurídico.
+
+    A categoria é texto (validada pelo enum na API) e não um tipo do Postgres: incluir uma
+    categoria nova não exige migration.
+    """
+
+    __tablename__ = "legal_person_documents"
+
+    person_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("legal_persons.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    category: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    uploaded_by_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    uploaded_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+
+    person: Mapped["LegalPerson"] = relationship(back_populates="documents")
 
 
 class LegalCase(TimestampUUIDMixin, Base):

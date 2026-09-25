@@ -153,6 +153,21 @@ class LegalPersonRead(ORMModel, LegalPersonBase):
     total_pending: float | None = None
 
 
+class LegalPersonDocumentRead(ORMModel):
+    """Documento anexado ao desligado (o binário é servido pela rota de download)."""
+
+    id: UUID
+    person_id: UUID
+    category: str
+    category_label: str
+    title: str
+    original_filename: str
+    content_type: str | None = None
+    size_bytes: int = 0
+    uploaded_by_email: str | None = None
+    uploaded_at: datetime
+
+
 class LegalPersonDetail(LegalPersonRead):
     """Detalhe (modal do ex-colaborador): inclui os processos relacionados."""
 

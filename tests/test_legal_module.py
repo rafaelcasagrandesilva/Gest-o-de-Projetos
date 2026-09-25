@@ -586,5 +586,33 @@ class SensitiveWriteGuardTests(unittest.TestCase):
         self.assertEqual(out, {"city": "Rio"})
 
 
+class PersonDocumentTests(unittest.TestCase):
+    def test_every_category_has_label(self):
+        from app.models.legal import LegalPersonDocumentCategory
+        from app.services.legal_service import DOCUMENT_CATEGORY_LABELS
+
+        self.assertEqual(
+            set(DOCUMENT_CATEGORY_LABELS), {c.value for c in LegalPersonDocumentCategory}
+        )
+
+    def test_download_requires_sensitive(self):
+        """Rescisão/FGTS em PDF trazem os valores que a API omite: abrir exige o sensitive."""
+        from app.modules.legal.router import router
+
+        route = next(
+            r for r in router.routes if getattr(r, "path", "").endswith("/documents/{document_id}/download")
+        )
+        # A dependência de permissão é uma closure; confere pelo código capturado.
+        codes = set()
+        for dep in route.dependant.dependencies:
+            for cell in getattr(dep.call, "__closure__", None) or ():
+                val = cell.cell_contents
+                if isinstance(val, (tuple, list, set, frozenset)):
+                    codes.update(v for v in val if isinstance(v, str))
+                elif isinstance(val, str):
+                    codes.add(val)
+        self.assertIn(pc.LEGAL_PERSONS_SENSITIVE, codes)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -44,6 +44,8 @@ def test_deriva_do_diretorio_das_nfs_quando_so_ele_esta_definido(monkeypatch) ->
     dirs = _settings(monkeypatch, RECEIVABLE_UPLOAD_DIR="/data/receivable_uploads").storage_dirs()
     assert dirs["ASSET_UPLOAD_DIR"] == Path("/data/asset_uploads")
     assert dirs["PROJECT_DOCUMENT_DIR"] == Path("/data/project_documents")
+    # Documentos do desligado (Jurídico) nascem no mesmo volume — não somem no redeploy.
+    assert dirs["LEGAL_DOCUMENT_DIR"] == Path("/data/legal_documents")
 
 
 def test_nf_apontando_para_a_raiz_do_volume_nao_vira_barra(monkeypatch) -> None:
