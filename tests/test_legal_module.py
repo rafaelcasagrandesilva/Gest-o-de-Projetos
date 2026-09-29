@@ -407,11 +407,11 @@ class ReportTests(unittest.TestCase):
                         "valor": _money(100.0, include=cases_sensitive)}],
             "quebras": [{"grupo": "Status", "item": "Em andamento", "quantidade": 2,
                          "valor": _money(100.0, include=cases_sensitive)}],
-            "processos": [{"processo": "1", "valor_considerado": _money(100.0, include=cases_sensitive)}],
+            "processos": [{"processo": "1", "valor_causa": _money(100.0, include=cases_sensitive)}],
             "desligados": [{"nome": "X", "qtd_processos": 1,
                             "rescisao": _money(50.0, include=persons_sensitive)}],
             "consolidado": [{"processo": "1", "nome": "X", "processo_do_desligado": "1 de 1",
-                             "valor_considerado": _money(100.0, include=cases_sensitive),
+                             "valor_causa": _money(100.0, include=cases_sensitive),
                              "rescisao": _money(50.0, include=persons_sensitive),
                              "multa_477": _money(10.0, include=persons_sensitive)}],
         }
@@ -450,6 +450,20 @@ class ReportTests(unittest.TestCase):
         # Todas as linhas com a mesma altura, mesmo com texto enorme.
         self.assertEqual(wb["Consolidado"].row_dimensions[2].height, 15)
 
+    def test_detail_sheets_have_no_considered_value(self):
+        """Nas abas de detalhe fica só o valor da causa (pedido do usuário)."""
+        import io
+
+        import openpyxl
+
+        from app.services.legal_report_export import render_legal_report_bytes
+
+        raw, _, _ = render_legal_report_bytes("legal", self._payload(), "xlsx", None)
+        wb = openpyxl.load_workbook(io.BytesIO(raw))
+        for name in ("Processos", "Desligados", "Consolidado"):
+            headers = [c.value for c in wb[name][1]]
+            self.assertFalse([h for h in headers if "considerado" in str(h).lower()], name)
+
     def test_pdf_is_generated(self):
         from app.services.legal_report_export import render_legal_report_bytes
 
@@ -469,7 +483,7 @@ class ReportTests(unittest.TestCase):
         raw, _, _ = render_legal_report_bytes("legal", payload, "xlsx", None)
         wb = openpyxl.load_workbook(io.BytesIO(raw))
         # Célula VAZIA (openpyxl lê "" como None), nunca 0 — "não pode ver" ≠ "é zero".
-        for value in (_cell(wb["Processos"], 2, "Valor considerado"), _cell(wb["Resumo"], 2, "Valor")):
+        for value in (_cell(wb["Processos"], 2, "Valor da causa"), _cell(wb["Resumo"], 2, "Valor")):
             self.assertIn(value, (None, ""))
             self.assertNotIsInstance(value, (int, float))
 
@@ -485,9 +499,9 @@ class ReportTests(unittest.TestCase):
         raw, _, _ = render_legal_report_bytes("legal", payload, "xlsx", None)
         wb = openpyxl.load_workbook(io.BytesIO(raw))
         self.assertIn(_cell(wb["Desligados"], 2, "Rescisão"), (None, ""))
-        self.assertEqual(_cell(wb["Processos"], 2, "Valor considerado"), 100.0)
+        self.assertEqual(_cell(wb["Processos"], 2, "Valor da causa"), 100.0)
         # Consolidado mistura os dois recursos na MESMA linha: cada coluna segue o seu.
-        self.assertEqual(_cell(wb["Consolidado"], 2, "Valor considerado"), 100.0)
+        self.assertEqual(_cell(wb["Consolidado"], 2, "Valor da causa"), 100.0)
         self.assertIn(_cell(wb["Consolidado"], 2, "Rescisão"), (None, ""))
         self.assertIn(_cell(wb["Consolidado"], 2, "Multa art. 477"), (None, ""))
 
@@ -645,3 +659,35 @@ class PersonDocumentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Art477FromNotesTests(unittest.TestCase):
+    """Multa do art. 477 escrita nas Observações → campo próprio (importador e migration 0153)."""
+
+    def test_known_formats(self):
+        from app.services.legal_import_parser import split_art477_fine
+
+        cases = {
+            "Tem multa do 477 - 3.060,14": 3060.14,
+            "Multa Art. 477 - 1.893,64": 1893.64,
+            "Tem multa do 477 -3.500,00": 3500.0,
+            "Multa Art. 477 -1.770,84": 1770.84,
+            "Tem multa do 477- 1981,13": 1981.13,
+            "multa art 477 R$ 2.000,00": 2000.0,
+        }
+        for note, expected in cases.items():
+            self.assertEqual(split_art477_fine(note), (expected, None), note)
+
+    def test_keeps_the_rest_of_the_note(self):
+        from app.services.legal_import_parser import split_art477_fine
+
+        self.assertEqual(
+            split_art477_fine("Acordo em andamento; Tem multa do 477 - 1.600,00"),
+            (1600.0, "Acordo em andamento"),
+        )
+
+    def test_never_guesses(self):
+        from app.services.legal_import_parser import split_art477_fine
+
+        for note in (None, "", "Sem pendências", "Pagou a multa", "Processo 477/2024"):
+            self.assertEqual(split_art477_fine(note), (None, note))
