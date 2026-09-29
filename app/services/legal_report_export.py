@@ -4,7 +4,8 @@ Reusa os builders compartilhados (`export/builders.py`) e a nomenclatura/cabeça
 (`export/report_meta.py`), então o arquivo sai com a mesma cara dos demais relatórios do SGC.
 
 Estrutura = a estrutura dos MENUS:
-    Excel → uma aba por menu (Resumo, Quebras, Processos, Desligados)
+    Excel → uma aba por menu (Resumo, Quebras, Processos, Desligados) + Consolidado
+            (1 linha por processo com os dados do desligado ao lado)
     PDF   → o Resumo executivo (é o formato que a diretoria lê); o detalhamento linha a linha
             fica no Excel, que é onde ele é utilizável.
 
@@ -65,7 +66,6 @@ _LEGAL_SHEETS: list[tuple[str, str, list[Col]]] = [
             Col("Reclamante", "reclamante"),
             Col("Reclamado", "reclamado"),
             Col("Valor da causa", "valor_causa", money=True),
-            Col("Valor considerado", "valor_considerado", money=True),
             Col("Valor acordado", "valor_acordado", money=True),
             Col("Valor pago", "valor_pago", money=True),
             Col("Valor pendente", "valor_pendente", money=True),
@@ -93,7 +93,6 @@ _LEGAL_SHEETS: list[tuple[str, str, list[Col]]] = [
             Col("Desligamento", "desligamento", is_date=True),
             Col("Qtd. processos", "qtd_processos"),
             Col("Valor da causa (total)", "valor_causa_total", money=True),
-            Col("Valor considerado (total)", "valor_considerado_total", money=True),
             Col("Valor acordado (total)", "valor_acordado_total", money=True),
             Col("Valor pago (total)", "valor_pago_total", money=True),
             Col("Valor pendente (total)", "valor_pendente_total", money=True),
@@ -102,6 +101,51 @@ _LEGAL_SHEETS: list[tuple[str, str, list[Col]]] = [
             Col("Multa art. 477", "multa_477", money=True),
             Col("Situação do cadastro", "situacao_cadastro"),
             Col("Observações", "observacoes"),
+        ],
+    ),
+    (
+        "Consolidado",
+        "consolidado",
+        [
+            # — Processo —
+            Col("Processo", "processo"),
+            Col("Nome", "nome"),
+            Col("CPF", "cpf"),
+            Col("Processo do desligado", "processo_do_desligado"),
+            Col("Status", "status"),
+            Col("Tipo", "tipo"),
+            Col("Classe processual", "classe"),
+            Col("Empresa", "empresa"),
+            Col("Projeto", "projeto"),
+            Col("Cliente", "cliente"),
+            Col("UF", "uf"),
+            Col("Foro", "foro"),
+            Col("Comarca", "comarca"),
+            Col("Reclamado", "reclamado"),
+            Col("Distribuição", "distribuicao", is_date=True),
+            Col("Audiência", "audiencia", is_date=True),
+            Col("Última movimentação", "ultima_movimentacao"),
+            Col("Data da movimentação", "data_movimentacao", is_date=True),
+            Col("Valor da causa", "valor_causa", money=True),
+            Col("Valor acordado", "valor_acordado", money=True),
+            Col("Valor pago", "valor_pago", money=True),
+            Col("Valor pendente", "valor_pendente", money=True),
+            Col("Condições do acordo", "condicoes_acordo"),
+            # — Desligado —
+            Col("Cargo", "cargo"),
+            Col("Admissão", "admissao", is_date=True),
+            Col("Desligamento", "desligamento", is_date=True),
+            Col("Empresa (cadastro do desligado)", "empresa_desligado"),
+            Col("Projeto (cadastro do desligado)", "projeto_desligado"),
+            Col("Rescisão", "rescisao", money=True),
+            Col("Saldo FGTS", "fgts", money=True),
+            Col("Multa art. 477", "multa_477", money=True),
+            # — Cadastro —
+            Col("Situação do processo", "situacao_cadastro"),
+            Col("Situação do desligado", "situacao_desligado"),
+            Col("Link JusBrasil", "jusbrasil"),
+            Col("Observações do processo", "observacoes"),
+            Col("Observações do desligado", "observacoes_desligado"),
         ],
     ),
 ]
@@ -144,6 +188,7 @@ def render_legal_report_bytes(
                     "headers": [c.header for c in cols],
                     "rows": [[_xlsx_cell(r, c) for c in cols] for r in rows],
                     "money_columns": frozenset(i for i, c in enumerate(cols, start=1) if c.money),
+                    "polished": True,
                 }
             )
         raw = build_multisheet_operational_xlsx_bytes(sheets)
@@ -166,6 +211,7 @@ def render_legal_report_bytes(
         counts = [
             f"Processos no relatório: {len(payload.get('processos') or [])}",
             f"Desligados no relatório: {len(payload.get('desligados') or [])}",
+            "Consolidado (processo × desligado): disponível no Excel",
         ]
         meta = list(header_lines(ctx, include_title=False, include_gen=False)) + counts
         raw = build_executive_pdf_bytes(

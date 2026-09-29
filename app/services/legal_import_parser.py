@@ -208,6 +208,31 @@ def parse_money(value: object) -> float | None:
         return None
 
 
+# Multa do art. 477 anotada nas Observações do RH, antes de existir o campo próprio:
+# "Tem multa do 477 - 3.060,14" · "Multa Art. 477 -1.770,84" · "Tem multa do 477- 1981,13".
+_ART477_RE = re.compile(
+    r"(?:tem\s+)?multa\s+(?:do\s+|art\.?\s*)?477\s*-?\s*(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{1,2})?)",
+    re.IGNORECASE,
+)
+
+
+def split_art477_fine(note: str | None) -> tuple[float | None, str | None]:
+    """Separa a multa do art. 477 escrita na observação: (valor, observação sem o trecho).
+
+    Sem menção reconhecível, devolve (None, observação intacta) — nunca adivinha. O que sobra da
+    observação depois de tirar o trecho da multa (pontuação solta incluída) é preservado; se não
+    sobrar nada, a observação vira None.
+    """
+    if not note:
+        return None, note
+    match = _ART477_RE.search(note)
+    if match is None:
+        return None, note
+    fine = parse_money(match.group(1))
+    rest = (note[: match.start()] + " " + note[match.end():]).strip(" \t\n-–;,./|")
+    return fine, (clean_str(rest) or None)
+
+
 def parse_agreement(text: str | None) -> float | None:
     """Soma o valor total de um acordo parcelado descrito em texto livre.
 
@@ -508,6 +533,7 @@ def build_payload(
 
         empresa = clean_str(row[C_EMPRESA])
         projeto = clean_str(row[C_PROJETO])
+        art477_fine, obs_rh = split_art477_fine(clean_str(row[C_OBS_RH]))
         person = people.get(key)
         if person is None:
             people[key] = {
@@ -526,7 +552,9 @@ def build_payload(
                 ),
                 "severance_amount": parse_money(row[C_RESCISAO]),
                 "fgts_balance": parse_money(row[C_FGTS]),
-                "notes": clean_str(row[C_OBS_RH]),
+                # A planilha não tem coluna de multa 477: ela vem escrita nas Observações do RH.
+                "art477_fine": art477_fine,
+                "notes": obs_rh,
             }
         else:
             duplicates.append(
@@ -546,7 +574,8 @@ def build_payload(
                 ("termination_date", parse_date(row[C_DESLIGAMENTO])),
                 ("severance_amount", parse_money(row[C_RESCISAO])),
                 ("fgts_balance", parse_money(row[C_FGTS])),
-                ("notes", clean_str(row[C_OBS_RH])),
+                ("art477_fine", art477_fine),
+                ("notes", obs_rh),
             ):
                 if person.get(field_name) is None and value is not None:
                     person[field_name] = value

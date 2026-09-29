@@ -80,6 +80,7 @@ PERSON_FIELDS: tuple[str, ...] = (
     "termination_date",
     "severance_amount",
     "fgts_balance",
+    "art477_fine",
     "notes",
 )
 
@@ -122,6 +123,7 @@ MONEY_FIELDS = frozenset(
     {
         "severance_amount",
         "fgts_balance",
+        "art477_fine",
         "amount_claimed",
         "amount_considered",
         "amount_agreed",
