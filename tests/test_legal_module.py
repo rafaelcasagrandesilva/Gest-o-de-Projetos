@@ -447,8 +447,8 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(ws["A1"].alignment.horizontal, "center")
             self.assertTrue(ws["A2"].alignment.wrap_text)
             self.assertEqual(ws["A2"].border.bottom.style, "thin")
-        # Texto enorme não vira uma linha de tela cheia (altura com teto).
-        self.assertLessEqual(wb["Consolidado"].row_dimensions[2].height, 90)
+        # Todas as linhas com a mesma altura, mesmo com texto enorme.
+        self.assertEqual(wb["Consolidado"].row_dimensions[2].height, 15)
 
     def test_pdf_is_generated(self):
         from app.services.legal_report_export import render_legal_report_bytes

@@ -74,7 +74,7 @@ def build_xlsx_bytes(
     return buf.getvalue()
 
 
-_MAX_ROW_LINES = 6
+_ROW_HEIGHT = 15
 _THIN_SIDE = Side(style="thin", color="BFC7D1")
 _THIN_BORDER = Border(left=_THIN_SIDE, right=_THIN_SIDE, top=_THIN_SIDE, bottom=_THIN_SIDE)
 
@@ -131,18 +131,11 @@ def _write_operational_sheet(
         ws.freeze_panes = "A2"
         ws.sheet_view.showGridLines = False
         ws.row_dimensions[1].height = 30
-        # Altura explícita por linha, com teto: com quebra de texto o Excel estica a linha até
-        # caber o texto inteiro, e um andamento de 4 mil caracteres vira uma linha de tela cheia.
-        # O conteúdo segue completo na célula (barra de fórmulas); só a altura é limitada.
-        widths = [ws.column_dimensions[get_column_letter(c)].width or 12 for c in range(1, ncols + 1)]
+        # Altura FIXA de uma linha em todas as linhas de dados: a tabela fica uniforme e a
+        # quebra de texto não estica a linha (um andamento de 4 mil caracteres viraria uma linha
+        # de tela cheia). O texto segue completo na célula — clique para ler na barra de fórmulas.
         for r_idx in range(2, last_row + 1):
-            lines = 1
-            for c_idx, w in enumerate(widths, start=1):
-                v = ws.cell(row=r_idx, column=c_idx).value
-                if isinstance(v, str) and v:
-                    per_line = max(int(w * 1.1), 1)
-                    lines = max(lines, sum(-(-len(part) // per_line) or 1 for part in v.split("\n")))
-            ws.row_dimensions[r_idx].height = 15 * min(lines, _MAX_ROW_LINES)
+            ws.row_dimensions[r_idx].height = _ROW_HEIGHT
 
 
 def build_operational_xlsx_bytes(
