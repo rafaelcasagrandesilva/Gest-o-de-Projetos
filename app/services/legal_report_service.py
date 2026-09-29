@@ -8,6 +8,8 @@ Uma aba por menu:
     Resumo      → os indicadores e as quebras do Dashboard (status, UF, empresa, projeto)
     Processos   → a tabela da tela de Processos
     Desligados  → a tabela da tela de Desligados
+    Consolidado → 1 linha por PROCESSO com os dados do desligado vinculado ao lado (rescisão, FGTS,
+                  multa 477…). Diferente de Desligados, que SOMA os processos de quem tem mais de um.
 
 `include_*_sensitive` refletem `legal_cases.sensitive` / `legal_persons.sensitive`: sem a
 permissão, o relatório sai SEM os valores daquele recurso (mesma regra da tela — o arquivo não
@@ -208,9 +210,48 @@ class LegalReportService:
             for p, t in people
         ]
 
+        # Consolidado: a linha é o PROCESSO; os campos do desligado se repetem em cada processo dele.
+        # Valores do desligado (rescisão, FGTS, multa 477) são da relação de emprego, não do
+        # processo — somá-los na coluna contaria N vezes quem tem N processos. Por isso a coluna
+        # "Processo do desligado" numera "1 de N" DENTRO deste arquivo: filtrar pelos "1 de …"
+        # dá exatamente uma linha por pessoa.
+        per_person: dict[Any, int] = {}
+        for c in cases:
+            if c.person_id is not None:
+                per_person[c.person_id] = per_person.get(c.person_id, 0) + 1
+        seen: dict[Any, int] = {}
+        consolidado: list[dict[str, Any]] = []
+        for c, row in zip(cases, processos):
+            p = c.person
+            ordem = None
+            if p is not None:
+                seen[c.person_id] = seen.get(c.person_id, 0) + 1
+                ordem = f"{seen[c.person_id]} de {per_person[c.person_id]}"
+            consolidado.append(
+                {
+                    **row,
+                    "processo_do_desligado": ordem,
+                    "cargo": p.role if p else None,
+                    "admissao": p.admission_date if p else None,
+                    "desligamento": p.termination_date if p else None,
+                    "empresa_desligado": p.company if p else None,
+                    "projeto_desligado": p.project if p else None,
+                    "rescisao": _money(p.severance_amount, include=include_persons_sensitive)
+                    if p
+                    else None,
+                    "fgts": _money(p.fgts_balance, include=include_persons_sensitive) if p else None,
+                    "multa_477": _money(p.art477_fine, include=include_persons_sensitive)
+                    if p
+                    else None,
+                    "situacao_desligado": ("Ativo" if p.is_active else "Inativo") if p else None,
+                    "observacoes_desligado": p.notes if p else None,
+                }
+            )
+
         return {
             "resumo": resumo,
             "quebras": quebras,
             "processos": processos,
             "desligados": desligados,
+            "consolidado": consolidado,
         }

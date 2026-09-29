@@ -410,6 +410,10 @@ class ReportTests(unittest.TestCase):
             "processos": [{"processo": "1", "valor_considerado": _money(100.0, include=cases_sensitive)}],
             "desligados": [{"nome": "X", "qtd_processos": 1,
                             "rescisao": _money(50.0, include=persons_sensitive)}],
+            "consolidado": [{"processo": "1", "nome": "X", "processo_do_desligado": "1 de 1",
+                             "valor_considerado": _money(100.0, include=cases_sensitive),
+                             "rescisao": _money(50.0, include=persons_sensitive),
+                             "multa_477": _money(10.0, include=persons_sensitive)}],
         }
 
     def test_xlsx_has_one_sheet_per_menu(self):
@@ -421,7 +425,7 @@ class ReportTests(unittest.TestCase):
 
         raw, name, mime = render_legal_report_bytes("legal", self._payload(), "xlsx", None)
         wb = openpyxl.load_workbook(io.BytesIO(raw))
-        self.assertEqual(wb.sheetnames, ["Resumo", "Quebras", "Processos", "Desligados"])
+        self.assertEqual(wb.sheetnames, ["Resumo", "Quebras", "Processos", "Desligados", "Consolidado"])
         self.assertTrue(name.endswith(".xlsx"))
         self.assertIn("spreadsheetml", mime)
 
@@ -461,6 +465,10 @@ class ReportTests(unittest.TestCase):
         wb = openpyxl.load_workbook(io.BytesIO(raw))
         self.assertIn(_cell(wb["Desligados"], 2, "Rescisão"), (None, ""))
         self.assertEqual(_cell(wb["Processos"], 2, "Valor considerado"), 100.0)
+        # Consolidado mistura os dois recursos na MESMA linha: cada coluna segue o seu.
+        self.assertEqual(_cell(wb["Consolidado"], 2, "Valor considerado"), 100.0)
+        self.assertIn(_cell(wb["Consolidado"], 2, "Rescisão"), (None, ""))
+        self.assertIn(_cell(wb["Consolidado"], 2, "Multa art. 477"), (None, ""))
 
     def test_report_type_is_registered_everywhere(self):
         from app.schemas.reports import ReportGenerateRequest

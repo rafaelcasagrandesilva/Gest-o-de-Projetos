@@ -57,7 +57,7 @@ const REPORT_GROUPS: { label: string; reports: ReportDef[] }[] = [
     reports: [
       {
         id: "legal",
-        label: "Jurídico — passivo, processos e desligados",
+        label: "Jurídico — passivo, processos, desligados e consolidado",
         perm: "legal_reports.read",
       },
     ],
