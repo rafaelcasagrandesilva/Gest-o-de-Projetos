@@ -191,6 +191,7 @@ def render_legal_report_bytes(
                     "headers": [c.header for c in cols],
                     "rows": [[_xlsx_cell(r, c) for c in cols] for r in rows],
                     "money_columns": frozenset(i for i, c in enumerate(cols, start=1) if c.money),
+                    "polished": True,
                 }
             )
         raw = build_multisheet_operational_xlsx_bytes(sheets)

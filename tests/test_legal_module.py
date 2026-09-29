@@ -429,6 +429,27 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(name.endswith(".xlsx"))
         self.assertIn("spreadsheetml", mime)
 
+    def test_xlsx_comes_formatted(self):
+        """Cabeçalho centralizado, linha 1 congelada, sem grade e com borda nas células."""
+        import io
+
+        import openpyxl
+
+        from app.services.legal_report_export import render_legal_report_bytes
+
+        payload = self._payload()
+        payload["consolidado"][0]["ultima_movimentacao"] = "x" * 5000
+        raw, _, _ = render_legal_report_bytes("legal", payload, "xlsx", None)
+        wb = openpyxl.load_workbook(io.BytesIO(raw))
+        for ws in wb:
+            self.assertEqual(ws.freeze_panes, "A2")
+            self.assertFalse(ws.sheet_view.showGridLines)
+            self.assertEqual(ws["A1"].alignment.horizontal, "center")
+            self.assertTrue(ws["A2"].alignment.wrap_text)
+            self.assertEqual(ws["A2"].border.bottom.style, "thin")
+        # Texto enorme não vira uma linha de tela cheia (altura com teto).
+        self.assertLessEqual(wb["Consolidado"].row_dimensions[2].height, 90)
+
     def test_pdf_is_generated(self):
         from app.services.legal_report_export import render_legal_report_bytes
 

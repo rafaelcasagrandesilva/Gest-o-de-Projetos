@@ -7,7 +7,7 @@ from xml.sax.saxutils import escape
 
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
@@ -74,6 +74,11 @@ def build_xlsx_bytes(
     return buf.getvalue()
 
 
+_MAX_ROW_LINES = 6
+_THIN_SIDE = Side(style="thin", color="BFC7D1")
+_THIN_BORDER = Border(left=_THIN_SIDE, right=_THIN_SIDE, top=_THIN_SIDE, bottom=_THIN_SIDE)
+
+
 def _write_operational_sheet(
     ws,
     *,
@@ -81,22 +86,33 @@ def _write_operational_sheet(
     rows: Sequence[Sequence[Any]],
     money_columns: frozenset[int] | None = None,
     date_columns: frozenset[int] | None = None,
+    polished: bool = False,
 ) -> None:
     """Escreve UMA planilha operacional (cabeçalho, autofiltro, largura auto, formatos) em `ws`.
 
     Corpo compartilhado por `build_operational_xlsx_bytes` (aba única) e
-    `build_multisheet_operational_xlsx_bytes` (várias abas) — mesma aparência/formatação."""
+    `build_multisheet_operational_xlsx_bytes` (várias abas) — mesma aparência/formatação.
+
+    `polished=True` entrega a planilha pronta para leitura: cabeçalho centralizado, linha 1
+    congelada, grade do Excel desligada e borda fina em cada célula (só as linhas da tabela).
+    Opt-in para não mudar a cara dos relatórios que já circulam."""
     header_fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
     ncols = len(headers)
     for col, h in enumerate(headers, start=1):
         cell = ws.cell(row=1, column=col, value=str(h))
         cell.font = Font(bold=True)
         cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        cell.alignment = Alignment(
+            horizontal="center" if polished else "left", vertical="center", wrap_text=True
+        )
+        if polished:
+            cell.border = _THIN_BORDER
     for r_idx, row in enumerate(rows, start=2):
         for c_idx, val in enumerate(row, start=1):
             cell = ws.cell(row=r_idx, column=c_idx, value=val)
             cell.alignment = Alignment(vertical="top", wrap_text=True)
+            if polished:
+                cell.border = _THIN_BORDER
             if money_columns and c_idx in money_columns and isinstance(val, (int, float)):
                 cell.number_format = _BRL_NUM_FMT
             if date_columns and c_idx in date_columns and val not in (None, ""):
@@ -111,6 +127,22 @@ def _write_operational_sheet(
             if v is not None:
                 max_len = max(max_len, min(len(str(v)), 48))
         ws.column_dimensions[get_column_letter(col)].width = min(max(max_len + 2, 12), 42)
+    if polished:
+        ws.freeze_panes = "A2"
+        ws.sheet_view.showGridLines = False
+        ws.row_dimensions[1].height = 30
+        # Altura explícita por linha, com teto: com quebra de texto o Excel estica a linha até
+        # caber o texto inteiro, e um andamento de 4 mil caracteres vira uma linha de tela cheia.
+        # O conteúdo segue completo na célula (barra de fórmulas); só a altura é limitada.
+        widths = [ws.column_dimensions[get_column_letter(c)].width or 12 for c in range(1, ncols + 1)]
+        for r_idx in range(2, last_row + 1):
+            lines = 1
+            for c_idx, w in enumerate(widths, start=1):
+                v = ws.cell(row=r_idx, column=c_idx).value
+                if isinstance(v, str) and v:
+                    per_line = max(int(w * 1.1), 1)
+                    lines = max(lines, sum(-(-len(part) // per_line) or 1 for part in v.split("\n")))
+            ws.row_dimensions[r_idx].height = 15 * min(lines, _MAX_ROW_LINES)
 
 
 def build_operational_xlsx_bytes(
@@ -138,7 +170,8 @@ def build_multisheet_operational_xlsx_bytes(sheets: Sequence[dict[str, Any]]) ->
     """Workbook operacional com VÁRIAS abas (mesma formatação por aba do builder de aba única).
 
     Cada `sheet` = {"title": str, "headers": [...], "rows": [[...]],
-    "money_columns": frozenset[int]?, "date_columns": frozenset[int]?}. A ordem da lista é a
+    "money_columns": frozenset[int]?, "date_columns": frozenset[int]?,
+    "polished": bool?}. A ordem da lista é a
     ordem das abas. Títulos são truncados em 31 chars (limite do openpyxl)."""
     wb = Workbook()
     for i, spec in enumerate(sheets):
@@ -150,6 +183,7 @@ def build_multisheet_operational_xlsx_bytes(sheets: Sequence[dict[str, Any]]) ->
             rows=spec.get("rows") or [],
             money_columns=spec.get("money_columns"),
             date_columns=spec.get("date_columns"),
+            polished=bool(spec.get("polished")),
         )
     buf = io.BytesIO()
     wb.save(buf)
