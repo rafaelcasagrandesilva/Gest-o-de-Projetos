@@ -272,20 +272,27 @@ class CompetenciaInitializationService:
             .scalars()
             .all()
         )
+        created: list[PaymentVariableComponent] = []
         for c in rows:
-            self.session.add(
-                PaymentVariableComponent(
-                    type_id=c.type_id,
-                    employee_id=c.employee_id,
-                    competencia=target_labor.competencia,
-                    amount=c.amount,
-                    note=c.note,
-                    project_labor_id=target_labor.id,
-                    company_financial_item_id=c.company_financial_item_id,
-                )
+            comp = PaymentVariableComponent(
+                type_id=c.type_id,
+                employee_id=c.employee_id,
+                competencia=target_labor.competencia,
+                amount=c.amount,
+                note=c.note,
+                project_labor_id=target_labor.id,
+                company_financial_item_id=c.company_financial_item_id,
             )
-        if rows:
+            self.session.add(comp)
+            created.append(comp)
+        if created:
             await self.session.flush()
+            # Mesmo pipeline do cadastro pela tela: cada componente vira o seu lançamento no CAP
+            # (só REALIZADO — `apply_variable_component` ignora o PREVISTO). Sem isto a cópia
+            # gravava a Premiação mas o CAP — e o relatório de Folha, que lê o CAP — ficavam só
+            # com o salário até alguém abrir a tela do CAP daquele mês.
+            for comp in created:
+                await self.payables.apply_variable_component(component=comp)
         return len(rows)
 
     # ---- Mão de obra (vínculo + snapshot de custos) ------------------------
@@ -300,6 +307,18 @@ class CompetenciaInitializationService:
             project_id=source.project_id, competencia=source.competencia, scenario=source.scenario, limit=_COPY_LIMIT
         )
         affected_employees: set[UUID] = {r.employee_id for r in tgt_rows}
+        # Os componentes do destino somem junto com a linha (FK CASCADE); o lançamento deles no
+        # CAP precisa sair antes, senão fica um título órfão. Título já pago é preservado.
+        if tgt_rows:
+            tgt_component_ids = (
+                await self.session.execute(
+                    select(PaymentVariableComponent.id).where(
+                        PaymentVariableComponent.project_labor_id.in_([r.id for r in tgt_rows])
+                    )
+                )
+            ).scalars().all()
+            for comp_id in tgt_component_ids:
+                await self.payables.remove_variable_component_snapshot(component_id=comp_id)
         for r in tgt_rows:
             await self.labors.delete(r)
         await self.session.flush()
