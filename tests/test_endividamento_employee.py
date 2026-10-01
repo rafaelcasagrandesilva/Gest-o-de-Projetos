@@ -231,6 +231,14 @@ class DebtEmployeeDBTests(unittest.IsolatedAsyncioTestCase):
 
             # Limpeza (mês de teste é futuro e isolado).
             await session.execute(text("DELETE FROM payable_snapshots WHERE month = :m"), {"m": comp})
+            # Criar o item já gera títulos nos meses abertos do CAP (tempo real): saem também.
+            for iid in created_item_ids:
+                await session.execute(
+                    text("DELETE FROM payable_snapshots WHERE ref_id = :i"), {"i": str(iid)}
+                )
+                await session.execute(
+                    text("DELETE FROM company_financial_payments WHERE item_id = :i"), {"i": str(iid)}
+                )
             for iid in created_item_ids:
                 fresh = await session.get(CompanyFinancialItem, iid)
                 if fresh is not None:
@@ -295,6 +303,9 @@ class DebtEmployeeDBTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(snap.item_description)
 
             await session.execute(text("DELETE FROM payable_snapshots WHERE month = :m"), {"m": comp})
+            await session.execute(
+                text("DELETE FROM payable_snapshots WHERE ref_id = :i"), {"i": str(legacy.id)}
+            )
             fresh = await session.get(CompanyFinancialItem, legacy.id)
             if fresh is not None:
                 await session.delete(fresh)

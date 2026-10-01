@@ -33,6 +33,11 @@ class PagamentoMes(BaseModel):
     # Quantidade de LANÇAMENTOS que compõem o valor do mês (soma). 1 no caso comum; >1 quando
     # a competência tem múltiplos lançamentos (detalhe no modal). Somente leitura.
     count: int | None = None
+    # Premiação/Reembolso (Componentes Variáveis) do colaborador nesta competência. Vão ao CAP
+    # como títulos próprios; aqui são SOMENTE LEITURA e ficam FORA de `valor` (a grade grava
+    # `valor`; somá-los ali gravaria o reembolso como lançamento comum, em dobro).
+    componentes_valor: float | None = None
+    componentes_count: int | None = None
 
     @field_validator("mes")
     @classmethod
@@ -384,11 +389,25 @@ class LancamentoRead(BaseModel):
     has_payment: bool = False
 
 
+class ComponenteLancamentoRead(BaseModel):
+    """Premiação/Reembolso da competência — somente leitura no modal (edita-se em Componentes)."""
+
+    id: str
+    tipo: str
+    valor: float | None = None
+    descricao: str | None = None
+    cap_amount_paid: float | None = 0
+    cap_status: str | None = None
+
+
 class LancamentosCompetenciaRead(BaseModel):
     item_id: str
     competencia: str
     lancamentos: list[LancamentoRead] = Field(default_factory=list)
+    # Total da GRADE (soma de `lancamentos`); os componentes têm total próprio.
     total: float | None = 0
+    componentes: list[ComponenteLancamentoRead] = Field(default_factory=list)
+    componentes_total: float | None = 0
     payable_sync_warning: str | None = None
 
 

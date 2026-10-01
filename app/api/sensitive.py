@@ -302,15 +302,26 @@ SENSITIVE_SPECS: dict[str, SensitiveSpec] = {
     # --- Endividamento (gate debts.sensitive) e Finanças da empresa (company_finance.sensitive).
     # Mesmos campos; o router escolhe o recurso por `tipo` (endividamento vs custo_fixo).
     # `pagamentos` (grade mensal) também é redigido — valores monetários por competência.
+    # Os mesmos recursos redigem o detalhamento da competência (`LancamentosCompetenciaRead`):
+    # antes ele passava INTEIRO — `lancamentos`/`total` não estavam na spec.
     "debt_item": SensitiveSpec(
-        DEBTS_SENSITIVE, COMPANY_FINANCE_ITEM_SENSITIVE_FIELDS,
-        nested=(("pagamentos", "company_finance_payment"),),
+        DEBTS_SENSITIVE, COMPANY_FINANCE_ITEM_SENSITIVE_FIELDS + ("total", "componentes_total"),
+        nested=(
+            ("pagamentos", "company_finance_payment"),
+            ("lancamentos", "company_finance_entry"),
+            ("componentes", "company_finance_entry"),
+        ),
     ),
     "custo_fixo_item": SensitiveSpec(
-        COMPANY_FINANCE_SENSITIVE, COMPANY_FINANCE_ITEM_SENSITIVE_FIELDS,
-        nested=(("pagamentos", "company_finance_payment"),),
+        COMPANY_FINANCE_SENSITIVE, COMPANY_FINANCE_ITEM_SENSITIVE_FIELDS + ("total", "componentes_total"),
+        nested=(
+            ("pagamentos", "company_finance_payment"),
+            ("lancamentos", "company_finance_entry"),
+            ("componentes", "company_finance_entry"),
+        ),
     ),
-    "company_finance_payment": SensitiveSpec(DEBTS_SENSITIVE, ("valor",)),
+    "company_finance_payment": SensitiveSpec(DEBTS_SENSITIVE, ("valor", "componentes_valor")),
+    "company_finance_entry": SensitiveSpec(DEBTS_SENSITIVE, ("valor", "cap_amount_paid")),
     "kpi_endividamento": SensitiveSpec(DEBTS_SENSITIVE, KPI_ENDIVIDAMENTO_SENSITIVE_FIELDS),
     "kpi_custos_fixos": SensitiveSpec(COMPANY_FINANCE_SENSITIVE, KPI_CUSTOS_FIXOS_SENSITIVE_FIELDS),
     "debt_chart": SensitiveSpec(DEBTS_SENSITIVE, (), nested=(("points", "chart_point"),)),

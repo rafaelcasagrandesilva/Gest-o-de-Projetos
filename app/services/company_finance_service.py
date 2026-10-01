@@ -15,7 +15,8 @@ from app.models.company_finance import CompanyFinancialItemType
 from app.models.employee import Employee
 from app.models.legal import LegalPerson
 from app.models.payable_payment import PayablePayment
-from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
+from app.models.payable_snapshot import PayableOrigin, PayableSnapshot, PayableSnapshotType
+from app.models.payment_component import PaymentVariableComponent
 from app.schemas.company_finance import PagamentoMes
 from app.services.company_finance_cost_center import (
     CompanyFinanceCostCenterService,
@@ -230,11 +231,13 @@ class CompanyFinanceService:
     async def _sync_payables_metadata_for_company_finance_item(self, *, item_id: UUID) -> None:
         await PayableSnapshotService(self.db).sync_company_finance_item_metadata(item_id=item_id)
 
-    async def _sync_payables_for_company_finance_item(self, *, item_id: UUID, months: set[date]) -> dict:
+    async def _sync_payables_for_company_finance_item(
+        self, *, item_id: UUID, months: set[date], cleared_box_to_reference: bool = False
+    ) -> dict:
         if not months:
             return {"synced": 0, "skipped_paid": []}
         return await PayableSnapshotService(self.db).sync_company_finance_item_months(
-            item_id=item_id, months=months
+            item_id=item_id, months=months, cleared_box_to_reference=cleared_box_to_reference
         )
 
     async def list_items(self, tipo: str, competencia: str | None) -> list[dict]:
@@ -254,9 +257,10 @@ class CompanyFinanceService:
         )
         rows = (await self.db.execute(q)).scalars().unique().all()
         comp_date = parse_month(competencia) if competencia else None
+        components = await self._variable_components_by_item([it.id for it in rows])
         # Fonte única da verdade: consulta (somente leitura) o Contas a Pagar da competência
         # para espelhar pago/status no Extrato Analítico. NÃO gera snapshot nem altera nada.
-        cap_map = await self._cap_rows_for_competence(list(rows), tipo, comp_date)
+        cap_map = await self._cap_rows_for_competence(list(rows), tipo, comp_date, components)
         # Modo 2: pago REAL do CAP carregado em lote (fonte única) e repassado ao cálculo oficial.
         sched_ids = [it.id for it in rows if self._uses_schedule(it)]
         pbe_all = await self._cap_paid_by_entry(sched_ids)
@@ -269,11 +273,49 @@ class CompanyFinanceService:
                     "schedule_paid_by_entry": pbe_all,
                     "schedule_paid_by_month": pbm_all.get(it.id, {}),
                 }
-            out.append(await self._item_to_read(it, comp_date, cap_rows=cap_map.get(it.id), **kw))
+            out.append(
+                await self._item_to_read(
+                    it, comp_date, cap_rows=cap_map.get(it.id), components=components.get(it.id, []), **kw
+                )
+            )
+        return out
+
+    async def variable_components_of(self, item: CompanyFinancialItem) -> list[PaymentVariableComponent]:
+        """Componentes de UM item (leituras pontuais: criar/editar/salvar a grade)."""
+        return (await self._variable_components_by_item([item.id])).get(item.id, [])
+
+    async def _variable_components_by_item(
+        self, item_ids: list[UUID]
+    ) -> dict[UUID, list[PaymentVariableComponent]]:
+        """Premiação/Reembolso (Componentes Variáveis) ligados a itens de Custo Fixo.
+
+        Cada um vira um título PRÓPRIO no Contas a Pagar (origin=VARIABLE, ref_id = id do
+        componente). Sem incluí-los, a tela de Custos Fixos ficava abaixo do CAP: mostrava só a
+        grade e o "Pago no mês" não via o título do reembolso.
+        """
+        if not item_ids:
+            return {}
+        rows = (
+            await self.db.execute(
+                select(PaymentVariableComponent)
+                .options(selectinload(PaymentVariableComponent.type))
+                .where(
+                    PaymentVariableComponent.company_financial_item_id.in_(item_ids),
+                    PaymentVariableComponent.amount > 0,
+                )
+            )
+        ).scalars().all()
+        out: dict[UUID, list[PaymentVariableComponent]] = {}
+        for c in rows:
+            out.setdefault(c.company_financial_item_id, []).append(c)
         return out
 
     async def _cap_rows_for_competence(
-        self, items: list[CompanyFinancialItem], tipo: str, comp_date: date | None
+        self,
+        items: list[CompanyFinancialItem],
+        tipo: str,
+        comp_date: date | None,
+        components: dict[UUID, list[PaymentVariableComponent]] | None = None,
     ) -> dict[UUID, list[PayableSnapshot]]:
         """Títulos do Contas a Pagar (PayableSnapshot) da competência, agrupados por `ref_id`.
 
@@ -304,6 +346,25 @@ class CompanyFinanceService:
             if r.ref_id is None:
                 continue
             out.setdefault(r.ref_id, []).append(r)
+        # Títulos de Premiação/Reembolso do item na competência (ref_id = id do componente).
+        owner = {
+            c.id: item_id
+            for item_id, comps in (components or {}).items()
+            for c in comps
+            if c.competencia == comp_date
+        }
+        if owner:
+            var_rows = (
+                await self.db.execute(
+                    select(PayableSnapshot).where(
+                        PayableSnapshot.origin == PayableOrigin.VARIABLE.value,
+                        PayableSnapshot.ref_id.in_(list(owner)),
+                        PayableSnapshot.month == comp_date,
+                    )
+                )
+            ).scalars().all()
+            for r in var_rows:
+                out.setdefault(owner[r.ref_id], []).append(r)
         return out
 
     async def _employee_full_name(self, employee_id: UUID | None) -> str | None:
@@ -342,6 +403,7 @@ class CompanyFinanceService:
         competencia: date | None,
         cap_rows: list[PayableSnapshot] | None = None,
         *,
+        components: list[PaymentVariableComponent] | None = None,
         schedule_paid_by_entry: dict[UUID, float] | None = None,
         schedule_paid_by_month: dict[date, float] | None = None,
     ) -> dict:
@@ -353,9 +415,22 @@ class CompanyFinanceService:
         for p in it.payments:
             by_month[p.competencia] = by_month.get(p.competencia, 0.0) + _f(p.valor)
             by_month_count[p.competencia] = by_month_count.get(p.competencia, 0) + 1
+        # Premiação/Reembolso: somados à parte (somente leitura) — `valor` continua sendo só a
+        # grade, que é o que a tela grava de volta.
+        comp_value: dict[date, float] = {}
+        comp_count: dict[date, int] = {}
+        for c in components or ():
+            comp_value[c.competencia] = comp_value.get(c.competencia, 0.0) + _f(c.amount)
+            comp_count[c.competencia] = comp_count.get(c.competencia, 0) + 1
         pagamentos = [
-            PagamentoMes(mes=month_key(m), valor=v, count=by_month_count.get(m, 0)).model_dump()
-            for m, v in sorted(by_month.items())
+            PagamentoMes(
+                mes=month_key(m),
+                valor=by_month.get(m),
+                count=by_month_count.get(m, 0),
+                componentes_valor=round(comp_value[m], 2) if m in comp_value else None,
+                componentes_count=comp_count.get(m) or None,
+            ).model_dump()
+            for m in sorted(set(by_month) | set(comp_value))
         ]
         total_pago = sum(_f(p.valor) for p in it.payments)
         ref = _f(it.valor_referencia)
@@ -487,7 +562,14 @@ class CompanyFinanceService:
                 "schedule": schedule_dict,
             }
 
+        # Progresso = grade × referência (a obrigação do mês). "Pago no mês"/"Total pago" somam
+        # também Premiação/Reembolso, como o Contas a Pagar — sem eles o cartão ficava abaixo do
+        # CAP. Ficam fora do progresso para não passar de 100% por causa de um reembolso.
         progresso_mes = (pago_mes / ref) if ref > 0 else 0.0
+        if comp_value:
+            if competencia:
+                pago_mes = round(pago_mes + comp_value.get(competencia, 0.0), 2)
+            total_pago = total_pago + sum(comp_value.values())
         return {
             "id": it.id,
             "tipo": it.tipo,
@@ -608,6 +690,9 @@ class CompanyFinanceService:
             raise ValueError("Centro de custo é obrigatório.")
         await CompanyFinanceCostCenterService(self.db).apply_ref(row, str(ref_raw))
         await self.db.refresh(row)
+        # Tempo real: o item entra já nos meses abertos do CAP (antes só ao abrir a tela).
+        if row.is_active:
+            await PayableSnapshotService(self.db).sync_company_finance_item_open_months(item_id=row.id)
         return row
 
     async def update_item(self, *, item_id: UUID, data: dict) -> CompanyFinancialItem | None:
@@ -748,6 +833,10 @@ class CompanyFinanceService:
             await PayableSnapshotService(self.db).close_company_finance_item_payables(
                 item_id=item_id
             )
+        # Tempo real: reativação, vigência ou "obrigatório mensal" alterados passam a valer nos
+        # meses já abertos do CAP sem esperar alguém abrir a tela.
+        if row.is_active:
+            await PayableSnapshotService(self.db).sync_company_finance_item_open_months(item_id=item_id)
         return row
 
     async def delete_item(self, *, item_id: UUID) -> bool:
@@ -913,8 +1002,10 @@ class CompanyFinanceService:
                 item_id,
                 sorted(month_key(c) for c in months_in_payload),
             )
+            # Salvar a grade é o único momento em que "caixa esvaziada" é uma decisão do usuário
+            # (volta à referência); as demais sincronizações não reinterpretam título antigo.
             self.last_payable_sync = await self._sync_payables_for_company_finance_item(
-                item_id=item_id, months=months_in_payload
+                item_id=item_id, months=months_in_payload, cleared_box_to_reference=True
             )
             logger.info(
                 "company_finance.replace_payments service AFTER sync_company_finance_item_months item_id=%s sync=%s",
@@ -1003,12 +1094,63 @@ class CompanyFinanceService:
                     "has_payment": paid,
                 }
             )
+        componentes = await self._components_for_month(item_id=item_id, comp=comp)
         return {
             "item_id": str(item_id),
             "competencia": competencia,
             "lancamentos": out,
             "total": round(total, 2),
+            "componentes": componentes,
+            "componentes_total": round(sum(c["valor"] for c in componentes), 2),
         }
+
+    async def _components_for_month(self, *, item_id: UUID, comp: date) -> list[dict]:
+        """Premiação/Reembolso do item na competência, com o status do título no CAP."""
+        comps = (
+            await self.db.execute(
+                select(PaymentVariableComponent)
+                .options(selectinload(PaymentVariableComponent.type))
+                .where(
+                    PaymentVariableComponent.company_financial_item_id == item_id,
+                    PaymentVariableComponent.competencia == comp,
+                    PaymentVariableComponent.amount > 0,
+                )
+                .order_by(PaymentVariableComponent.created_at)
+            )
+        ).scalars().all()
+        if not comps:
+            return []
+        snaps = {
+            r.ref_id: r
+            for r in (
+                await self.db.execute(
+                    select(PayableSnapshot).where(
+                        PayableSnapshot.origin == PayableOrigin.VARIABLE.value,
+                        PayableSnapshot.ref_id.in_([c.id for c in comps]),
+                    )
+                )
+            ).scalars().all()
+        }
+        out: list[dict] = []
+        for c in comps:
+            snap = snaps.get(c.id)
+            out.append(
+                {
+                    "id": str(c.id),
+                    "tipo": (getattr(c.type, "name", None) or "Componente").strip(),
+                    "valor": _f(c.amount),
+                    "descricao": c.note or None,
+                    "cap_amount_paid": _f(snap.amount_paid) if snap is not None else 0.0,
+                    "cap_status": (
+                        payable_snapshot_payment_status(
+                            amount_paid=snap.amount_paid, amount_final=snap.amount_final
+                        )
+                        if snap is not None
+                        else None
+                    ),
+                }
+            )
+        return out
 
     async def replace_entries(
         self, *, item_id: UUID, competencia: str, lancamentos: list[dict]

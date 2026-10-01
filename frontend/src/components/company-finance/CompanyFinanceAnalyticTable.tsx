@@ -45,16 +45,29 @@ function gridValueForMonth(item: CompanyFinancialItem, mes: string): number | nu
   return p && p.valor != null && p.valor > 0 ? p.valor : null;
 }
 
-/** Quantidade de lançamentos que compõem o valor do mês (>1 → indicador discreto). */
+/**
+ * Quantidade de lançamentos do mês (>1 → indicador discreto): os da grade MAIS as
+ * premiações/reembolsos, que são títulos próprios no Contas a Pagar.
+ */
 function entriesCountForMonth(item: CompanyFinancialItem, mes: string): number {
-  return item.pagamentos.find((x) => x.mes === mes)?.count ?? 0;
+  const p = item.pagamentos.find((x) => x.mes === mes);
+  return (p?.count ?? 0) + (p?.componentes_count ?? 0);
 }
 
-/** Valor Mensal — regra do CAP: grade (se lançada) senão valor de referência. Null se redigido. */
+/** Premiação/Reembolso do mês (somente leitura); 0 quando não há. */
+export function componentesValorOf(item: CompanyFinancialItem, mes: string): number {
+  return item.pagamentos.find((x) => x.mes === mes)?.componentes_valor ?? 0;
+}
+
+/**
+ * Valor Mensal — regra do CAP: grade (se lançada) senão valor de referência, MAIS as
+ * premiações/reembolsos do mês (títulos próprios no CAP). Null se redigido.
+ */
 export function valorMensalOf(item: CompanyFinancialItem, competencia: string): number | null {
   const g = gridValueForMonth(item, competencia);
-  if (g != null) return g;
-  return item.valor_referencia; // number | null
+  const base = g != null ? g : item.valor_referencia; // number | null
+  if (base == null) return null;
+  return base + componentesValorOf(item, competencia);
 }
 
 /** Valor Anual híbrido: grade (se lançada) senão referência, por mês. Null se redigido. */
@@ -65,7 +78,7 @@ function valorAnualOf(item: CompanyFinancialItem, competencia: string): number |
   for (let m = 1; m <= 12; m++) {
     const mes = `${year}-${String(m).padStart(2, "0")}`;
     const g = gridValueForMonth(item, mes);
-    total += g != null ? g : (item.valor_referencia ?? 0);
+    total += (g != null ? g : (item.valor_referencia ?? 0)) + componentesValorOf(item, mes);
   }
   return total;
 }

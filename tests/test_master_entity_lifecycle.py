@@ -108,7 +108,11 @@ class CompanyFinanceLifecycleDBTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(item.is_active)
             self.assertIsNone(item.end_date)
 
-            # Limpeza (remoção direta, sem efeitos em contas a pagar).
+            # Limpeza: criar/editar o item já gera os títulos dos meses abertos do CAP (tempo
+            # real) — eles saem junto, senão ficam órfãos no banco de testes.
+            await session.execute(
+                text("DELETE FROM payable_snapshots WHERE ref_id = :i"), {"i": str(item.id)}
+            )
             await session.execute(
                 text("DELETE FROM company_financial_payments WHERE item_id = :i"), {"i": str(item.id)}
             )

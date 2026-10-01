@@ -41,6 +41,10 @@ _EMPLOYEE_PAYABLE_COST_FIELDS = frozenset(
         "extra_hours_50",
         "extra_hours_70",
         "extra_hours_100",
+        # CLT↔PJ troca a composição inteira do título (salário/benefício × contratado), e o
+        # nome está no título: os dois também precisam refletir nos títulos em aberto.
+        "employment_type",
+        "full_name",
     }
 )
 

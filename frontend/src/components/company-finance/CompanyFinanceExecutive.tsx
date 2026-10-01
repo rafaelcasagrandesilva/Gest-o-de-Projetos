@@ -3253,6 +3253,11 @@ function FinanceItemCard({
               const pending = dirtyMonths.has(mes);
               const pmes = item.pagamentos.find((x) => x.mes === mes);
               const count = pmes?.count ?? 0;
+              // Premiação/Reembolso: títulos próprios no CAP, somente leitura aqui (editam-se em
+              // Componentes). Entram no selo de lançamentos, mas NÃO na caixa (que grava a grade).
+              const compValor = pmes?.componentes_valor ?? 0;
+              const compCount = pmes?.componentes_count ?? 0;
+              const totalCount = count + compCount;
               // Lançamentos múltiplos são um recurso de Custos Fixos. Endividamento permanece
               // single-lançamento (UI/renegociação inalteradas): sem modal, sem badge.
               const entriesEnabled = tipo === "custo_fixo";
@@ -3278,14 +3283,14 @@ function FinanceItemCard({
                         {mesLabel(mes)} <span className="font-normal text-slate-400">({mes})</span>
                       </span>
                     )}
-                    {multi ? (
+                    {entriesEnabled && totalCount > 1 ? (
                       <button
                         type="button"
                         onClick={() => setEntriesModalMes(mes)}
                         className="ml-1.5 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-100"
                         title="Múltiplos lançamentos — abrir detalhamento"
                       >
-                        {count} lançamentos
+                        {totalCount} lançamentos
                       </button>
                     ) : null}
                     {pending ? <span className="ml-1 text-blue-600" title="Alteração não salva">●</span> : null}
@@ -3312,6 +3317,16 @@ function FinanceItemCard({
                       title={readOnly ? FINANCE_EDIT_NO_PERM : undefined}
                     />
                   )}
+                  {entriesEnabled && compValor > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setEntriesModalMes(mes)}
+                      className="text-left text-[11px] text-indigo-700 hover:underline"
+                      title="Premiação/Reembolso do mês — títulos próprios no Contas a Pagar"
+                    >
+                      + {formatBRL(compValor)} em premiação/reembolso
+                    </button>
+                  ) : null}
                 </label>
               );
             })}

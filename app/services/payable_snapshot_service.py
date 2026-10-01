@@ -618,6 +618,11 @@ class PayableSnapshotService:
         enxergava parte dos projetos. Vale para TODOS os projetos: o CAP é um livro único.
         """
         comp = normalize_competencia(payment_month)
+        # Antes do piso o CAP não era automático: custos de projeto eram lançados à mão (MANUAL)
+        # ou ficaram como títulos legados sem ref_id. "Completar" esses meses DUPLICARIA
+        # despesas já pagas (jan–abr/2026 têm 14 casos assim no clone de produção).
+        if comp < COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE:
+            return 0
         source = previous_competencia(comp)
         realizado = scenario_pg_rhs(Scenario.REALIZADO)
         active_project = select(Project.id).where(Project.deleted_at.is_(None))
@@ -806,6 +811,7 @@ class PayableSnapshotService:
         settings,
         cc_svc: CompanyFinanceCostCenterService,
         is_generating: bool,
+        cleared_box_to_reference: bool = False,
     ) -> dict:
         """Reconciliador ÚNICO grade→CAP por (item, competência), com N lançamentos.
 
@@ -877,7 +883,52 @@ class PayableSnapshotService:
             entries = [entry]
 
         if not entries:
-            return result  # sem lançamentos (mas há títulos legados órfãos) → não mexe
+            # Há título(s) sem lançamento: a caixa do mês foi ESVAZIADA na grade (o FK zera o
+            # `entry_id`). Regra da tela: caixa vazia = o mês volta ao valor de REFERÊNCIA.
+            # Antes o título ficava parado no valor antigo. Só age a partir do piso, em item
+            # sem cronograma, e nunca em título com pagamento.
+            # SÓ quando o usuário acabou de esvaziar a caixa e salvar a grade. A abertura do mês
+            # e as sincronizações automáticas NÃO mexem em título antigo sem lançamento: pode
+            # ser lançamento indevido de um mês passado (ex.: jul/2026 do Caio Murilo), e levá-lo
+            # à referência inflaria um mês fechado sem ninguém ter pedido.
+            if not cleared_box_to_reference:
+                return result
+            open_unlinked = [
+                l
+                for l in unlinked
+                if _money2(l.amount_paid) <= 0
+                and not await _has_active_payments(self.session, snapshot_id=l.id)
+            ]
+            if (
+                below_floor
+                or not open_unlinked
+                or len(open_unlinked) != len(cap_lines)
+                or bool(getattr(item, "uses_custom_schedule", False))
+            ):
+                return result
+            value = (
+                self._company_finance_monthly_value(item, comp=comp, settings=settings)
+                if eligible
+                else Decimal("0")
+            )
+            if value <= 0:
+                # Fora da vigência (ou referência zerada): sem obrigação no mês → sai do CAP.
+                for l in open_unlinked:
+                    await self.session.delete(l)
+                await self.session.flush()
+                result["synced"] += len(open_unlinked)
+                return result
+            entry = CompanyFinancialPayment(
+                item_id=item.id,
+                competencia=comp,
+                valor=value,
+                due_date=_default_due_date(comp, day=10),
+                descricao=None,
+            )
+            self.session.add(entry)
+            await self.session.flush()
+            auto_reference_entry_ids.add(entry.id)
+            entries = [entry]  # o loop abaixo ADOTA o título antigo e o leva à referência
 
         snap_type, category, origin = self._company_finance_payable_labels(item)
         cost_center = await cc_svc.resolve_label(item)
@@ -1208,8 +1259,27 @@ class PayableSnapshotService:
         await self.session.flush()
         return len(rows)
 
+    async def sync_company_finance_item_open_months(self, *, item_id: UUID) -> dict:
+        """Reflete o cadastro do item em TODOS os meses já abertos no CAP (a partir do piso).
+
+        Chamado ao criar/editar o item: sem isto o título só nascia quando alguém abria o mês
+        na tela do CAP, e quem lê o CAP direto (relatório de Folha, Dashboard) via o mês sem
+        ele. Usa o reconciliador único (cria/atualiza títulos abertos; pago nunca muda).
+        """
+        months = {
+            normalize_competencia(m)
+            for m in (
+                await self.session.execute(
+                    select(PayableSnapshotGeneration.month).where(
+                        PayableSnapshotGeneration.month >= COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE
+                    )
+                )
+            ).scalars().all()
+        }
+        return await self.sync_company_finance_item_months(item_id=item_id, months=months)
+
     async def sync_company_finance_item_months(
-        self, *, item_id: UUID, months: set[date]
+        self, *, item_id: UUID, months: set[date], cleared_box_to_reference: bool = False
     ) -> dict:
         """A grade mensal governa o valor oficial da competência no Contas a Pagar.
 
@@ -1250,7 +1320,12 @@ class PayableSnapshotService:
         for raw_month in months:
             comp = normalize_competencia(raw_month)
             res = await self._reconcile_company_finance_entries_for_month(
-                item=item, comp=comp, settings=settings, cc_svc=cc_svc, is_generating=False
+                item=item,
+                comp=comp,
+                settings=settings,
+                cc_svc=cc_svc,
+                is_generating=False,
+                cleared_box_to_reference=cleared_box_to_reference,
             )
             synced += int(res.get("synced", 0))
             skipped_paid.extend(res.get("skipped_paid", []))
@@ -2240,7 +2315,8 @@ class PayableSnapshotService:
                         added_fixed = await self._ensure_company_finance_auto_entries(payment_month=comp)
                         added_ants = await self._ensure_invoice_anticipation_obligations(
                             payment_month=comp,
-                            project_ids=None if sees_all_projects else (accessible_project_ids or None),
+                            # Livro ÚNICO: completa todos os projetos (a listagem filtra o acesso).
+                            project_ids=None,
                         )
                         added_var = await self.sync_all_variable_components_for_month(payment_month=comp)
                         added_proj = await self._ensure_project_cost_entries(payment_month=comp)
@@ -2264,7 +2340,8 @@ class PayableSnapshotService:
                         added_fixed = await self._ensure_company_finance_auto_entries(payment_month=comp)
                         added_ants = await self._ensure_invoice_anticipation_obligations(
                             payment_month=comp,
-                            project_ids=None if sees_all_projects else (accessible_project_ids or None),
+                            # Livro ÚNICO: completa todos os projetos (a listagem filtra o acesso).
+                            project_ids=None,
                         )
                         added_var = await self.sync_all_variable_components_for_month(payment_month=comp)
                         added_proj = await self._ensure_project_cost_entries(payment_month=comp)
@@ -2331,10 +2408,13 @@ class PayableSnapshotService:
                         await self.session.flush()
                     return await self.list_for_month(month=comp)
 
+            # O CAP é um livro ÚNICO e a geração do mês acontece UMA vez: gera SEMPRE todos os
+            # projetos. Gerar só os projetos de quem abriu a tela primeiro deixava os demais de
+            # fora para sempre. O que cada usuário enxerga é filtrado na listagem (router).
             created = await self._generate_snapshot(
                 payment_month=comp,
-                accessible_project_ids=accessible_project_ids,
-                sees_all_projects=sees_all_projects,
+                accessible_project_ids=None,
+                sees_all_projects=True,
             )
             await self.session.flush()
 
