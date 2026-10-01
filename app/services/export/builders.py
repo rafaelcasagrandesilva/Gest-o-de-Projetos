@@ -8,6 +8,9 @@ from xml.sax.saxutils import escape
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.worksheet.filters import AutoFilter
+from openpyxl.worksheet.table import Table as XlTable
+from openpyxl.worksheet.table import TableColumn, TableStyleInfo
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
@@ -136,6 +139,153 @@ def _write_operational_sheet(
         # de tela cheia). O texto segue completo na célula — clique para ler na barra de fórmulas.
         for r_idx in range(2, last_row + 1):
             ws.row_dimensions[r_idx].height = _ROW_HEIGHT
+
+
+# Formato "Contábil" do Excel em R$ (o mesmo que o usuário aplica à mão): zero aparece como "-".
+_ACCOUNTING_BRL_FMT = '_-"R$"\\ * #,##0.00_-;\\-"R$"\\ * #,##0.00_-;_-"R$"\\ * "-"??_-;_-@_-'
+_TABLE_HEADER_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+# Funções da linha de total da Tabela do Excel → código do SUBTOTAL (ignora linhas filtradas).
+_SUBTOTAL_CODES = {"sum": 109, "count": 103}
+
+
+def build_table_xlsx_bytes(
+    *,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+    sheet_title: str = "Relatório",
+    money_columns: frozenset[int] = frozenset(),
+    date_columns: frozenset[int] = frozenset(),
+    totals: dict[int, str] | None = None,
+    total_label: str = "Total",
+    bold_columns: frozenset[int] = frozenset(),
+    freeze: str = "B2",
+) -> bytes:
+    """Planilha pronta para uso: os dados viram uma TABELA do Excel.
+
+    - valores são NÚMEROS no formato Contábil R$ (nada de texto "R$ 1.234,56", que o Excel
+      marca com o triângulo verde e não soma);
+    - datas são datas de verdade (DD/MM/AAAA), que ordenam e filtram;
+    - linha de total da Tabela com SUBTOTAL — a soma acompanha o filtro;
+    - cabeçalho amarelo centralizado, borda fina, linha 1 e coluna A congeladas, sem grade,
+      SEM quebra de texto (todas as linhas com a mesma altura).
+
+    Colunas são 1-based. `totals` = {coluna: "sum" | "count"}; a 1ª coluna recebe `total_label`.
+    """
+    totals = dict(totals or {})
+    thin = Side(style="thin")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_title[:31]
+    ncols = len(headers)
+    names = _unique_headers(headers)
+
+    for c, h in enumerate(names, start=1):
+        cell = ws.cell(row=1, column=c, value=h)
+        cell.font = Font(bold=True)
+        cell.fill = _TABLE_HEADER_FILL
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border
+
+    for r_idx, row in enumerate(rows, start=2):
+        for c_idx, val in enumerate(row, start=1):
+            if c_idx in date_columns:
+                val = _as_date(val)
+            cell = ws.cell(row=r_idx, column=c_idx, value=val)
+            cell.alignment = Alignment(vertical="top")
+            cell.border = border
+            if c_idx in money_columns:
+                cell.number_format = _ACCOUNTING_BRL_FMT
+            elif c_idx in date_columns and val is not None:
+                cell.number_format = "DD/MM/YYYY"
+            if c_idx in bold_columns:
+                cell.font = Font(bold=True)
+
+    last_data = len(rows) + 1
+    total_row = last_data + 1
+    table_name = "Tabela1"
+    columns: list[TableColumn] = []
+    for c, name in enumerate(names, start=1):
+        col = TableColumn(id=c, name=name)
+        func = totals.get(c)
+        cell = ws.cell(row=total_row, column=c)
+        cell.border = border
+        if c == 1 and func is None:
+            col.totalsRowLabel = total_label
+            cell.value = total_label
+        elif func in _SUBTOTAL_CODES:
+            col.totalsRowFunction = func
+            cell.value = f"=SUBTOTAL({_SUBTOTAL_CODES[func]},{table_name}[{_table_ref(name)}])"
+        if c in money_columns:
+            cell.number_format = _ACCOUNTING_BRL_FMT
+        if c in bold_columns:
+            cell.font = Font(bold=True)
+        columns.append(col)
+
+    if ncols:
+        table = XlTable(
+            displayName=table_name,
+            ref=f"A1:{get_column_letter(ncols)}{total_row}",
+            totalsRowCount=1,
+        )
+        table.tableColumns = columns
+        table.tableStyleInfo = TableStyleInfo(name="TableStyleLight16", showRowStripes=True)
+        # Linha de total fora do autofiltro da tabela (senão o filtro a esconderia).
+        table.autoFilter = AutoFilter(ref=f"A1:{get_column_letter(ncols)}{last_data}")
+        ws.add_table(table)
+
+    for c in range(1, ncols + 1):
+        longest = len(str(names[c - 1])) + 4  # espaço da seta do filtro
+        for r_idx in range(2, last_data + 1):
+            v = ws.cell(row=r_idx, column=c).value
+            if v is None:
+                continue
+            text = format_brl(v) if c in money_columns and isinstance(v, (int, float)) else str(v)
+            longest = max(longest, min(len(text), 50))
+        ws.column_dimensions[get_column_letter(c)].width = min(max(longest + 2, 10), 52)
+
+    ws.freeze_panes = freeze
+    ws.sheet_view.showGridLines = False
+    # Fórmulas do total saem sem valor em cache: o Excel recalcula ao abrir.
+    wb.calculation.fullCalcOnLoad = True
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _unique_headers(headers: Sequence[str]) -> list[str]:
+    """Nomes de coluna de Tabela do Excel precisam ser únicos e não vazios."""
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for i, h in enumerate(headers, start=1):
+        name = str(h).strip() or f"Coluna{i}"
+        if name.lower() in seen:
+            seen[name.lower()] += 1
+            name = f"{name}{seen[name.lower()]}"
+        else:
+            seen[name.lower()] = 1
+        out.append(name)
+    return out
+
+
+def _table_ref(name: str) -> str:
+    """Escapa o nome da coluna para referência estruturada (Tabela1[Coluna])."""
+    return "".join(f"'{ch}" if ch in "[]#'" else ch for ch in name)
+
+
+def _as_date(val: Any) -> Any:
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date) or val in (None, ""):
+        return val if val != "" else None
+    text = str(val).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text[:10], fmt).date()
+        except ValueError:
+            continue
+    return val
 
 
 def build_operational_xlsx_bytes(

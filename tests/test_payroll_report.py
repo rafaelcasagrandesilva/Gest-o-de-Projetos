@@ -153,13 +153,16 @@ class PayrollReportDBTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(pdf[:4] == b"%PDF", "pdf inválido")
             self.assertIn("Folha de Pagamento", xname)
 
-            # Excel deve conter a linha de TOTAIS.
+            # Excel = Tabela com linha de total por SUBTOTAL (segue o filtro) e valores numéricos.
             from openpyxl import load_workbook
 
             wb = load_workbook(io.BytesIO(xlsx))
             ws = wb.active
             col_a = [str(c.value) for c in ws["A"] if c.value is not None]
-            self.assertIn("TOTAIS", col_a)
+            self.assertIn("Total", col_a)
+            self.assertIn("Tabela1", ws.tables)
+            total_row = [c.value for c in ws[ws.max_row]]
+            self.assertTrue(any(str(v).startswith("=SUBTOTAL(109") for v in total_row))
 
             # Limpeza (snapshots do CAP + item de endividamento + colaborador).
             await session.execute(
