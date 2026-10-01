@@ -606,6 +606,84 @@ class PayableSnapshotService:
         row = await self.session.get(PayableSnapshotGeneration, comp)
         return row is not None
 
+    async def _ensure_project_cost_entries(self, *, payment_month: date) -> int:
+        """Completa os títulos de PROJETO que faltam num mês já gerado (idempotente).
+
+        Invariante: lançamento REALIZADO da competência anterior — vínculo de mão de obra,
+        custo diverso ou sistema do projeto — sempre tem título no mês de pagamento. Só age onde
+        NÃO existe título nenhum (nem obsoleto) para a origem, e delega ao MESMO sync usado ao
+        salvar pela tela; então título existente, pago ou não, nunca é tocado aqui.
+
+        Cobre meses congelados sem a geração completa (out/2026) e gerações feitas por quem só
+        enxergava parte dos projetos. Vale para TODOS os projetos: o CAP é um livro único.
+        """
+        comp = normalize_competencia(payment_month)
+        source = previous_competencia(comp)
+        realizado = scenario_pg_rhs(Scenario.REALIZADO)
+        active_project = select(Project.id).where(Project.deleted_at.is_(None))
+
+        labor_title = select(PayableSnapshot.id).where(
+            PayableSnapshot.month == comp,
+            PayableSnapshot.type == PayableSnapshotType.COLLABORATOR,
+            PayableSnapshot.ref_id == ProjectLabor.employee_id,
+            PayableSnapshot.project_id == ProjectLabor.project_id,
+            func.coalesce(PayableSnapshot.origin, "") != PayableOrigin.VARIABLE.value,
+        )
+        missing_labors = (
+            await self.session.execute(
+                select(ProjectLabor.project_id, ProjectLabor.employee_id)
+                .where(
+                    ProjectLabor.competencia == source,
+                    ProjectLabor.scenario == realizado,
+                    ProjectLabor.employee_id.is_not(None),
+                    ProjectLabor.project_id.in_(active_project),
+                    ~labor_title.exists(),
+                )
+                .distinct()
+            )
+        ).all()
+
+        created = 0
+        for project_id, employee_id in missing_labors:
+            created += await self.sync_collaborator_payables_for_labor(
+                project_id=project_id,
+                employee_id=employee_id,
+                labor_competencia=source,
+                scenario=Scenario.REALIZADO,
+            )
+
+        for model, sync in (
+            (ProjectOperationalFixed, self.sync_project_misc_cost_payables),
+            (ProjectSystemCost, self.sync_project_system_payables),
+        ):
+            item_title = select(PayableSnapshot.id).where(PayableSnapshot.ref_id == model.id)
+            missing_items = (
+                await self.session.execute(
+                    select(model.id, model.project_id).where(
+                        model.competencia == source,
+                        model.scenario == realizado,
+                        model.value > 0,
+                        model.project_id.in_(active_project),
+                        ~item_title.exists(),
+                    )
+                )
+            ).all()
+            for item_id, project_id in missing_items:
+                kwargs = {"project_id": project_id, "labor_competencia": source, "scenario": Scenario.REALIZADO}
+                if model is ProjectOperationalFixed:
+                    created += await sync(cost_id=item_id, **kwargs)
+                else:
+                    created += await sync(system_id=item_id, **kwargs)
+
+        if missing_labors or created:
+            logger.warning(
+                "payables month=%s: completados títulos de projeto ausentes (vínculos=%d, criados=%d)",
+                comp,
+                len(missing_labors),
+                created,
+            )
+        return created
+
     async def _ensure_company_finance_auto_entries(self, *, payment_month: date) -> int:
         """Backfill idempotente de Custos Fixos/Endividamento na competência.
 
@@ -2165,7 +2243,8 @@ class PayableSnapshotService:
                             project_ids=None if sees_all_projects else (accessible_project_ids or None),
                         )
                         added_var = await self.sync_all_variable_components_for_month(payment_month=comp)
-                        if added_fixed or added_ants or added_var:
+                        added_proj = await self._ensure_project_cost_entries(payment_month=comp)
+                        if added_fixed or added_ants or added_var or added_proj:
                             await self.session.flush()
                             return await self.list_for_month(month=comp)
                         return existing
@@ -2188,7 +2267,8 @@ class PayableSnapshotService:
                             project_ids=None if sees_all_projects else (accessible_project_ids or None),
                         )
                         added_var = await self.sync_all_variable_components_for_month(payment_month=comp)
-                        if added_fixed or added_ants or added_var:
+                        added_proj = await self._ensure_project_cost_entries(payment_month=comp)
+                        if added_fixed or added_ants or added_var or added_proj:
                             await self.session.flush()
                             return await self.list_for_month(month=comp)
                         return existing
@@ -2234,6 +2314,11 @@ class PayableSnapshotService:
                             .where(
                                 PayableSnapshot.month == comp,
                                 PayableSnapshot.type.notin_(PAYABLE_PRESERVED_TYPES),
+                                # Premiação/Reembolso (origin=VARIABLE) nascem no CAP ao serem
+                                # cadastrados, ANTES de o mês ser gerado. Contá-los aqui fazia o
+                                # mês parecer "legado já gerado" e ser congelado sem salários nem
+                                # custos de projeto (out/2026: Subterrâneo inteiro de fora).
+                                func.coalesce(PayableSnapshot.origin, "") != PayableOrigin.VARIABLE.value,
                             )
                         )
                     )

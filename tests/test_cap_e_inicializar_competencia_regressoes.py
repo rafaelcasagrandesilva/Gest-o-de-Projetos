@@ -737,3 +737,31 @@ class ExclusaoEmMassaTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class MesCongeladoSemGeracaoTests(unittest.IsolatedAsyncioTestCase):
+    """out/2026: Premiação/Reembolso lançados antes da abertura do mês faziam o CAP congelar o
+    mês como "legado já gerado" — sem salários nem custos de projeto (Subterrâneo inteiro)."""
+
+    async def test_variaveis_nao_contam_como_mes_ja_gerado(self) -> None:
+        import inspect
+
+        from app.services.payable_snapshot_service import PayableSnapshotService
+
+        src = inspect.getsource(PayableSnapshotService.get_or_create_for_month)
+        trecho = src[src.index("Compat legado"):src.index("_generate_snapshot(")]
+        self.assertIn("PayableOrigin.VARIABLE.value", trecho)
+
+    async def test_mes_gerado_completa_titulos_de_projeto_ausentes(self) -> None:
+        import inspect
+
+        from app.services.payable_snapshot_service import PayableSnapshotService
+
+        src = inspect.getsource(PayableSnapshotService.get_or_create_for_month)
+        # Os DOIS caminhos de "mês já gerado" (fora e dentro do lock) completam o que falta.
+        self.assertEqual(src.count("_ensure_project_cost_entries(payment_month=comp)"), 2)
+        heal = inspect.getsource(PayableSnapshotService._ensure_project_cost_entries)
+        # Só age onde não há título nenhum e reaproveita os syncs da tela (com guarda de pago).
+        self.assertIn("~labor_title.exists()", heal)
+        self.assertIn("~item_title.exists()", heal)
+        self.assertIn("sync_collaborator_payables_for_labor", heal)
