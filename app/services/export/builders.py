@@ -5,12 +5,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Sequence
 from xml.sax.saxutils import escape
 
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.worksheet.filters import AutoFilter
-from openpyxl.worksheet.table import Table as XlTable
-from openpyxl.worksheet.table import TableColumn, TableStyleInfo
+from app.services.export.xlsx_table import SheetSpec, build_workbook_bytes
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
@@ -52,100 +47,43 @@ def build_xlsx_bytes(
     sheet_title: str = "Exportação",
     totals_row: Sequence[Any] | None = None,
 ) -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = sheet_title[:31]
-    header_font = Font(bold=True)
-    for col, h in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col, value=str(h))
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    for r_idx, row in enumerate(rows, start=2):
-        for c_idx, val in enumerate(row, start=1):
-            cell = ws.cell(row=r_idx, column=c_idx, value=val)
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    """Relatórios que montam as células como TEXTO formatado ("R$ 1.234,56", "dd/mm/aaaa").
+
+    Sai no padrão único (`xlsx_table`): o texto é convertido em número/data, e as colunas de
+    valor ganham total por SUBTOTAL. Com `totals_row`, o total informado é respeitado: vira
+    SUBTOTAL quando é a soma da coluna, senão fica como valor fixo.
+    """
+    spec = SheetSpec(
+        title=sheet_title, headers=headers, rows=rows, parse_text=True, auto_totals=totals_row is None
+    )
     if totals_row is not None:
-        r = len(rows) + 3
-        for c_idx, val in enumerate(totals_row, start=1):
-            cell = ws.cell(row=r, column=c_idx, value=val)
-            cell.font = Font(bold=True)
-    for col in range(1, len(headers) + 1):
-        ws.column_dimensions[get_column_letter(col)].width = 18
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
+        spec.totals = _legacy_totals(headers, rows, totals_row)
+    return build_workbook_bytes([spec])
 
 
-_ROW_HEIGHT = 15
-_THIN_SIDE = Side(style="thin", color="BFC7D1")
-_THIN_BORDER = Border(left=_THIN_SIDE, right=_THIN_SIDE, top=_THIN_SIDE, bottom=_THIN_SIDE)
+def _legacy_totals(
+    headers: Sequence[str], rows: Sequence[Sequence[Any]], totals_row: Sequence[Any]
+) -> dict[int, Any]:
+    from app.services.export.xlsx_table import _parse_one
 
+    def num(v: Any) -> float | None:
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            kind, parsed = _parse_one(v.strip())
+            return parsed if kind in ("money", "percent") else None
+        return None
 
-def _write_operational_sheet(
-    ws,
-    *,
-    headers: Sequence[str],
-    rows: Sequence[Sequence[Any]],
-    money_columns: frozenset[int] | None = None,
-    date_columns: frozenset[int] | None = None,
-    polished: bool = False,
-) -> None:
-    """Escreve UMA planilha operacional (cabeçalho, autofiltro, largura auto, formatos) em `ws`.
-
-    Corpo compartilhado por `build_operational_xlsx_bytes` (aba única) e
-    `build_multisheet_operational_xlsx_bytes` (várias abas) — mesma aparência/formatação.
-
-    `polished=True` entrega a planilha pronta para leitura: cabeçalho centralizado, linha 1
-    congelada, grade do Excel desligada e borda fina em cada célula (só as linhas da tabela).
-    Opt-in para não mudar a cara dos relatórios que já circulam."""
-    header_fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
-    ncols = len(headers)
-    for col, h in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col, value=str(h))
-        cell.font = Font(bold=True)
-        cell.fill = header_fill
-        cell.alignment = Alignment(
-            horizontal="center" if polished else "left", vertical="center", wrap_text=True
-        )
-        if polished:
-            cell.border = _THIN_BORDER
-    for r_idx, row in enumerate(rows, start=2):
-        for c_idx, val in enumerate(row, start=1):
-            cell = ws.cell(row=r_idx, column=c_idx, value=val)
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-            if polished:
-                cell.border = _THIN_BORDER
-            if money_columns and c_idx in money_columns and isinstance(val, (int, float)):
-                cell.number_format = _BRL_NUM_FMT
-            if date_columns and c_idx in date_columns and val not in (None, ""):
-                cell.number_format = "DD/MM/YYYY"
-    last_row = max(1, len(rows) + 1)
-    if ncols and last_row:
-        ws.auto_filter.ref = f"A1:{get_column_letter(ncols)}{last_row}"
-    for col in range(1, ncols + 1):
-        max_len = len(str(headers[col - 1]))
-        for r_idx in range(2, last_row + 1):
-            v = ws.cell(row=r_idx, column=col).value
-            if v is not None:
-                max_len = max(max_len, min(len(str(v)), 48))
-        ws.column_dimensions[get_column_letter(col)].width = min(max(max_len + 2, 12), 42)
-    if polished:
-        ws.freeze_panes = "A2"
-        ws.sheet_view.showGridLines = False
-        ws.row_dimensions[1].height = 30
-        # Altura FIXA de uma linha em todas as linhas de dados: a tabela fica uniforme e a
-        # quebra de texto não estica a linha (um andamento de 4 mil caracteres viraria uma linha
-        # de tela cheia). O texto segue completo na célula — clique para ler na barra de fórmulas.
-        for r_idx in range(2, last_row + 1):
-            ws.row_dimensions[r_idx].height = _ROW_HEIGHT
-
-
-# Formato "Contábil" do Excel em R$ (o mesmo que o usuário aplica à mão): zero aparece como "-".
-_ACCOUNTING_BRL_FMT = '_-"R$"\\ * #,##0.00_-;\\-"R$"\\ * #,##0.00_-;_-"R$"\\ * "-"??_-;_-@_-'
-_TABLE_HEADER_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-# Funções da linha de total da Tabela do Excel → código do SUBTOTAL (ignora linhas filtradas).
-_SUBTOTAL_CODES = {"sum": 109, "count": 103}
+    out: dict[int, Any] = {}
+    for c, total in enumerate(totals_row, start=1):
+        if c == 1:
+            continue
+        t = num(total)
+        if t is None:
+            continue
+        col_sum = sum(num(r[c - 1]) or 0.0 for r in rows if len(r) >= c)
+        out[c] = "sum" if abs(col_sum - t) < 0.005 else t
+    return out
 
 
 def build_table_xlsx_bytes(
@@ -155,183 +93,59 @@ def build_table_xlsx_bytes(
     sheet_title: str = "Relatório",
     money_columns: frozenset[int] = frozenset(),
     date_columns: frozenset[int] = frozenset(),
+    percent_columns: frozenset[int] = frozenset(),
     totals: dict[int, str] | None = None,
     total_label: str = "Total",
     bold_columns: frozenset[int] = frozenset(),
     freeze: str = "B2",
 ) -> bytes:
-    """Planilha pronta para uso: os dados viram uma TABELA do Excel.
-
-    - valores são NÚMEROS no formato Contábil R$ (nada de texto "R$ 1.234,56", que o Excel
-      marca com o triângulo verde e não soma);
-    - datas são datas de verdade (DD/MM/AAAA), que ordenam e filtram;
-    - linha de total da Tabela com SUBTOTAL — a soma acompanha o filtro;
-    - cabeçalho amarelo centralizado, borda fina, linha 1 e coluna A congeladas, sem grade,
-      SEM quebra de texto (todas as linhas com a mesma altura).
-
-    Colunas são 1-based. `totals` = {coluna: "sum" | "count"}; a 1ª coluna recebe `total_label`.
-    """
-    totals = dict(totals or {})
-    thin = Side(style="thin")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    wb = Workbook()
-    ws = wb.active
-    ws.title = sheet_title[:31]
-    ncols = len(headers)
-    names = _unique_headers(headers)
-
-    for c, h in enumerate(names, start=1):
-        cell = ws.cell(row=1, column=c, value=h)
-        cell.font = Font(bold=True)
-        cell.fill = _TABLE_HEADER_FILL
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = border
-
-    for r_idx, row in enumerate(rows, start=2):
-        for c_idx, val in enumerate(row, start=1):
-            if c_idx in date_columns:
-                val = _as_date(val)
-            cell = ws.cell(row=r_idx, column=c_idx, value=val)
-            cell.alignment = Alignment(vertical="top")
-            cell.border = border
-            if c_idx in money_columns:
-                cell.number_format = _ACCOUNTING_BRL_FMT
-            elif c_idx in date_columns and val is not None:
-                cell.number_format = "DD/MM/YYYY"
-            if c_idx in bold_columns:
-                cell.font = Font(bold=True)
-
-    last_data = len(rows) + 1
-    total_row = last_data + 1
-    table_name = "Tabela1"
-    columns: list[TableColumn] = []
-    for c, name in enumerate(names, start=1):
-        col = TableColumn(id=c, name=name)
-        func = totals.get(c)
-        cell = ws.cell(row=total_row, column=c)
-        cell.border = border
-        if c == 1 and func is None:
-            col.totalsRowLabel = total_label
-            cell.value = total_label
-        elif func in _SUBTOTAL_CODES:
-            col.totalsRowFunction = func
-            cell.value = f"=SUBTOTAL({_SUBTOTAL_CODES[func]},{table_name}[{_table_ref(name)}])"
-        if c in money_columns:
-            cell.number_format = _ACCOUNTING_BRL_FMT
-        if c in bold_columns:
-            cell.font = Font(bold=True)
-        columns.append(col)
-
-    if ncols:
-        table = XlTable(
-            displayName=table_name,
-            ref=f"A1:{get_column_letter(ncols)}{total_row}",
-            totalsRowCount=1,
-        )
-        table.tableColumns = columns
-        table.tableStyleInfo = TableStyleInfo(name="TableStyleLight16", showRowStripes=True)
-        # Linha de total fora do autofiltro da tabela (senão o filtro a esconderia).
-        table.autoFilter = AutoFilter(ref=f"A1:{get_column_letter(ncols)}{last_data}")
-        ws.add_table(table)
-
-    for c in range(1, ncols + 1):
-        longest = len(str(names[c - 1])) + 4  # espaço da seta do filtro
-        for r_idx in range(2, last_data + 1):
-            v = ws.cell(row=r_idx, column=c).value
-            if v is None:
-                continue
-            text = format_brl(v) if c in money_columns and isinstance(v, (int, float)) else str(v)
-            longest = max(longest, min(len(text), 50))
-        ws.column_dimensions[get_column_letter(c)].width = min(max(longest + 2, 10), 52)
-
-    ws.freeze_panes = freeze
-    ws.sheet_view.showGridLines = False
-    # Fórmulas do total saem sem valor em cache: o Excel recalcula ao abrir.
-    wb.calculation.fullCalcOnLoad = True
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
-
-
-def _unique_headers(headers: Sequence[str]) -> list[str]:
-    """Nomes de coluna de Tabela do Excel precisam ser únicos e não vazios."""
-    seen: dict[str, int] = {}
-    out: list[str] = []
-    for i, h in enumerate(headers, start=1):
-        name = str(h).strip() or f"Coluna{i}"
-        if name.lower() in seen:
-            seen[name.lower()] += 1
-            name = f"{name}{seen[name.lower()]}"
-        else:
-            seen[name.lower()] = 1
-        out.append(name)
-    return out
-
-
-def _table_ref(name: str) -> str:
-    """Escapa o nome da coluna para referência estruturada (Tabela1[Coluna])."""
-    return "".join(f"'{ch}" if ch in "[]#'" else ch for ch in name)
-
-
-def _as_date(val: Any) -> Any:
-    if isinstance(val, datetime):
-        return val.date()
-    if isinstance(val, date) or val in (None, ""):
-        return val if val != "" else None
-    text = str(val).strip()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(text[:10], fmt).date()
-        except ValueError:
-            continue
-    return val
-
-
-def build_operational_xlsx_bytes(
-    *,
-    headers: Sequence[str],
-    rows: Sequence[Sequence[Any]],
-    sheet_title: str = "Relatório",
-    money_columns: frozenset[int] | None = None,
-    date_columns: frozenset[int] | None = None,
-) -> bytes:
-    """Planilha operacional: cabeçalho, autofiltro, largura automática e formatos básicos."""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = sheet_title[:31]
-    _write_operational_sheet(
-        ws, headers=headers, rows=rows, money_columns=money_columns, date_columns=date_columns
-    )
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
+    """Uma aba no padrão único com totais explícitos ({coluna: "sum" | "count"})."""
+    return build_workbook_bytes([SheetSpec(
+        title=sheet_title, headers=headers, rows=rows, money_columns=money_columns,
+        date_columns=date_columns, percent_columns=percent_columns,
+        totals=dict(totals or {}), total_label=total_label,
+        bold_columns=bold_columns, freeze=freeze,
+    )])
 
 
 def build_multisheet_operational_xlsx_bytes(sheets: Sequence[dict[str, Any]]) -> bytes:
-    """Workbook operacional com VÁRIAS abas (mesma formatação por aba do builder de aba única).
+    """Várias abas no padrão único (uma Tabela por aba).
 
-    Cada `sheet` = {"title": str, "headers": [...], "rows": [[...]],
-    "money_columns": frozenset[int]?, "date_columns": frozenset[int]?,
-    "polished": bool?}. A ordem da lista é a
-    ordem das abas. Títulos são truncados em 31 chars (limite do openpyxl)."""
-    wb = Workbook()
-    for i, spec in enumerate(sheets):
-        ws = wb.active if i == 0 else wb.create_sheet()
-        ws.title = str(spec.get("title") or f"Aba {i + 1}")[:31]
-        _write_operational_sheet(
-            ws,
+    Cada `sheet` = {"title", "headers", "rows", "money_columns"?, "date_columns"?,
+    "totals"?: bool | {coluna: "sum"}}. `totals` padrão = soma de todas as colunas de valor;
+    False para abas em que somar não faz sentido (indicadores, saldos acumulados).
+    """
+    return build_workbook_bytes([
+        _operational_spec(
+            title=str(spec.get("title") or f"Aba {i + 1}"),
             headers=spec.get("headers") or [],
             rows=spec.get("rows") or [],
             money_columns=spec.get("money_columns"),
             date_columns=spec.get("date_columns"),
-            polished=bool(spec.get("polished")),
+            totals=spec.get("totals", True),
         )
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
+        for i, spec in enumerate(sheets)
+    ])
+
+
+def _operational_spec(
+    *, title, headers, rows, money_columns, date_columns, totals: bool | dict[int, str]
+) -> SheetSpec:
+    money = frozenset(money_columns or ())
+    if isinstance(totals, dict):
+        total_map = dict(totals)
+    else:
+        total_map = {c: "sum" for c in money if c != 1} if totals else {}
+    return SheetSpec(
+        title=title,
+        headers=headers,
+        rows=rows,
+        money_columns=money,
+        date_columns=frozenset(date_columns or ()),
+        totals=total_map,
+        # Datas chegam como texto "dd/mm/aaaa" em alguns relatórios: vira data de verdade.
+        parse_text=True,
+    )
 
 
 def _pdf_footer(canvas, doc) -> None:
@@ -479,73 +293,34 @@ def export_filename(module_slug: str, ext: str, period_suffix: str | None = None
     return f"{safe}_{suf}.{ext}"
 
 
-_YELLOW = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-_BRL_NUM_FMT = '[$R$-416] #,##0.00'
-_PCT_NUM_FMT = "0.00%"
-
-
-def _apply_negative_red(cell) -> None:
-    v = cell.value
-    if isinstance(v, (int, float)) and v < 0:
-        cell.font = Font(color="FF0000")
-
-
 def build_projects_summary_xlsx_bytes(
     *,
     headers: Sequence[str],
     rows: Sequence[Sequence[Any]],
     totals_row: Sequence[Any],
 ) -> bytes:
-    """Planilha executiva: cabeçalho amarelo, totais amarelos, negativos em vermelho; valores numéricos em moeda."""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Resumo por projeto"[:31]
+    """Resumo por projeto: valores em R$, última coluna = margem (%), negativos em vermelho."""
     ncols = len(headers)
-    for col, h in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col, value=str(h))
-        cell.font = Font(bold=True)
-        cell.fill = _YELLOW
-        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
     margin_col = ncols
-    for r_idx, row in enumerate(rows, start=2):
-        for c_idx, val in enumerate(row, start=1):
-            cell = ws.cell(row=r_idx, column=c_idx, value=val)
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-            if c_idx == 1:
-                continue
-            if c_idx == margin_col:
-                if isinstance(val, (int, float)):
-                    cell.number_format = _PCT_NUM_FMT
-                    cell.value = float(val)
-                _apply_negative_red(cell)
-            else:
-                if isinstance(val, (int, float)):
-                    cell.number_format = _BRL_NUM_FMT
-                    cell.value = float(val)
-                _apply_negative_red(cell)
-    tr = len(rows) + 2
-    for c_idx, val in enumerate(totals_row, start=1):
-        cell = ws.cell(row=tr, column=c_idx, value=val)
-        is_neg = isinstance(val, (int, float)) and val < 0
-        cell.font = Font(bold=True, color="FF0000") if is_neg else Font(bold=True)
-        cell.fill = _YELLOW
-        cell.alignment = Alignment(vertical="center", wrap_text=True)
-        if c_idx == 1:
+    money = frozenset(range(2, margin_col))
+    totals: dict[int, Any] = {}
+    for c, val in enumerate(totals_row, start=1):
+        if c == 1 or not isinstance(val, (int, float)):
             continue
-        if c_idx == margin_col:
-            if isinstance(val, (int, float)):
-                cell.number_format = _PCT_NUM_FMT
-                cell.value = float(val)
-        else:
-            if isinstance(val, (int, float)):
-                cell.number_format = _BRL_NUM_FMT
-                cell.value = float(val)
-    for col in range(1, ncols + 1):
-        ws.column_dimensions[get_column_letter(col)].width = 16
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
+        if c == margin_col:
+            totals[c] = float(val)  # margem do total não é soma das margens
+            continue
+        col_sum = sum(float(r[c - 1]) for r in rows if len(r) >= c and isinstance(r[c - 1], (int, float)))
+        totals[c] = "sum" if abs(col_sum - float(val)) < 0.005 else float(val)
+    return build_workbook_bytes([SheetSpec(
+        title="Resumo por projeto",
+        headers=headers,
+        rows=rows,
+        money_columns=money,
+        percent_columns=frozenset({margin_col}),
+        totals=totals,
+        negative_red=True,
+    )])
 
 
 def build_projects_summary_pdf_bytes(

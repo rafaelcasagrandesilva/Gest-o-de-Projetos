@@ -188,7 +188,10 @@ def render_legal_report_bytes(
                     "headers": [c.header for c in cols],
                     "rows": [[_xlsx_cell(r, c) for c in cols] for r in rows],
                     "money_columns": frozenset(i for i, c in enumerate(cols, start=1) if c.money),
-                    "polished": True,
+                    "date_columns": frozenset(i for i, c in enumerate(cols, start=1) if c.is_date),
+                    # Indicadores e quebras não se somam (as quebras repetem o mesmo passivo
+                    # por status, estado, tipo…); as listagens ganham total por SUBTOTAL.
+                    "totals": key not in ("resumo", "quebras"),
                 }
             )
         raw = build_multisheet_operational_xlsx_bytes(sheets)

@@ -6,7 +6,6 @@ from typing import Any
 from app.services.export.builders import (
     build_executive_pdf_bytes,
     build_multisheet_operational_xlsx_bytes,
-    build_operational_xlsx_bytes,
     build_table_xlsx_bytes,
     format_brl,
     format_date_br,
@@ -25,6 +24,8 @@ class Col:
     key: str
     money: bool = False
     is_date: bool = False
+    # Entra no total da planilha? (False para saldos acumulados, que não se somam.)
+    total: bool = True
 
 
 # Colunas por relatório, na ordem lógica das telas:
@@ -168,15 +169,6 @@ _OPERATIONAL_COLUMNS: dict[str, list[Col]] = {
 }
 
 
-def _cell_xlsx(row: dict[str, Any], col: Col) -> Any:
-    val = row.get(col.key)
-    if col.money and isinstance(val, (int, float)):
-        return float(val)
-    if col.is_date and val:
-        return format_date_br(str(val)[:10])
-    return "" if val is None else val
-
-
 def _cell_table(row: dict[str, Any], col: Col) -> Any:
     """Célula da Tabela do Excel: número para valor, data crua (o builder converte), vazio = None."""
     val = row.get(col.key)
@@ -196,9 +188,9 @@ def _cell_pdf(row: dict[str, Any], col: Col) -> str:
     return "" if val is None else str(val)
 
 
-# Relatórios que saem como Tabela do Excel (formato pedido pelo financeiro/RH). Os demais
-# seguem no layout operacional antigo até alguém pedir — basta incluir o tipo aqui.
-_TABLE_XLSX_REPORTS = frozenset({"payables_detailed"})
+def _sum_totals(cols: list[Col]) -> dict[int, str]:
+    """Total por soma nas colunas de valor que se somam (a 1ª coluna leva o rótulo "Total")."""
+    return {i: "sum" for i, c in enumerate(cols, start=1) if c.money and c.total and i != 1}
 
 
 def render_operational_report_bytes(
@@ -221,29 +213,16 @@ def render_operational_report_bytes(
     title = report_title(report_type)
     periodo_token = ctx.periodo_token if ctx else None
 
-    if fmt == "xlsx" and report_type in _TABLE_XLSX_REPORTS:
-        # Tabela do Excel: valores e datas de verdade, total por SUBTOTAL (segue o filtro).
-        date_cols = frozenset(i for i, c in enumerate(cols, start=1) if c.is_date)
-        table_rows = [[_cell_table(r, c) for c in cols] for r in raw_rows]
+    if fmt == "xlsx":
+        # Excel abre direto nos dados (sem aba de identificação); o nome amigável do relatório
+        # fica no NOME DO ARQUIVO. Padrão único: Tabela com total por SUBTOTAL (segue o filtro).
         raw = build_table_xlsx_bytes(
             headers=headers,
-            rows=table_rows,
+            rows=[[_cell_table(r, c) for c in cols] for r in raw_rows],
             sheet_title=title[:31],
             money_columns=money_cols,
-            date_columns=date_cols,
-            totals={i: "sum" for i in money_cols},
-        )
-        return raw, friendly_filename(report_type, "xlsx", periodo_token=periodo_token), MIME_XLSX
-
-    if fmt == "xlsx":
-        # Excel abre direto nos dados (sem aba de identificação); o nome amigável
-        # do relatório fica no NOME DO ARQUIVO.
-        xlsx_rows = [[_cell_xlsx(r, c) for c in cols] for r in raw_rows]
-        raw = build_operational_xlsx_bytes(
-            headers=headers,
-            rows=xlsx_rows,
-            sheet_title=title[:31],
-            money_columns=money_cols,
+            date_columns=frozenset(i for i, c in enumerate(cols, start=1) if c.is_date),
+            totals=_sum_totals(cols),
         )
         return raw, friendly_filename(report_type, "xlsx", periodo_token=periodo_token), MIME_XLSX
 
@@ -338,7 +317,7 @@ _ANTECIPACOES_SHEETS: list[tuple[str, str, list[Col]]] = [
             Col("Tipo", "tipo"),
             Col("Origem", "origem"),
             Col("Valor", "valor", money=True),
-            Col("Saldo após a movimentação", "saldo_apos", money=True),
+            Col("Saldo após a movimentação", "saldo_apos", money=True, total=False),
             Col("Destino da retirada", "destino_retirada"),
             Col("Observação", "observacao"),
             Col("Estornado", "estornado"),
@@ -385,8 +364,10 @@ def render_antecipacoes_bytes(
             {
                 "title": title,
                 "headers": [c.header for c in cols],
-                "rows": [[_cell_xlsx(r, c) for c in cols] for r in raw_rows],
+                "rows": [[_cell_table(r, c) for c in cols] for r in raw_rows],
                 "money_columns": frozenset(i for i, c in enumerate(cols, start=1) if c.money),
+                "date_columns": frozenset(i for i, c in enumerate(cols, start=1) if c.is_date),
+                "totals": _sum_totals(cols),
             }
         )
     raw = build_multisheet_operational_xlsx_bytes(sheets)
