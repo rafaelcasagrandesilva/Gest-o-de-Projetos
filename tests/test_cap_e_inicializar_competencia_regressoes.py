@@ -206,6 +206,28 @@ class InicializarCompetenciaTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("exclude_project_ids", sig.parameters)
 
+    async def test_copia_gera_lancamento_dos_componentes_variaveis(self) -> None:
+        """Premiação/Reembolso copiados viram título no CAP na hora (caso Lucas Santos Ramos).
+
+        Antes a cópia gravava o componente mas só o salário ia ao CAP; o relatório de Folha (que
+        lê o CAP) saía sem a premiação até alguém abrir a tela do CAP daquele mês.
+        """
+        import inspect
+
+        from app.services.competencia_initialization_service import (
+            CompetenciaInitializationService,
+        )
+
+        copy_src = inspect.getsource(CompetenciaInitializationService._copy_variable_components)
+        self.assertIn("apply_variable_component", copy_src)
+        # E o título do componente que a cópia substitui sai antes do CASCADE (sem órfão).
+        replace_src = inspect.getsource(CompetenciaInitializationService._replace_labor)
+        self.assertIn("remove_variable_component_snapshot", replace_src)
+        self.assertLess(
+            replace_src.index("remove_variable_component_snapshot"),
+            replace_src.index("await self.labors.delete(r)"),
+        )
+
     async def test_omissao_e_reportada_em_vez_de_silenciosa(self) -> None:
         """Cópia é exata por contrato: o que ficar de fora precisa chegar à tela."""
         from app.services.competencia_initialization_service import CategoryCopyOutcome, CostCategory
