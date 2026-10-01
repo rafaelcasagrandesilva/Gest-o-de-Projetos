@@ -5,9 +5,6 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 from xml.sax.saxutils import escape
 
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.styles import Alignment, Font
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
@@ -24,6 +21,7 @@ from app.services.export.builders import (
     format_date_br,
 )
 from app.services.export.report_meta import ReportContext, friendly_filename, header_lines, report_title
+from app.services.export.xlsx_table import SheetSpec, build_workbook_bytes
 
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MIME_PDF = "application/pdf"
@@ -187,71 +185,60 @@ def render_project_summary_bytes(
     s = data["summary"]
 
     if fmt == "xlsx":
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Resumo"[:31]
-        ws.cell(row=1, column=1, value=f"Cenário: {data.get('scenario') or 'REALIZADO'}")
-        ws.cell(row=2, column=1, value="Indicador")
-        ws.cell(row=2, column=2, value="Valor")
-        ws.cell(row=2, column=1).font = Font(bold=True)
-        ws.cell(row=2, column=2).font = Font(bold=True)
-        for i, (k, v) in enumerate(_summary_kpi_rows(s), start=3):
-            ws.cell(row=i, column=1, value=k)
-            ws.cell(row=i, column=2, value=v)
-        ws.column_dimensions["A"].width = 32
-        ws.column_dimensions["B"].width = 22
-
-        def sheet_table(title: str, headers: list[str], rows: Sequence[Sequence[Any]]) -> None:
-            nws = wb.create_sheet(title[:31])
-            for c, h in enumerate(headers, start=1):
-                cell = nws.cell(row=1, column=c, value=h)
-                cell.font = Font(bold=True)
-            for ri, row in enumerate(rows, start=2):
-                for ci, val in enumerate(row, start=1):
-                    nws.cell(row=ri, column=ci, value=val)
-            for c in range(1, len(headers) + 1):
-                nws.column_dimensions[get_column_letter(c)].width = 18
-
+        # Uma Tabela por aba no padrão único; os valores chegam como texto formatado e o
+        # `parse_text` os converte em número (R$) e percentual.
         labor = data["labor"]
-        sheet_table(
-            "Colaboradores",
-            ["Nome", "Tipo", "% aloc.", "Custo alocado"],
-            [
-                (
-                    x["name"],
-                    x["tipo"],
-                    f"{float(x['allocation_percentage']):.1f}%",
-                    format_brl(float(x["allocated_cost"])),
-                )
-                for x in labor
-            ],
-        )
         veh = data["vehicles"]
-        sheet_table(
-            "Veículos",
-            ["Placa", "Modelo", "Tipo", "Custo mês"],
-            [
-                (x["plate"], x.get("model") or "", x["vehicle_type"], format_brl(float(x["monthly_cost"])))
-                for x in veh
-            ],
-        )
         sysrows = data["systems"]
-        sheet_table(
-            "Sistemas",
-            ["Nome", "Valor"],
-            [(x["name"], format_brl(float(x["value"]))) for x in sysrows],
-        )
         fixrows = data["fixed_operational"]
-        sheet_table(
-            "Custos fixos",
-            ["Nome", "Valor"],
-            [(x["name"], format_brl(float(x["value"]))) for x in fixrows],
-        )
-
-        buf = io.BytesIO()
-        wb.save(buf)
-        buf.seek(0)
-        return buf.getvalue(), _fname("project_summary", "xlsx", ctx), MIME_XLSX
+        sheets = [
+            SheetSpec(
+                title="Resumo",
+                headers=["Indicador", "Valor"],
+                rows=[("Cenário", data.get("scenario") or "REALIZADO"), *_summary_kpi_rows(s)],
+                parse_text=True,  # indicadores não se somam: sem linha de total
+            ),
+            SheetSpec(
+                title="Colaboradores",
+                headers=["Nome", "Tipo", "% aloc.", "Custo alocado"],
+                rows=[
+                    (
+                        x["name"],
+                        x["tipo"],
+                        f"{float(x['allocation_percentage']):.1f}%".replace(".", ","),
+                        format_brl(float(x["allocated_cost"])),
+                    )
+                    for x in labor
+                ],
+                parse_text=True,
+                totals={4: "sum"},
+            ),
+            SheetSpec(
+                title="Veículos",
+                headers=["Placa", "Modelo", "Tipo", "Custo mês"],
+                rows=[
+                    (x["plate"], x.get("model") or "", x["vehicle_type"], format_brl(float(x["monthly_cost"])))
+                    for x in veh
+                ],
+                parse_text=True,
+                auto_totals=True,
+            ),
+            SheetSpec(
+                title="Sistemas",
+                headers=["Nome", "Valor"],
+                rows=[(x["name"], format_brl(float(x["value"]))) for x in sysrows],
+                parse_text=True,
+                auto_totals=True,
+            ),
+            SheetSpec(
+                title="Custos fixos",
+                headers=["Nome", "Valor"],
+                rows=[(x["name"], format_brl(float(x["value"]))) for x in fixrows],
+                parse_text=True,
+                auto_totals=True,
+            ),
+        ]
+        return build_workbook_bytes(sheets), _fname("project_summary", "xlsx", ctx), MIME_XLSX
 
     # PDF
     buf = io.BytesIO()
@@ -646,8 +633,16 @@ def render_company_finance_matrix_bytes(
     title = report_title(report_type)
 
     if fmt == "xlsx":
-        raw = build_xlsx_bytes(
-            headers=headers, rows=xlsx_rows, sheet_title=label[:31]
+        # Referência, meses, total pago e saldo são R$ (somam); Progresso % não soma.
+        progress_col = len(headers)
+        money = frozenset(range(2, progress_col))
+        raw = build_table_xlsx_bytes(
+            headers=headers,
+            rows=[[None if v == "" else v for v in r] for r in xlsx_rows],
+            sheet_title=label[:31],
+            money_columns=money,
+            percent_columns=frozenset({progress_col}),
+            totals={c: "sum" for c in money},
         )
         return raw, _fname(report_type, "xlsx", ctx), MIME_XLSX
     raw = build_pdf_bytes(title=title, headers=headers, rows=pdf_rows, meta_lines=meta)

@@ -430,7 +430,8 @@ class ReportTests(unittest.TestCase):
         self.assertIn("spreadsheetml", mime)
 
     def test_xlsx_comes_formatted(self):
-        """Cabeçalho centralizado, linha 1 congelada, sem grade e com borda nas células."""
+        """Padrão único do SGC: Tabela azul-marinho, linha 1 e coluna A congeladas, sem grade e
+        sem quebra de texto (texto enorme não estica a linha)."""
         import io
 
         import openpyxl
@@ -442,13 +443,16 @@ class ReportTests(unittest.TestCase):
         raw, _, _ = render_legal_report_bytes("legal", payload, "xlsx", None)
         wb = openpyxl.load_workbook(io.BytesIO(raw))
         for ws in wb:
-            self.assertEqual(ws.freeze_panes, "A2")
+            self.assertTrue(ws.tables, ws.title)
+            self.assertEqual(ws.freeze_panes, "B2")
             self.assertFalse(ws.sheet_view.showGridLines)
             self.assertEqual(ws["A1"].alignment.horizontal, "center")
-            self.assertTrue(ws["A2"].alignment.wrap_text)
+            self.assertTrue(ws["A1"].fill.fgColor.rgb.endswith("1F3864"))
+            self.assertFalse(ws["A2"].alignment.wrap_text)
             self.assertEqual(ws["A2"].border.bottom.style, "thin")
-        # Todas as linhas com a mesma altura, mesmo com texto enorme.
-        self.assertEqual(wb["Consolidado"].row_dimensions[2].height, 15)
+        # Indicadores e quebras não se somam; as listagens têm total.
+        self.assertFalse(wb["Resumo"].tables["Tabela1"].totalsRowCount)
+        self.assertEqual(wb["Consolidado"].tables["Tabela5"].totalsRowCount, 1)
 
     def test_detail_sheets_have_no_considered_value(self):
         """Nas abas de detalhe fica só o valor da causa (pedido do usuário)."""
