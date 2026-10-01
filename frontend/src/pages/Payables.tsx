@@ -94,6 +94,21 @@ function payableTipoLabel(r: PayableSnapshotRow): string {
   return typeLabel(r.type);
 }
 
+/** Premiação/Reembolso de colaborador (Componente Variável), lançado à parte do salário. */
+function isCollaboratorVariable(r: PayableSnapshotRow): boolean {
+  return r.type === "COLLABORATOR" && r.origin === "VARIABLE";
+}
+
+const TIPO_COLLAB_SALARY = "__collab_salary__";
+const TIPO_COLLAB_VARIABLE = "__collab_variable__";
+
+/** Filtro "Tipo": o rótulo exibido na coluna Tipo, mais os dois recortes de Colaborador. */
+function matchesTipoFilter(r: PayableSnapshotRow, tipo: string): boolean {
+  if (tipo === TIPO_COLLAB_SALARY) return r.type === "COLLABORATOR" && !isCollaboratorVariable(r);
+  if (tipo === TIPO_COLLAB_VARIABLE) return isCollaboratorVariable(r);
+  return payableTipoLabel(r) === tipo;
+}
+
 /** Linha manual ainda sem classificação no Resultado da Empresa. */
 function isUnclassifiedManual(r: PayableSnapshotRow): boolean {
   return r.type === "MANUAL" && !r.result_classification;
@@ -176,6 +191,8 @@ export function Payables() {
   const [statusFilter, setStatusFilter] = useState<PayableSnapshotStatus | "">("");
   const [search, setSearch] = useState("");
   const [onlyUnclassifiedManual, setOnlyUnclassifiedManual] = useState(false);
+  const [costCenterFilter, setCostCenterFilter] = useState("");
+  const [tipoFilter, setTipoFilter] = useState("");
 
   const [rows, setRows] = useState<PayableSnapshotRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -359,11 +376,38 @@ export function Payables() {
     return rows.filter((r) => {
       if (statusFilter && r.status !== statusFilter) return false;
       if (onlyUnclassifiedManual && !isUnclassifiedManual(r)) return false;
+      if (costCenterFilter && (r.cost_center || "").trim() !== costCenterFilter) return false;
+      if (tipoFilter && !matchesTipoFilter(r, tipoFilter)) return false;
       if (!q) return true;
       const hay = `${r.name} ${r.cost_center} ${r.category}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [rows, statusFilter, search, onlyUnclassifiedManual]);
+  }, [rows, statusFilter, search, onlyUnclassifiedManual, costCenterFilter, tipoFilter]);
+
+  // Opções dos filtros vêm das linhas do período carregado: nunca oferecem algo que não existe.
+  const costCenterOptions = useMemo(
+    () =>
+      [...new Set(rows.map((r) => (r.cost_center || "").trim()).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b, "pt-BR"),
+      ),
+    [rows],
+  );
+  const tipoOptions = useMemo(
+    () => [...new Set(rows.map(payableTipoLabel))].sort((a, b) => a.localeCompare(b, "pt-BR")),
+    [rows],
+  );
+  const hasCollaboratorVariable = useMemo(() => rows.some(isCollaboratorVariable), [rows]);
+  const hasActiveFilters = Boolean(
+    statusFilter || search.trim() || onlyUnclassifiedManual || costCenterFilter || tipoFilter,
+  );
+
+  function clearFilters() {
+    setStatusFilter("");
+    setSearch("");
+    setOnlyUnclassifiedManual(false);
+    setCostCenterFilter("");
+    setTipoFilter("");
+  }
 
   const unclassifiedManualCount = useMemo(() => rows.filter(isUnclassifiedManual).length, [rows]);
 
@@ -798,6 +842,49 @@ export function Payables() {
             </select>
           </label>
 
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-slate-700">Centro de custo</span>
+            <select
+              value={costCenterFilter}
+              onChange={(e) => setCostCenterFilter(e.target.value)}
+              className="max-w-[220px] rounded-lg border border-slate-300 px-3 py-2"
+            >
+              <option value="">Todos</option>
+              {costCenterFilter && !costCenterOptions.includes(costCenterFilter) ? (
+                <option value={costCenterFilter}>{costCenterFilter}</option>
+              ) : null}
+              {costCenterOptions.map((cc) => (
+                <option key={cc} value={cc}>
+                  {cc}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-slate-700">Tipo</span>
+            <select
+              value={tipoFilter}
+              onChange={(e) => setTipoFilter(e.target.value)}
+              className="max-w-[260px] rounded-lg border border-slate-300 px-3 py-2"
+            >
+              <option value="">Todos</option>
+              {tipoOptions.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+              {tipoOptions.includes("Colaborador") ? (
+                <>
+                  <option value={TIPO_COLLAB_SALARY}>Colaborador · só salários</option>
+                  {hasCollaboratorVariable || tipoFilter === TIPO_COLLAB_VARIABLE ? (
+                    <option value={TIPO_COLLAB_VARIABLE}>Colaborador · só avulsos (premiação/reembolso)</option>
+                  ) : null}
+                </>
+              ) : null}
+            </select>
+          </label>
+
           <label className="flex min-w-[240px] flex-1 flex-col gap-1 text-sm">
             <span className="font-medium text-slate-700">Buscar</span>
             <input
@@ -827,6 +914,22 @@ export function Payables() {
               ) : null}
             </span>
           </label>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-slate-600">
+            Mostrando <strong className="text-slate-900">{filteredRows.length}</strong> de {rows.length}{" "}
+            lançamento{rows.length === 1 ? "" : "s"}
+          </span>
+          {hasActiveFilters ? (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="w-fit rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            >
+              Limpar filtros
+            </button>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

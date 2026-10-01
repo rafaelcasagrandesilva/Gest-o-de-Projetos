@@ -15,6 +15,12 @@ export interface PagamentoMes {
   valor: number | null;
   /** Quantidade de lançamentos que compõem o valor do mês (>1 → detalhe no modal). */
   count?: number | null;
+  /**
+   * Premiação/Reembolso (Componentes Variáveis) do mês — somente leitura, FORA de `valor`
+   * (a grade grava `valor`; somar aqui gravaria o reembolso em dobro). Vão ao CAP à parte.
+   */
+  componentes_valor?: number | null;
+  componentes_count?: number | null;
 }
 
 export interface CompanyFinancialItem {
@@ -255,11 +261,24 @@ export interface LancamentoCompetencia {
   has_payment?: boolean;
 }
 
+/** Premiação/Reembolso da competência no detalhamento (somente leitura). */
+export interface ComponenteLancamento {
+  id: string;
+  tipo: string;
+  valor: number | null;
+  descricao: string | null;
+  cap_amount_paid?: number | null;
+  cap_status?: "ABERTO" | "PARCIAL" | "PAGO" | null;
+}
+
 export interface LancamentosCompetencia {
   item_id: string;
   competencia: string;
   lancamentos: LancamentoCompetencia[];
+  /** Total da grade (soma de `lancamentos`). */
   total: number | null;
+  componentes?: ComponenteLancamento[];
+  componentes_total?: number | null;
   payable_sync_warning?: string | null;
 }
 

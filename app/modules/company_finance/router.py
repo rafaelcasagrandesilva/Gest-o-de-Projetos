@@ -161,7 +161,9 @@ async def create_item(
     if loaded is None:
         raise HTTPException(status_code=500, detail="Falha ao carregar item")
     comp = _default_month()
-    read = await svc._item_to_read(loaded, parse_month(comp))
+    read = await svc._item_to_read(
+        loaded, parse_month(comp), components=await svc.variable_components_of(loaded)
+    )
     return redact_for(
         _sensitive_resource_for_tipo(payload.tipo), CompanyFinancialItemRead.model_validate(read), actor
     )
@@ -199,7 +201,9 @@ async def update_item(
     if loaded is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")
     comp = competencia or _default_month()
-    read = await svc._item_to_read(loaded, parse_month(comp))
+    read = await svc._item_to_read(
+        loaded, parse_month(comp), components=await svc.variable_components_of(loaded)
+    )
     logger.info(
         "company_finance.patch_item saved item_id=%s cost_center_ref=%s cost_center=%s project_id=%s system=%s",
         item_id,
@@ -272,7 +276,9 @@ async def replace_payments(
         if loaded is None:
             raise HTTPException(status_code=404, detail="Item não encontrado")
         comp = competencia or _default_month()
-        read = await svc._item_to_read(loaded, parse_month(comp))
+        read = await svc._item_to_read(
+            loaded, parse_month(comp), components=await svc.variable_components_of(loaded)
+        )
         result = CompanyFinancialItemRead.model_validate(read)
         # Aviso quando a grade não pôde governar o CAP por já haver pagamento no mês.
         sync = svc.last_payable_sync or {}

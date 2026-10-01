@@ -579,6 +579,18 @@ class ProjectStructureService:
         deleted_project_id = row.project_id
         deleted_employee_id = row.employee_id
         deleted_scenario = row.scenario
+        # Premiação/Reembolso do vínculo somem junto (FK CASCADE); o título deles no CAP precisa
+        # sair ANTES, na mesma transação — senão ficava em aberto inflando o mês (título pago é
+        # preservado pelo próprio remove_variable_component_snapshot).
+        from app.models.payment_component import PaymentVariableComponent
+
+        payables = PayableSnapshotService(self.session)
+        for comp_id in (
+            await self.session.execute(
+                select(PaymentVariableComponent.id).where(PaymentVariableComponent.project_labor_id == row.id)
+            )
+        ).scalars().all():
+            await payables.remove_variable_component_snapshot(component_id=comp_id)
         await self.labors.delete(row)
         await self.audit.log_action(
             user=actor,

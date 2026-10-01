@@ -737,3 +737,98 @@ class ExclusaoEmMassaTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class MesCongeladoSemGeracaoTests(unittest.IsolatedAsyncioTestCase):
+    """out/2026: Premiação/Reembolso lançados antes da abertura do mês faziam o CAP congelar o
+    mês como "legado já gerado" — sem salários nem custos de projeto (Subterrâneo inteiro)."""
+
+    async def test_variaveis_nao_contam_como_mes_ja_gerado(self) -> None:
+        import inspect
+
+        from app.services.payable_snapshot_service import PayableSnapshotService
+
+        src = inspect.getsource(PayableSnapshotService.get_or_create_for_month)
+        trecho = src[src.index("Compat legado"):src.index("_generate_snapshot(")]
+        self.assertIn("PayableOrigin.VARIABLE.value", trecho)
+
+    async def test_mes_gerado_completa_titulos_de_projeto_ausentes(self) -> None:
+        import inspect
+
+        from app.services.payable_snapshot_service import PayableSnapshotService
+
+        src = inspect.getsource(PayableSnapshotService.get_or_create_for_month)
+        # Os DOIS caminhos de "mês já gerado" (fora e dentro do lock) completam o que falta.
+        self.assertEqual(src.count("_ensure_project_cost_entries(payment_month=comp)"), 2)
+        heal = inspect.getsource(PayableSnapshotService._ensure_project_cost_entries)
+        # Só age onde não há título nenhum e reaproveita os syncs da tela (com guarda de pago).
+        self.assertIn("~labor_title.exists()", heal)
+        self.assertIn("~item_title.exists()", heal)
+        self.assertIn("sync_collaborator_payables_for_labor", heal)
+        # Nunca retroage para antes da automação (duplicaria despesas legadas já pagas).
+        self.assertIn("COMPANY_FINANCE_AUTOGEN_FIRST_COMPETENCE", heal)
+
+
+class CapTempoRealTests(unittest.IsolatedAsyncioTestCase):
+    """Auditoria 01/10/2026: tudo que é lançado nas fontes chega ao CAP sem depender de alguém
+    abrir a tela do mês."""
+
+    async def test_geracao_do_mes_e_sempre_de_todos_os_projetos(self) -> None:
+        import inspect
+
+        from app.services.payable_snapshot_service import PayableSnapshotService
+
+        src = inspect.getsource(PayableSnapshotService.get_or_create_for_month)
+        chamada = src[src.index("self._generate_snapshot("):]
+        chamada = chamada[: chamada.index(")")]
+        self.assertIn("accessible_project_ids=None", chamada)
+        self.assertIn("sees_all_projects=True", chamada)
+
+    async def test_item_de_custo_fixo_reflete_nos_meses_abertos_ao_criar_e_editar(self) -> None:
+        import inspect
+
+        from app.services.company_finance_service import CompanyFinanceService
+
+        for metodo in (CompanyFinanceService.create_item, CompanyFinanceService.update_item):
+            self.assertIn("sync_company_finance_item_open_months", inspect.getsource(metodo))
+
+    async def test_caixa_esvaziada_volta_a_referencia(self) -> None:
+        import inspect
+
+        from app.services.payable_snapshot_service import PayableSnapshotService
+
+        src = inspect.getsource(PayableSnapshotService._reconcile_company_finance_entries_for_month)
+        self.assertIn("open_unlinked", src)  # antes: "sem lançamentos → não mexe"
+        self.assertIn("_has_active_payments", src)
+        # ...mas só quando o usuário esvazia a caixa e salva a grade; abrir o mês não mexe.
+        self.assertIn("if not cleared_box_to_reference:", src)
+        from app.services.company_finance_service import CompanyFinanceService
+
+        grade = inspect.getsource(CompanyFinanceService.replace_payments)
+        self.assertIn("cleared_box_to_reference=True", grade)
+
+    async def test_excluir_vinculo_remove_titulo_da_premiacao(self) -> None:
+        import inspect
+
+        from app.services.project_structure_service import ProjectStructureService
+
+        src = inspect.getsource(ProjectStructureService.delete_labor)
+        self.assertLess(
+            src.index("remove_variable_component_snapshot"), src.index("await self.labors.delete(row)")
+        )
+
+    async def test_troca_clt_pj_e_nome_ressincronizam_titulos(self) -> None:
+        from app.services.employees_service import _EMPLOYEE_PAYABLE_COST_FIELDS
+
+        self.assertIn("employment_type", _EMPLOYEE_PAYABLE_COST_FIELDS)
+        self.assertIn("full_name", _EMPLOYEE_PAYABLE_COST_FIELDS)
+
+    async def test_relatorio_de_folha_completa_o_mes_antes_de_ler(self) -> None:
+        import inspect
+
+        from app.modules.reports import router
+
+        src = inspect.getsource(router.generate_report)
+        trecho = src[src.index('if body.type == "payroll"'):src.index('if body.type == "vehicles"')]
+        self.assertIn("get_or_create_for_month", trecho)
+        self.assertIn("is_generated", trecho)  # nunca cria mês novo a partir de um relatório

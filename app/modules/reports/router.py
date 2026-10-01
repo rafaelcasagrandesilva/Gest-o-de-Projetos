@@ -321,6 +321,20 @@ async def generate_report(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para este relatório.")
         comp = _competencia_date(f, "competencia")
         include_sensitive = user_has_permission(user, EMPLOYEES_SENSITIVE)
+        if comp is not None:
+            # A Folha é a consolidação do CAP do mês de PAGAMENTO: completa esse mês antes de
+            # ler (mesma rotina da tela do CAP — títulos de projeto, custos fixos e premiações
+            # que faltem). Só em mês JÁ aberto: um relatório não cria mês novo no CAP.
+            from app.services.payable_snapshot_service import PayableSnapshotService
+            from app.utils.date_utils import next_competencia, normalize_competencia
+
+            payables = PayableSnapshotService(db)
+            pay_month = next_competencia(normalize_competencia(comp))
+            if await payables.is_generated(month=pay_month):
+                await payables.get_or_create_for_month(
+                    payment_month=pay_month, accessible_project_ids=None, sees_all_projects=True
+                )
+                await db.commit()
         payload = await svc.generate_payroll_report(
             competencia=comp, scenario=_report_scenario(body), include_sensitive=include_sensitive
         )

@@ -4,6 +4,7 @@ import { formatApiError } from "@/utils/apiError";
 import {
   fetchCompanyFinanceEntries,
   replaceCompanyFinanceEntries,
+  type ComponenteLancamento,
   type LancamentoCompetenciaInput,
 } from "@/services/companyFinance";
 import {
@@ -64,13 +65,18 @@ export function LancamentosCompetenciaModal({
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [redacted, setRedacted] = useState(false);
+  // Premiação/Reembolso do mês: títulos próprios no CAP, só exibidos aqui (editam-se em
+  // Componentes) e nunca enviados no salvar.
+  const [componentes, setComponentes] = useState<ComponenteLancamento[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const data = await fetchCompanyFinanceEntries(itemId, competencia);
-      const anyRedacted = data.lancamentos.some((l) => l.valor == null);
+      const anyRedacted =
+        data.lancamentos.some((l) => l.valor == null) || (data.componentes ?? []).some((c) => c.valor == null);
+      setComponentes(data.componentes ?? []);
       setRedacted(anyRedacted);
       setRows(
         data.lancamentos.map((l) => ({
@@ -254,12 +260,42 @@ export function LancamentosCompetenciaModal({
           )}
         </div>
 
+        {componentes.length > 0 && (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Premiação e reembolso (somente leitura — edite em Componentes)
+            </p>
+            <ul className="mt-2 space-y-1">
+              {componentes.map((c) => (
+                <li key={c.id} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="min-w-0 truncate text-slate-700">
+                    {c.tipo}
+                    {c.descricao ? <span className="text-slate-500"> · {c.descricao}</span> : null}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    {c.cap_status ? (
+                      <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-600 ring-1 ring-slate-200">
+                        {c.cap_status}
+                      </span>
+                    ) : null}
+                    <span className="tabular-nums text-slate-800">
+                      {redacted ? "—" : formatCurrencyOrDash(c.valor)}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
           <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
             Total da competência
           </span>
           <span className="text-base font-semibold tabular-nums text-slate-800">
-            {redacted ? "—" : formatCurrencyOrDash(total)}
+            {redacted
+              ? "—"
+              : formatCurrencyOrDash(total + componentes.reduce((sum, c) => sum + (c.valor ?? 0), 0))}
           </span>
         </div>
 
