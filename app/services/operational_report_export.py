@@ -7,6 +7,7 @@ from app.services.export.builders import (
     build_executive_pdf_bytes,
     build_multisheet_operational_xlsx_bytes,
     build_operational_xlsx_bytes,
+    build_table_xlsx_bytes,
     format_brl,
     format_date_br,
 )
@@ -176,6 +177,16 @@ def _cell_xlsx(row: dict[str, Any], col: Col) -> Any:
     return "" if val is None else val
 
 
+def _cell_table(row: dict[str, Any], col: Col) -> Any:
+    """Célula da Tabela do Excel: número para valor, data crua (o builder converte), vazio = None."""
+    val = row.get(col.key)
+    if val is None or val == "":
+        return None
+    if col.money:
+        return float(val) if isinstance(val, (int, float)) else None
+    return val
+
+
 def _cell_pdf(row: dict[str, Any], col: Col) -> str:
     val = row.get(col.key)
     if col.money and isinstance(val, (int, float)):
@@ -183,6 +194,11 @@ def _cell_pdf(row: dict[str, Any], col: Col) -> str:
     if col.is_date and val:
         return format_date_br(str(val)[:10])
     return "" if val is None else str(val)
+
+
+# Relatórios que saem como Tabela do Excel (formato pedido pelo financeiro/RH). Os demais
+# seguem no layout operacional antigo até alguém pedir — basta incluir o tipo aqui.
+_TABLE_XLSX_REPORTS = frozenset({"payables_detailed"})
 
 
 def render_operational_report_bytes(
@@ -204,6 +220,20 @@ def render_operational_report_bytes(
 
     title = report_title(report_type)
     periodo_token = ctx.periodo_token if ctx else None
+
+    if fmt == "xlsx" and report_type in _TABLE_XLSX_REPORTS:
+        # Tabela do Excel: valores e datas de verdade, total por SUBTOTAL (segue o filtro).
+        date_cols = frozenset(i for i, c in enumerate(cols, start=1) if c.is_date)
+        table_rows = [[_cell_table(r, c) for c in cols] for r in raw_rows]
+        raw = build_table_xlsx_bytes(
+            headers=headers,
+            rows=table_rows,
+            sheet_title=title[:31],
+            money_columns=money_cols,
+            date_columns=date_cols,
+            totals={i: "sum" for i in money_cols},
+        )
+        return raw, friendly_filename(report_type, "xlsx", periodo_token=periodo_token), MIME_XLSX
 
     if fmt == "xlsx":
         # Excel abre direto nos dados (sem aba de identificação); o nome amigável

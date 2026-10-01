@@ -18,6 +18,7 @@ from app.services.export.builders import (
     build_pdf_bytes,
     build_projects_summary_pdf_bytes,
     build_projects_summary_xlsx_bytes,
+    build_table_xlsx_bytes,
     build_xlsx_bytes,
     format_brl,
     format_date_br,
@@ -498,8 +499,37 @@ def render_payroll_bytes(
 
     title = report_title("payroll")
     if fmt == "xlsx":
-        raw = build_xlsx_bytes(
-            headers=headers, rows=rows, sheet_title="Folha de Pagamento", totals_row=totals_row
+        # Excel: valores NUMÉRICOS (não o texto "R$ 1.234,56") numa Tabela com total por
+        # SUBTOTAL — a soma acompanha o filtro. Mesmo layout que o RH montava à mão.
+        def _num(v: Any) -> float | None:
+            return float(v) if isinstance(v, (int, float)) else None
+
+        xlsx_rows: list[list[Any]] = []
+        for r in data["rows"]:
+            componentes = r.get("componentes") or {}
+            xlsx_rows.append(
+                [
+                    r["nome"], r.get("email") or None, r.get("cargo") or None, r["tipo"],
+                    r.get("status") or None, r.get("centro_custo") or "—", r.get("distribuicao") or "—",
+                    *[_num(componentes.get(c)) for c in component_columns],
+                    _num(r.get("endividamentos")),
+                    _format_endividamentos_detalhe(r.get("endividamentos_itens"), summarize=False) or None,
+                    _num(r.get("total_folha")),
+                    r.get("pix_tipo") or None,
+                    r.get("pix_chave") or None,
+                ]
+            )
+        first_money = 8  # após as 7 colunas de identificação
+        money_cols = list(range(first_money, first_money + len(component_columns) + 1))
+        total_col = first_money + len(component_columns) + 2  # pula "Detalhamento"
+        money_cols.append(total_col)
+        raw = build_table_xlsx_bytes(
+            headers=headers,
+            rows=xlsx_rows,
+            sheet_title="Folha de Pagamento",
+            money_columns=frozenset(money_cols),
+            totals={**{c: "sum" for c in money_cols}, len(headers): "count"},
+            bold_columns=frozenset({total_col}),
         )
         return raw, _fname("payroll", "xlsx", ctx), MIME_XLSX
     raw = build_pdf_bytes(title=title, headers=headers, rows=rows, meta_lines=meta, totals_row=totals_row)
