@@ -13,20 +13,24 @@ from app.utils.date_utils import normalize_competencia
 from app.schemas.common import UUIDTimestampRead
 
 
-class HourlyReferenceRead(BaseModel):
-    """Salário de REFERÊNCIA de quem recebe por hora: valor-hora × 8h × 22 dias.
+class PayrollAverageMonthRead(BaseModel):
+    #: Mês do Contas a Pagar (fluxo de caixa: o mês M paga a folha de M-1), dia 1.
+    month: date
+    amount: float
+    #: Média dos meses pagos até este (inclusive) — a evolução da média mês a mês.
+    running_average: float
 
-    Só para leitura na relação de colaboradores. Não é gravado e nenhum cálculo de custo
-    (projeto, Contas a Pagar, folha) o usa — os custos continuam vindo do que o gestor lança.
+
+class PayrollAverageRead(BaseModel):
+    """Remuneração média mensal do colaborador, apurada no Contas a Pagar.
+
+    Só EXIBIÇÃO na relação de colaboradores. Entra a remuneração recorrente (salário, benefícios
+    CLT, VT, ajuda de custo e premiação de PJ); ficam fora reembolso, férias, rescisão e "outros
+    pagamentos". Valor do mês = o efetivamente pago; mês sem pagamento não entra. Nada de custo/CAP/folha lê este valor.
     """
 
-    hourly_rate: float
-    reference_hours: float
-    monthly_reference: float
-    #: Centro de Custo do contrato de onde saiu o valor-hora (None = cadastro do colaborador).
-    cost_center: str | None = None
-    #: Projeto do contrato — distingue dois contratos no mesmo centro.
-    project_name: str | None = None
+    average: float
+    months: list[PayrollAverageMonthRead]
 
 
 class EmployeeRead(UUIDTimestampRead):
@@ -65,7 +69,7 @@ class EmployeeRead(UUIDTimestampRead):
     pj_additional_cost: float = 0
     #: Quem recebe por hora: salário de referência (8h × 22 dias) por contrato. Só exibição;
     #: sensível (omitido sem employees.sensitive). None/vazio = não recebe por hora.
-    hourly_reference: list[HourlyReferenceRead] | None = Field(default_factory=list)
+    payroll_average: PayrollAverageRead | None = None
 
 
 class EmployeeCreate(BaseModel):

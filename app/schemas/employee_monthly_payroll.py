@@ -11,6 +11,8 @@ class EmployeeMonthlyPayrollUpsert(BaseModel):
     vr_amount: float | None = Field(default=None, ge=0)
     vt_amount: float | None = Field(default=None, ge=0)
     vacation_advance_amount: float | None = Field(default=None, ge=0)
+    is_termination: bool = False
+    termination_amount: float | None = Field(default=None, ge=0)
     notes: str | None = None
 
 
@@ -22,6 +24,8 @@ class EmployeeMonthlyPayrollRead(BaseModel):
     vr_amount: float | None
     vt_amount: float | None
     vacation_advance_amount: float | None
+    is_termination: bool
+    termination_amount: float | None
     notes: str | None
     created_at: datetime
     updated_at: datetime

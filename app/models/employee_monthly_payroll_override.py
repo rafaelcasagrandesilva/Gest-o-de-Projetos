@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +33,11 @@ class EmployeeMonthlyPayrollOverride(TimestampUUIDMixin, Base):
     # Adiantamento de férias (opcional). Gera um lançamento independente "Férias CLT" no
     # Contas a Pagar; NÃO é somado ao salário nem altera o custo gerencial do projeto.
     vacation_advance_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # Rescisão contratual no mês: o "Salário CLT" NÃO entra no Contas a Pagar — nem pelo holerite
+    # nem pelo salário do cadastro. O valor da rescisão (opcional) vira um lançamento independente
+    # "Rescisão CLT"; só vale com a marcação ligada. VR/VT/Férias seguem gerando os seus.
+    is_termination: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    termination_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     employee: Mapped["Employee"] = relationship("Employee")

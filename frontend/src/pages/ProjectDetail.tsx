@@ -222,6 +222,8 @@ function MonthlyPayrollSection({
   const [vrAmount, setVrAmount] = useState("");
   const [vtAmount, setVtAmount] = useState("");
   const [vacationAmount, setVacationAmount] = useState("");
+  const [isTermination, setIsTermination] = useState(false);
+  const [terminationAmount, setTerminationAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -241,6 +243,8 @@ function MonthlyPayrollSection({
         setVacationAmount(
           row?.vacation_advance_amount != null ? String(row.vacation_advance_amount) : "",
         );
+        setIsTermination(Boolean(row?.is_termination));
+        setTerminationAmount(row?.termination_amount != null ? String(row.termination_amount) : "");
         setNotes(row?.notes ?? "");
       } catch {
         if (!cancelled) setErr("Não foi possível carregar a folha real do mês.");
@@ -269,6 +273,8 @@ function MonthlyPayrollSection({
         vr_amount: parseNum(vrAmount),
         vt_amount: parseNum(vtAmount),
         vacation_advance_amount: parseNum(vacationAmount),
+        is_termination: isTermination,
+        termination_amount: isTermination ? parseNum(terminationAmount) : null,
         notes: notes.trim() || null,
       });
       await Promise.resolve(onSaved());
@@ -279,44 +285,58 @@ function MonthlyPayrollSection({
     }
   }
 
+  const inputCls =
+    "mt-1 w-full rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-100 disabled:text-slate-400";
+
   return (
     <fieldset disabled={readOnly} className="m-0 mt-4 min-w-0 border-0 p-0">
-      <div className="rounded-lg border border-emerald-100 bg-emerald-50/40 p-4">
-        <p className="text-xs font-medium text-emerald-900">Folha real do mês (opcional)</p>
-        <p className="mt-1 text-xs text-slate-600">
-          Os valores abaixo afetam apenas os lançamentos financeiros do mês e{" "}
-          <strong>não alteram</strong> o custo gerencial do colaborador no projeto.
-        </p>
-        <p className="mt-1 text-xs text-slate-500">
-          Custo integral do colaborador = custo gerencial / projeto. Folha real do mês = usado no contas a
-          pagar.
-        </p>
+      <div className="rounded-lg border border-emerald-100 bg-emerald-50/40 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p
+            className="text-xs font-medium text-emerald-900"
+            title="Usado só no Contas a Pagar; não altera o custo gerencial do colaborador no projeto."
+          >
+            Folha real do mês · {competenceMonth}
+          </p>
+          <label className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
+            <input
+              type="checkbox"
+              checked={isTermination}
+              onChange={(e) => setIsTermination(e.target.checked)}
+            />
+            Rescisão contratual
+          </label>
+        </div>
         {err ? <p className="mt-2 text-xs text-red-700">{err}</p> : null}
         {loading ? (
-          <p className="mt-3 text-xs text-slate-500">Carregando…</p>
+          <p className="mt-2 text-xs text-slate-500">Carregando…</p>
         ) : (
-          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <label className="block text-xs text-slate-600">
-              Competência
-              <input
-                type="text"
-                readOnly
-                value={competenceMonth}
-                className="mt-1 w-full rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-700"
-              />
-            </label>
-            <label className="block text-xs text-slate-600">
-              Salário líquido real
-              <input
-                type="number"
-                step="0.01"
-                min={0}
-                value={netSalary}
-                onChange={(e) => setNetSalary(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
-                placeholder="Ex.: 4137.40"
-              />
-            </label>
+          <div className="mt-2 grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
+            {isTermination ? (
+              <label className="block text-xs text-slate-600">
+                Rescisão
+                <input
+                  type="number"
+                  step="0.01"
+                  min={0}
+                  value={terminationAmount}
+                  onChange={(e) => setTerminationAmount(e.target.value)}
+                  className={inputCls}
+                />
+              </label>
+            ) : (
+              <label className="block text-xs text-slate-600">
+                Salário líquido real
+                <input
+                  type="number"
+                  step="0.01"
+                  min={0}
+                  value={netSalary}
+                  onChange={(e) => setNetSalary(e.target.value)}
+                  className={inputCls}
+                />
+              </label>
+            )}
             <label className="block text-xs text-slate-600">
               VR real
               <input
@@ -325,8 +345,7 @@ function MonthlyPayrollSection({
                 min={0}
                 value={vrAmount}
                 onChange={(e) => setVrAmount(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
-                placeholder="Ex.: 672.00"
+                className={inputCls}
               />
             </label>
             <label className="block text-xs text-slate-600">
@@ -337,12 +356,8 @@ function MonthlyPayrollSection({
                 min={0}
                 value={vtAmount}
                 onChange={(e) => setVtAmount(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
-                placeholder="Ex.: 220.00"
+                className={inputCls}
               />
-              <span className="mt-1 block text-[11px] text-slate-500">
-                Gera lançamento "Vale Transporte CLT" no Contas a Pagar. Não é somado ao VR.
-              </span>
             </label>
             <label className="block text-xs text-slate-600">
               Férias (adiantamento)
@@ -352,26 +367,21 @@ function MonthlyPayrollSection({
                 min={0}
                 value={vacationAmount}
                 onChange={(e) => setVacationAmount(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
-                placeholder="Ex.: 2500.00"
+                className={inputCls}
               />
-              <span className="mt-1 block text-[11px] text-slate-500">
-                Gera lançamento "Férias CLT" no Contas a Pagar. Não é somado ao salário.
-              </span>
             </label>
-            <label className="block text-xs text-slate-600 sm:col-span-2 lg:col-span-3">
+            <label className="block text-xs text-slate-600">
               Observações
-              <textarea
-                rows={2}
+              <input
+                type="text"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
-                placeholder="Ex.: multa atraso salário mês anterior"
+                className={inputCls}
               />
             </label>
           </div>
         )}
-        <div className="mt-3">
+        <div className="mt-2">
           <button
             type="button"
             disabled={saving || readOnly || loading}
