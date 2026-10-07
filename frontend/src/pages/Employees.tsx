@@ -27,6 +27,7 @@ import { useAuxiliaryResource } from "@/hooks/useAuxiliaryResource";
 import { TruncatedCell } from "@/components/TruncatedText";
 import { formatCurrencyOrDash, parseCurrencyInput } from "@/utils/currency";
 import { Money } from "@/components/Money";
+import { monthLabel } from "@/utils/roiFormat";
 
 function monthStartIso(): string {
   const d = new Date();
@@ -92,27 +93,52 @@ const emptyForm: FormState = {
 };
 
 /**
- * "Salário base" da relação. Quem recebe por HORA não tem salário no cadastro — mostra-se a
- * REFERÊNCIA valor-hora × 8h × 22 dias, em itálico, uma linha por contrato. É só leitura: não
- * é gravada e não entra em custo de projeto, Contas a Pagar nem folha.
+ * "Média mensal" da relação: remuneração média apurada no Contas a Pagar (meses pagos), com a
+ * valor de cada mês ao clicar. Sem mês pago, cai no salário do cadastro — exceto quem recebe
+ * por hora, cujo cadastro guarda o valor-hora. Só exibição: não entra em custo nenhum.
  */
-function SalarioBaseCell({ employee }: { employee: Employee }) {
-  const refs = employee.hourly_reference ?? [];
-  if (refs.length === 0) return <Money value={employee.salary_base} />;
+function MediaMensalCell({ employee }: { employee: Employee }) {
+  const [aberto, setAberto] = useState(false);
+  const media = employee.payroll_average;
+  if (!media) {
+    const porHora = Number(employee.pj_hours_per_month ?? 0) > 0;
+    if (porHora || !employee.salary_base) {
+      return <span className="text-slate-400" title="Nenhum mês pago no Contas a Pagar ainda">—</span>;
+    }
+    return (
+      <div title="Nenhum mês pago no Contas a Pagar ainda — valor do cadastro">
+        <Money value={employee.salary_base} className="italic text-slate-500" />
+        <p className="text-right text-[10px] leading-tight text-slate-400">cadastro</p>
+      </div>
+    );
+  }
+  const n = media.months.length;
   return (
-    <div
-      className="space-y-1"
-      title="Referência para quem recebe por hora: valor-hora × 8h × 22 dias. Não entra nos custos dos projetos."
-    >
-      {refs.map((r, i) => (
-        <div key={i}>
-          <Money value={r.monthly_reference} className="italic text-slate-500" />
-          <p className="text-right text-[10px] leading-tight text-slate-400">
-            {formatCurrencyOrDash(r.hourly_rate)}/h × {r.reference_hours}h
-            {refs.length > 1 && (r.project_name || r.cost_center) ? ` · ${r.project_name ?? r.cost_center}` : ""}
-          </p>
-        </div>
-      ))}
+    <div className="text-right">
+      <button type="button" onClick={() => setAberto((v) => !v)} className="w-full text-right">
+        <Money value={media.average} />
+        <span className="block text-[10px] leading-tight text-indigo-600">
+          média de {n} {n === 1 ? "mês" : "meses"} {aberto ? "▴" : "▾"}
+        </span>
+      </button>
+      {aberto && (
+        <table className="ml-auto mt-1 text-[11px] tabular-nums text-slate-600">
+          <thead>
+            <tr className="text-slate-400">
+              <th className="pr-3 text-left font-normal">Mês</th>
+              <th className="text-right font-normal">Pago</th>
+            </tr>
+          </thead>
+          <tbody>
+            {media.months.map((m) => (
+              <tr key={m.month}>
+                <td className="pr-3 text-left">{monthLabel(m.month)}</td>
+                <td>{formatCurrencyOrDash(m.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
@@ -928,7 +954,12 @@ export function Employees() {
                   <th className="px-4 py-3 font-medium text-slate-600">Centro de Custo</th>
                   {canSeeSensitive && (
                     <>
-                      <th className="px-4 py-3 text-right font-medium text-slate-600">Salário base</th>
+                      <th
+                        className="px-4 py-3 text-right font-medium text-slate-600"
+                        title="Média do que foi pago no Contas a Pagar (salário, benefícios CLT, VT, ajuda de custo e premiação de PJ). Não entra nos custos dos projetos."
+                      >
+                        Média mensal
+                      </th>
                       <th className="px-4 py-3 text-right font-medium text-slate-600">Custo mês</th>
                     </>
                   )}
@@ -957,7 +988,7 @@ export function Employees() {
                     {canSeeSensitive && (
                       <>
                         <td className="px-4 py-3 text-slate-700">
-                          <SalarioBaseCell employee={emp} />
+                          <MediaMensalCell employee={emp} />
                         </td>
                         <td className="px-4 py-3 font-medium text-slate-900">
                           <Money value={emp.total_cost} />

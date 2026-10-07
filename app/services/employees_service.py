@@ -16,7 +16,7 @@ from app.models.payable_snapshot import PayableSnapshot, PayableSnapshotType
 from app.models.project_operational import ProjectLabor
 from app.models.user import User
 from app.repositories.employees import EmployeeRepository
-from app.schemas.employees import EmployeeRead, HourlyReferenceRead
+from app.schemas.employees import EmployeeRead, PayrollAverageRead
 from app.services.audit_service import AuditService
 from app.services.employee_cost_service import calculate_clt_cost, calculate_pj_total_cost
 from app.services.payable_snapshot_service import PayableSnapshotService
@@ -110,72 +110,96 @@ class EmployeesService:
                 out.setdefault(emp_id, set()).add(nome)
         return out
 
-    #: 8h × 22 dias — base do salário de REFERÊNCIA de quem recebe por hora.
-    REFERENCE_HOURS_PER_MONTH = 8 * 22
+    #: Componentes da folha que NÃO entram na média (eventuais, distorcem o mês).
+    PAYROLL_AVERAGE_EXCLUDED_LABELS = frozenset({"Férias CLT", "Rescisão CLT"})
 
-    async def hourly_references(self, employees: list) -> dict:
-        """Salário de referência (valor-hora × 176h) de quem recebe por hora, por colaborador.
+    async def payroll_averages(self, employees: list) -> dict:
+        """Remuneração média mensal de cada colaborador, apurada no Contas a Pagar.
 
-        Só EXIBIÇÃO na relação de colaboradores (pedido da diretoria: "quanto seria o salário").
-        Não grava nada e não alimenta custo algum — Mão de Obra, Contas a Pagar e folha seguem
-        vindo do que o gestor lança no projeto.
+        Só EXIBIÇÃO na relação de colaboradores (substitui a antiga estimativa valor-hora × 176h,
+        que errava para quem tem salário fixo). Não grava nada e não alimenta custo algum.
 
-        Fonte do valor-hora: as alocações ATIVAS com horas definidas (uma linha por contrato);
-        na falta, o cadastro PJ com horas/mês (ali `salary_base` já é valor-hora).
+        Fontes (todas ligadas ao colaborador, nunca por nome):
+          - Mão de obra do projeto (COLLABORATOR, ref_id = colaborador), exceto Férias/Rescisão;
+          - Custos Fixos com colaborador vinculado (item.employee_id) — quem é pago pela matriz;
+          - Componentes variáveis: Ajuda de custo sempre; Premiação só de PJ. Reembolso e
+            "Outros pagamentos" ficam fora.
+        Valor do mês = o que foi EFETIVAMENTE PAGO (amount_paid), não o valor do título: há quem
+        receba sistematicamente menos que o título, que fica "parcial" para sempre (ex.: título de
+        12 mil, 11 mil pagos) — exigir quitação descartava esses meses. Mês sem pagamento (o mês
+        em aberto) não entra. Mês = mês do CAP; rateio entre projetos é somado.
         """
-        ids = [e.id for e in employees if e is not None and e.id is not None]
-        if not ids:
-            return {}
-        from app.models.employee_assignment import AssignmentStatus, EmployeeAssignment
-        from app.models.project import Project
+        from collections import defaultdict
 
-        horas = float(self.REFERENCE_HOURS_PER_MONTH)
+        from app.models.payment_component import PaymentComponentType, PaymentVariableComponent
+        from app.services.payable_snapshot_service import _collaborator_payable_component_label
+
+        by_id = {e.id: e for e in employees if e is not None and e.id is not None}
+        if not by_id:
+            return {}
+        ids = list(by_id)
+        cols = (PayableSnapshot.month, PayableSnapshot.amount_final, PayableSnapshot.amount_paid)
+        vivo = PayableSnapshot.is_obsolete.is_(False)
+        linhas: list[tuple] = []
+
+        labor = await self.session.execute(
+            select(PayableSnapshot.ref_id, PayableSnapshot.name, *cols).where(
+                vivo,
+                PayableSnapshot.type == PayableSnapshotType.COLLABORATOR,
+                PayableSnapshot.ref_id.in_(ids),
+                func.coalesce(PayableSnapshot.origin, "") != "VARIABLE",
+            )
+        )
+        for emp_id, nome, mes, final, pago in labor.all():
+            if _collaborator_payable_component_label(nome) in self.PAYROLL_AVERAGE_EXCLUDED_LABELS:
+                continue
+            linhas.append((emp_id, mes, final, pago))
+
+        fixos = await self.session.execute(
+            select(CompanyFinancialItem.employee_id, *cols)
+            .join(CompanyFinancialItem, CompanyFinancialItem.id == PayableSnapshot.ref_id)
+            .where(
+                vivo,
+                PayableSnapshot.type == PayableSnapshotType.FIXED_COST,
+                func.coalesce(PayableSnapshot.origin, "") != "VARIABLE",
+                CompanyFinancialItem.employee_id.in_(ids),
+            )
+        )
+        linhas.extend(fixos.all())
+
+        variaveis = await self.session.execute(
+            select(PaymentVariableComponent.employee_id, PaymentComponentType.code, *cols)
+            .join(PaymentVariableComponent, PaymentVariableComponent.id == PayableSnapshot.ref_id)
+            .join(PaymentComponentType, PaymentComponentType.id == PaymentVariableComponent.type_id)
+            .where(
+                vivo,
+                PayableSnapshot.origin == "VARIABLE",
+                PaymentVariableComponent.employee_id.in_(ids),
+            )
+        )
+        for emp_id, code, mes, final, pago in variaveis.all():
+            pj = (by_id[emp_id].employment_type or "").strip().upper() == "PJ"
+            if code == "ajuda_custo" or (code == "premiacao" and pj):
+                linhas.append((emp_id, mes, final, pago))
+
+        meses: dict = defaultdict(lambda: defaultdict(float))
+        for emp_id, mes, _final, pago in linhas:
+            meses[emp_id][mes] += float(pago or 0)
+
         out: dict = {}
-        rows = (
-            await self.session.execute(
-                select(
-                    EmployeeAssignment.employee_id,
-                    EmployeeAssignment.salary_base,
-                    EmployeeAssignment.cost_center,
-                    Project.name,
+        for emp_id, por_mes in meses.items():
+            soma, n, serie = 0.0, 0, []
+            for mes in sorted(por_mes):
+                valor = por_mes[mes]
+                if valor <= 0:
+                    continue
+                soma += valor
+                n += 1
+                serie.append(
+                    {"month": mes, "amount": round(valor, 2), "running_average": round(soma / n, 2)}
                 )
-                .outerjoin(Project, Project.id == EmployeeAssignment.project_id)
-                .where(
-                    EmployeeAssignment.employee_id.in_(ids),
-                    EmployeeAssignment.status == AssignmentStatus.ATIVA,
-                    EmployeeAssignment.hours_per_month.is_not(None),
-                    EmployeeAssignment.salary_base.is_not(None),
-                )
-                .order_by(EmployeeAssignment.created_at)
-            )
-        ).all()
-        for emp_id, valor_hora, cc, projeto in rows:
-            v = float(valor_hora)
-            if v <= 0:
-                continue
-            out.setdefault(emp_id, []).append(
-                {
-                    "hourly_rate": v,
-                    "reference_hours": horas,
-                    "monthly_reference": round(v * horas, 2),
-                    "cost_center": (cc or "").strip() or None,
-                    "project_name": (projeto or "").strip() or None,
-                }
-            )
-        for emp in employees:
-            if emp.id in out or emp.employment_type != "PJ":
-                continue
-            if emp.salary_base and emp.pj_hours_per_month and float(emp.pj_hours_per_month) > 0:
-                v = float(emp.salary_base)
-                out[emp.id] = [
-                    {
-                        "hourly_rate": v,
-                        "reference_hours": horas,
-                        "monthly_reference": round(v * horas, 2),
-                        "cost_center": None,
-                        "project_name": None,
-                    }
-                ]
+            if serie:
+                out[emp_id] = {"average": serie[-1]["running_average"], "months": serie}
         return out
 
     async def labor_kinds(self, employee_ids: list, *, competencia: date) -> dict:
@@ -285,13 +309,13 @@ class EmployeesService:
             tc = calculate_pj_total_cost(emp)
         alocados = (await self.active_assignment_cost_centers([emp.id])).get(emp.id)
         kinds = await self.labor_kinds([emp.id], competencia=competencia)
-        referencias = (await self.hourly_references([emp])).get(emp.id, [])
+        media = (await self.payroll_averages([emp])).get(emp.id)
         base = EmployeeRead.model_validate(emp)
         return base.model_copy(
             update={
                 "total_cost": tc,
                 "cost_centers": self._merge_cost_centers(emp.cost_center, alocados),
-                "hourly_reference": [HourlyReferenceRead(**r) for r in referencias],
+                "payroll_average": PayrollAverageRead(**media) if media else None,
                 **kinds.get(emp.id, {}),
             }
         )
@@ -320,7 +344,7 @@ class EmployeesService:
         y, m = competencia.year, competencia.month
         centros = await self.active_assignment_cost_centers([e.id for e in rows])
         kinds = await self.labor_kinds([e.id for e in rows], competencia=competencia)
-        referencias = await self.hourly_references(rows)
+        medias = await self.payroll_averages(rows)
         out: list[EmployeeRead] = []
         for emp in rows:
             if emp.employment_type == "CLT":
@@ -332,9 +356,9 @@ class EmployeesService:
                     update={
                         "total_cost": tc,
                         "cost_centers": self._merge_cost_centers(emp.cost_center, centros.get(emp.id)),
-                        "hourly_reference": [
-                            HourlyReferenceRead(**r) for r in referencias.get(emp.id, [])
-                        ],
+                        "payroll_average": (
+                            PayrollAverageRead(**medias[emp.id]) if emp.id in medias else None
+                        ),
                         **kinds.get(emp.id, {}),
                     }
                 )
