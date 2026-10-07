@@ -78,6 +78,8 @@ class EmployeeMonthlyPayrollService:
             row.vr_amount = data["vr_amount"]
             row.vt_amount = data["vt_amount"]
             row.vacation_advance_amount = data["vacation_advance_amount"]
+            row.is_termination = data["is_termination"]
+            row.termination_amount = data["termination_amount"]
             row.notes = data["notes"]
 
         await self.session.flush()

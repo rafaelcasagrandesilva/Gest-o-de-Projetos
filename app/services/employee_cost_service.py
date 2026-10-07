@@ -261,6 +261,7 @@ CLT_PAYABLE_LABEL_SALARY = "Salário CLT"
 CLT_PAYABLE_LABEL_BENEFIT = "Benefício CLT"
 CLT_PAYABLE_LABEL_TRANSPORT = "Vale Transporte CLT"
 CLT_PAYABLE_LABEL_VACATION = "Férias CLT"
+CLT_PAYABLE_LABEL_TERMINATION = "Rescisão CLT"
 
 
 def clt_payable_components_from_monthly_override(payroll_override: Any | None) -> list[tuple[str, float]] | None:
@@ -271,12 +272,17 @@ def clt_payable_components_from_monthly_override(payroll_override: Any | None) -
     Cada componente vira um lançamento independente no Contas a Pagar (não são somados
     entre si). Férias (adiantamento) segue exatamente o mesmo fluxo de Salário/Benefício:
     só gera linha quando o valor é positivo; campo vazio → nenhum lançamento.
+
+    Rescisão (`is_termination`): o mês não tem "Salário CLT"; o valor da rescisão, se houver,
+    vira o lançamento "Rescisão CLT" (ignorado com a marcação desligada). Devolve a lista mesmo
+    VAZIA (nunca None), senão o chamador voltaria ao salário do cadastro.
     """
     if payroll_override is None:
         return None
+    is_termination = bool(getattr(payroll_override, "is_termination", False))
     lines: list[tuple[str, float]] = []
     net = getattr(payroll_override, "net_salary_amount", None)
-    if net is not None:
+    if net is not None and not is_termination:
         v = float(net)
         if v > 0:
             lines.append((CLT_PAYABLE_LABEL_SALARY, v))
@@ -295,6 +301,13 @@ def clt_payable_components_from_monthly_override(payroll_override: Any | None) -
         v = float(vacation)
         if v > 0:
             lines.append((CLT_PAYABLE_LABEL_VACATION, v))
+    if is_termination:
+        termination = getattr(payroll_override, "termination_amount", None)
+        if termination is not None:
+            v = float(termination)
+            if v > 0:
+                lines.append((CLT_PAYABLE_LABEL_TERMINATION, v))
+        return lines
     return lines if lines else None
 
 

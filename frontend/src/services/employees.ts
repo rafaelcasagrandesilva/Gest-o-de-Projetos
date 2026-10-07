@@ -1,13 +1,13 @@
 import { isAxiosError } from "axios";
 import { api } from "./api";
 
-/** Salário de REFERÊNCIA de quem recebe por hora (valor-hora × 8h × 22 dias). Só exibição. */
-export interface HourlyReference {
-  hourly_rate: number;
-  reference_hours: number;
-  monthly_reference: number;
-  cost_center: string | null;
-  project_name: string | null;
+/**
+ * Remuneração média mensal apurada no Contas a Pagar (só exibição). Entra salário, benefícios
+ * CLT, VT, ajuda de custo e premiação de PJ; só meses com tudo pago.
+ */
+export interface PayrollAverage {
+  average: number;
+  months: { month: string; amount: number; running_average: number }[];
 }
 
 export interface Employee {
@@ -44,7 +44,7 @@ export interface Employee {
   pj_hours_per_month: number | null;
   pj_additional_cost: number;
   /** Quem recebe por hora: referência por contrato. Omitido sem employees.sensitive. */
-  hourly_reference?: HourlyReference[] | null;
+  payroll_average?: PayrollAverage | null;
 }
 
 export interface EmployeeCreate {
@@ -149,6 +149,8 @@ export interface EmployeeMonthlyPayrollOverride {
   vr_amount: number | null;
   vt_amount: number | null;
   vacation_advance_amount: number | null;
+  is_termination: boolean;
+  termination_amount: number | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -159,6 +161,8 @@ export interface EmployeeMonthlyPayrollUpsert {
   vr_amount?: number | null;
   vt_amount?: number | null;
   vacation_advance_amount?: number | null;
+  is_termination?: boolean;
+  termination_amount?: number | null;
   notes?: string | null;
 }
 
