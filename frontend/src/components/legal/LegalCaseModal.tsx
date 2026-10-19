@@ -4,6 +4,7 @@ import { LegalCaseTimeline } from "@/components/legal/LegalCaseTimeline";
 import { usePermission } from "@/hooks/usePermission";
 import { LEGAL_STATUS_LABELS, LEGAL_TYPE_LABELS, type LegalCase } from "@/services/legal";
 import { EVENT_TYPE_LABELS, listEvents, type LegalEvent } from "@/services/legalOperation";
+import { useBackdropClose } from "@/hooks/useBackdropClose";
 
 /**
  * Ficha 360° do processo — a central operacional do caso, não um formulário de cadastro.
@@ -68,6 +69,7 @@ export function LegalCaseModal({
   onClose: () => void;
   onOpenPerson?: (personId: string) => void;
 }) {
+  const fundo = useBackdropClose(onClose);
   const c = legalCase;
   const canWriteTimeline = usePermission("legal_cases.update");
   const [eventos, setEventos] = useState<LegalEvent[]>([]);
@@ -115,11 +117,10 @@ export function LegalCaseModal({
       role="dialog"
       aria-modal="true"
       aria-label={`Processo ${c.case_number}`}
-      onClick={onClose}
+      {...fundo}
     >
       <div
         className="my-8 w-full max-w-5xl rounded-xl bg-white shadow-xl"
-        onClick={(e) => e.stopPropagation()}
       >
         {/* -------- Cabeçalho -------- */}
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4">

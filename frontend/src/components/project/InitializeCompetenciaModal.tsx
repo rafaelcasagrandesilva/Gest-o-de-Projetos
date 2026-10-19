@@ -6,6 +6,7 @@ import {
   type InitializeCompetenciaResult,
   type InitializeOrigin,
 } from "@/services/projectStructure";
+import { useBackdropClose } from "@/hooks/useBackdropClose";
 
 const MONTHS_PT = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -49,6 +50,9 @@ export function InitializeCompetenciaModal({
   targetScenario: "PREVISTO" | "REALIZADO";
   onDone: (result: InitializeCompetenciaResult) => void;
 }) {
+  const fundo = useBackdropClose(() => {
+    if (!busy) onClose();
+  });
   const [origin, setOrigin] = useState<InitializeOrigin>("previous_realizado");
   const [selected, setSelected] = useState<Set<CostCategory>>(
     () => new Set<CostCategory>(CATEGORIES.map((c) => c.id)),
@@ -131,9 +135,7 @@ export function InitializeCompetenciaModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
       role="dialog"
       aria-modal="true"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
-      }}
+      {...fundo}
     >
       <div className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
         <div className="border-b border-slate-200 px-5 py-4">

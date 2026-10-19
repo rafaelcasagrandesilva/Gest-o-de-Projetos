@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useBackdropClose } from "@/hooks/useBackdropClose";
 
 /**
  * Modal quase full-screen reutilizável para "expandir" gráficos/painéis dos
@@ -23,6 +24,7 @@ export function DashboardModal({
   /** Ocupa a janela inteira (sem margem nem backdrop visível) — "Tela cheia". */
   fullScreen?: boolean;
 }) {
+  const fundo = useBackdropClose(onClose);
   useEffect(() => {
     if (!open) return;
     function onEsc(e: KeyboardEvent) {
@@ -49,9 +51,7 @@ export function DashboardModal({
           ? "fixed inset-0 z-50 flex bg-white"
           : "fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-3 sm:p-6"
       }
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      {...fundo}
       role="dialog"
       aria-modal="true"
     >

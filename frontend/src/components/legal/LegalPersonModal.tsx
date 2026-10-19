@@ -2,6 +2,7 @@ import { Money } from "@/components/Money";
 import { LegalPersonDocuments } from "@/components/legal/LegalPersonDocuments";
 import { DetailMoney, DetailRow, StatusPill, formatCount, formatDateBR } from "@/components/legal/LegalPanelPieces";
 import { LEGAL_STATUS_LABELS, type LegalCase, type LegalPersonDetail } from "@/services/legal";
+import { useBackdropClose } from "@/hooks/useBackdropClose";
 
 /**
  * Ficha da pessoa: dados pessoais/contratuais, totais derivados dos processos e a LISTA
@@ -19,17 +20,17 @@ export function LegalPersonModal({
   onOpenCase: (legalCase: LegalCase) => void;
   onSeeAllCases?: (personId: string) => void;
 }) {
+  const fundo = useBackdropClose(onClose);
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4"
       role="dialog"
       aria-modal="true"
       aria-label={`Pessoa ${person.full_name}`}
-      onClick={onClose}
+      {...fundo}
     >
       <div
         className="my-8 w-full max-w-4xl rounded-xl bg-white shadow-xl"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div className="min-w-0">

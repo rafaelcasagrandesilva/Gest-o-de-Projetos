@@ -41,6 +41,7 @@ import {
   normalizeCurrencyForApi,
   sanitizeCurrencyTyping,
 } from "@/utils/currency";
+import { useBackdropClose } from "@/hooks/useBackdropClose";
 
 function formatDateBr(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -671,6 +672,7 @@ function ExtendDueModal({
   onChanged: (atualizadas: Obligation[]) => Promise<void> | void;
   onDone: () => void;
 }) {
+  const fundo = useBackdropClose(onClose);
   const [novaData, setNovaData] = useState("");
   const [custo, setCusto] = useState("");
   const [pagoEm, setPagoEm] = useState(todayIso());
@@ -719,8 +721,8 @@ function ExtendDueModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={onClose}>
-      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" {...fundo}>
+      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-xl">
         <div className="flex items-start justify-between border-b border-slate-200 p-4">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">
@@ -911,6 +913,7 @@ function SettlementModal({
   onClose: () => void;
   onChanged: (o: Obligation) => Promise<void> | void;
 }) {
+  const fundo = useBackdropClose(onClose);
   const isSettled = obligation.situacao === "LIQUIDADA";
   const editable = canEdit && !isSettled;
   const [rows, setRows] = useState<MovRow[]>([
@@ -1011,10 +1014,9 @@ function SettlementModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" {...fundo}>
       <div
         className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white shadow-xl"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between border-b border-slate-200 p-4">
           <div>
@@ -1316,6 +1318,7 @@ function MassSettlementModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const fundo = useBackdropClose(onClose);
   const [institutionId, setInstitutionId] = useState(institutions[0]?.id ?? "");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [amounts, setAmounts] = useState<Record<string, string>>({});
@@ -1398,8 +1401,8 @@ function MassSettlementModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={onClose}>
-      <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" {...fundo}>
+      <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white shadow-xl">
         <div className="flex items-start justify-between border-b border-slate-200 p-4">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Liquidação em massa</h2>
@@ -1571,11 +1574,13 @@ function SettlementEventsModal({
   institutions: { id: string; name: string }[];
   onClose: () => void;
 }) {
+  const fundo = useBackdropClose(onClose);
   const [instId, setInstId] = useState<string>("");
   const [events, setEvents] = useState<SettlementEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [detail, setDetail] = useState<SettlementEventDetail | null>(null);
+  const fundoDetalhe = useBackdropClose(() => setDetail(null));
   const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
@@ -1603,8 +1608,8 @@ function SettlementEventsModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={onClose}>
-      <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" {...fundo}>
+      <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white shadow-xl">
         <div className="flex items-start justify-between border-b border-slate-200 p-4">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Extrato de Liquidações</h2>
@@ -1670,8 +1675,8 @@ function SettlementEventsModal({
       </div>
 
       {(detail || detailLoading) && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={() => setDetail(null)}>
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-2 sm:p-4" {...fundoDetalhe}>
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-xl">
             <div className="flex items-start justify-between border-b border-slate-200 p-4">
               <h3 className="text-base font-semibold text-slate-900">
                 Evento {detail ? detail.code : ""}

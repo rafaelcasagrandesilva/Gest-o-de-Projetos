@@ -10,6 +10,7 @@ import {
   type Commitment,
   type MeetingOption,
 } from "@/services/projectAgenda";
+import { useBackdropClose } from "@/hooks/useBackdropClose";
 
 /**
  * Caixas de diálogo da Agenda — do próprio sistema, nunca `window.prompt`/`confirm` do navegador.
@@ -36,13 +37,13 @@ export function Dialog({
   onClose: () => void;
   wide?: boolean | "xl";
 }) {
+  const fundo = useBackdropClose(onClose);
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/40 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/40 p-4" {...fundo}>
       <div
         className={`my-10 w-full rounded-xl bg-white shadow-xl ${
           wide === "xl" ? "max-w-4xl" : wide ? "max-w-2xl" : "max-w-lg"
         }`}
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
           <div className="min-w-0">

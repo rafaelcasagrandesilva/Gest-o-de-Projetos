@@ -16,6 +16,7 @@ import { formatCurrency, normalizeCurrencyForApi, sanitizeCurrencyTyping } from 
 import { Money } from "@/components/Money";
 import { PageSizeSelect, TablePager } from "@/components/table";
 import { usePagination } from "@/hooks/usePagination";
+import { useBackdropClose } from "@/hooks/useBackdropClose";
 
 function formatDateBr(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -38,6 +39,7 @@ export function RepasseLedgerModal({
   canEdit: boolean;
   onClose: () => void;
 }) {
+  const fundo = useBackdropClose(onClose);
   const [instId, setInstId] = useState<string>(institutions[0]?.id ?? "");
   const [statement, setStatement] = useState<LedgerStatement | null>(null);
   const [loading, setLoading] = useState(false);
@@ -101,10 +103,9 @@ export function RepasseLedgerModal({
   const pagination = usePagination(entries);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" {...fundo}>
       <div
         className="max-h-[92vh] w-full max-w-6xl overflow-y-auto rounded-xl bg-white shadow-xl"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between border-b border-slate-200 p-4">
           <div>
@@ -287,6 +288,7 @@ function WithdrawalModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const fundo = useBackdropClose(onClose);
   const [occurredAt, setOccurredAt] = useState(todayIso());
   const [amount, setAmount] = useState("");
   const [purpose, setPurpose] = useState<WithdrawalPurpose>("DEBT_REDUCTION");
@@ -338,8 +340,8 @@ function WithdrawalModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-2 sm:p-4" {...fundo}>
+      <div className="w-full max-w-md rounded-xl bg-white shadow-xl">
         <div className="flex items-start justify-between border-b border-slate-200 p-4">
           <div>
             <h3 className="text-base font-semibold text-slate-900">Registrar retirada</h3>
