@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatApiError } from "@/utils/apiError";
 import { createEvent, EVENT_TYPES } from "@/services/legalOperation";
 import { listLegalCases, type LegalCase } from "@/services/legal";
+import { useBackdropClose } from "@/hooks/useBackdropClose";
 
 /**
  * Cadastro de compromisso. Vinculado a um processo (opcional) porque nem todo compromisso
@@ -16,6 +17,7 @@ export function LegalEventForm({
   onCreated: () => void;
   initialDate?: Date;
 }) {
+  const fundo = useBackdropClose(onClose);
   const [title, setTitle] = useState("");
   const [type, setType] = useState("AUDIENCIA");
   const [date, setDate] = useState(() => (initialDate ?? new Date()).toISOString().slice(0, 10));
@@ -77,9 +79,9 @@ export function LegalEventForm({
       role="dialog"
       aria-modal="true"
       aria-label="Novo compromisso"
-      onClick={onClose}
+      {...fundo}
     >
-      <div className="my-10 w-full max-w-xl rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="my-10 w-full max-w-xl rounded-xl bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <h2 className="text-lg font-semibold text-slate-900">Novo compromisso</h2>
           <button

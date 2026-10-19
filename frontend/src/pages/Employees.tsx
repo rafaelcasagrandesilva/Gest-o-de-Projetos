@@ -28,6 +28,7 @@ import { TruncatedCell } from "@/components/TruncatedText";
 import { formatCurrencyOrDash, parseCurrencyInput } from "@/utils/currency";
 import { Money } from "@/components/Money";
 import { monthLabel } from "@/utils/roiFormat";
+import { useBackdropClose } from "@/hooks/useBackdropClose";
 
 function monthStartIso(): string {
   const d = new Date();
@@ -724,6 +725,7 @@ export function Employees() {
   );
   // UI/UX: cadastro em Drawer (oculto por padrão).
   const [showNewDrawer, setShowNewDrawer] = useState(false);
+  const fundoGaveta = useBackdropClose(() => setShowNewDrawer(false));
   // Ponto de entrada de "Histórico" do colaborador (placeholder preparado para evolução futura).
   const [historyEmp, setHistoryEmp] = useState<Employee | null>(null);
 
@@ -1068,9 +1070,7 @@ export function Employees() {
           className="fixed inset-0 z-50 flex justify-end bg-black/40"
           role="dialog"
           aria-modal="true"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setShowNewDrawer(false);
-          }}
+          {...fundoGaveta}
         >
           <div className="flex h-full w-full max-w-xl flex-col overflow-hidden bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
@@ -1125,6 +1125,7 @@ export function Employees() {
  * consulta APIs — apenas a estrutura de UI para ser preenchida em uma etapa posterior.
  */
 function EmployeeHistoryModal({ emp, onClose }: { emp: Employee; onClose: () => void }) {
+  const fundo = useBackdropClose(onClose);
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -1138,9 +1139,7 @@ function EmployeeHistoryModal({ emp, onClose }: { emp: Employee; onClose: () => 
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
       role="dialog"
       aria-modal="true"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      {...fundo}
     >
       <div className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
