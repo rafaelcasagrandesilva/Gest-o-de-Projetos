@@ -93,6 +93,7 @@ export function Settings() {
   const [regimes, setRegimes] = useState<TaxRegimePeriod[]>([]);
   const [regimeError, setRegimeError] = useState<string | null>(null);
   const [regimeBusy, setRegimeBusy] = useState(false);
+  const [nfTaxesBusy, setNfTaxesBusy] = useState(false);
   const [newRegime, setNewRegime] = useState<TaxRegime>("LUCRO_REAL");
   const [newRegimeMonth, setNewRegimeMonth] = useState("");
   const [newRegimeNote, setNewRegimeNote] = useState("");
@@ -179,6 +180,24 @@ export function Settings() {
       setError(formatApiError(e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  /**
+   * Liga/desliga a simulação "só impostos da NF" e SALVA NA HORA — é uma chave de apresentação,
+   * não precisa do "Salvar" do formulário (que também não a envia, para não desfazê-la).
+   */
+  async function handleToggleNfTaxes(next: boolean) {
+    if (!canEditSettings || !s) return;
+    setNfTaxesBusy(true);
+    setRegimeError(null);
+    try {
+      const saved = await updateSettings({ nf_taxes_only: next });
+      setS((prev) => (prev ? { ...prev, nf_taxes_only: saved.nf_taxes_only } : saved));
+    } catch (e) {
+      setRegimeError(formatApiError(e));
+    } finally {
+      setNfTaxesBusy(false);
     }
   }
 
@@ -408,6 +427,32 @@ export function Settings() {
                 cada competência. Para mudar de regime, adicione um novo período com a data em que a mudança passa a
                 valer — os meses anteriores continuam no regime antigo.
               </p>
+
+              <label
+                className={`mb-4 flex items-start gap-3 rounded-lg border px-4 py-3 ${
+                  s.nf_taxes_only ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50/60"
+                } ${canEditSettings ? "cursor-pointer" : "cursor-not-allowed opacity-70"}`}
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 accent-amber-600"
+                  checked={s.nf_taxes_only}
+                  disabled={!canEditSettings || nfTaxesBusy}
+                  onChange={(e) => void handleToggleNfTaxes(e.target.checked)}
+                />
+                <span>
+                  <span className="block text-sm font-medium text-slate-800">
+                    Simular só os impostos da NF (6,15%)
+                    {nfTaxesBusy ? <span className="ml-2 text-xs text-slate-400">salvando…</span> : null}
+                  </span>
+                  <span className="block text-xs text-slate-500">
+                    Marcado, todo o sistema calcula os impostos apenas pelas retenções da nota — IR 1,5%, CSLL 1%,
+                    PIS 0,65% e COFINS 3% — em todas as competências, sem ISS, adicional ou IRPJ/CSLL sobre o lucro.
+                    Os parâmetros abaixo não são alterados: desmarque para voltar ao cálculo pelo regime. Vale para
+                    todos os usuários e salva na hora.
+                  </span>
+                </span>
+              </label>
 
               {regimeError && (
                 <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
