@@ -25,6 +25,8 @@ export interface SystemSettings {
   cofins_real_rate: number;
   /** Créditos estimados de PIS/COFINS no Lucro Real, como fração da receita. */
   pis_cofins_credit_rate: number;
+  /** Simulação: tributos só pelas retenções da NF (6,15%), sem mexer nos parâmetros do regime. */
+  nf_taxes_only: boolean;
   vehicle_light_cost: number;
   vehicle_pickup_cost: number;
   vehicle_sedan_cost: number;

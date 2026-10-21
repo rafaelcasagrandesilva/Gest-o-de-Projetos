@@ -16,6 +16,11 @@ Lucro Real:
 
 As retenções de 6,15% na NF (IR, CSLL, PIS, COFINS) são ANTECIPAÇÃO desses mesmos tributos, não um
 custo a mais: o custo é o tributo devido, pago na fonte ou em guia.
+
+Simulação "só impostos da NF" (`nf_taxes_only`): ligada, o tributo passa a ser APENAS o retido na
+nota (IR 1,5% · CSLL 1% · PIS 0,65% · COFINS 3% = 6,15% da receita), sem ISS, sem adicional e sem
+IRPJ/CSLL sobre o lucro — qualquer que seja o regime. Serve para comparar com o que a empresa
+efetivamente recolhe hoje; desligada, nada muda no cálculo pelo regime.
 """
 
 from __future__ import annotations
@@ -46,6 +51,11 @@ _DEFAULTS = {
 }
 
 
+# Retenções federais destacadas na NF de serviço (fração da receita bruta).
+NF_WITHHOLDING_RATES = {"irpj": 0.015, "csll": 0.01, "pis": 0.0065, "cofins": 0.03}
+NF_TAX_RATE = sum(NF_WITHHOLDING_RATES.values())
+
+
 @dataclass(frozen=True)
 class RevenueTaxes:
     regime: str | None  # None = sem regime cadastrado (percentual de reserva)
@@ -59,6 +69,10 @@ class RevenueTaxes:
     @property
     def total(self) -> float:
         return self.pis + self.cofins + self.iss + self.irpj + self.csll + self.other
+
+
+def nf_taxes_only(settings) -> bool:
+    return bool(getattr(settings, "nf_taxes_only", False))
 
 
 def _p(settings, name: str) -> float:
@@ -82,6 +96,8 @@ def revenue_taxes(*, regime: str | None, settings, revenue: float, company_reven
     revenue = float(revenue or 0)
     if revenue <= 0:
         return RevenueTaxes(regime)
+    if nf_taxes_only(settings):
+        return RevenueTaxes(regime, **{k: revenue * rate for k, rate in NF_WITHHOLDING_RATES.items()})
     if regime is None:
         return RevenueTaxes(None, other=revenue * _p(settings, "tax_rate"))
     iss = revenue * _p(settings, "iss_rate")
@@ -115,7 +131,7 @@ def revenue_taxes(*, regime: str | None, settings, revenue: float, company_reven
 def profit_taxes_real(*, settings, taxable_profit: float) -> tuple[float, float]:
     """(IRPJ, CSLL) do Lucro Real sobre o lucro mensal da empresa; zero no prejuízo."""
     profit = float(taxable_profit or 0)
-    if profit <= 0:
+    if profit <= 0 or nf_taxes_only(settings):
         return 0.0, 0.0
     irpj = profit * _p(settings, "irpj_rate") + max(
         profit - _p(settings, "irpj_additional_monthly_threshold"), 0.0

@@ -51,6 +51,7 @@ class SystemSettingsRead(UUIDTimestampRead):
     pis_real_rate: float
     cofins_real_rate: float
     pis_cofins_credit_rate: float
+    nf_taxes_only: bool = False
     vehicle_light_cost: float = Field(
         description="Padrão leve (R$/mês) — sugerido no cadastro de veículo (leve_default_cost).",
     )
@@ -88,6 +89,7 @@ class SystemSettingsUpdate(BaseModel):
     pis_real_rate: float | None = Field(default=None, ge=0)
     cofins_real_rate: float | None = Field(default=None, ge=0)
     pis_cofins_credit_rate: float | None = Field(default=None, ge=0)
+    nf_taxes_only: bool | None = None
     vehicle_light_cost: float | None = Field(default=None, ge=0)
     vehicle_pickup_cost: float | None = Field(default=None, ge=0)
     vehicle_sedan_cost: float | None = Field(default=None, ge=0)

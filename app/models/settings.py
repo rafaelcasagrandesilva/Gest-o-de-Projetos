@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Numeric, String
+from sqlalchemy import Boolean, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampUUIDMixin
@@ -67,6 +67,12 @@ class SystemSettings(TimestampUUIDMixin, Base):
     # Créditos estimados de PIS/COFINS no Lucro Real, como fração da receita.
     pis_cofins_credit_rate: Mapped[float] = mapped_column(
         Numeric(8, 6), default=0, server_default="0.000000", nullable=False
+    )
+    # Simulação "só impostos da NF": ligada, TODO o sistema calcula os tributos pelas retenções da
+    # nota (6,15%) em vez do regime. Os parâmetros do regime acima ficam intactos — desligar volta
+    # exatamente ao cálculo anterior.
+    nf_taxes_only: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
     )
 
     vehicle_light_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0, nullable=False)

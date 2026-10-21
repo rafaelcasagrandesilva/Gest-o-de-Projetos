@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from app.services.tax_calc import (
     LUCRO_PRESUMIDO,
     LUCRO_REAL,
+    NF_TAX_RATE,
     profit_taxes_real,
     regime_for_competencia,
     revenue_taxes,
@@ -63,6 +64,33 @@ class RealTests(unittest.TestCase):
         irpj, csll = profit_taxes_real(settings=SETTINGS, taxable_profit=100_000)
         self.assertAlmostEqual(irpj, 15_000 + 8_000)  # 15% + 10% sobre o que passa de 20 mil
         self.assertAlmostEqual(csll, 9_000)
+
+
+class NfTaxesOnlyTests(unittest.TestCase):
+    """Simulação "só impostos da NF": 6,15% da receita, qualquer regime, sem tributo sobre o lucro."""
+
+    NF = SimpleNamespace(tax_rate=0.09, nf_taxes_only=True)
+
+    def test_retencoes_somam_6_15(self) -> None:
+        self.assertAlmostEqual(NF_TAX_RATE, 0.0615)
+
+    def test_presumido_vira_so_retencao_mesmo_com_adicional(self) -> None:
+        t = revenue_taxes(regime=LUCRO_PRESUMIDO, settings=self.NF, revenue=100_000, company_revenue=1_000_000)
+        self.assertAlmostEqual((t.pis, t.cofins, t.iss, t.irpj, t.csll), (650, 3_000, 0, 1_500, 1_000))
+        self.assertAlmostEqual(t.total, 6_150)
+        self.assertEqual(t.regime, LUCRO_PRESUMIDO)
+
+    def test_real_e_sem_regime_tambem(self) -> None:
+        for regime in (LUCRO_REAL, None):
+            t = revenue_taxes(regime=regime, settings=self.NF, revenue=100_000, company_revenue=100_000)
+            self.assertAlmostEqual(t.total, 6_150)
+        self.assertEqual(profit_taxes_real(settings=self.NF, taxable_profit=100_000), (0.0, 0.0))
+
+    def test_desligado_mantem_o_regime(self) -> None:
+        off = SimpleNamespace(tax_rate=0.09, nf_taxes_only=False)
+        t = revenue_taxes(regime=LUCRO_PRESUMIDO, settings=off, revenue=100_000, company_revenue=100_000)
+        base = revenue_taxes(regime=LUCRO_PRESUMIDO, settings=SETTINGS, revenue=100_000, company_revenue=100_000)
+        self.assertAlmostEqual(t.total, base.total)
 
 
 if __name__ == "__main__":

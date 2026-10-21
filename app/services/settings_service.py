@@ -25,6 +25,7 @@ def _default_settings() -> SystemSettings:
         pis_real_rate=0.0165,
         cofins_real_rate=0.076,
         pis_cofins_credit_rate=0,
+        nf_taxes_only=False,
         vehicle_light_cost=0,
         vehicle_pickup_cost=0,
         vehicle_sedan_cost=0,
