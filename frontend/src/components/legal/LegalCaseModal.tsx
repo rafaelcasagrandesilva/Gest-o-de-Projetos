@@ -284,9 +284,6 @@ export function LegalCaseModal({
                 <LinhaValor label="Valor da causa">
                   <DetailMoney value={c.amount_claimed} />
                 </LinhaValor>
-                <LinhaValor label="Valor considerado">
-                  <DetailMoney value={c.amount_considered} />
-                </LinhaValor>
                 <LinhaValor label="Valor acordado">
                   <DetailMoney value={c.amount_agreed} />
                 </LinhaValor>
