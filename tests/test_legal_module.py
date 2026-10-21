@@ -260,6 +260,16 @@ class FilterAndLabelTests(unittest.TestCase):
         self.assertEqual(extra(CaseFilters(ufs=["MS", "MT"])), 1)
         self.assertEqual(extra(CaseFilters(value_min=10, value_max=20)), 2)
         self.assertEqual(extra(CaseFilters(statuses=["ACORDO"], companies=["X"])), 2)
+        self.assertEqual(extra(CaseFilters(only_agreements=True)), 1)
+
+    def test_only_agreements_matches_value_or_status(self):
+        from app.services.legal_service import LegalService
+
+        condition = LegalService._case_conditions(CaseFilters(only_agreements=True))[-1]
+        sql = str(condition.compile(compile_kwargs={"literal_binds": True}))
+        self.assertIn("amount_agreed IS NOT NULL", sql)
+        self.assertIn("'ACORDO'", sql)
+        self.assertIn("'ACORDO_FINALIZADO'", sql)
 
 
 class ChangeLogTests(unittest.TestCase):

@@ -242,6 +242,7 @@ def _case_filters(
     q: str | None,
     basis: str,
     include_inactive: bool = False,
+    only_agreements: bool = False,
 ) -> CaseFilters:
     return CaseFilters(
         statuses=status_ or [],
@@ -254,6 +255,7 @@ def _case_filters(
         value_min=value_min,
         value_max=value_max,
         q=q,
+        only_agreements=only_agreements,
         basis=basis,
         include_inactive=include_inactive,
     )
@@ -276,6 +278,9 @@ async def list_cases(
     value_min: float | None = Query(default=None),
     value_max: float | None = Query(default=None),
     q: str | None = Query(default=None),
+    only_agreements: bool = Query(
+        default=False, description="Só processos com valor de acordo ou status de acordo"
+    ),
     basis: str = Query(default="considered", pattern="^(considered|claimed)$"),
     include_inactive: bool = Query(
         default=False, description="Administração: inclui processos desativados"
@@ -285,7 +290,7 @@ async def list_cases(
 ) -> list[LegalCaseRead]:
     filters = _case_filters(
         status_, type_, uf, company, project, client, person_id, value_min, value_max, q, basis,
-        include_inactive,
+        include_inactive, only_agreements,
     )
     rows = await LegalService(db).list_cases(filters)
     return [redact_for("legal_case", _case_read(row), user) for row in rows]
@@ -303,12 +308,16 @@ async def cases_overview(
     value_min: float | None = Query(default=None),
     value_max: float | None = Query(default=None),
     q: str | None = Query(default=None),
+    only_agreements: bool = Query(
+        default=False, description="Só processos com valor de acordo ou status de acordo"
+    ),
     basis: str = Query(default="considered", pattern="^(considered|claimed)$"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> LegalOverview:
     filters = _case_filters(
-        status_, type_, uf, company, project, client, person_id, value_min, value_max, q, basis
+        status_, type_, uf, company, project, client, person_id, value_min, value_max, q, basis,
+        only_agreements=only_agreements,
     )
     return redact_for("legal_overview", await LegalService(db).overview(filters), user)
 

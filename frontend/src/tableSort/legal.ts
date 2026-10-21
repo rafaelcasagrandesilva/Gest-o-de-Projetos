@@ -22,8 +22,8 @@ export type LegalCaseSortColumn =
   | "project"
   | "uf"
   | "status"
-  | "considered"
   | "claimed"
+  | "agreed"
   | "last_movement";
 
 export const LEGAL_CASE_SORT_COLUMNS: Record<LegalCaseSortColumn, SortColumnDef<LegalCase>> = {
@@ -34,14 +34,14 @@ export const LEGAL_CASE_SORT_COLUMNS: Record<LegalCaseSortColumn, SortColumnDef<
   project: { kind: "text", getValue: (c) => c.project ?? "" },
   uf: { kind: "text", getValue: (c) => c.uf ?? "" },
   status: { kind: "status", getValue: (c) => c.status, statusOrder: STATUS_ORDER },
-  considered: { kind: "money", getValue: (c) => c.amount_considered ?? 0 },
   claimed: { kind: "money", getValue: (c) => c.amount_claimed ?? 0 },
+  agreed: { kind: "money", getValue: (c) => c.amount_agreed ?? 0 },
   last_movement: { kind: "date", getValue: (c) => c.last_movement_date ?? "" },
 };
 
-/** Sem coluna escolhida: maior passivo primeiro (é a leitura padrão do Painel de Passivo). */
+/** Sem coluna escolhida: maior valor da causa primeiro. */
 export function defaultLegalCaseSort(a: LegalCase, b: LegalCase): number {
-  const byValue = (b.amount_considered ?? 0) - (a.amount_considered ?? 0);
+  const byValue = (b.amount_claimed ?? 0) - (a.amount_claimed ?? 0);
   if (byValue !== 0) return byValue;
   return compareText(a.case_number, b.case_number);
 }

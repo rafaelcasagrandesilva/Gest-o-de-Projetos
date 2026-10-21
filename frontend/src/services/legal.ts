@@ -124,6 +124,8 @@ export type LegalCaseFilters = {
   value_min?: number | null;
   value_max?: number | null;
   q?: string;
+  /** Só processos com valor de acordo OU status Acordo/Acordo finalizado. */
+  only_agreements?: boolean;
   basis?: LegalValueBasis;
 };
 
@@ -148,6 +150,7 @@ function caseParams(filters: LegalCaseFilters): URLSearchParams {
   if (filters.value_min != null) params.set("value_min", String(filters.value_min));
   if (filters.value_max != null) params.set("value_max", String(filters.value_max));
   if (filters.q?.trim()) params.set("q", filters.q.trim());
+  if (filters.only_agreements) params.set("only_agreements", "true");
   if (filters.basis) params.set("basis", filters.basis);
   if (filters.include_inactive) params.set("include_inactive", "true");
   return params;

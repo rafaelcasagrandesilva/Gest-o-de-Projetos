@@ -47,6 +47,12 @@ from app.schemas.legal import (
 BASIS_CONSIDERED = "considered"
 BASIS_CLAIMED = "claimed"
 
+# Status que, por si só, caracterizam um processo com acordo.
+AGREEMENT_STATUSES: tuple[str, ...] = (
+    LegalCaseStatus.ACORDO.value,
+    LegalCaseStatus.ACORDO_FINALIZADO.value,
+)
+
 # Rótulos pt-BR do domínio — fonte ÚNICA (API e frontend consomem o mesmo texto).
 STATUS_LABELS: dict[str, str] = {
     LegalCaseStatus.EM_ANDAMENTO.value: "Em andamento",
@@ -127,6 +133,9 @@ class CaseFilters:
     value_min: float | None = None
     value_max: float | None = None
     q: str | None = None
+    # "Só acordos": processo com valor de acordo lançado OU status de acordo — o status sozinho não
+    # basta, porque o jurídico registra valores em processos cujo status ainda não foi atualizado.
+    only_agreements: bool = False
     basis: str = BASIS_CONSIDERED
     # Processo desativado sai das telas analíticas E dos indicadores. Só a Administração pede
     # `include_inactive=True` — daí o default False preservar exatamente os números da Fase 1.
@@ -258,6 +267,13 @@ class LegalService:
             conditions.append(LegalCase.client.in_(filters.clients))
         if filters.person_id is not None:
             conditions.append(LegalCase.person_id == filters.person_id)
+        if filters.only_agreements:
+            conditions.append(
+                or_(
+                    LegalCase.amount_agreed.is_not(None),
+                    LegalCase.status.in_(AGREEMENT_STATUSES),
+                )
+            )
 
         basis = filters.basis_column()
         # Processo sem valor conhecido é tratado como 0 na faixa (não some ao filtrar por mínimo 0).

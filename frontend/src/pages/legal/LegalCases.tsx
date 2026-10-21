@@ -28,7 +28,6 @@ import {
   type LegalCaseStatus,
   type LegalCaseType,
   type LegalOverview,
-  type LegalValueBasis,
 } from "@/services/legal";
 
 /**
@@ -38,10 +37,20 @@ import {
  * a TODOS os filtros, e barras clicáveis que também filtram. A diferença arquitetural é que os
  * indicadores são calculados no BACKEND sobre os mesmos filtros da lista (`/legal/cases/overview`),
  * não no navegador — assim o número do card nunca diverge da tabela e a tela escala com o acervo.
+ *
+ * Base de valor = VALOR DA CAUSA (faixa, gráficos e ordenação). O "considerado" saiu desta tela por
+ * decisão do jurídico; o dado continua no cadastro e no Painel do passivo.
  */
 
 /** Debounce dos campos de digitação: evita uma consulta por tecla. */
 const TYPING_DEBOUNCE_MS = 350;
+
+const AGREEMENT_STATUSES: ReadonlySet<LegalCaseStatus> = new Set(["ACORDO", "ACORDO_FINALIZADO"]);
+
+/** Valor de acordo lançado num processo cujo status não é de acordo: status desatualizado ou proposta. */
+function agreementOutOfStatus(c: LegalCase): boolean {
+  return c.amount_agreed != null && !AGREEMENT_STATUSES.has(c.status);
+}
 
 function toggle(list: string[], value: string): string[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
@@ -71,7 +80,7 @@ export function LegalCases() {
   const [ufs, setUfs] = useState<string[]>(() => initial.current.getAll("uf"));
   const [companies, setCompanies] = useState<string[]>(() => initial.current.getAll("company"));
   const [projects, setProjects] = useState<string[]>(() => initial.current.getAll("project"));
-  const [basis, setBasis] = useState<LegalValueBasis>("considered");
+  const [onlyAgreements, setOnlyAgreements] = useState(false);
 
   // Campos de texto: estado imediato (input) + estado "aplicado" (dispara a consulta).
   const [searchInput, setSearchInput] = useState(() => initial.current.get("q") ?? "");
@@ -144,9 +153,10 @@ export function LegalCases() {
       value_min: valueMin,
       value_max: valueMax,
       q: search,
-      basis,
+      only_agreements: onlyAgreements,
+      basis: "claimed",
     }),
-    [statuses, types, ufs, companies, projects, personId, valueMin, valueMax, search, basis],
+    [statuses, types, ufs, companies, projects, personId, valueMin, valueMax, search, onlyAgreements],
   );
 
   // Guarda contra respostas fora de ordem: só a requisição mais recente pode escrever no estado.
@@ -179,7 +189,6 @@ export function LegalCases() {
 
   const facets = overview?.facets;
   const kpis = overview?.kpis;
-  const basisLabel = basis === "considered" ? "considerado" : "valor da causa";
 
   const hasFilters =
     statuses.length > 0 ||
@@ -187,6 +196,7 @@ export function LegalCases() {
     ufs.length > 0 ||
     companies.length > 0 ||
     projects.length > 0 ||
+    onlyAgreements ||
     !!search ||
     valueMin != null ||
     valueMax != null ||
@@ -198,6 +208,7 @@ export function LegalCases() {
     setUfs([]);
     setCompanies([]);
     setProjects([]);
+    setOnlyAgreements(false);
     setSearchInput("");
     setMinInput("");
     setMaxInput("");
@@ -219,8 +230,8 @@ export function LegalCases() {
           <h1 className="text-2xl font-semibold text-slate-900">Processos</h1>
           <p className="text-sm text-slate-500">
             {kpis
-              ? `${formatCount(kpis.case_count)} processo(s) · passivo ${basisLabel} ${formatCurrencyShortOrDash(
-                  basis === "considered" ? kpis.total_considered : kpis.total_claimed,
+              ? `${formatCount(kpis.case_count)} processo(s) · valor da causa ${formatCurrencyShortOrDash(
+                  kpis.total_claimed,
                 )}`
               : "Carregando…"}
           </p>
@@ -250,6 +261,14 @@ export function LegalCases() {
                 tone={LEGAL_STATUS_STYLES[s].bar}
               />
             ))}
+          </FilterGroup>
+          <FilterGroup label="Acordo">
+            <FilterChip
+              label="Só acordos"
+              active={onlyAgreements}
+              onClick={() => setOnlyAgreements((prev) => !prev)}
+              tone="bg-violet-500"
+            />
           </FilterGroup>
           <FilterGroup label="Tipo">
             {(facets?.types ?? []).map((t) => (
@@ -352,30 +371,6 @@ export function LegalCases() {
             />
           </label>
 
-          <div className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Somar por</span>
-            <div className="inline-flex overflow-hidden rounded-lg border border-slate-300">
-              {(
-                [
-                  ["considered", "Considerado"],
-                  ["claimed", "Valor da causa"],
-                ] as [LegalValueBasis, string][]
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={basis === value}
-                  onClick={() => setBasis(value)}
-                  className={`px-3 py-2 text-xs font-medium ${
-                    basis === value ? "bg-indigo-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
           {hasFilters ? (
             <button
               type="button"
@@ -429,16 +424,11 @@ export function LegalCases() {
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
       {/* ---------------- Indicadores ---------------- */}
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <KpiCard
           label="Processos"
           value={kpis ? formatCount(kpis.case_count) : "—"}
           meta={kpis ? `${formatCount(kpis.person_count)} pessoa(s)` : undefined}
-        />
-        <KpiCard
-          label="Valor considerado"
-          value={formatCurrencyOrDash(kpis?.total_considered)}
-          meta="sem duplicidade"
         />
         <KpiCard label="Valor da causa" value={formatCurrencyOrDash(kpis?.total_claimed)} meta="somatório bruto" />
         <KpiCard
@@ -456,20 +446,20 @@ export function LegalCases() {
 
       <section className="grid gap-3 lg:grid-cols-3">
         <BarChartCard
-          title={`Valor por status (${basisLabel})`}
+          title={`Valor por status (valor da causa)`}
           buckets={overview?.by_status ?? []}
           selected={statuses}
           onToggle={(key) => setStatuses((prev) => toggle(prev, key))}
           statusColors
         />
         <BarChartCard
-          title={`Valor por tipo (${basisLabel})`}
+          title={`Valor por tipo (valor da causa)`}
           buckets={overview?.by_type ?? []}
           selected={types}
           onToggle={(key) => setTypes((prev) => toggle(prev, key))}
         />
         <BarChartCard
-          title={`Valor por estado (${basisLabel})`}
+          title={`Valor por estado (valor da causa)`}
           buckets={overview?.by_uf ?? []}
           selected={ufs}
           onToggle={(key) => setUfs((prev) => toggle(prev, key))}
@@ -494,8 +484,8 @@ export function LegalCases() {
                 <SortableTh label="Projeto" column="project" {...headerSort} />
                 <SortableTh label="UF" column="uf" {...headerSort} />
                 <SortableTh label="Status" column="status" {...headerSort} />
-                <SortableTh label="Considerado" column="considered" align="right" {...headerSort} />
                 <SortableTh label="Valor da causa" column="claimed" align="right" {...headerSort} />
+                <SortableTh label="Valor do acordo" column="agreed" align="right" {...headerSort} />
                 <SortableTh label="Última movimentação" column="last_movement" {...headerSort} />
                 <th className="px-2 py-2 text-center text-xs font-semibold uppercase tracking-wide">
                   JusBrasil
@@ -546,10 +536,20 @@ export function LegalCases() {
                     <StatusPill status={c.status} label={LEGAL_STATUS_LABELS[c.status]} />
                   </td>
                   <td className="px-2 py-2">
-                    <Money value={c.amount_considered} />
-                  </td>
-                  <td className="px-2 py-2">
                     <Money value={c.amount_claimed} />
+                  </td>
+                  <td className="relative px-2 py-2 pl-6">
+                    {/* Ícone fora do bloco do valor: mantém o alinhamento contábil da coluna. */}
+                    {agreementOutOfStatus(c) ? (
+                      <span
+                        className="absolute left-1 top-1/2 inline-flex h-4 w-4 -translate-y-1/2 cursor-help items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-700"
+                        title="Valor de acordo lançado, mas o status do processo não é Acordo nem Acordo finalizado."
+                        aria-label="Status do processo não é de acordo"
+                      >
+                        !
+                      </span>
+                    ) : null}
+                    <Money value={c.amount_agreed} />
                   </td>
                   <td
                     className="max-w-[18rem] truncate px-2 py-2 text-xs text-slate-500"
