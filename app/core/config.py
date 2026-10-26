@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     legal_document_dir: str = Field(default="var/legal_documents", alias="LEGAL_DOCUMENT_DIR")
     legal_document_max_bytes: int = Field(default=25 * 1024 * 1024, alias="LEGAL_DOCUMENT_MAX_BYTES")
 
+    # Integração com o sistema de Medição (somente leitura, ver app/modules/integrations).
+    # SHA-256 da chave (nunca a chave em si) e projetos liberados (UUIDs separados por vírgula).
+    # Vazio = integração desligada.
+    medicao_integration_key_sha256: str = Field(default="", alias="MEDICAO_INTEGRATION_KEY_SHA256")
+    medicao_integration_projects: str = Field(default="", alias="MEDICAO_INTEGRATION_PROJECTS")
+
     @field_validator("jwt_secret_key", "jwt_algorithm", mode="before")
     @classmethod
     def strip_secrets(cls, v: str) -> str:

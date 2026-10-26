@@ -236,28 +236,33 @@ def line_from_snapshot(
     )
 
 
+def vehicle_in_fleet(v, *, start: date, end: date) -> bool:
+    """Veículo entra na frota rateada do mês [start, end]: ativo no período (aquisição/devolução),
+    com centro de custo e custo mensal."""
+    if getattr(v, "deleted_at", None) is not None:
+        return False
+    if v.start_date is not None and v.start_date > end:
+        return False
+    if v.end_date is not None and v.end_date < start:
+        return False
+    if not bool(v.is_active) and v.end_date is None:
+        return False
+    # Veículo sem centro de custo não está alocado a nada e não entra na frota rateada
+    # (ex.: os 16 carros devolvidos em 08/2026 que nunca foram usados — acordo no Endividamento).
+    if not (v.cost_center or "").strip():
+        return False
+    return _f(v.monthly_cost) > 0
+
+
 def fleet_for_month(vehicles: Iterable, *, comp: date, project_by_cost_center: dict) -> FleetMonth:
     """Frota ativa no mês pelo cadastro de Veículos (aquisição/devolução), por centro de custo."""
     start, end = month_bounds(comp)
     weights: dict[UUID | None, float] = defaultdict(float)
     for v in vehicles:
-        if getattr(v, "deleted_at", None) is not None:
-            continue
-        if v.start_date is not None and v.start_date > end:
-            continue
-        if v.end_date is not None and v.end_date < start:
-            continue
-        if not bool(v.is_active) and v.end_date is None:
-            continue
-        # Veículo sem centro de custo não está alocado a nada e não entra na frota rateada
-        # (ex.: os 16 carros devolvidos em 08/2026 que nunca foram usados — acordo no Endividamento).
-        if not (v.cost_center or "").strip():
-            continue
-        cost = _f(v.monthly_cost)
-        if cost <= 0:
+        if not vehicle_in_fleet(v, start=start, end=end):
             continue
         key = (v.cost_center or "").strip().casefold()
-        weights[project_by_cost_center.get(key)] += cost
+        weights[project_by_cost_center.get(key)] += _f(v.monthly_cost)
     total = sum(weights.values())
     shares = {k: w / total for k, w in weights.items()} if total > 0 else {}
     return FleetMonth(shares=shares, registry_total=total)

@@ -26,6 +26,7 @@ from app.modules.assets.router import router as assets_router
 from app.modules.indicators.router import router as indicators_router
 from app.modules.legal.router import router as legal_router
 from app.modules.payments.router import router as payment_components_router
+from app.modules.integrations.router import router as integrations_router
 
 
 api_router = APIRouter()
@@ -59,3 +60,5 @@ protected.include_router(
 
 api_router.include_router(protected)
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
+# Integrações sistema a sistema: autenticadas por chave própria (não por usuário/JWT).
+api_router.include_router(integrations_router, prefix="/integrations", tags=["integrations"])
