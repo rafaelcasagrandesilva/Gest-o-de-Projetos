@@ -330,6 +330,10 @@ class CompanyFinancialItemRead(BaseModel):
     schedule: ScheduleExecutionRead | None = None
     pagamentos: list[PagamentoMes]
     total_pago: float | None = None
+    # Dívida sem cronograma (razão): valor de hoje com aportes e encargos, e o pago REALIZADO
+    # (sem lançamento futuro). None no cronograma e em custo fixo.
+    debt_total: float | None = None
+    total_pago_realizado: float | None = None
     pago_mes: float | None = 0
     restante: float | None = None
     progresso: float | None = None

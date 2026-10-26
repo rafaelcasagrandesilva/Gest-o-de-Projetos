@@ -9,7 +9,7 @@ financeira fica testável sem banco.
 
 | Entrada do motor | Origem no cadastro |
 |---|---|
-| principal | `valor_referencia` (a dívida de origem) |
+| principal | `debt_base_amount` (renegociado válido, senão `valor_referencia`) |
 | competência de origem | `start_date`, senão o 1º mês com lançamento, senão o mês do cadastro |
 | vigências de taxa | `company_financial_rates` (vazio = dívida congelada) |
 | aportes/abatimentos/encargos | `company_financial_events` |
@@ -84,6 +84,19 @@ class DebtLedgerService:
                 )
             )
         ).scalars().first()
+
+    @staticmethod
+    def principal_of(it: CompanyFinancialItem) -> Decimal:
+        """Principal do razão = a base ÚNICA da dívida (`debt_base_amount`).
+
+        Uma renegociação válida substitui o valor original, como em todo o resto do SGC. Com
+        `valor_referencia` cru, uma dívida de cadastro zerado e renegociação válida começava o
+        razão em zero e cada pagamento empurrava o saldo para baixo de zero — o Extrato a
+        mostrava QUITADA ainda devendo.
+        """
+        from app.services.company_finance_service import debt_base_amount
+
+        return Decimal(str(debt_base_amount(it)))
 
     @staticmethod
     def origin_month(it: CompanyFinancialItem) -> date:
@@ -324,7 +337,7 @@ class DebtLedgerService:
         return self._render(
             it=it,
             origem=origem,
-            principal=Decimal(str(it.valor_referencia or 0)),
+            principal=self.principal_of(it),
             vigencias=vigencias,
             usando_padrao=usando_padrao,
             eventos=self._events(it),
@@ -490,7 +503,13 @@ class DebtLedgerService:
             valor = Decimal(str(principal))
             if valor < 0:
                 raise ValueError("O valor de origem não pode ser negativo.")
-            it.valor_referencia = float(valor)
+            # Grava onde o principal é LIDO: com renegociação válida, o valor de origem do
+            # razão é o renegociado — gravar no `valor_referencia` faria a edição sumir.
+            reneg = getattr(it, "renegotiated_amount", None)
+            if getattr(it, "has_renegotiation", False) and reneg is not None and float(reneg) > 0 and valor > 0:
+                it.renegotiated_amount = float(valor)
+            else:
+                it.valor_referencia = float(valor)
 
         rows = linhas or []
 
@@ -579,7 +598,7 @@ class DebtLedgerService:
 
         rows = linhas or []
         origem = first_of_month(start_month) if start_month else self.origin_month(it)
-        base = Decimal(str(principal)) if principal is not None else Decimal(str(it.valor_referencia or 0))
+        base = Decimal(str(principal)) if principal is not None else self.principal_of(it)
 
         # A carga digitada é a fonte do preview — MAS só quando existe. Um payload vazio (a
         # abertura da tela, ou uma troca de horizonte de projeção) tem que espelhar o que está
@@ -664,10 +683,10 @@ class DebtLedgerService:
         vigencias, _padrao = self._vigencias_com_padrao(it, origem, await self._default_rate())
 
         if inicio == origem:
-            saldo = Decimal(str(it.valor_referencia or 0))
+            saldo = self.principal_of(it)
         else:
             anterior = build_ledger(
-                principal=Decimal(str(it.valor_referencia or 0)),
+                principal=self.principal_of(it),
                 origin_month=origem,
                 through=add_months(inicio, -1),
                 rates=vigencias,

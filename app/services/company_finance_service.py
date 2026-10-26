@@ -473,6 +473,9 @@ class CompanyFinanceService:
 
         if it.tipo == "endividamento":
             schedule_dict = None
+            # Só o razão (dívida sem cronograma) preenche; o cronograma segue no contrato antigo.
+            debt_total: float | None = None
+            total_pago_realizado: float | None = None
             if self._uses_schedule(it):
                 # Modo 2: fonte ÚNICA — pago/saldo/progresso/status vêm do CAP (pagamentos reais),
                 # nunca da soma das parcelas planejadas. Um só cálculo oficial (_schedule_execution).
@@ -514,6 +517,14 @@ class CompanyFinanceService:
                 denominador = pago_realizado + restante
                 progresso = (pago_realizado / denominador) if denominador > 0.005 else 0.0
                 status = "quitado" if restante <= 0.005 else "ativo"
+                # Extrato: a dívida como ela está HOJE (origem + aportes − abatimentos + encargos)
+                # e o pago realizado. Derivada como saldo + pago para a linha fechar por
+                # construção e o % não passar de 100% enquanto houver saldo. Lançamento futuro é
+                # plano e fica de fora.
+                debt_total = round(restante + pago_realizado, 2)
+                total_pago_realizado = round(pago_realizado, 2)
+                # Pagou além do que devia: o excedente não é saldo a receber da dívida.
+                restante = max(0.0, restante)
             return {
                 "id": it.id,
                 "tipo": it.tipo,
@@ -553,6 +564,8 @@ class CompanyFinanceService:
                 "uses_custom_schedule": bool(getattr(it, "uses_custom_schedule", False)),
                 "pagamentos": pagamentos,
                 "total_pago": total_pago,
+                "debt_total": debt_total,
+                "total_pago_realizado": total_pago_realizado,
                 "restante": restante,
                 "progresso": min(1.0, progresso),
                 "status": status,
@@ -1549,7 +1562,18 @@ class CompanyFinanceService:
         return self._debt_default_rate
 
     async def _accrual_execution(self, it: CompanyFinancialItem) -> "DebtIndicators":
-        """Execução de uma dívida SEM cronograma, derivada do razão (motor de saldo).
+        linhas, principal = await self._accrual_lines(it)
+        return compute_accrual_indicators(linhas, principal=principal)
+
+    async def _accrual_lines(
+        self, it: CompanyFinancialItem, *, through: date | None = None
+    ) -> tuple[list, Decimal]:
+        """Razão (linhas mês a mês) e principal de uma dívida SEM cronograma — base de `_accrual_execution`.
+
+        `through` estende o razão além do último fato (o gráfico pede o saldo até o fim do
+        período exibido); meses depois de hoje saem como projeção, como no modal.
+
+        Execução de uma dívida SEM cronograma, derivada do razão (motor de saldo).
 
         Fonte ÚNICA de saldo/progresso/status desses itens. A conta antiga
         (`valor_referencia − Σ pagamentos`) ignorava aporte e juros: uma dívida que recebeu
@@ -1582,8 +1606,11 @@ class CompanyFinanceService:
         # depois de hoje, e sem isso o razão pediria um intervalo invertido — o que derrubava
         # a lista inteira de Endividamento, não só aquele item.
         fim = max([hoje, origem, *pagamentos.keys(), *(first_of_month(e.competencia) for e in (it.events or []))])
+        if through is not None:
+            fim = max(fim, first_of_month(through))
+        principal = svc.principal_of(it)
         linhas = build_ledger(
-            principal=Decimal(str(it.valor_referencia or 0)),
+            principal=principal,
             origin_month=origem,
             through=fim,
             rates=vigencias,
@@ -1593,7 +1620,7 @@ class CompanyFinanceService:
             # como pago nem antecipar a queda do saldo.
             realized_through=hoje,
         )
-        return compute_accrual_indicators(linhas, principal=Decimal(str(it.valor_referencia or 0)))
+        return linhas, principal
 
     @staticmethod
     def _uses_schedule(it: CompanyFinancialItem) -> bool:
@@ -1748,7 +1775,7 @@ class CompanyFinanceService:
             .all()
         )
         comp = parse_month(competencia)
-        total_endividamento = sum(_debt_base_amount(i) for i in items)
+        total_endividamento = 0.0
         sched_ids = [it.id for it in items if self._uses_schedule(it)]
         pbe_all = await self._cap_paid_by_entry(sched_ids)
         pbm_all = await self._cap_paid_by_month(sched_ids)
@@ -1758,13 +1785,17 @@ class CompanyFinanceService:
             if self._uses_schedule(it):
                 # Fonte única: saldo do cálculo oficial; pago do mês = pagamento REAL do CAP.
                 ind = self._schedule_execution(it, pbe_all)
+                total_endividamento += _debt_base_amount(it)
                 saldo_restante += float(ind.saldo_restante)
                 total_pago_mes += round(pbm_all.get(it.id, {}).get(comp, 0.0), 2)
             else:
                 # Mesmo cálculo do cartão: o saldo vem do razão, com aportes e juros dentro.
                 ind = await self._accrual_execution(it)
                 total_pago_mes += sum(_f(p.valor) for p in it.payments if p.competencia == comp)
-                saldo_restante += float(ind.saldo_atual)
+                saldo_restante += max(0.0, float(ind.saldo_atual))
+                # Mesmo "Valor da Dívida" do Extrato (com aportes e encargos), para o total do
+                # cartão ser a soma da coluna.
+                total_endividamento += float(ind.saldo_atual) + float(ind.total_pago)
         return {
             "total_endividamento": total_endividamento,
             "total_pago_mes": total_pago_mes,
@@ -2022,6 +2053,15 @@ class CompanyFinanceService:
         sched_ids = [it.id for it in items if self._uses_schedule(it)]
         pbm_all = await self._cap_paid_by_month(sched_ids)
 
+        # Modo 1: saldo de cada mês = saldo final da linha do razão (o mesmo do modal "Evolução
+        # da dívida", com aportes e juros). Antes do início a dívida não existia (saldo 0).
+        saldo_razao: dict[UUID, dict[date, float]] = {}
+        if tipo == "endividamento":
+            for it in items:
+                if not self._uses_schedule(it):
+                    linhas, _principal = await self._accrual_lines(it, through=months[-1] if months else None)
+                    saldo_razao[it.id] = {ln.competencia: float(ln.saldo_final) for ln in linhas}
+
         points: list[dict] = []
         for m in months:
             mk = month_key(m)
@@ -2038,12 +2078,12 @@ class CompanyFinanceService:
             if tipo == "endividamento":
                 saldo_restante_total = 0.0
                 for it in items:
-                    ref = _debt_base_amount(it)
                     if self._uses_schedule(it):
+                        ref = _debt_base_amount(it)
                         cum = sum(v for mm, v in pbm_all.get(it.id, {}).items() if mm <= m)
+                        saldo_restante_total += max(0.0, ref - cum)
                     else:
-                        cum = sum(_f(p.valor) for p in it.payments if p.competencia <= m)
-                    saldo_restante_total += max(0.0, ref - cum)
+                        saldo_restante_total += max(0.0, saldo_razao[it.id].get(m, 0.0))
 
             points.append(
                 {
