@@ -1,7 +1,7 @@
 """Extrato Analítico do Endividamento × motor de saldo.
 
-Regressão do Danilo Arieiro: o Extrato fazia `valor de origem − pago` e mostrava QUITADA
-(173,8%) uma dívida que, com aportes e juros, ainda devia R$ 73 mil. Agora a linha do razão
+Regressão: o Extrato fazia `valor de origem − pago` e mostrava QUITADA (acima de 100%) uma
+dívida que, com aportes e juros, ainda tinha saldo. Agora a linha do razão
 traz `debt_total` (valor de hoje, com aportes e encargos) e `total_pago_realizado`, e fecha:
 valor − pago = saldo = saldo de hoje do modal "Evolução da dívida".
 
@@ -89,7 +89,7 @@ class DebtExtratoMotorTests(unittest.IsolatedAsyncioTestCase):
                 await session.rollback()
 
     async def test_renegotiated_base_is_the_ledger_principal(self) -> None:
-        """Dex: cadastro R$ 0 renegociado em R$ 25.882,56 — o razão não pode começar em zero."""
+        """Cadastro zerado com renegociação válida: o razão não pode começar em zero."""
         from app.database.session import AsyncSessionLocal, engine
         from app.models.company_finance import CompanyFinancialPayment, CompanyFinancialRate
 

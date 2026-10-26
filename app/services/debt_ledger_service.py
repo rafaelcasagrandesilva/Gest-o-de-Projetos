@@ -90,9 +90,9 @@ class DebtLedgerService:
         """Principal do razão = a base ÚNICA da dívida (`debt_base_amount`).
 
         Uma renegociação válida substitui o valor original, como em todo o resto do SGC. Com
-        `valor_referencia` cru, a Dex (cadastro R$ 0, renegociada em R$ 25.882,56) começava o
+        `valor_referencia` cru, uma dívida de cadastro zerado e renegociação válida começava o
         razão em zero e cada pagamento empurrava o saldo para baixo de zero — o Extrato a
-        mostrava QUITADA devendo mais de R$ 20 mil.
+        mostrava QUITADA ainda devendo.
         """
         from app.services.company_finance_service import debt_base_amount
 
