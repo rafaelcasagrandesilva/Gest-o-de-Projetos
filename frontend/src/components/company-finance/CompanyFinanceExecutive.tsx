@@ -50,12 +50,15 @@ import { DebtLedgerPanel } from "@/components/company-finance/DebtLedgerPanel";
 import {
   capPaidOf,
   isIndirectLaborItem,
+  baseOf as debtValueOf,
   CompanyFinanceAnalyticTable,
   FIXED_COST_STATUS_FILTER_OPTIONS,
   isRedacted,
   matchesFixedCostStatus,
   matchesStatusFilter,
+  quitadoAntesDe,
   REQUIRED_FILTER_OPTIONS,
+  saldoOf as debtBalanceOf,
   STATUS_FILTER_OPTIONS,
   valorMensalOf,
   type FixedCostStatusFilter,
@@ -605,8 +608,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
           : list.filter((it) => pendingItemIds.has(it.id));
     }
     // Status — filtro global (apenas endividamento), mesmos critérios do extrato analítico.
-    if (tipo === "endividamento" && statusFilter !== "ALL") {
-      list = list.filter((it) => matchesStatusFilter(it, statusFilter));
+    // Roda também em "Todos": é ele que tira da lista os quitados de meses anteriores.
+    if (tipo === "endividamento") {
+      list = list.filter((it) => matchesStatusFilter(it, statusFilter, competencia));
     }
     if (itemSearch.trim()) {
       list = list.filter((it) => itemMatchesSearch(it, itemSearch, projectOptions, tipo));
@@ -615,6 +619,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   }, [
     tipo,
     items,
+    competencia,
     costCenterFilter,
     natureFilter,
     requiredFilter,
@@ -623,6 +628,16 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     itemSearch,
     projectOptions,
   ]);
+
+  // Quitados de meses anteriores saem da lista padrão (Status "Todos"); o aviso diz quantos e
+  // leva ao Status "Quitado", que mostra todos.
+  const quitadosOcultos = useMemo(
+    () =>
+      tipo === "endividamento" && statusFilter === "ALL"
+        ? items.filter((it) => quitadoAntesDe(it, competencia)).length
+        : 0,
+    [tipo, statusFilter, items, competencia],
+  );
 
   // Filtro de VISUALIZAÇÃO por Status consolidado (Custos Fixos): narra apenas as LISTAS
   // (Extrato Analítico, Visão Executiva, lista de Pendências). NÃO afeta os cards do topo
@@ -642,6 +657,27 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     }
     return list;
   }, [tipo, filteredItems, fixedStatusFilter, situacaoFilter]);
+
+  // Cards do Endividamento: refletem TODOS os filtros — são a soma das linhas exibidas, com as
+  // mesmas funções por item das colunas do Extrato (Valor da Dívida, Saldo Restante, Pago no
+  // mês). Sem filtro nenhum, batem com o KPI do backend, que fica como "total geral".
+  const debtKpi = useMemo(() => {
+    if (tipo !== "endividamento") return null;
+    const list = displayItems;
+    if (list.some(isRedacted)) {
+      return { total: null, pagoMes: null, saldo: null, quantidade: list.length };
+    }
+    let total = 0;
+    let pagoMes = 0;
+    let saldo = 0;
+    for (const it of list) {
+      total += debtValueOf(it) ?? 0;
+      pagoMes += it.pago_mes ?? 0;
+      saldo += debtBalanceOf(it) ?? 0;
+    }
+    return { total, pagoMes, saldo, quantidade: list.length };
+  }, [tipo, displayItems]);
+  const debtKpiFiltrado = debtKpi != null && kpiDebt != null && debtKpi.quantidade !== kpiDebt.quantidade_itens;
 
   // Cards de Custos Fixos (Total esperado/pago, Itens, Cobertura): FONTE ÚNICA idêntica ao
   // Extrato Analítico — consomem as MESMAS funções por item (`valorMensalOf` = coluna Valor
@@ -1062,6 +1098,20 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             />
           </label>
         </div>
+        {quitadosOcultos > 0 && (
+          <p className="mt-3 text-xs text-slate-500">
+            {quitadosOcultos === 1
+              ? "1 dívida quitada em mês anterior não aparece na lista."
+              : `${quitadosOcultos} dívidas quitadas em meses anteriores não aparecem na lista.`}{" "}
+            <button
+              type="button"
+              onClick={() => setStatusFilter("QUITADO")}
+              className="font-medium text-indigo-600 hover:underline"
+            >
+              Ver quitadas
+            </button>
+          </p>
+        )}
       </header>
 
       {error && (
@@ -1070,12 +1120,37 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
 
       {/* KPIs */}
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {tipo === "endividamento" && kpiDebt && (
+        {tipo === "endividamento" && debtKpi && (
           <>
-            <KpiCard label="Total de endividamento" value={formatCurrencyOrDash(kpiDebt.total_endividamento)} />
-            <KpiCard label="Total pago no mês" value={formatCurrencyOrDash(kpiDebt.total_pago_mes)} />
-            <KpiCard label="Saldo restante" value={formatCurrencyOrDash(kpiDebt.saldo_restante)} accent="text-amber-800" />
-            <KpiCard label="Quantidade de itens" value={String(kpiDebt.quantidade_itens)} />
+            <KpiCard
+              label="Total de endividamento"
+              value={formatCurrencyOrDash(debtKpi.total)}
+              breakdown={
+                debtKpiFiltrado ? [{ label: "Total geral", value: formatCurrencyOrDash(kpiDebt?.total_endividamento) }] : undefined
+              }
+            />
+            <KpiCard
+              label="Total pago no mês"
+              value={formatCurrencyOrDash(debtKpi.pagoMes)}
+              breakdown={
+                debtKpiFiltrado ? [{ label: "Total geral", value: formatCurrencyOrDash(kpiDebt?.total_pago_mes) }] : undefined
+              }
+            />
+            <KpiCard
+              label="Saldo restante"
+              value={formatCurrencyOrDash(debtKpi.saldo)}
+              accent="text-amber-800"
+              breakdown={
+                debtKpiFiltrado ? [{ label: "Total geral", value: formatCurrencyOrDash(kpiDebt?.saldo_restante) }] : undefined
+              }
+            />
+            <KpiCard
+              label="Quantidade de itens"
+              value={String(debtKpi.quantidade)}
+              breakdown={
+                debtKpiFiltrado ? [{ label: "Cadastrados", value: String(kpiDebt?.quantidade_itens ?? "—") }] : undefined
+              }
+            />
           </>
         )}
         {tipo === "custo_fixo" && fixedKpi && !(loading && items.length === 0) && (
