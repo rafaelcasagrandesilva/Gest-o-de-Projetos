@@ -334,6 +334,9 @@ class CompanyFinancialItemRead(BaseModel):
     # (sem lançamento futuro). None no cronograma e em custo fixo.
     debt_total: float | None = None
     total_pago_realizado: float | None = None
+    # Endividamento quitado: competência (1º dia) em que zerou. A lista padrão o esconde a partir
+    # do mês seguinte; o filtro Status › Quitado mostra todos.
+    quitado_em: date | None = None
     pago_mes: float | None = 0
     restante: float | None = None
     progresso: float | None = None

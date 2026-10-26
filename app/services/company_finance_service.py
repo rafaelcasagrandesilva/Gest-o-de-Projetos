@@ -64,6 +64,40 @@ def _f(v: object) -> float:
     return float(v) if v is not None else 0.0
 
 
+def _ledger_settled_month(linhas: list) -> date | None:
+    """Competência em que o razão zerou e não voltou a dever (só linhas REALIZADAS).
+
+    Uma dívida que zerou, recebeu aporte e zerou de novo foi quitada na SEGUNDA vez.
+    """
+    quitado: date | None = None
+    for ln in linhas:
+        if ln.is_projected:
+            break
+        if float(ln.saldo_final) <= 0.005:
+            quitado = quitado or ln.competencia
+        else:
+            quitado = None
+    return quitado
+
+
+def _schedule_settled_month(paid_by_month: dict[date, float], total: float) -> date | None:
+    """Competência em que o pago REAL do CAP alcançou o total do cronograma.
+
+    Sem alcançar (pago e negociado divergem por centavos de arredondamento), vale o último mês
+    com pagamento — foi ele que encerrou a dívida.
+    """
+    acumulado = 0.0
+    ultimo: date | None = None
+    for mes in sorted(paid_by_month):
+        if paid_by_month[mes] <= 0:
+            continue
+        acumulado += paid_by_month[mes]
+        ultimo = mes
+        if acumulado >= total - 0.005:
+            return mes
+    return ultimo
+
+
 def debt_base_amount(it: CompanyFinancialItem) -> float:
     """Base financeira ÚNICA da dívida (fonte da verdade — usar em TODOS os cálculos).
 
@@ -476,6 +510,8 @@ class CompanyFinanceService:
             # Só o razão (dívida sem cronograma) preenche; o cronograma segue no contrato antigo.
             debt_total: float | None = None
             total_pago_realizado: float | None = None
+            # Competência em que a dívida zerou — a lista padrão a esconde a partir do mês seguinte.
+            quitado_em: date | None = None
             if self._uses_schedule(it):
                 # Modo 2: fonte ÚNICA — pago/saldo/progresso/status vêm do CAP (pagamentos reais),
                 # nunca da soma das parcelas planejadas. Um só cálculo oficial (_schedule_execution).
@@ -488,6 +524,11 @@ class CompanyFinanceService:
                 progresso = ind.progresso
                 status = "quitado" if progresso >= 1.0 else "ativo"
                 schedule_dict = self._schedule_execution_dict(ind)
+                if status == "quitado":
+                    pbm_q = schedule_paid_by_month
+                    if pbm_q is None:
+                        pbm_q = (await self._cap_paid_by_month([it.id])).get(it.id, {})
+                    quitado_em = _schedule_settled_month(pbm_q, float(ind.total_negociado))
                 if competencia is not None:
                     pbm = schedule_paid_by_month
                     if pbm is None:
@@ -498,7 +539,8 @@ class CompanyFinanceService:
             else:
                 # Fonte única: o RAZÃO. Saldo, progresso e status saem da evolução da dívida
                 # (principal + aportes + juros − pagamentos), nunca de `referência − pago`.
-                ind = await self._accrual_execution(it)
+                linhas_razao, principal_razao = await self._accrual_lines(it)
+                ind = compute_accrual_indicators(linhas_razao, principal=principal_razao)
                 # `total_pago` continua sendo a SOMA DA GRADE (contrato antigo do cartão, que
                 # inclui lançamento datado no futuro) MAIS as retiradas de Repasse que abatem
                 # esta dívida — elas são pagamento de fato, só não passam pelo caixa. Saldo,
@@ -525,6 +567,8 @@ class CompanyFinanceService:
                 total_pago_realizado = round(pago_realizado, 2)
                 # Pagou além do que devia: o excedente não é saldo a receber da dívida.
                 restante = max(0.0, restante)
+                if status == "quitado":
+                    quitado_em = _ledger_settled_month(linhas_razao)
             return {
                 "id": it.id,
                 "tipo": it.tipo,
@@ -573,6 +617,7 @@ class CompanyFinanceService:
                 "pago_mes": pago_mes,
                 # Contrato de leitura do Modo 2 (fonte única). None no Modo 1 (inalterado).
                 "schedule": schedule_dict,
+                "quitado_em": quitado_em,
             }
 
         # Progresso = grade × referência (a obrigação do mês). "Pago no mês"/"Total pago" somam

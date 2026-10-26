@@ -18,7 +18,7 @@ function usesLedger(item: CompanyFinancialItem): boolean {
 
 /** Valor da Dívida: no razão, com aportes e encargos; senão a base ÚNICA (renegociado válido
  *  > 0, senão valor_referencia). Null quando redigido. */
-function baseOf(item: CompanyFinancialItem): number | null {
+export function baseOf(item: CompanyFinancialItem): number | null {
   if (isRedacted(item)) return null;
   if (usesLedger(item)) return item.debt_total ?? null;
   const base = item.debt_base;
@@ -45,7 +45,7 @@ function pctQuitadoOf(item: CompanyFinancialItem): number | null {
 
 /** Saldo Restante. No razão é o saldo de hoje do motor (o mesmo do modal "Evolução da
  *  dívida", com juros); senão base − Pago Total (nunca negativo). Null quando redigido. */
-function saldoOf(item: CompanyFinancialItem): number | null {
+export function saldoOf(item: CompanyFinancialItem): number | null {
   if (isRedacted(item)) return null;
   if (usesLedger(item)) return item.restante == null ? null : Math.max(0, item.restante);
   const base = baseOf(item);
@@ -407,7 +407,7 @@ function buildColumns(
 
 export type RequiredFilter = "ALL" | "REQUIRED" | "PENDING";
 
-export type StatusFilter = "ALL" | "ABERTO" | "PARCIAL" | "RENEGOCIADO" | "JUDICIAL" | "QUITADO";
+export type StatusFilter = "ALL" | "ATIVOS" | "ABERTO" | "PARCIAL" | "RENEGOCIADO" | "JUDICIAL" | "QUITADO";
 
 export const REQUIRED_FILTER_OPTIONS: { key: RequiredFilter; label: string }[] = [
   { key: "ALL", label: "Todos" },
@@ -417,6 +417,7 @@ export const REQUIRED_FILTER_OPTIONS: { key: RequiredFilter; label: string }[] =
 
 export const STATUS_FILTER_OPTIONS: { key: StatusFilter; label: string }[] = [
   { key: "ALL", label: "Todos" },
+  { key: "ATIVOS", label: "Ativos (não quitados)" },
   { key: "ABERTO", label: "Em aberto" },
   { key: "PARCIAL", label: "Parcial" },
   { key: "RENEGOCIADO", label: "Renegociado" },
@@ -424,13 +425,24 @@ export const STATUS_FILTER_OPTIONS: { key: StatusFilter; label: string }[] = [
   { key: "QUITADO", label: "Quitado" },
 ];
 
-/** Predicado do filtro de status (endividamento). Critérios multi (Judicial/Renegociado podem coexistir). */
-export function matchesStatusFilter(item: CompanyFinancialItem, key: StatusFilter): boolean {
-  if (key === "ALL") return true;
+/** Quitada ANTES da competência exibida (YYYY-MM)? No mês da quitação ela ainda aparece; a
+ *  partir do seguinte sai da lista padrão. Sem data de quitação, nunca esconde. */
+export function quitadoAntesDe(item: CompanyFinancialItem, competencia: string): boolean {
+  const mes = (item.quitado_em ?? "").slice(0, 7);
+  return mes !== "" && mes < competencia;
+}
+
+/** Predicado do filtro de status (endividamento). Critérios multi (Judicial/Renegociado podem coexistir).
+ *  "Todos" é a lista do dia a dia: esconde quem foi quitado em mês anterior a `competencia`;
+ *  "Quitado" mostra todos os quitados, de qualquer mês. */
+export function matchesStatusFilter(item: CompanyFinancialItem, key: StatusFilter, competencia: string): boolean {
+  if (key === "ALL") return !quitadoAntesDe(item, competencia);
   const quitado = item.status === "quitado" || (pctQuitadoOf(item) ?? 0) >= 100;
   switch (key) {
     case "QUITADO":
       return quitado;
+    case "ATIVOS":
+      return !quitado;
     case "JUDICIAL":
       return !quitado && Boolean(item.has_legal_process);
     case "RENEGOCIADO":

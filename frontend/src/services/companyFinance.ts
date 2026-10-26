@@ -76,6 +76,8 @@ export interface CompanyFinancialItem {
   debt_total?: number | null;
   /** Pago REALIZADO até hoje (sem lançamento futuro) — par de `debt_total`. */
   total_pago_realizado?: number | null;
+  /** Endividamento quitado: competência (YYYY-MM-01) em que zerou. Null enquanto deve. */
+  quitado_em?: string | null;
   pago_mes: number | null;
   restante: number | null;
   /** Fração 0–1 do progresso de pagamento. Redigido (null) sem a permissão sensível. */

@@ -79,6 +79,7 @@ class DebtExtratoMotorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertAlmostEqual(row["restante"], saldo_hoje, places=2)
                 self.assertEqual(row["status"], "ativo")
                 self.assertLess(row["progresso"], 1.0)
+                self.assertIsNone(row["quitado_em"])
                 self.assertEqual(row["total_pago_realizado"], 11000.0)
                 # Contrato antigo do cartão preservado: total_pago ainda soma o futuro.
                 self.assertEqual(row["total_pago"], 11999.0)
@@ -169,8 +170,53 @@ class DebtExtratoMotorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(row["restante"], 0.0)
                 self.assertEqual(row["status"], "quitado")
                 self.assertEqual(row["progresso"], 1.0)
+                # Mês em que zerou: a lista padrão o esconde a partir do seguinte.
+                self.assertEqual(row["quitado_em"], _month(-2))
             finally:
                 await session.rollback()
+
+
+class SettledMonthTests(unittest.TestCase):
+    def test_ledger_settles_on_the_last_zeroing(self) -> None:
+        from decimal import Decimal
+
+        from app.services.company_finance_service import _ledger_settled_month
+        from app.services.debt_accrual import LedgerEvent, build_ledger
+
+        # Zera em 03, recebe aporte em 04 e zera de novo em 05: quitada em 05.
+        linhas = build_ledger(
+            principal=Decimal("1000"),
+            origin_month=date(2026, 1, 1),
+            through=date(2026, 8, 1),
+            events=[LedgerEvent(competencia=date(2026, 4, 1), kind="APORTE", amount=Decimal("500"))],
+            payments={date(2026, 3, 1): 1000, date(2026, 5, 1): 500},
+            realized_through=date(2026, 6, 1),
+        )
+        self.assertEqual(_ledger_settled_month(linhas), date(2026, 5, 1))
+
+    def test_ledger_with_balance_is_not_settled(self) -> None:
+        from decimal import Decimal
+
+        from app.services.company_finance_service import _ledger_settled_month
+        from app.services.debt_accrual import build_ledger
+
+        # Pagamento futuro (projeção) não quita.
+        linhas = build_ledger(
+            principal=Decimal("1000"),
+            origin_month=date(2026, 1, 1),
+            through=date(2026, 4, 1),
+            payments={date(2026, 4, 1): 1000},
+            realized_through=date(2026, 3, 1),
+        )
+        self.assertIsNone(_ledger_settled_month(linhas))
+
+    def test_schedule_settles_when_paid_reaches_total(self) -> None:
+        from app.services.company_finance_service import _schedule_settled_month
+
+        pagos = {date(2026, 3, 1): 1000.0, date(2026, 1, 1): 1000.0, date(2026, 2, 1): 0.0}
+        self.assertEqual(_schedule_settled_month(pagos, 2000.0), date(2026, 3, 1))
+        # Centavos de diferença: vale o último mês com pagamento.
+        self.assertEqual(_schedule_settled_month(pagos, 2000.02), date(2026, 3, 1))
 
 
 if __name__ == "__main__":
