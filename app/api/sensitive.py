@@ -174,7 +174,7 @@ EMPLOYEE_ALLOCATION_SENSITIVE_FIELDS: tuple[str, ...] = ("monthly_cost",)
 
 # --- Endividamento / Finanças da empresa (company_finance; gate por tipo) ---
 COMPANY_FINANCE_ITEM_SENSITIVE_FIELDS: tuple[str, ...] = (
-    "valor_referencia", "debt_base", "renegotiated_amount", "installment_value",
+    "valor_referencia", "debt_base", "debt_total", "total_pago_realizado", "renegotiated_amount", "installment_value",
     "total_pago", "pago_mes", "cap_amount_paid", "restante", "progresso", "progresso_mes",
 )
 KPI_ENDIVIDAMENTO_SENSITIVE_FIELDS: tuple[str, ...] = (

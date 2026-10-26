@@ -71,6 +71,11 @@ export interface CompanyFinancialItem {
   end_date?: string | null;
   pagamentos: PagamentoMes[];
   total_pago: number | null;
+  /** Dívida sem cronograma (motor de saldo): valor de hoje com aportes e encargos. Null no
+   *  cronograma, em custo fixo e quando redigido. */
+  debt_total?: number | null;
+  /** Pago REALIZADO até hoje (sem lançamento futuro) — par de `debt_total`. */
+  total_pago_realizado?: number | null;
   pago_mes: number | null;
   restante: number | null;
   /** Fração 0–1 do progresso de pagamento. Redigido (null) sem a permissão sensível. */

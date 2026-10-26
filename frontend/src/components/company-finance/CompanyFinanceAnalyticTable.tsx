@@ -10,25 +10,44 @@ export function isRedacted(item: CompanyFinancialItem): boolean {
   return item.valor_referencia == null;
 }
 
-/** Base financeira ÚNICA da dívida (espelha a fonte da verdade do backend): renegociado
- *  válido (> 0) senão valor_referencia. Null quando redigido. */
+/** Dívida que evolui pelo motor de saldo (sem cronograma): o backend manda o valor de hoje
+ *  (origem + aportes + encargos) e o pago realizado. Cronograma segue a conta de sempre. */
+function usesLedger(item: CompanyFinancialItem): boolean {
+  return item.debt_total != null && item.total_pago_realizado != null;
+}
+
+/** Valor da Dívida: no razão, com aportes e encargos; senão a base ÚNICA (renegociado válido
+ *  > 0, senão valor_referencia). Null quando redigido. */
 function baseOf(item: CompanyFinancialItem): number | null {
   if (isRedacted(item)) return null;
+  if (usesLedger(item)) return item.debt_total ?? null;
   const base = item.debt_base;
   if (base != null && base > 0) return base;
   return item.valor_referencia;
 }
 
-/** % Quitado da dívida inteira = (Pago Total / base) * 100. Null quando redigido. */
+/** Pago Total: no razão, só o realizado (lançamento futuro é plano); senão a soma de sempre. */
+function pagoTotalOf(item: CompanyFinancialItem): number | null {
+  if (usesLedger(item)) return item.total_pago_realizado ?? null;
+  return item.total_pago;
+}
+
+/** % Quitado da dívida inteira. No razão vem do backend (pago ÷ (pago + saldo), teto 100%);
+ *  senão (Pago Total / base) * 100. Null quando redigido. */
 function pctQuitadoOf(item: CompanyFinancialItem): number | null {
+  if (isRedacted(item)) return null;
+  if (usesLedger(item)) return item.progresso == null ? null : item.progresso * 100;
   const base = baseOf(item);
   if (base == null || item.total_pago == null) return null;
   if (!(base > 0)) return 0;
   return (item.total_pago / base) * 100;
 }
 
-/** Saldo Restante da dívida inteira = base − Pago Total (nunca negativo). Null quando redigido. */
+/** Saldo Restante. No razão é o saldo de hoje do motor (o mesmo do modal "Evolução da
+ *  dívida", com juros); senão base − Pago Total (nunca negativo). Null quando redigido. */
 function saldoOf(item: CompanyFinancialItem): number | null {
+  if (isRedacted(item)) return null;
+  if (usesLedger(item)) return item.restante == null ? null : Math.max(0, item.restante);
   const base = baseOf(item);
   if (base == null || item.total_pago == null) return null;
   return Math.max(0, base - item.total_pago);
@@ -282,8 +301,8 @@ function buildColumns(
         label: "Pago Total",
         align: "right",
         sortable: true,
-        sortValue: (i) => i.total_pago ?? -1,
-        cell: (i) => <span className="tabular-nums text-emerald-700">{formatCurrencyOrDash(i.total_pago)}</span>,
+        sortValue: (i) => pagoTotalOf(i) ?? -1,
+        cell: (i) => <span className="tabular-nums text-emerald-700">{formatCurrencyOrDash(pagoTotalOf(i))}</span>,
       },
       {
         key: "saldo",
@@ -417,9 +436,9 @@ export function matchesStatusFilter(item: CompanyFinancialItem, key: StatusFilte
     case "RENEGOCIADO":
       return !quitado && Boolean(item.has_renegotiation);
     case "PARCIAL":
-      return !quitado && (item.total_pago ?? 0) > 0;
+      return !quitado && (pagoTotalOf(item) ?? 0) > 0;
     case "ABERTO":
-      return !quitado && (item.total_pago ?? 0) <= 0;
+      return !quitado && (pagoTotalOf(item) ?? 0) <= 0;
     default:
       return true;
   }
