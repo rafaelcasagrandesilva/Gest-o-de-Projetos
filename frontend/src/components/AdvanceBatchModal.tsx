@@ -83,6 +83,75 @@ type Props = {
   onOpenOperation?: (batchId: string) => void;
 };
 
+/**
+ * Demonstrativo da operação: do valor ANTECIPADO até o que entrou na conta.
+ *
+ * "Valor da operação" é a soma do que foi usado de cada NF (bruto, líquido ou líquido−10%,
+ * conforme a base de cada uma) — não o bruto das NFs, que não diz nada da operação.
+ * Recebido = operação − deságio − tarifas − repasse retido. O "líquido" gravado na operação
+ * (operação − deságio − tarifas) continua sendo a base do CAR/CAP; aqui ele só confere a conta.
+ */
+function OperationValuesPanel({ detail }: { detail: AdvanceBatch }) {
+  const operacao = detail.advanced_total ?? detail.gross_amount;
+  const desagio = detail.discount_amount ?? 0;
+  const tarifas = detail.fee_amount ?? 0;
+  const repasse = detail.repasse_enabled ? detail.repasse_amount ?? 0 : 0;
+  // Perfis com previsto/realizado (ex.: Daycoval): o que entra na conta é o realizado, ou o previsto.
+  const comPrevisto = detail.expected_amount != null;
+  const liquido = comPrevisto ? detail.actual_received_amount ?? detail.expected_amount ?? 0 : detail.received_amount;
+  const recebido = liquido - repasse;
+  // Conferência: o líquido gravado deveria ser operação − deságio − tarifas.
+  const divergencia = comPrevisto ? 0 : Math.round((operacao - desagio - tarifas - liquido) * 100) / 100;
+  const pct = (v: number) =>
+    operacao > 0.005
+      ? ` (${((v / operacao) * 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%)`
+      : "";
+
+  const linha = (label: string, valor: number, opts?: { sinal?: "-"; nota?: string; forte?: boolean }) => (
+    <div className={`flex items-baseline justify-between gap-4 py-1.5 ${opts?.forte ? "font-semibold" : ""}`}>
+      <dt className={opts?.forte ? "text-slate-900" : "text-slate-600"}>
+        {opts?.sinal === "-" ? "(−) " : ""}
+        {label}
+        {opts?.nota ? <span className="ml-1 text-xs font-normal text-slate-400">{opts.nota}</span> : null}
+      </dt>
+      <dd className={`tabular-nums ${opts?.sinal === "-" ? "text-rose-700" : "text-slate-900"}`}>
+        {opts?.sinal === "-" ? "− " : ""}
+        {formatBRL(valor)}
+      </dd>
+    </div>
+  );
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3">
+      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Valores da operação</p>
+      <dl className="divide-y divide-slate-200/70 text-sm">
+        {linha("Valor da operação", operacao, { forte: true, nota: "soma do valor usado de cada NF" })}
+        {!comPrevisto ? linha("Deságio", desagio, { sinal: "-", nota: pct(desagio).trim() || undefined }) : null}
+        {!comPrevisto ? linha("Tarifas", tarifas, { sinal: "-" }) : null}
+        {repasse > 0 ? linha("Repasse retido", repasse, { sinal: "-", nota: pct(repasse).trim() || undefined }) : null}
+        {comPrevisto ? (
+          <>
+            {linha("Recebimento previsto", detail.expected_amount ?? 0)}
+            {linha("Recebimento realizado", detail.actual_received_amount ?? 0, {
+              nota: detail.actual_received_amount == null ? "não informado — vale o previsto" : undefined,
+            })}
+          </>
+        ) : null}
+        <div className="flex items-baseline justify-between gap-4 pt-2 text-base font-semibold">
+          <dt className="text-emerald-800">(=) Valor recebido</dt>
+          <dd className="tabular-nums text-emerald-800">{formatBRL(recebido)}</dd>
+        </div>
+      </dl>
+      {Math.abs(divergencia) > 0.01 ? (
+        <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+          O líquido gravado na operação ({formatBRL(liquido)}) difere de operação − deságio − tarifas em{" "}
+          {formatBRL(divergencia)}. O valor recebido acima parte do líquido gravado — confira a operação em Editar.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 export function AdvanceBatchModal({
   open,
   onClose,
@@ -681,51 +750,8 @@ export function AdvanceBatchModal({
               <p>
                 <span className="text-slate-500">Recebimento:</span> {formatDateBr(detail.receive_date)}
               </p>
-              <p>
-                <span className="text-slate-500">Bruto:</span> <span className="tabular-nums">{formatBRL(detail.gross_amount)}</span>
-              </p>
-              <p>
-                <span className="text-slate-500">Líquido:</span> <span className="tabular-nums">{formatBRL(detail.received_amount)}</span>
-              </p>
-              {detail.expected_amount != null ? (
-                <>
-                  <p>
-                    <span className="text-slate-500">Previsto:</span> <span className="tabular-nums">{formatBRL(detail.expected_amount)}</span>
-                  </p>
-                  <p>
-                    <span className="text-slate-500">Realizado:</span>{" "}
-                    <span className="tabular-nums">{detail.actual_received_amount != null ? formatBRL(detail.actual_received_amount) : "—"}</span>
-                  </p>
-                  <p>
-                    <span className="text-slate-500">Diferença:</span>{" "}
-                    <span className="tabular-nums">
-                      {detail.actual_received_amount != null
-                        ? formatBRL(detail.actual_received_amount - detail.expected_amount)
-                        : "—"}
-                    </span>
-                  </p>
-                </>
-              ) : null}
-              {detail.repasse_amount != null ? (
-                <p>
-                  <span className="text-slate-500">Repasse:</span> <span className="tabular-nums">{formatBRL(detail.repasse_amount)}</span>
-                </p>
-              ) : null}
-              {detail.expected_amount == null ? (
-                <>
-                  <p>
-                    <span className="text-slate-500">Deságio:</span> 
-                    <span className="tabular-nums">
-                      {formatBRL(detail.discount_amount)}
-                      {detail.discount_percent != null ? ` (${detail.discount_percent}%)` : null}
-                    </span>
-                  </p>
-                  <p>
-                    <span className="text-slate-500">Tarifas:</span> <span className="tabular-nums">{formatBRL(detail.fee_amount)}</span>
-                  </p>
-                </>
-              ) : null}
             </div>
+            <OperationValuesPanel detail={detail} />
             {/* Indicador informativo: custo efetivo de antecipar as NFs (Daycoval).
                 A base é o valor CEDIDO (soma do antecipado por NF), não o líquido integral:
                 a parte da NF que não foi cedida (retenção, ou outra operação) continua a
