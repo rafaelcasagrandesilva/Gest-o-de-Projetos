@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -361,6 +361,13 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [chartPoints, setChartPoints] = useState<ChartPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Aviso do topo: ações disparadas lá embaixo na lista (ex.: Excluir) rolam até ele ao falhar —
+  // senão a recusa parecia "não fazer nada".
+  const errorBannerRef = useRef<HTMLDivElement>(null);
+  const showErrorAtTop = useCallback((msg: string) => {
+    setError(msg);
+    requestAnimationFrame(() => errorBannerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  }, []);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [componentsFor, setComponentsFor] = useState<CompanyFinancialItem | null>(null);
   // Modal "Lançamentos da Competência" aberto pelo Extrato Analítico (célula Valor Mensal).
@@ -1076,9 +1083,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     } catch (err) {
       // Cadastro com movimentação não pode ser excluído — o backend orienta a inativar.
       if (isAxiosError(err) && typeof err.response?.data?.detail === "string") {
-        setError(err.response.data.detail);
+        showErrorAtTop(err.response.data.detail);
       } else {
-        setError("Não foi possível excluir.");
+        showErrorAtTop("Não foi possível excluir.");
       }
     }
   }
@@ -1316,7 +1323,13 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       </header>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
+        <div
+          ref={errorBannerRef}
+          role="alert"
+          className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+        >
+          {error}
+        </div>
       )}
 
       {/* KPIs */}
@@ -2211,6 +2224,17 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
           {createValidationError && (
             <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               {createValidationError}
+            </div>
+          )}
+
+          {/* O aviso do topo da página fica fora da vista de quem rolou até o formulário: sem
+              repetir o erro aqui, a criação recusada parecia "não fazer nada". */}
+          {error && (
+            <div
+              role="alert"
+              className="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+            >
+              {error}
             </div>
           )}
 
