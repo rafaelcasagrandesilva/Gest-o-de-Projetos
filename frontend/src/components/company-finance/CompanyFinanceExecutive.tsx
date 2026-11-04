@@ -3250,7 +3250,9 @@ function FinanceItemCard({
                         />
                       </label>
                     ) : (
-                    {structureEmployeePicker}
+                      // Sem chaves: `( {x} )` aqui é um OBJETO JS ({ structureEmployeePicker }), não
+                      // JSX — o React derrubava a tela ao abrir a estrutura de dívida de Colaborador.
+                      structureEmployeePicker
                     )}
                     <label className="flex flex-col gap-1 text-sm">
                       <span className="text-slate-600">Descrição (opcional)</span>
