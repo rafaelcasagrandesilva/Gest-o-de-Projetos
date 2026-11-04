@@ -301,6 +301,22 @@ def _allocate_payable_components(
     return out
 
 
+def entry_subtitle(item_description: str | None, entry_description: str | None) -> str | None:
+    """Subtítulo do título no CAP: descrição do ITEM + descrição do LANÇAMENTO.
+
+    Antes a do lançamento substituía a do item, e duas dívidas da mesma pessoa saíam idênticas
+    no CAP ("Paulo — Parcela 1" e "Paulo — Parcela 1"). Agora: "Aposentadoria — Parcela 1".
+    Sem uma das duas, vale a outra; se a do lançamento já contém a do item, não repete.
+    """
+    item_desc = (item_description or "").strip() or None
+    entry_desc = (entry_description or "").strip() or None
+    if item_desc is None or entry_desc is None:
+        return entry_desc or item_desc
+    if item_desc.casefold() in entry_desc.casefold():
+        return entry_desc
+    return f"{item_desc} — {entry_desc}"
+
+
 def _employee_display_name(emp: object) -> str:
     """Rótulo do colaborador no snapshot; o model `Employee` usa `full_name`, não `name`."""
     for attr in ("full_name", "name", "nome"):
@@ -951,10 +967,9 @@ class PayableSnapshotService:
             new_amount = _money2(entry.valor)
             entry_is_explicit = entry.id not in auto_reference_entry_ids
             due = entry.due_date or _default_due_date(comp, day=10)
-            # Descrição do LANÇAMENTO vira o subtítulo do título (mesmo padrão do Endividamento
-            # e dos Componentes Variáveis). Vazia → cai no `item_description` do item (descrição
-            # da dívida em Endividamento; None em Custos Fixos). Genérico p/ qualquer fornecedor.
-            line_item_description = (entry.descricao or "").strip() or item_description
+            # Subtítulo = descrição do item (descrição da dívida em Endividamento; None em Custos
+            # Fixos) + descrição do LANÇAMENTO ("Aposentadoria — Parcela 1"). Ver entry_subtitle.
+            line_item_description = entry_subtitle(item_description, entry.descricao)
             row = linked.get(entry.id)
 
             # Adoção de título legado equivalente (entry_id NULL) — vincula em vez de duplicar.
@@ -1269,7 +1284,7 @@ class PayableSnapshotService:
         ).scalars().all()
         for row in rows:
             row.name = name
-            row.item_description = entry_desc.get(row.entry_id) or item_description
+            row.item_description = entry_subtitle(item_description, entry_desc.get(row.entry_id))
             row.cost_center = cost_center
             row.category = category
             _sync_legacy_paid_fields(row)

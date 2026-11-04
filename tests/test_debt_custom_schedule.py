@@ -481,3 +481,75 @@ class DebtCustomScheduleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["lines"][0]["vencimento"], date(2026, 8, 20))
         self.assertEqual(out["lines"][-1]["vencimento"], date(2029, 1, 20))
         self.assertEqual(out["total"], 15000 * 6 + 20000 * 6 + 45000 * 18)
+
+
+class EntrySubtitleTests(unittest.TestCase):
+    """Subtítulo do título no CAP = descrição da dívida + descrição da parcela."""
+
+    def test_combina_descricao_da_divida_e_da_parcela(self) -> None:
+        from app.services.payable_snapshot_service import entry_subtitle
+
+        self.assertEqual(entry_subtitle("Aposentadoria", "Parcela 1"), "Aposentadoria — Parcela 1")
+
+    def test_sem_uma_das_duas_vale_a_outra(self) -> None:
+        from app.services.payable_snapshot_service import entry_subtitle
+
+        self.assertEqual(entry_subtitle(None, "Parcela 1"), "Parcela 1")
+        self.assertEqual(entry_subtitle("Aposentadoria", None), "Aposentadoria")
+        self.assertEqual(entry_subtitle("  ", "  "), None)
+
+    def test_nao_repete_quando_a_parcela_ja_traz_a_descricao(self) -> None:
+        from app.services.payable_snapshot_service import entry_subtitle
+
+        self.assertEqual(entry_subtitle("Acordo", "acordo — parcela 3"), "acordo — parcela 3")
+
+
+class ScheduleTitleSubtitleDBTests(unittest.IsolatedAsyncioTestCase):
+    async def test_titulo_do_cronograma_leva_a_descricao_da_divida(self) -> None:
+        from sqlalchemy import select, text
+        from sqlalchemy.exc import ProgrammingError
+
+        from app.database.session import AsyncSessionLocal, engine
+        from app.models.payable_snapshot import PayableSnapshot
+        from app.services.company_finance_service import CompanyFinanceService
+        from app.services.payable_snapshot_service import PayableSnapshotService
+
+        await engine.dispose()
+        async with AsyncSessionLocal() as session:
+            try:
+                await session.execute(text("SELECT uses_custom_schedule FROM company_financial_items LIMIT 1"))
+            except ProgrammingError:
+                self.skipTest("Colunas do cronograma ausentes (rode alembic upgrade head).")
+            try:
+                item = _debt_item(uuid4().hex[:6], uses_schedule=True, renegotiated=2000.0)
+                item.item_description = "Aposentadoria"
+                session.add(item)
+                await session.flush()
+                cf = CompanyFinanceService(session)
+                await cf.replace_schedule(
+                    item_id=item.id,
+                    lines=[
+                        {"seq": 1, "vencimento": date(2099, 5, 20), "valor": 1000.0, "descricao": "Parcela 1"},
+                        {"seq": 2, "vencimento": date(2099, 6, 20), "valor": 1000.0, "descricao": "Parcela 2"},
+                    ],
+                )
+                svc = PayableSnapshotService(session)
+                await svc._generate_company_finance_payables(payment_month=date(2099, 5, 1))
+                await session.flush()
+                row = (
+                    await session.execute(
+                        select(PayableSnapshot).where(
+                            PayableSnapshot.ref_id == item.id, PayableSnapshot.month == date(2099, 5, 1)
+                        )
+                    )
+                ).scalar_one()
+                self.assertEqual(row.item_description, "Aposentadoria — Parcela 1")
+
+                # Mudar a descrição da dívida reflete nos títulos já existentes (Editar estrutura).
+                await cf.update_item(item_id=item.id, data={"item_description": "Reembolso aposentadoria"})
+                await session.flush()
+                await session.refresh(row)
+                self.assertEqual(row.item_description, "Reembolso aposentadoria — Parcela 1")
+            finally:
+                await session.rollback()
+                await engine.dispose()
