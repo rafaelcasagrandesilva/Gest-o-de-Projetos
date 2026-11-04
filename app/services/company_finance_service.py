@@ -992,28 +992,55 @@ class CompanyFinanceService:
             return False
         # Exclusão física bloqueada quando há movimentação: o cadastro deve ser inativado para
         # preservar o histórico financeiro.
-        if self._uses_schedule(row):
-            # Em modo Cronograma as linhas de `company_financial_payments` são as PARCELAS
-            # PLANEJADAS, não pagamentos — contá-las tornava toda dívida com cronograma
-            # inexcluível desde a criação. Movimentação aqui é parcela paga no Contas a Pagar.
-            movement = await self._paid_payables_count(item_id)
-        else:
-            movement = int(
-                (
-                    await self.db.execute(
-                        select(func.count())
-                        .select_from(CompanyFinancialPayment)
-                        .where(CompanyFinancialPayment.item_id == item_id)
-                    )
-                ).scalar_one()
-                or 0
-            )
-        if movement > 0:
+        if await self._has_financial_history(item_id, uses_schedule=self._uses_schedule(row)):
             raise ValueError(DELETE_WITH_MOVEMENT_MSG)
         await PayableSnapshotService(self.db).preserve_or_remove_deleted_company_finance_item(item_id=item_id)
         await self.db.delete(row)
         await self.db.flush()
         return True
+
+    async def _has_financial_history(self, item_id: UUID, *, uses_schedule: bool) -> bool:
+        """O cadastro tem histórico financeiro REAL (e por isso só pode ser inativado)?
+
+        Criar/editar o item já materializa, sozinho, um lançamento por mês na grade e o título
+        aberto correspondente no CAP. Contar esses lançamentos como "movimentação" tornava todo
+        cadastro inexcluível desde o nascimento — inclusive o criado por engano. Histórico real é:
+
+        - título do item com valor pago (ou marcado pago) no Contas a Pagar;
+        - qualquer pagamento registrado num título do item, mesmo estornado (é trilha de auditoria);
+        - fora do Cronograma: lançamento da grade SEM título vinculado (`entry_id`) — é histórico
+          digitado à mão (ex.: meses anteriores ao CAP), que só existe ali.
+
+        No Cronograma as linhas da grade são parcelas PLANEJADAS: nunca contam por si.
+        """
+        if await self._paid_payables_count(item_id) > 0:
+            return True
+        registered_payments = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(PayablePayment)
+                .join(PayableSnapshot, PayablePayment.payable_snapshot_id == PayableSnapshot.id)
+                .where(PayableSnapshot.ref_id == item_id)
+            )
+        ).scalar_one()
+        if registered_payments:
+            return True
+        if uses_schedule:
+            return False
+        linked_entries = select(PayableSnapshot.entry_id).where(
+            PayableSnapshot.ref_id == item_id, PayableSnapshot.entry_id.is_not(None)
+        )
+        unlinked_entries = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(CompanyFinancialPayment)
+                .where(
+                    CompanyFinancialPayment.item_id == item_id,
+                    CompanyFinancialPayment.id.not_in(linked_entries),
+                )
+            )
+        ).scalar_one()
+        return bool(unlinked_entries)
 
     async def _paid_payables_count(self, item_id: UUID) -> int:
         """Títulos do item com algum valor pago no Contas a Pagar (mesmo critério que preserva o
