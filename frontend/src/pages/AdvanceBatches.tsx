@@ -20,6 +20,7 @@ import {
 } from "@/services/receivableAdvanceBatches";
 import { formatApiError } from "@/utils/apiError";
 import { usePermission } from "@/hooks/usePermission";
+import { AdvanceBatchDocumentsDialog } from "@/components/AdvanceBatchDocuments";
 
 function formatDateBr(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
@@ -51,6 +52,8 @@ export function AdvanceBatches() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [viewBatchId, setViewBatchId] = useState<string | null>(null);
+  // Caixa só com os documentos da operação (clique no "📎 Anexo (n)").
+  const [docsBatch, setDocsBatch] = useState<{ id: string; title: string } | null>(null);
   // Instituições de Antecipação virou aba daqui (saiu do menu); `?aba=instituicoes` abre direto nela.
   const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<AdvanceTab>(() =>
@@ -322,9 +325,10 @@ export function AdvanceBatches() {
               <SortableTh label="Instituição" column="institution" {...headerSort} />
               <SortableTh label="Qtd NFs" column="invoice_count" align="right" {...headerSort} />
               <SortableTh label="Repasse Retido" column="repasse" align="right" {...headerSort} />
-              <SortableTh label="Líquido" column="received" align="right" {...headerSort} />
+              <SortableTh label="Valor da operação" column="operation" align="right" {...headerSort} />
               <SortableTh label="Deságio" column="discount" align="right" {...headerSort} />
               <SortableTh label="Tarifas" column="fee" align="right" {...headerSort} />
+              <th className="px-2 py-2 text-center">Anexos</th>
               <SortableTh label="Recebimento" column="receive_date" {...headerSort} />
               <SortableTh label="Status" column="status" {...headerSort} />
               <th className="px-2 py-2 text-right">Ações</th>
@@ -333,13 +337,13 @@ export function AdvanceBatches() {
           <tbody className="divide-y divide-slate-100">
             {loading ? (
               <tr>
-                <td colSpan={11} className="px-3 py-10 text-center text-slate-500">
+                <td colSpan={12} className="px-3 py-10 text-center text-slate-500">
                   Carregando…
                 </td>
               </tr>
             ) : sorted.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
                   Nenhum borderô criado ainda.
                 </td>
               </tr>
@@ -357,9 +361,25 @@ export function AdvanceBatches() {
                   <td className="px-2 py-1.5 text-indigo-700" title="Repasse retido (7% do antecipado)">
                     <Money value={b.repasse_enabled ? b.repasse_amount : null} />
                   </td>
-                  <td className="px-2 py-1.5"><Money value={b.received_amount} /></td>
+                  {/* Valor da operação: soma do valor usado de cada NF (mesmo número do detalhe). */}
+                  <td className="px-2 py-1.5"><Money value={b.advanced_total ?? b.gross_amount} /></td>
                   <td className="px-2 py-1.5"><Money value={b.discount_amount} /></td>
                   <td className="px-2 py-1.5"><Money value={b.fee_amount} /></td>
+                  {/* Documento da operação: abre o detalhe, onde ficam Ver / Baixar / Anexar. */}
+                  <td className="whitespace-nowrap px-2 py-1.5 text-center">
+                    {(b.attachment_count ?? 0) > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => setDocsBatch({ id: b.id, title: `Documentos · ${operationLabel(b)}` })}
+                        className="rounded px-1.5 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+                        title="Ver os documentos da operação"
+                      >
+                        📎 Anexo ({b.attachment_count})
+                      </button>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
                   <td className="whitespace-nowrap px-2 py-1.5">{formatDateBr(b.receive_date)}</td>
                   <td className="px-2 py-1.5">
                     <span
@@ -404,6 +424,9 @@ export function AdvanceBatches() {
         {loading ? null : <TablePager pagination={pagination} itemLabel="operações" />}
       </div>
 
+      {docsBatch ? (
+        <AdvanceBatchDocumentsDialog batchId={docsBatch.id} title={docsBatch.title} onClose={() => setDocsBatch(null)} />
+      ) : null}
       <AdvanceBatchModal
         open={modalOpen}
         viewBatchId={viewBatchId}

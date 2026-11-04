@@ -38,6 +38,7 @@ from app.schemas.receivable import (
     DEFAULT_PDF_DUE_DAYS,
 )
 from app.schemas.receivable_advance_batch import (
+    AdvanceBatchAttachmentRead,
     AdvanceBatchCreate,
     AdvanceBatchEligibleInvoiceRead,
     AdvanceBatchRead,
@@ -71,6 +72,8 @@ from app.services.advance_institution_service import AdvanceInstitutionService
 from app.services.advance_repasse_ledger_service import AdvanceRepasseLedgerService
 from app.services.advance_settlement_service import AdvanceSettlementService
 from app.services.receivable_advance_batch_service import ReceivableAdvanceBatchService
+from app.services.advance_batch_attachment_service import AdvanceBatchAttachmentService
+from app.utils.media_type import resolve_media_type
 from app.services.receivable_service import ReceivableService
 from app.models.receivable import ReceivableInvoice, ReceivableInvoiceFile
 from app.models.project import Project
@@ -618,6 +621,73 @@ async def delete_advance_batch_hard(
         await batch_svc.delete_batch(batch_id=batch_id, log_user=_actor_email(actor))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+
+
+# --------------------------------------------------------------------------- documentos
+# Documento da operação (borderô/termo da instituição). Mesmas permissões da operação: quem lista
+# operações vê os documentos; quem edita operações anexa e exclui.
+
+
+async def _require_batch(db: AsyncSession, batch_id: UUID) -> None:
+    if await ReceivableAdvanceBatchService(db).get_batch(batch_id) is None:
+        raise HTTPException(status_code=404, detail="Operação não encontrada.")
+
+
+@invoices_router.get(
+    "/advance-batches/{batch_id}/attachments",
+    response_model=list[AdvanceBatchAttachmentRead],
+    dependencies=_read_view,
+)
+async def list_advance_batch_attachments(
+    batch_id: UUID, db: AsyncSession = Depends(get_db)
+) -> list[AdvanceBatchAttachmentRead]:
+    await _require_batch(db, batch_id)
+    rows = await AdvanceBatchAttachmentService(db).list_for_batch(batch_id)
+    return [AdvanceBatchAttachmentRead.model_validate(r) for r in rows]
+
+
+@invoices_router.post(
+    "/advance-batches/{batch_id}/attachments",
+    response_model=list[AdvanceBatchAttachmentRead],
+    dependencies=_edit_view,
+)
+async def upload_advance_batch_attachments(
+    batch_id: UUID,
+    files: list[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> list[AdvanceBatchAttachmentRead]:
+    """Vários arquivos de uma vez, tudo ou nada (um recusado → nenhum gravado)."""
+    await _require_batch(db, batch_id)
+    uploads = [((f.filename or "operacao"), await f.read(), f.content_type) for f in files]
+    out = await AdvanceBatchAttachmentService(db).save_many(batch_id, uploads=uploads, uploaded_by_user_id=actor.id)
+    await db.commit()
+    return [AdvanceBatchAttachmentRead.model_validate(r) for r in out]
+
+
+@invoices_router.get("/advance-batches/{batch_id}/attachments/{attachment_id}/download", dependencies=_read_view)
+async def download_advance_batch_attachment(
+    batch_id: UUID, attachment_id: UUID, db: AsyncSession = Depends(get_db)
+) -> FileResponse:
+    svc = AdvanceBatchAttachmentService(db)
+    row = await svc.get(batch_id, attachment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
+    path = svc.disk_path(row)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado no servidor.")
+    return FileResponse(path, media_type=resolve_media_type(row.mime_type, row.file_name), filename=row.file_name)
+
+
+@invoices_router.delete(
+    "/advance-batches/{batch_id}/attachments/{attachment_id}", status_code=204, dependencies=_edit_view
+)
+async def delete_advance_batch_attachment(
+    batch_id: UUID, attachment_id: UUID, db: AsyncSession = Depends(get_db)
+) -> None:
+    if not await AdvanceBatchAttachmentService(db).delete(batch_id, attachment_id):
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
     await db.commit()
 
 

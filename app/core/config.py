@@ -60,6 +60,14 @@ class Settings(BaseSettings):
         default=10 * 1024 * 1024, alias="PAYMENT_COMPONENT_ATTACHMENT_MAX_BYTES"
     )
 
+    # Documentos da operação de antecipação (borderô/termo da instituição, quase sempre PDF).
+    advance_batch_attachment_dir: str = Field(
+        default="var/advance_batch_attachments", alias="ADVANCE_BATCH_ATTACHMENT_DIR"
+    )
+    advance_batch_attachment_max_bytes: int = Field(
+        default=25 * 1024 * 1024, alias="ADVANCE_BATCH_ATTACHMENT_MAX_BYTES"
+    )
+
     # Anexos da Agenda de Projetos — a ATA da reunião e documentos de apoio.
     project_agenda_attachment_dir: str = Field(
         default="var/project_agenda_attachments", alias="PROJECT_AGENDA_ATTACHMENT_DIR"
@@ -134,6 +142,7 @@ class Settings(BaseSettings):
             "asset_upload_dir": "asset_uploads",
             "project_document_dir": "project_documents",
             "payment_component_attachment_dir": "payment_component_attachments",
+            "advance_batch_attachment_dir": "advance_batch_attachments",
             "project_agenda_attachment_dir": "project_agenda_attachments",
             "legal_document_dir": "legal_documents",
         }
@@ -161,6 +170,7 @@ class Settings(BaseSettings):
             "ASSET_UPLOAD_DIR": Path(self.asset_upload_dir),
             "PROJECT_DOCUMENT_DIR": Path(self.project_document_dir),
             "PAYMENT_COMPONENT_ATTACHMENT_DIR": Path(self.payment_component_attachment_dir),
+            "ADVANCE_BATCH_ATTACHMENT_DIR": Path(self.advance_batch_attachment_dir),
             "PROJECT_AGENDA_ATTACHMENT_DIR": Path(self.project_agenda_attachment_dir),
             "LEGAL_DOCUMENT_DIR": Path(self.legal_document_dir),
         }

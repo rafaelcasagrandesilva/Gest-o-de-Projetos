@@ -9,11 +9,18 @@ import {
   deleteAdvanceBatchHard,
   updateAdvanceBatchDashboardInclusion,
   setAdvanceBatchActualReceived,
+  deleteAdvanceBatchAttachment,
+  uploadAdvanceBatchAttachments,
   type AdvanceBatch,
   type AdvanceBatchEligibleInvoice,
   type AdvanceBatchItem,
 } from "@/services/receivableAdvanceBatches";
 import { OperationInvoicesTable } from "@/components/OperationInvoicesTable";
+import {
+  AdvanceBatchDocuments,
+  EMPTY_DOC_CHANGES,
+  type PendingDocChanges,
+} from "@/components/AdvanceBatchDocuments";
 import { fetchAdvanceInstitutions, type AdvanceInstitution } from "@/services/advanceInstitutions";
 import { formatApiError } from "@/utils/apiError";
 import { formatCurrencyField, formatCurrencyOrDash, normalizeCurrencyForApi } from "@/utils/currency";
@@ -194,6 +201,12 @@ export function AdvanceBatchModal({
   const [discountAmount, setDiscountAmount] = useState("");
   const [feeAmount, setFeeAmount] = useState("");
   const [observation, setObservation] = useState("");
+  // Documentos adicionados/removidos no formulário: só gravados ao clicar em Salvar/Criar.
+  const [docChanges, setDocChanges] = useState<PendingDocChanges>(EMPTY_DOC_CHANGES);
+  // Entrar/sair da edição (inclusive Cancelar) descarta o que não foi salvo.
+  useEffect(() => {
+    setDocChanges(EMPTY_DOC_CHANGES);
+  }, [editing]);
 
   const loadEligible = useCallback(async () => {
     setLoading(true);
@@ -251,6 +264,7 @@ export function AdvanceBatchModal({
     setDiscountAmount("");
     setFeeAmount("");
     setObservation("");
+    setDocChanges(EMPTY_DOC_CHANGES);
     setRepasseEnabled(false);
     setActualReceivedInput("");
   }, [open]);
@@ -511,10 +525,11 @@ export function AdvanceBatchModal({
     setError(null);
     try {
       // Editar reusa o MESMO payload da criação; o backend reverte → aplica → reaplica.
-      const submitBatch =
-        editing && detail
-          ? (p: Parameters<typeof createAdvanceBatch>[0]) => editAdvanceBatch(detail.id, p)
-          : createAdvanceBatch;
+      let saved: AdvanceBatch | null = null;
+      const submitBatch = async (p: Parameters<typeof createAdvanceBatch>[0]) => {
+        saved = editing && detail ? await editAdvanceBatch(detail.id, p) : await createAdvanceBatch(p);
+        return saved;
+      };
       const common = {
         operation_type: operationType,
         operation_code: operationCode.trim() || null,
@@ -557,6 +572,21 @@ export function AdvanceBatchModal({
           fee_amount: feeNum,
           invoice_ids: [...selected],
         });
+      }
+      const savedBatch = saved as AdvanceBatch | null;
+      if (savedBatch && (docChanges.adds.length > 0 || docChanges.removals.length > 0)) {
+        try {
+          for (const id of docChanges.removals) await deleteAdvanceBatchAttachment(savedBatch.id, id);
+          if (docChanges.adds.length > 0) await uploadAdvanceBatchAttachments(savedBatch.id, docChanges.adds);
+        } catch (docErr) {
+          // A operação já foi salva: só os documentos ficaram para trás — dá para refazer em Editar.
+          onCreated();
+          setError(
+            `Operação ${editing ? "salva" : "criada"}, mas os documentos não foram atualizados: ` +
+              `${formatApiError(docErr)}. Ajuste em Editar.`,
+          );
+          return;
+        }
       }
       onCreated();
       onClose();
@@ -798,6 +828,7 @@ export function AdvanceBatchModal({
                 <span className="font-medium">Obs.:</span> {detail.observation}
               </p>
             ) : null}
+            <AdvanceBatchDocuments batchId={detail.id} />
             <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <label className="flex items-center gap-2 text-sm">
                 <input
@@ -1003,6 +1034,13 @@ export function AdvanceBatchModal({
                   className="resize-y rounded-lg border border-slate-300 px-3 py-2"
                 />
               </label>
+              <div className="sm:col-span-2 lg:col-span-3">
+                <AdvanceBatchDocuments
+                  batchId={editing && detail ? detail.id : null}
+                  changes={docChanges}
+                  onChangesChange={setDocChanges}
+                />
+              </div>
             </div>
 
             {/* Objetivo 5: resumo operacional em tempo real conforme a seleção das NFs. */}
