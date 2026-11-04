@@ -1,3 +1,5 @@
+import { hydrateBlobError } from "@/utils/apiError";
+import { saveBlobAsFile, viewFileInNewTab } from "@/utils/fileView";
 import { api } from "./api";
 
 export type AdvanceBatchStatus = "DRAFT" | "OPEN" | "SETTLED" | "CANCELLED";
@@ -85,6 +87,8 @@ export interface AdvanceBatch {
   advanced_total?: number | null;
   finance_cost_amount?: number | null;
   finance_cost_percent?: number | null;
+  /** Documentos anexados à operação (borderô/termo da instituição). */
+  attachment_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -191,4 +195,51 @@ export async function cancelAdvanceBatch(batchId: string): Promise<void> {
 
 export async function deleteAdvanceBatchHard(batchId: string): Promise<void> {
   await api.delete(`/invoices/advance-batches/${batchId}/hard`);
+}
+
+/** Documento anexado à operação (borderô/termo da instituição). */
+export interface AdvanceBatchAttachment {
+  id: string;
+  batch_id: string;
+  file_name: string;
+  mime_type: string | null;
+  size_bytes: number;
+  created_at: string;
+  download_url: string;
+}
+
+export async function listAdvanceBatchAttachments(batchId: string): Promise<AdvanceBatchAttachment[]> {
+  const { data } = await api.get<AdvanceBatchAttachment[]>(`/invoices/advance-batches/${batchId}/attachments`);
+  return data;
+}
+
+/** Envia o lote numa requisição (o backend recusa tudo se um arquivo for inválido). */
+export async function uploadAdvanceBatchAttachments(batchId: string, files: File[]): Promise<AdvanceBatchAttachment[]> {
+  const form = new FormData();
+  files.forEach((f) => form.append("files", f));
+  const { data } = await api.post<AdvanceBatchAttachment[]>(`/invoices/advance-batches/${batchId}/attachments`, form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
+}
+
+export async function deleteAdvanceBatchAttachment(batchId: string, attachmentId: string): Promise<void> {
+  await api.delete(`/invoices/advance-batches/${batchId}/attachments/${attachmentId}`);
+}
+
+async function fetchAdvanceBatchAttachmentBlob(att: AdvanceBatchAttachment): Promise<Blob> {
+  try {
+    const resp = await api.get<Blob>(`/${att.download_url}`, { responseType: "blob" });
+    return resp.data;
+  } catch (e) {
+    throw await hydrateBlobError(e);
+  }
+}
+
+export async function viewAdvanceBatchAttachment(att: AdvanceBatchAttachment): Promise<void> {
+  await viewFileInNewTab(() => fetchAdvanceBatchAttachmentBlob(att));
+}
+
+export async function downloadAdvanceBatchAttachment(att: AdvanceBatchAttachment): Promise<void> {
+  saveBlobAsFile(await fetchAdvanceBatchAttachmentBlob(att), att.file_name);
 }

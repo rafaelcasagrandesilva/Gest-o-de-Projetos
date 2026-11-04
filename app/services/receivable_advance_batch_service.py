@@ -457,6 +457,11 @@ class ReceivableAdvanceBatchService:
             if log_user:
                 recv_svc.append_log(inv, f"Borderô {batch.batch_number}: excluído definitivamente by={log_user}")
 
+        # Documentos da operação: arquivos do disco + registros (o CASCADE só limparia as linhas).
+        from app.services.advance_batch_attachment_service import AdvanceBatchAttachmentService
+
+        await AdvanceBatchAttachmentService(self.db).purge_for_batch(batch.id)
+
         # Remove itens e o lote
         await self.db.delete(batch)
         await self.db.flush()
@@ -898,7 +903,13 @@ class ReceivableAdvanceBatchService:
         other_map: dict[UUID, list[dict]] = {}
         for iid, batches in ops_map.items():
             other_map[iid] = [self.operation_summary_entry(b) for b in batches if b.id != batch.id]
-        return self.batch_to_read(batch, other_operations_map=other_map)
+        out = self.batch_to_read(batch, other_operations_map=other_map)
+        from app.services.advance_batch_attachment_service import AdvanceBatchAttachmentService
+
+        out["attachment_count"] = (await AdvanceBatchAttachmentService(self.db).count_by_batch([batch.id])).get(
+            batch.id, 0
+        )
+        return out
 
     def batch_to_read(
         self, batch: ReceivableAdvanceBatch, *, other_operations_map: dict[UUID, list[dict]] | None = None

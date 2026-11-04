@@ -109,6 +109,21 @@ class AdvanceBatchRead(UUIDTimestampRead):
     advanced_total: float | None = None
     finance_cost_amount: float | None = None
     finance_cost_percent: float | None = None
+    # Documentos anexados à operação (borderô/termo). Arquivos em /advance-batches/{id}/attachments.
+    attachment_count: int = 0
+
+
+class AdvanceBatchAttachmentRead(BaseModel):
+    """Documento anexado à operação de antecipação."""
+
+    id: UUID
+    batch_id: UUID
+    file_name: str
+    mime_type: str | None
+    size_bytes: int
+    created_at: datetime
+    # Relativo à base da API (o front concatena), como nos demais anexos.
+    download_url: str
 
 
 class AdvanceBatchCreate(BaseModel):

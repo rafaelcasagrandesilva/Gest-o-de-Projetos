@@ -69,6 +69,16 @@ _SOURCES: dict[str, tuple[str, str]] = {
          ORDER BY a.created_at
         """,
     ),
+    "Documento de operação de antecipação": (
+        "advance_batch_attachment_dir",
+        """
+        SELECT 'Operação SGC ' || b.sgc_number || ' — ' || b.institution AS onde, 'Operação' AS titulo,
+               a.file_name AS arquivo, a.stored_path AS caminho, a.created_at AS enviado_em
+          FROM receivable_advance_batch_attachments a
+          JOIN receivable_advance_batches b ON b.id = a.batch_id
+         ORDER BY a.created_at
+        """,
+    ),
     "PDF de NF": (
         "receivable_upload_dir",
         """

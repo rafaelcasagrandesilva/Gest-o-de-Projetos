@@ -4,7 +4,7 @@ import enum
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -85,6 +85,14 @@ class ReceivableAdvanceBatch(TimestampUUIDMixin, Base):
         cascade="all, delete-orphan",
         order_by="ReceivableAdvanceBatchItem.created_at.asc()",
     )
+    # passive_deletes: o CASCADE do banco remove as linhas — o ORM não precisa carregar os anexos
+    # (lazy load em sessão async quebraria a exclusão). Os ARQUIVOS saem antes, pelo service.
+    attachments: Mapped[list["ReceivableAdvanceBatchAttachment"]] = relationship(
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ReceivableAdvanceBatchAttachment.created_at.asc()",
+    )
     institution_ref: Mapped["AdvanceInstitution | None"] = relationship(  # noqa: F821
         foreign_keys=[institution_id],
         lazy="raise",
@@ -111,3 +119,28 @@ class ReceivableAdvanceBatchItem(TimestampUUIDMixin, Base):
 
     batch: Mapped[ReceivableAdvanceBatch] = relationship(back_populates="items")
     invoice: Mapped["ReceivableInvoice"] = relationship(back_populates="advance_batch_items")  # noqa: F821
+
+
+class ReceivableAdvanceBatchAttachment(TimestampUUIDMixin, Base):
+    """Documento da operação (borderô/termo da instituição — quase sempre PDF).
+
+    N arquivos por operação. O arquivo mora em disco sob a raiz única de storage
+    (`Settings.resolved_storage_root`), como os PDFs de NF; o banco guarda só o caminho
+    RELATIVO. Excluir a operação leva os anexos (CASCADE; o service apaga os arquivos antes).
+    """
+
+    __tablename__ = "receivable_advance_batch_attachments"
+
+    batch_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("receivable_advance_batches.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    stored_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    uploaded_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    batch: Mapped[ReceivableAdvanceBatch] = relationship(back_populates="attachments")

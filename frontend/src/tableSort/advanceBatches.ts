@@ -8,7 +8,7 @@ export type AdvanceBatchSortColumn =
   | "institution"
   | "invoice_count"
   | "repasse"
-  | "received"
+  | "operation"
   | "discount"
   | "fee"
   | "receive_date"
@@ -27,7 +27,7 @@ export const ADVANCE_BATCH_SORT_COLUMNS: Record<AdvanceBatchSortColumn, SortColu
   institution: { kind: "text", getValue: (b) => b.institution ?? "" },
   invoice_count: { kind: "number", getValue: (b) => Number(b.invoice_count ?? 0) },
   repasse: { kind: "money", getValue: (b) => (b.repasse_enabled ? Number(b.repasse_amount ?? 0) : 0) },
-  received: { kind: "money", getValue: (b) => Number(b.received_amount ?? 0) },
+  operation: { kind: "money", getValue: (b) => Number(b.advanced_total ?? b.gross_amount ?? 0) },
   discount: { kind: "money", getValue: (b) => Number(b.discount_amount ?? 0) },
   fee: { kind: "money", getValue: (b) => Number(b.fee_amount ?? 0) },
   receive_date: { kind: "date", getValue: (b) => b.receive_date ?? "" },
