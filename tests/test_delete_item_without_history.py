@@ -2,7 +2,7 @@
 
 Criar o item já gera, sozinho, os lançamentos da grade e os títulos ABERTOS do Contas a Pagar.
 Antes, esses lançamentos contavam como "movimentação" e o item criado por engano não podia ser
-excluído pela tela. Agora bloqueiam só: título pago, pagamento registrado (mesmo estornado) e
+excluído pela tela. Agora bloqueiam só: título pago, pagamento ativo (estornado não conta) e
 lançamento da grade sem título (histórico digitado à mão).
 
 Tudo roda numa transação desfeita no fim — nada fica no banco.
@@ -94,30 +94,44 @@ class DeleteItemWithoutHistoryDBTests(unittest.IsolatedAsyncioTestCase):
             await svc.delete_item(item_id=item.id)
         self.assertEqual(str(ctx.exception), DELETE_WITH_MOVEMENT_MSG)
 
-    async def test_registered_payment_blocks_delete_even_if_reversed(self) -> None:
-        from datetime import datetime, timezone
-
-        from app.models.payable_payment import PayablePayment
+    async def _item_with_registered_payment(self, tag: str):
         from app.models.payable_snapshot import PayableSnapshot
-        from app.services.company_finance_service import DELETE_WITH_MOVEMENT_MSG, CompanyFinanceService
+        from app.services.company_finance_service import CompanyFinanceService
+        from app.services.payable_snapshot_service import PayableSnapshotService
 
         svc = CompanyFinanceService(self.session)
-        item = await svc.create_item(actor_user_id=uuid4(), data=_debt(f"Estorno {uuid4().hex[:6]}"))
+        item = await svc.create_item(actor_user_id=uuid4(), data=_debt(f"{tag} {uuid4().hex[:6]}"))
         await self.session.flush()
-        titulo = (await self.session.execute(select(PayableSnapshot).where(PayableSnapshot.ref_id == item.id).limit(1))).scalar_one()
-        self.session.add(
-            PayablePayment(
-                payable_snapshot_id=titulo.id,
-                amount=100,
-                payment_date=date(2026, 7, 10),
-                reversed_at=datetime.now(timezone.utc),
-            )
+        titulo = (
+            await self.session.execute(select(PayableSnapshot).where(PayableSnapshot.ref_id == item.id).limit(1))
+        ).scalar_one()
+        await PayableSnapshotService(self.session).register_payment(
+            row=titulo, amount=100.0, payment_date=date(2026, 7, 10)
         )
         await self.session.flush()
+        return svc, item, titulo
 
+    async def test_active_payment_blocks_delete(self) -> None:
+        from app.services.company_finance_service import DELETE_WITH_MOVEMENT_MSG
+
+        svc, item, _ = await self._item_with_registered_payment("Ativo")
         with self.assertRaises(ValueError) as ctx:
             await svc.delete_item(item_id=item.id)
         self.assertEqual(str(ctx.exception), DELETE_WITH_MOVEMENT_MSG)
+
+    async def test_reversed_payment_does_not_block_delete(self) -> None:
+        """Lançado no item errado: estornar → excluir → registrar no certo (fluxo pela tela)."""
+        from app.services.payable_snapshot_service import PayableSnapshotService
+
+        svc, item, titulo = await self._item_with_registered_payment("Estorno")
+        await PayableSnapshotService(self.session).reverse_payment(
+            row=titulo, amount=100.0, reversal_reason="lançado no item errado"
+        )
+        await self.session.flush()
+
+        self.assertTrue(await svc.delete_item(item_id=item.id))
+        await self.session.flush()
+        self.assertEqual(await self._counts(item.id), (0, 0, 0))
 
     async def test_manual_entry_without_title_blocks_delete(self) -> None:
         from app.models.company_finance import CompanyFinancialPayment

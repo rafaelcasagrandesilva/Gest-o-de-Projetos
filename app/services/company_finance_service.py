@@ -1007,7 +1007,9 @@ class CompanyFinanceService:
         cadastro inexcluível desde o nascimento — inclusive o criado por engano. Histórico real é:
 
         - título do item com valor pago (ou marcado pago) no Contas a Pagar;
-        - qualquer pagamento registrado num título do item, mesmo estornado (é trilha de auditoria);
+        - pagamento ATIVO registrado num título do item. Estornado não conta: é o caminho para
+          corrigir um lançamento no item errado (estornar → excluir → registrar no certo), e os
+          registros de estorno saem junto com o título (CASCADE);
         - fora do Cronograma: lançamento da grade SEM título vinculado (`entry_id`) — é histórico
           digitado à mão (ex.: meses anteriores ao CAP), que só existe ali.
 
@@ -1020,7 +1022,7 @@ class CompanyFinanceService:
                 select(func.count())
                 .select_from(PayablePayment)
                 .join(PayableSnapshot, PayablePayment.payable_snapshot_id == PayableSnapshot.id)
-                .where(PayableSnapshot.ref_id == item_id)
+                .where(PayableSnapshot.ref_id == item_id, PayablePayment.reversed_at.is_(None))
             )
         ).scalar_one()
         if registered_payments:
