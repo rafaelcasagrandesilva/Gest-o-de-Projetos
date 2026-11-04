@@ -55,6 +55,7 @@ from app.schemas.legal_import import (
     LegalImportSummary,
 )
 from app.services.audit_service import AuditService
+from app.services.legal_debt_link_service import PAID_SOURCE_DEBT
 from app.services.legal_import_parser import (
     PANEL_ENRICHED_FIELDS,
     ParsedSources,
@@ -412,6 +413,11 @@ class LegalImportService:
                 # pela concessionária tomadora do serviço, empobrecendo o filtro "Empresa".
                 if is_group_company(row.company) and not is_group_company(values.get("company")):
                     values.pop("company", None)
+            # Processo cujo acordo é pago por uma dívida do Endividamento: pago/saldo vêm dela, e a
+            # planilha não pode sobrescrever (o próximo sync desfaria, mas o relatório mentiria).
+            if row.paid_source == PAID_SOURCE_DEBT:
+                values.pop("amount_paid", None)
+                values.pop("amount_pending", None)
             changed = self._diff(row, values)
             # Vínculo com o desligado: liga quando a fonte identifica a pessoa; NUNCA desvincula.
             if person is not None and row.person_id != getattr(person, "id", None):

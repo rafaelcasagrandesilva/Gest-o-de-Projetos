@@ -32,7 +32,32 @@ class RenegotiationType(str, Enum):
 
 class CompanyFinancialItemType(str, Enum):
     MANUAL = "MANUAL"
+    # Custo do colaborador × percentual (quem é pago pela matriz como folha).
     COLABORADOR_MATRIZ = "COLABORADOR_MATRIZ"
+    # Colaborador com VALOR PRÓPRIO (referência/grade, como o Manual) e uma natureza de
+    # pagamento (ex.: Retirada de Capital dos sócios). Migration 0159.
+    COLABORADOR_VALOR = "COLABORADOR_VALOR"
+
+
+#: Naturezas de pagamento (code em payment_component_types) que NÃO são remuneração: a
+#: Retirada de Capital dos sócios. Ficam fora da média mensal do colaborador e da Mão de obra
+#: indireta do Resultado da Empresa.
+NON_REMUNERATION_NATURE_CODES = ("retirada_capital",)
+
+
+def item_pays_remuneration(item) -> bool:
+    """Item de Custo Fixo ligado a colaborador cujo pagamento é remuneração (Mão de obra)."""
+    if getattr(item, "employee_id", None) is None:
+        return False
+    nature = getattr(item, "payment_component_type", None)
+    return getattr(nature, "code", None) not in NON_REMUNERATION_NATURE_CODES
+
+
+#: Tipos de item de Custo Fixo que carregam colaborador vinculado.
+EMPLOYEE_LINKED_ITEM_TYPES = (
+    CompanyFinancialItemType.COLABORADOR_MATRIZ,
+    CompanyFinancialItemType.COLABORADOR_VALOR,
+)
 
 
 class CompanyFinancialItem(TimestampUUIDMixin, Base):
@@ -57,7 +82,20 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     legal_person_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("legal_persons.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Processo do Jurídico cujo ACORDO esta dívida paga. Opcional: dívida de desligado sem processo
+    # (acordo de rescisão) fica só com `legal_person_id`. É daqui que o Jurídico tira o "Valor pago"
+    # do processo (ver LegalDebtLinkService) — nunca casando título por nome.
+    legal_case_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("legal_cases.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     percentual: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
+    # Natureza do pagamento (só COLABORADOR_VALOR): o título do CAP sai "<Colaborador> — <tipo>".
+    payment_component_type_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("payment_component_types.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     nome: Mapped[str] = mapped_column(String(255), nullable=False)
     # Descrição própria do item (ex.: "Acordo de Remuneração"), separada do `nome`.
     # Genérica de propósito (reutilizável por outros tipos futuros); hoje usada por
@@ -152,6 +190,8 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
     )
 
     employee: Mapped[Employee | None] = relationship()
+    # `joined`: o nome do título é montado em caminhos async sem selectinload explícito.
+    payment_component_type: Mapped["PaymentComponentType | None"] = relationship(lazy="joined")
     cost_center_project: Mapped[Project | None] = relationship()
 
 

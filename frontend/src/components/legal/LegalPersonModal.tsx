@@ -1,8 +1,16 @@
 import { Money } from "@/components/Money";
 import { LegalPersonDocuments } from "@/components/legal/LegalPersonDocuments";
-import { DetailMoney, DetailRow, StatusPill, formatCount, formatDateBR } from "@/components/legal/LegalPanelPieces";
+import {
+  DetailMoney,
+  DetailRow,
+  PaymentBadge,
+  StatusPill,
+  formatCount,
+  formatDateBR,
+} from "@/components/legal/LegalPanelPieces";
 import { LEGAL_STATUS_LABELS, type LegalCase, type LegalPersonDetail } from "@/services/legal";
 import { useBackdropClose } from "@/hooks/useBackdropClose";
+import { monthLabel } from "@/utils/roiFormat";
 
 /**
  * Ficha da pessoa: dados pessoais/contratuais, totais derivados dos processos e a LISTA
@@ -92,6 +100,75 @@ export function LegalPersonModal({
                 <DetailMoney value={person.total_pending} />
               </DetailRow>
             </dl>
+          </section>
+
+          <section>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Acordos no Endividamento
+              </h3>
+              <PaymentBadge status={person.debt_status} />
+            </div>
+            {person.debts.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-sm text-slate-400">
+                Nenhuma dívida do Endividamento vinculada a esta pessoa.
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="border-b border-slate-100 bg-slate-50 text-xs uppercase text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Dívida</th>
+                      <th className="px-3 py-2 font-semibold">Processo</th>
+                      <th className="px-3 py-2 font-semibold">Situação</th>
+                      <th className="px-3 py-2 text-right font-semibold">Valor</th>
+                      <th className="px-3 py-2 text-right font-semibold">Pago</th>
+                      <th className="px-3 py-2 text-right font-semibold">Em aberto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {person.debts.map((d) => {
+                      const caso = d.case_id ? person.cases.find((c) => c.id === d.case_id) : undefined;
+                      return (
+                        <tr key={d.item_id} className="border-b border-slate-100 last:border-0">
+                          <td className="max-w-[16rem] truncate px-3 py-2" title={d.name}>
+                            {d.name}
+                          </td>
+                          <td className="px-3 py-2">
+                            {caso ? (
+                              <button
+                                type="button"
+                                onClick={() => onOpenCase(caso)}
+                                className="tabular-nums text-indigo-600 hover:underline"
+                              >
+                                {caso.case_number}
+                              </button>
+                            ) : (
+                              <span className="text-slate-500">{d.case_number ?? "Sem processo"}</span>
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2">
+                            <PaymentBadge status={d.status} />
+                            {d.status === "QUITADO" && d.settled_month ? (
+                              <span className="ml-1.5 text-xs text-slate-500">em {monthLabel(d.settled_month)}</span>
+                            ) : null}
+                          </td>
+                          <td className="px-3 py-2">
+                            <Money value={d.total} />
+                          </td>
+                          <td className="px-3 py-2">
+                            <Money value={d.paid} />
+                          </td>
+                          <td className="px-3 py-2">
+                            <Money value={d.pending} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
 
           <section>

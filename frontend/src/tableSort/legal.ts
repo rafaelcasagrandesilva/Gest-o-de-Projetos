@@ -24,6 +24,7 @@ export type LegalCaseSortColumn =
   | "status"
   | "claimed"
   | "agreed"
+  | "paid"
   | "last_movement";
 
 export const LEGAL_CASE_SORT_COLUMNS: Record<LegalCaseSortColumn, SortColumnDef<LegalCase>> = {
@@ -36,6 +37,7 @@ export const LEGAL_CASE_SORT_COLUMNS: Record<LegalCaseSortColumn, SortColumnDef<
   status: { kind: "status", getValue: (c) => c.status, statusOrder: STATUS_ORDER },
   claimed: { kind: "money", getValue: (c) => c.amount_claimed ?? 0 },
   agreed: { kind: "money", getValue: (c) => c.amount_agreed ?? 0 },
+  paid: { kind: "money", getValue: (c) => c.amount_paid ?? 0 },
   last_movement: { kind: "date", getValue: (c) => c.last_movement_date ?? "" },
 };
 
@@ -53,7 +55,8 @@ export type LegalPersonSortColumn =
   | "project"
   | "case_count"
   | "claimed"
-  | "considered";
+  | "considered"
+  | "debt_paid";
 
 export const LEGAL_PERSON_SORT_COLUMNS: Record<LegalPersonSortColumn, SortColumnDef<LegalPerson>> = {
   name: { kind: "text", getValue: (p) => p.full_name },
@@ -63,6 +66,7 @@ export const LEGAL_PERSON_SORT_COLUMNS: Record<LegalPersonSortColumn, SortColumn
   case_count: { kind: "number", getValue: (p) => p.case_count },
   claimed: { kind: "money", getValue: (p) => p.total_claimed ?? 0 },
   considered: { kind: "money", getValue: (p) => p.total_considered ?? 0 },
+  debt_paid: { kind: "money", getValue: (p) => p.debt_paid ?? 0 },
 };
 
 export function defaultLegalPersonSort(a: LegalPerson, b: LegalPerson): number {

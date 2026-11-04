@@ -6,12 +6,12 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment, RenegotiationType
-from app.models.company_finance import CompanyFinancialItemType
+from app.models.company_finance import EMPLOYEE_LINKED_ITEM_TYPES, CompanyFinancialItemType
 from app.models.employee import Employee
 from app.models.legal import LegalPerson
 from app.models.payable_payment import PayablePayment
@@ -31,6 +31,7 @@ from app.services.financial_schedule import (
     compute_indicators,
     validate_closure,
 )
+from app.services.legal_cost_center import person_cost_center_project_id
 from app.services.payable_snapshot_service import PayableSnapshotService, payable_snapshot_payment_status
 # Aliases: `financial_schedule` e `debt_accrual` têm funções de mesmo nome (cada núcleo
 # calcula os indicadores do SEU modelo — agenda de parcelas × saldo que evolui). Importar os
@@ -275,9 +276,28 @@ class CompanyFinanceService:
         )
 
     async def list_items(self, tipo: str, competencia: str | None) -> list[dict]:
+        rows = await self._load_items(select(CompanyFinancialItem).where(CompanyFinancialItem.tipo == tipo))
+        comp_date = parse_month(competencia) if competencia else None
+        return await self._read_items(rows, tipo, comp_date)
+
+    async def debt_reads(self, item_ids: list[UUID]) -> list[dict]:
+        """Leitura OFICIAL (a mesma da tela do Endividamento) de um subconjunto de dívidas.
+
+        Existe para o Jurídico mostrar pago/saldo/quitado sem refazer conta nenhuma: é o mesmo
+        `_item_to_read` da lista, só que sem calcular as ~30 dívidas para ler meia dúzia.
+        """
+        if not item_ids:
+            return []
+        rows = await self._load_items(
+            select(CompanyFinancialItem).where(
+                CompanyFinancialItem.tipo == "endividamento", CompanyFinancialItem.id.in_(item_ids)
+            )
+        )
+        return await self._read_items(rows, "endividamento", None)
+
+    async def _load_items(self, stmt) -> list[CompanyFinancialItem]:
         q = (
-            select(CompanyFinancialItem)
-            .where(CompanyFinancialItem.tipo == tipo)
+            stmt
             .options(
                 selectinload(CompanyFinancialItem.payments),
                 # O motor de saldo precisa de vigências e eventos junto: sem eager load,
@@ -289,8 +309,11 @@ class CompanyFinanceService:
             )
             .order_by(CompanyFinancialItem.nome)
         )
-        rows = (await self.db.execute(q)).scalars().unique().all()
-        comp_date = parse_month(competencia) if competencia else None
+        return list((await self.db.execute(q)).scalars().unique().all())
+
+    async def _read_items(
+        self, rows: list[CompanyFinancialItem], tipo: str, comp_date: date | None
+    ) -> list[dict]:
         components = await self._variable_components_by_item([it.id for it in rows])
         # Fonte única da verdade: consulta (somente leitura) o Contas a Pagar da competência
         # para espelhar pago/status no Extrato Analítico. NÃO gera snapshot nem altera nada.
@@ -407,6 +430,14 @@ class CompanyFinanceService:
         emp = await self.db.get(Employee, employee_id)
         return getattr(emp, "full_name", None) if emp is not None else None
 
+    async def _require_payment_nature(self, type_id: UUID | None) -> None:
+        from app.models.payment_component import PaymentComponentType
+
+        if type_id is None:
+            raise ValueError("Selecione a natureza do pagamento.")
+        if await self.db.get(PaymentComponentType, type_id) is None:
+            raise ValueError("Natureza do pagamento não encontrada.")
+
     async def _legal_person_full_name(self, legal_person_id: UUID | None) -> str | None:
         if legal_person_id is None:
             return None
@@ -487,6 +518,12 @@ class CompanyFinanceService:
             ref = round(float(base_val) * (float(percentual) / 100.0), 2)
 
         cc_fields = await self._cost_center_fields(it)
+        # Natureza do pagamento (Colaborador com valor próprio, ex.: Retirada de Capital).
+        pct = getattr(it, "payment_component_type", None)
+        pct_fields = {
+            "payment_component_type_id": getattr(it, "payment_component_type_id", None),
+            "payment_component_type_name": getattr(pct, "name", None) if pct is not None else None,
+        }
 
         # Espelho do Contas a Pagar da competência (fonte oficial de pagamento/status para o
         # Extrato Analítico). Com N lançamentos há N títulos por item/mês: agrega pago e valor
@@ -578,7 +615,9 @@ class CompanyFinanceService:
                 "employee_employment_type": employee_employment_type,
                 "legal_person_id": legal_person_id,
                 "legal_person_name": legal_person_name,
+                "legal_case_id": getattr(it, "legal_case_id", None),
                 "percentual": percentual,
+                **pct_fields,
                 "nome": it.nome,
                 "item_description": getattr(it, "item_description", None),
                 "valor_referencia": ref,
@@ -638,6 +677,7 @@ class CompanyFinanceService:
             "legal_person_id": legal_person_id,
             "legal_person_name": legal_person_name,
             "percentual": percentual,
+            **pct_fields,
             "nome": it.nome,
             "item_description": getattr(it, "item_description", None),
             "valor_referencia": ref,
@@ -688,6 +728,13 @@ class CompanyFinanceService:
         # Endividamento: colaborador é só identificação (nunca matriz/percentual); a
         # descrição própria é o identificador e o `nome` é composto automaticamente.
         item_description = (data.get("item_description") or "").strip() or None
+        legal_case_id = data.get("legal_case_id") if data["tipo"] == "endividamento" else None
+        if legal_case_id is not None:
+            from app.models.legal import LegalCase
+
+            case = await self.db.get(LegalCase, legal_case_id)
+            if case is None or case.person_id != data.get("legal_person_id"):
+                raise ValueError("O processo informado não é deste desligado.")
         if data["tipo"] == "endividamento":
             # Padrão Custos Fixos: Tipo Manual (Nome) ou Colaborador (colaborador). O
             # colaborador é só identificação — nunca matriz/percentual. Descrição é
@@ -705,6 +752,11 @@ class CompanyFinanceService:
         else:
             item_description = None
             nome = (data.get("nome") or "").strip()
+            # Colaborador com valor próprio: o item leva o nome do colaborador (a natureza vai
+            # como sufixo só no título do Contas a Pagar).
+            if item_type == CompanyFinancialItemType.COLABORADOR_VALOR:
+                await self._require_payment_nature(data.get("payment_component_type_id"))
+                nome = (await self._employee_full_name(employee_id)) or nome
 
         row = CompanyFinancialItem(
             tipo=data["tipo"],
@@ -721,7 +773,13 @@ class CompanyFinanceService:
             employee_id=employee_id,
             # Só endividamento carrega este vínculo; o schema já zera nos demais tipos.
             legal_person_id=data.get("legal_person_id"),
+            legal_case_id=legal_case_id,
             percentual=percentual,
+            payment_component_type_id=(
+                data.get("payment_component_type_id")
+                if item_type == CompanyFinancialItemType.COLABORADOR_VALOR
+                else None
+            ),
             is_monthly_required=bool(data.get("is_monthly_required") or False),
             # Rateio pela frota só existe em custo fixo; endividamento nunca rateia.
             fleet_allocation=(data.get("fleet_allocation") or None) if data["tipo"] == "custo_fixo" else None,
@@ -746,7 +804,13 @@ class CompanyFinanceService:
         ref_raw = data.get("cost_center_ref")
         if not ref_raw:
             raise ValueError("Centro de custo é obrigatório.")
-        await CompanyFinanceCostCenterService(self.db).apply_ref(row, str(ref_raw))
+        # Dívida de desligado pode ficar no projeto (já encerrado) em que ele trabalhou — só o
+        # vinculado ao projeto dele no Jurídico; qualquer outro encerrado continua recusado.
+        await CompanyFinanceCostCenterService(self.db).apply_ref(
+            row,
+            str(ref_raw),
+            allow_inactive_project_id=await person_cost_center_project_id(self.db, row.legal_person_id),
+        )
         await self.db.refresh(row)
         # Tempo real: o item entra já nos meses abertos do CAP (antes só ao abrir a tela).
         if row.is_active:
@@ -762,10 +826,13 @@ class CompanyFinanceService:
             row.item_type = CompanyFinancialItemType(data["item_type"])
         if "employee_id" in data:
             row.employee_id = data.get("employee_id")
+        prev_legal_person_id = row.legal_person_id
         if "legal_person_id" in data:
             row.legal_person_id = data.get("legal_person_id")
         if "percentual" in data:
             row.percentual = data.get("percentual")
+        if "payment_component_type_id" in data:
+            row.payment_component_type_id = data.get("payment_component_type_id")
         if data.get("nome") is not None:
             row.nome = data["nome"].strip()
         if "item_description" in data:
@@ -777,10 +844,14 @@ class CompanyFinanceService:
             row.category = (data.get("category") or _default_category(row.tipo)).strip()
         if "cost_center_ref" in data and data.get("cost_center_ref") is not None:
             cc_svc = CompanyFinanceCostCenterService(self.db)
+            # Mantém o encerrado que já estava; aceita também o do projeto do desligado vinculado.
+            current = getattr(row, "cost_center_project_id", None)
+            linked = await person_cost_center_project_id(self.db, row.legal_person_id)
+            target = str(data["cost_center_ref"]).strip()
             await cc_svc.apply_ref(
                 row,
-                str(data["cost_center_ref"]),
-                allow_inactive_project_id=getattr(row, "cost_center_project_id", None),
+                target,
+                allow_inactive_project_id=linked if linked is not None and str(linked) == target else current,
             )
         if "description" in data:
             raw = data.get("description")
@@ -852,7 +923,14 @@ class CompanyFinanceService:
             # Colaborador → nome = colaborador; Manual → nome informado (já aplicado acima
             # a partir de data["nome"], se enviado). Descrição é apenas complementar.
             emp_name = await self._employee_full_name(row.employee_id)
-            legal_name = await self._legal_person_full_name(row.legal_person_id)
+            # O desligado só dá o nome quando o vínculo MUDA. Uma dívida já existente ligada a ele
+            # pelo Jurídico ("CAROLINA … - ACORDO RESCISÃO") mantém o nome que tinha — e uma
+            # edição qualquer da estrutura (que reenvia o mesmo vínculo) não pode renomeá-la.
+            legal_name = (
+                await self._legal_person_full_name(row.legal_person_id)
+                if row.legal_person_id != prev_legal_person_id
+                else None
+            )
             row.nome = debt_nome_for(
                 employee_full_name=emp_name,
                 legal_person_full_name=legal_name,
@@ -861,9 +939,20 @@ class CompanyFinanceService:
             ) or row.nome
         else:
             row.legal_person_id = None
-            if row.item_type != CompanyFinancialItemType.COLABORADOR_MATRIZ:
+            if row.item_type not in EMPLOYEE_LINKED_ITEM_TYPES:
                 row.employee_id = None
+            if row.item_type != CompanyFinancialItemType.COLABORADOR_MATRIZ:
                 row.percentual = None
+            if row.item_type != CompanyFinancialItemType.COLABORADOR_VALOR:
+                row.payment_component_type_id = None
+            else:
+                if row.employee_id is None:
+                    raise ValueError("Selecione o colaborador.")
+                await self._require_payment_nature(row.payment_component_type_id)
+            if row.item_type == CompanyFinancialItemType.COLABORADOR_VALOR:
+                # Manual → Colaborador (ex.: "Robert Ugolini - Retirada de Capital"): o item
+                # passa a ter o nome do colaborador; a natureza vira sufixo no título do CAP.
+                row.nome = (await self._employee_full_name(row.employee_id)) or row.nome
 
         if row.tipo == "endividamento" and not row.has_renegotiation:
             row.renegotiated_amount = None
@@ -901,24 +990,47 @@ class CompanyFinanceService:
         row = await self.db.get(CompanyFinancialItem, item_id)
         if row is None:
             return False
-        # Exclusão física bloqueada quando há movimentação (pagamentos lançados): o
-        # cadastro deve ser inativado para preservar o histórico financeiro.
-        movement = int(
-            (
-                await self.db.execute(
-                    select(func.count())
-                    .select_from(CompanyFinancialPayment)
-                    .where(CompanyFinancialPayment.item_id == item_id)
-                )
-            ).scalar_one()
-            or 0
-        )
+        # Exclusão física bloqueada quando há movimentação: o cadastro deve ser inativado para
+        # preservar o histórico financeiro.
+        if self._uses_schedule(row):
+            # Em modo Cronograma as linhas de `company_financial_payments` são as PARCELAS
+            # PLANEJADAS, não pagamentos — contá-las tornava toda dívida com cronograma
+            # inexcluível desde a criação. Movimentação aqui é parcela paga no Contas a Pagar.
+            movement = await self._paid_payables_count(item_id)
+        else:
+            movement = int(
+                (
+                    await self.db.execute(
+                        select(func.count())
+                        .select_from(CompanyFinancialPayment)
+                        .where(CompanyFinancialPayment.item_id == item_id)
+                    )
+                ).scalar_one()
+                or 0
+            )
         if movement > 0:
             raise ValueError(DELETE_WITH_MOVEMENT_MSG)
         await PayableSnapshotService(self.db).preserve_or_remove_deleted_company_finance_item(item_id=item_id)
         await self.db.delete(row)
         await self.db.flush()
         return True
+
+    async def _paid_payables_count(self, item_id: UUID) -> int:
+        """Títulos do item com algum valor pago no Contas a Pagar (mesmo critério que preserva o
+        título na exclusão: `amount_paid > 0`; `paid` cobre linha antiga sem o valor preenchido)."""
+        return int(
+            (
+                await self.db.execute(
+                    select(func.count())
+                    .select_from(PayableSnapshot)
+                    .where(
+                        PayableSnapshot.ref_id == item_id,
+                        or_(PayableSnapshot.amount_paid > 0, PayableSnapshot.paid.is_(True)),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
 
     async def replace_payments(
         self, *, item_id: UUID, pagamentos: list[dict], zero_explicito: bool = False

@@ -39,7 +39,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment
+from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment, item_pays_remuneration
 from app.models.fleet import Vehicle
 from app.models.payable_snapshot import PayableOrigin, PayableSnapshot, PayableSnapshotType
 from app.models.payable_snapshot_generation import PayableSnapshotGeneration
@@ -144,7 +144,9 @@ def _item_line(item, *, amount: float, open_amount: float = 0.0, is_labor: bool 
         item.id,
         str(item.nome),
         indirect_category(item),
-        item.employee_id is not None if is_labor is None else is_labor,
+        # Mão de obra = item ligado a colaborador, exceto Retirada de Capital (não é remuneração;
+        # vale também para os componentes variáveis desse item).
+        item_pays_remuneration(item) if is_labor is None else (is_labor and item_pays_remuneration(item)),
         amount,
         open_amount,
         getattr(item, "cost_center_project_id", None),

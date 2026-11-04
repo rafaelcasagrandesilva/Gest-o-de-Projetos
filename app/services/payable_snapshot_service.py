@@ -732,6 +732,19 @@ class PayableSnapshotService:
             if desc is not None and desc.casefold() == name.casefold():
                 desc = None  # evita subtítulo duplicado (nome == descrição)
             return name, desc
+        # Colaborador com valor próprio: "<Colaborador> — <Natureza>" (ex.: "— Retirada de
+        # Capital"), o mesmo padrão dos componentes da folha. Nome do colaborador vem do
+        # cadastro (acompanha correções); nunca é usado para casar título.
+        nature = getattr(item, "payment_component_type", None)
+        if (
+            item.tipo == "custo_fixo"
+            and getattr(item, "item_type", None) == CompanyFinancialItemType.COLABORADOR_VALOR
+            and nature is not None
+        ):
+            emp = getattr(item, "employee", None)
+            emp_name = _employee_display_name(emp) if emp is not None else None
+            base = (emp_name or str(item.nome or "")).strip()
+            return f"{base} — {nature.name}", None
         return str(item.nome or "").strip(), None
 
     async def _company_finance_snapshot_meta(self, item: CompanyFinancialItem) -> tuple[PayableSnapshotType, str, str]:
@@ -1231,6 +1244,10 @@ class PayableSnapshotService:
         if item is None:
             return 0
         _snap_type, cost_center, category = await self._company_finance_snapshot_meta(item)
+        if item.tipo == "custo_fixo" and getattr(item, "employee_id", None) is not None:
+            # Mesma categoria que o reconciliador grava ("Colaborador"). Antes valia a categoria
+            # do cadastro ("Custos diversos"), e cada "Editar estrutura" tirava o título da Folha.
+            _t, category, _o = self._company_finance_payable_labels(item)
         name, item_description = self._company_finance_payable_identity(item)
         # Descrição por LANÇAMENTO é o subtítulo oficial da linha — preservada aqui (edição de
         # cadastro atualiza nome/centro/categoria, mas NÃO deve apagar a descrição do lançamento).
@@ -1855,6 +1872,48 @@ class PayableSnapshotService:
                 scenario=Scenario.REALIZADO,
             )
         return total
+
+    async def sync_employee_name(self, *, employee_id: UUID, old_name: str | None) -> dict:
+        """Nome do colaborador corrigido no cadastro → itens e títulos ligados a ele.
+
+        A mão de obra dos projetos já se ressincroniza pelo funil próprio. Aqui entram os
+        Custos Indiretos e o Endividamento ligados ao colaborador (o `nome` do item e TODOS os
+        títulos dele, pagos inclusive — só metadados) e os Componentes Variáveis (Reembolso,
+        Premiação…). Valor e pagamento nunca são tocados. O item só troca de nome se o nome
+        dele era o nome antigo do colaborador (um nome digitado à mão é preservado).
+        """
+        emp = await self.session.get(Employee, employee_id)
+        if emp is None:
+            return {"items": 0, "components": 0}
+        new_name = _employee_display_name(emp)
+        old = (old_name or "").strip()
+        items = (
+            await self.session.execute(
+                select(CompanyFinancialItem).where(CompanyFinancialItem.employee_id == employee_id)
+            )
+        ).scalars().all()
+        for item in items:
+            if old and str(item.nome or "").strip() == old:
+                item.nome = new_name
+            await self.session.flush()
+            await self.sync_company_finance_item_metadata(item_id=item.id)
+
+        components = (
+            await self.session.execute(
+                select(PaymentVariableComponent).where(PaymentVariableComponent.employee_id == employee_id)
+            )
+        ).scalars().all()
+        renamed = 0
+        for component in components:
+            row = await self._find_variable_snapshot(component.id)
+            fields = await self._variable_component_snapshot_fields(component) if row is not None else None
+            if row is None or fields is None or row.name == fields["name"]:
+                continue
+            row.name = fields["name"]
+            _sync_legacy_paid_fields(row)
+            renamed += 1
+        await self.session.flush()
+        return {"items": len(items), "components": renamed}
 
     # ------------------------------------------------------------------ #
     # Componentes Variáveis de Pagamento (Projeto e Custo Fixo) — pipeline único

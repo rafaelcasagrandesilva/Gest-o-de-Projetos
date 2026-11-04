@@ -2,7 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { DetailMoney, DetailRow, StatusPill, formatDateBR } from "@/components/legal/LegalPanelPieces";
 import { LegalCaseTimeline } from "@/components/legal/LegalCaseTimeline";
 import { usePermission } from "@/hooks/usePermission";
-import { LEGAL_STATUS_LABELS, LEGAL_TYPE_LABELS, type LegalCase } from "@/services/legal";
+import {
+  LEGAL_STATUS_LABELS,
+  LEGAL_TYPE_LABELS,
+  finalizeLegalAgreement,
+  type LegalCase,
+} from "@/services/legal";
+import { formatApiError } from "@/utils/apiError";
+import { monthLabel } from "@/utils/roiFormat";
 import { EVENT_TYPE_LABELS, listEvents, type LegalEvent } from "@/services/legalOperation";
 import { useBackdropClose } from "@/hooks/useBackdropClose";
 
@@ -22,8 +29,10 @@ import { useBackdropClose } from "@/hooks/useBackdropClose";
 
 const TIPOS_PRAZO = new Set(["PRAZO_PROCESSUAL", "PRAZO_INTERNO"]);
 
-/** Situação financeira derivada do que existe hoje (status + valores). Fase 2 traz o eixo real. */
+/** Situação financeira: com dívida vinculada, é a do Endividamento; sem ela, sai do status. */
 function situacaoFinanceira(c: LegalCase): { label: string; tone: string } {
+  if (c.payment_status === "QUITADO") return { label: "Quitado", tone: "text-emerald-700" };
+  if (c.payment_status === "EM_PAGAMENTO") return { label: "Em pagamento", tone: "text-amber-700" };
   if (c.status === "ACORDO_FINALIZADO") return { label: "Quitado", tone: "text-emerald-700" };
   if (c.status === "ACORDO") return { label: "Em negociação", tone: "text-amber-700" };
   if ((c.amount_pending ?? 0) > 0) return { label: "A pagar", tone: "text-amber-700" };
@@ -64,14 +73,35 @@ export function LegalCaseModal({
   legalCase,
   onClose,
   onOpenPerson,
+  onChanged,
 }: {
   legalCase: LegalCase;
   onClose: () => void;
   onOpenPerson?: (personId: string) => void;
+  /** Chamado quando a ficha altera o processo (ex.: "Acordo finalizado"), para a lista recarregar. */
+  onChanged?: (updated: LegalCase) => void;
 }) {
   const fundo = useBackdropClose(onClose);
-  const c = legalCase;
+  const [c, setC] = useState(legalCase);
+  useEffect(() => setC(legalCase), [legalCase]);
   const canWriteTimeline = usePermission("legal_cases.update");
+  const [finalizando, setFinalizando] = useState(false);
+  const [erroFinalizar, setErroFinalizar] = useState<string | null>(null);
+  const podeFinalizar =
+    canWriteTimeline && c.payment_status === "QUITADO" && c.status !== "ACORDO_FINALIZADO";
+  const finalizar = async () => {
+    setFinalizando(true);
+    setErroFinalizar(null);
+    try {
+      const updated = await finalizeLegalAgreement(c.id);
+      setC(updated);
+      onChanged?.(updated);
+    } catch (e) {
+      setErroFinalizar(formatApiError(e));
+    } finally {
+      setFinalizando(false);
+    }
+  };
   const [eventos, setEventos] = useState<LegalEvent[]>([]);
 
   useEffect(() => {
@@ -287,6 +317,11 @@ export function LegalCaseModal({
                 <LinhaValor label="Valor acordado">
                   <DetailMoney value={c.amount_agreed} />
                 </LinhaValor>
+                {c.paid_source === "ENDIVIDAMENTO" ? (
+                  <LinhaValor label="Valor no Endividamento">
+                    <DetailMoney value={c.payment_total} />
+                  </LinhaValor>
+                ) : null}
                 <LinhaValor label="Valor pago">
                   <DetailMoney value={c.amount_paid} />
                 </LinhaValor>
@@ -296,9 +331,33 @@ export function LegalCaseModal({
                   </LinhaValor>
                 </div>
               </dl>
-              <p className="mt-3 border-t border-slate-100 pt-2 text-[11px] leading-relaxed text-slate-400">
-                Parcelas, pagamentos e depósitos entram na Fase 2, integrados ao Contas a Pagar.
-              </p>
+              {c.paid_source === "ENDIVIDAMENTO" ? (
+                <div className="mt-3 space-y-2 border-t border-slate-100 pt-2 text-[11px] leading-relaxed text-slate-500">
+                  <p>
+                    Pago pelo Endividamento ({c.payment_debts.join(", ")}), atualizado a cada
+                    pagamento no Contas a Pagar.
+                    {c.payment_status === "QUITADO" && c.payment_settled_month
+                      ? ` Quitado em ${monthLabel(c.payment_settled_month)}.`
+                      : ""}
+                  </p>
+                  {podeFinalizar ? (
+                    <button
+                      type="button"
+                      onClick={() => void finalizar()}
+                      disabled={finalizando}
+                      className="w-full rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
+                    >
+                      {finalizando ? "Salvando…" : "Acordo quitado: marcar como Acordo finalizado"}
+                    </button>
+                  ) : null}
+                  {erroFinalizar ? <p className="text-red-600">{erroFinalizar}</p> : null}
+                </div>
+              ) : (
+                <p className="mt-3 border-t border-slate-100 pt-2 text-[11px] leading-relaxed text-slate-400">
+                  Valor pago digitado no Jurídico. Para acompanhar pelo Contas a Pagar, vincule a
+                  dívida do acordo em Administração › Vínculos com Endividamento.
+                </p>
+              )}
             </section>
 
             {/* 5. NEGOCIAÇÃO */}

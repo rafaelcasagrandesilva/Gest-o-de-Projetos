@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { formatCurrencyOrDash, formatCurrencyShortOrDash } from "@/utils/currency";
-import type { LegalBucket, LegalCaseStatus } from "@/services/legal";
-import { LEGAL_STATUS_STYLES } from "@/services/legal";
+import type { LegalBucket, LegalCaseStatus, LegalPaymentStatus } from "@/services/legal";
+import { LEGAL_PAYMENT_STATUS_LABELS, LEGAL_STATUS_STYLES } from "@/services/legal";
 
 /**
  * Peças visuais do Workspace Jurídico — reproduzem a experiência do Painel de Passivo
@@ -173,6 +173,21 @@ export function StatusPill({ status, label }: { status: LegalCaseStatus; label: 
   return (
     <span className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${style.pill}`}>
       {label}
+    </span>
+  );
+}
+
+/** Situação do acordo no Endividamento (dívida vinculada): Quitado / Em pagamento. */
+export function PaymentBadge({ status }: { status: LegalPaymentStatus | null | undefined }) {
+  if (!status) return null;
+  const tone =
+    status === "QUITADO" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900";
+  return (
+    <span
+      className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${tone}`}
+      title="Situação da dívida vinculada no Endividamento (pagamentos do Contas a Pagar)"
+    >
+      {LEGAL_PAYMENT_STATUS_LABELS[status]}
     </span>
   );
 }

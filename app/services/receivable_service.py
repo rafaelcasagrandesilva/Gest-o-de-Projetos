@@ -18,6 +18,7 @@ from app.models.receivable import (
     ReceivableInvoiceFile,
 )
 from app.services.payable_snapshot_service import PayableSnapshotService
+from app.models.project import Project
 from app.utils.dashboard_inclusion import apply_dashboard_inclusion_change
 from app.utils.date_utils import normalize_competencia
 from app.schemas.receivable import (
@@ -94,6 +95,45 @@ def get_affected_months(invoice: ReceivableInvoice) -> set[date]:
         add_month(getattr(ant, "due_date", None))
 
     return months
+
+
+_ACCENTED = "áàâãäéèêëíìîïóòôõöúùûüçñ"
+_PLAIN = "aaaaaeeeeiiiiooooouuuucn"
+
+
+def _search_norm(expr):
+    """Minúsculo e sem acento no SQL (sem depender da extensão `unaccent`)."""
+    return func.translate(func.lower(func.coalesce(expr, "")), _ACCENTED, _PLAIN)
+
+
+def _search_words(text: str) -> list[str]:
+    plain = text.strip().lower().translate(str.maketrans(_ACCENTED, _PLAIN))
+    return [w for w in plain.split() if w]
+
+
+def _invoice_search_conditions(text: str) -> list:
+    """Busca geral das NFs, por PALAVRAS: cada palavra precisa aparecer em algum campo —
+    nº da NF, cliente, projeto ou observações —, em qualquer ordem e sem acento.
+    "eletropaulo 3450" acha a NF 3450 da Eletropaulo; "fiscalizacao" acha "Fiscalização AT".
+    """
+    conds = []
+    for w in _search_words(text):
+        escaped = w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pat = f"%{escaped}%"
+        project_match = (
+            select(Project.id)
+            .where(Project.id == ReceivableInvoice.project_id, _search_norm(Project.name).like(pat))
+            .exists()
+        )
+        conds.append(
+            or_(
+                _search_norm(ReceivableInvoice.nf_number).like(pat),
+                _search_norm(ReceivableInvoice.client_name).like(pat),
+                _search_norm(ReceivableInvoice.notes).like(pat),
+                project_match,
+            )
+        )
+    return conds
 
 
 class ReceivableService:
@@ -357,8 +397,7 @@ class ReceivableService:
                     )
                 )
         if client_busca and client_busca.strip():
-            pat = f"%{client_busca.strip()}%"
-            q = q.where(ReceivableInvoice.client_name.ilike(pat))
+            q = q.where(*_invoice_search_conditions(client_busca))
         return q
 
     @staticmethod

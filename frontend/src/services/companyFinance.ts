@@ -23,10 +23,14 @@ export interface PagamentoMes {
   componentes_count?: number | null;
 }
 
+/** MANUAL; COLABORADOR_MATRIZ = custo do colaborador × %; COLABORADOR_VALOR = colaborador com
+ * valor próprio e uma natureza de pagamento (ex.: Retirada de Capital). */
+export type CompanyFinancialItemType = "MANUAL" | "COLABORADOR_MATRIZ" | "COLABORADOR_VALOR";
+
 export interface CompanyFinancialItem {
   id: string;
   tipo: string;
-  item_type?: "MANUAL" | "COLABORADOR_MATRIZ" | null;
+  item_type?: CompanyFinancialItemType | null;
   employee_id?: string | null;
   employee_name?: string | null;
   employee_employment_type?: string | null;
@@ -34,6 +38,9 @@ export interface CompanyFinancialItem {
   legal_person_id?: string | null;
   legal_person_name?: string | null;
   percentual?: number | null;
+  /** Natureza do pagamento (Colaborador com valor próprio), ex.: Retirada de Capital. */
+  payment_component_type_id?: string | null;
+  payment_component_type_name?: string | null;
   nome: string;
   /** Descrição própria do item (identificador da dívida em Endividamento). */
   item_description?: string | null;
@@ -152,10 +159,13 @@ export async function createCompanyFinanceItem(payload: {
   cost_center_ref: string;
   description?: string | null;
   recurrence?: string | null;
-  item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
+  item_type?: CompanyFinancialItemType;
   employee_id?: string | null;
+  payment_component_type_id?: string | null;
   /** Só Endividamento: vínculo com um desligado do Jurídico. Excludente com `employee_id`. */
   legal_person_id?: string | null;
+  /** Só Endividamento de Desligado: o processo cujo acordo a dívida paga. */
+  legal_case_id?: string | null;
   percentual?: number | null;
   is_monthly_required?: boolean;
   /** Rateio pela frota (só custo fixo): LOCACAO substitui o custo dos veículos; ADICIONAL soma; null = sem rateio. */
@@ -171,6 +181,8 @@ export async function createCompanyFinanceItem(payload: {
   renegotiation_agreement_date?: string | null;
   renegotiation_first_payment_date?: string | null;
   renegotiation_due_day?: number | null;
+  /** Modo 2: a dívida nasce com Cronograma Financeiro (as parcelas são gravadas logo depois). */
+  uses_custom_schedule?: boolean;
   is_active?: boolean;
   /** Ciclo de vida — início obrigatório em novos cadastros; encerramento opcional. */
   start_date: string;
@@ -192,8 +204,9 @@ export async function updateCompanyFinanceItem(
     cost_center_ref?: string;
     description?: string | null;
     recurrence?: string | null;
-    item_type?: "MANUAL" | "COLABORADOR_MATRIZ";
+    item_type?: CompanyFinancialItemType;
     employee_id?: string | null;
+    payment_component_type_id?: string | null;
     legal_person_id?: string | null;
     percentual?: number | null;
     is_monthly_required?: boolean;

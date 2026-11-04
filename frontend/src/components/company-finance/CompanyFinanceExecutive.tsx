@@ -33,7 +33,14 @@ import {
 } from "@/services/companyFinance";
 import { Link } from "react-router-dom";
 import { listEmployees, type Employee } from "@/services/employees";
-import { searchLegalPersonsReference, type LegalPersonRef } from "@/services/legal";
+import { fetchPaymentComponentTypes, type PaymentComponentType } from "@/services/paymentComponentTypes";
+import {
+  LEGAL_STATUS_LABELS,
+  fetchLegalPersonAgreements,
+  searchLegalPersonsReference,
+  type LegalPersonAgreement,
+  type LegalPersonRef,
+} from "@/services/legal";
 import { formatDateBR } from "@/components/legal/LegalPanelPieces";
 import { listProjects, type Project } from "@/services/projects";
 import { SortableTh } from "@/components/table";
@@ -119,6 +126,49 @@ function EmployeeOptionBadges({ employee }: { employee: Employee }) {
   );
 }
 
+/** Natureza do pagamento de um Custo Fixo "Colaborador (valor próprio)".
+ *
+ * Fonte = tipos de Componentes Variáveis (Configurações). O nome do tipo vira o sufixo do título
+ * no Contas a Pagar ("<Colaborador> — Retirada de Capital"). Inativos só aparecem se já são o
+ * valor atual (item antigo), para a tela não esconder o que está gravado.
+ */
+function NatureSelect({
+  value,
+  onChange,
+  options,
+  disabled,
+  compact,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+  options: PaymentComponentType[];
+  disabled?: boolean;
+  compact?: boolean;
+}) {
+  const visible = options.filter((o) => o.is_active || o.id === value);
+  return (
+    <label className="flex flex-col gap-1 text-sm">
+      <span className="text-slate-600">Natureza do pagamento *</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`rounded${compact ? "" : "-lg"} border border-slate-300 bg-white ${compact ? "px-2 py-1.5" : "px-3 py-2"}`}
+        disabled={disabled}
+      >
+        <option value="">Selecione…</option>
+        {visible.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.name}
+          </option>
+        ))}
+      </select>
+      <span className="text-[11px] leading-tight text-slate-500">
+        No Contas a Pagar o título sai “Colaborador — Natureza”.
+      </span>
+    </label>
+  );
+}
+
 /** Opções do combo "Tipo" ao criar/editar um item.
  *
  * `DESLIGADO` só existe em ENDIVIDAMENTO e é uma escolha de INTERFACE, não um item_type do
@@ -127,7 +177,28 @@ function EmployeeOptionBadges({ employee }: { employee: Employee }) {
  * cadastros são praticamente disjuntos: um passivo trabalhista costuma ser com quem já saiu, e
  * essa pessoa quase nunca está em Colaboradores.
  */
-type DraftItemType = "MANUAL" | "COLABORADOR_MATRIZ" | "DESLIGADO";
+type DraftItemType = "MANUAL" | "COLABORADOR_MATRIZ" | "COLABORADOR_VALOR" | "DESLIGADO";
+
+/** Vencimentos mensais das parcelas do acordo: a 1ª no mês do início, no dia de vencimento do
+ * acordo ("todo dia 30") ou, sem ele, no dia do início — limitado ao último dia de cada mês. */
+function agreementScheduleLines(values: number[], startDate: string, dueDay: number | null) {
+  const [y, m, d] = startDate.split("-").map(Number);
+  if (!y || !m || !d) return [];
+  const day = dueDay ?? d;
+  return values.map((valor, i) => {
+    const monthIndex = m - 1 + i;
+    const year = y + Math.floor(monthIndex / 12);
+    const month = (monthIndex % 12) + 1;
+    const lastDay = new Date(year, month, 0).getDate();
+    const dd = Math.min(day, lastDay);
+    return {
+      seq: i + 1,
+      vencimento: `${year}-${String(month).padStart(2, "0")}-${String(dd).padStart(2, "0")}`,
+      valor,
+      descricao: `Parcela ${i + 1}/${values.length} do acordo`,
+    };
+  });
+}
 
 /** Opções do "Rateio pela frota" (só custo fixo). Valor "" = sem rateio (null no payload). */
 const FLEET_ALLOCATION_OPTIONS: { value: FleetAllocation | ""; label: string }[] = [
@@ -334,12 +405,21 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   const [draftLegalPersonOptions, setDraftLegalPersonOptions] = useState<LegalPersonRef[]>([]);
   const [draftLegalPersonOpen, setDraftLegalPersonOpen] = useState(false);
   const [draftLegalPersonLoading, setDraftLegalPersonLoading] = useState(false);
+  // Desligado: processos COM ACORDO dele (o acordo é a dívida) e o escolhido.
+  const [draftAgreements, setDraftAgreements] = useState<LegalPersonAgreement[]>([]);
+  const [draftLegalCaseId, setDraftLegalCaseId] = useState("");
+  // Criar já com o Cronograma Financeiro lido das condições do acordo.
+  const [draftUseAgreementSchedule, setDraftUseAgreementSchedule] = useState(false);
   const [draftEmployeeQuery, setDraftEmployeeQuery] = useState("");
   const [draftEmployeeOptions, setDraftEmployeeOptions] = useState<Employee[]>([]);
   const [draftEmployeeOpen, setDraftEmployeeOpen] = useState(false);
   const [draftEmployeeLoading, setDraftEmployeeLoading] = useState(false);
   const [draftEmployeeId, setDraftEmployeeId] = useState("");
   const [draftPercentual, setDraftPercentual] = useState("100");
+  // Colaborador com valor próprio: natureza do pagamento (ex.: Retirada de Capital), que vira
+  // o sufixo do título no Contas a Pagar ("<Colaborador> — <Natureza>").
+  const [draftNatureId, setDraftNatureId] = useState("");
+  const [natureOptions, setNatureOptions] = useState<PaymentComponentType[]>([]);
   const [draftIsMonthlyRequired, setDraftIsMonthlyRequired] = useState(false);
   const [draftFleetAllocation, setDraftFleetAllocation] = useState<FleetAllocation | null>(null);
   const [draftProjectCostGroup, setDraftProjectCostGroup] = useState<ProjectCostGroup | null>(null);
@@ -373,6 +453,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     setDraftEmployeeOptions([]);
     setDraftEmployeeId("");
     setDraftPercentual("100");
+    setDraftNatureId("");
     setDraftIsMonthlyRequired(false);
     setDraftFleetAllocation(null);
     setDraftProjectCostGroup(null);
@@ -386,6 +467,11 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     setDraftRenegFirstPaymentDate("");
     setDraftRenegDueDay("");
     setDraftStartDate("");
+    setDraftLegalPersonId("");
+    setDraftLegalPersonQuery("");
+    setDraftAgreements([]);
+    setDraftLegalCaseId("");
+    setDraftUseAgreementSchedule(false);
   }, [tipo]);
 
   useEffect(() => {
@@ -416,6 +502,26 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       setDraftCostCenterRef(CC_REF_ADMINISTRATIVO);
     }
   }, [tipo, draftItemType]);
+
+  useEffect(() => {
+    if (tipo !== "custo_fixo") return;
+    let cancelled = false;
+    void fetchPaymentComponentTypes(false)
+      .then((rows) => {
+        if (!cancelled) setNatureOptions(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setNatureOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tipo]);
+
+  // Custo Fixo ligado a colaborador: pela matriz (% do custo) ou com valor próprio.
+  const draftEmployeeLinked =
+    tipo === "custo_fixo" && (draftItemType === "COLABORADOR_MATRIZ" || draftItemType === "COLABORADOR_VALOR");
+  const draftOwnValue = tipo === "custo_fixo" && draftItemType === "COLABORADOR_VALOR";
 
   const installmentCountN = useMemo(() => {
     const n = Number.parseInt(draftInstallmentCount || "0", 10);
@@ -509,6 +615,56 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
     () => draftLegalPersonOptions.find((p) => p.id === draftLegalPersonId) ?? null,
     [draftLegalPersonOptions, draftLegalPersonId],
   );
+
+  // Desligado escolhido → processos com acordo. Com um só (ainda sem dívida), já vem marcado.
+  useEffect(() => {
+    setDraftAgreements([]);
+    setDraftLegalCaseId("");
+    if (tipo !== "endividamento" || draftItemType !== "DESLIGADO" || !draftLegalPersonId) return;
+    let cancelled = false;
+    void fetchLegalPersonAgreements(draftLegalPersonId)
+      .catch(() => [])
+      .then((rows) => {
+        if (cancelled) return;
+        setDraftAgreements(rows);
+        const livres = rows.filter((a) => !a.linked_debt);
+        if (livres.length === 1) setDraftLegalCaseId(livres[0].case_id);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tipo, draftItemType, draftLegalPersonId]);
+
+  const selectedAgreement = useMemo(
+    () => draftAgreements.find((a) => a.case_id === draftLegalCaseId) ?? null,
+    [draftAgreements, draftLegalCaseId],
+  );
+
+  // O acordo é o valor da dívida: preenche (o usuário pode trocar) e marca "possui processo".
+  useEffect(() => {
+    if (!selectedAgreement) {
+      setDraftUseAgreementSchedule(false);
+      return;
+    }
+    if (selectedAgreement.amount_agreed != null) {
+      setDraftRef(formatCurrencyInputFromApi(selectedAgreement.amount_agreed));
+    }
+    setDraftHasLegalProcess(true);
+    setDraftUseAgreementSchedule(selectedAgreement.installments.length > 0);
+  }, [selectedAgreement]);
+
+  const agreementLines = useMemo(
+    () =>
+      selectedAgreement && draftStartDate
+        ? agreementScheduleLines(selectedAgreement.installments, draftStartDate, selectedAgreement.due_day)
+        : [],
+    [selectedAgreement, draftStartDate],
+  );
+  const agreementLinesTotal = useMemo(
+    () => Math.round(agreementLines.reduce((sum, l) => sum + l.valor, 0) * 100) / 100,
+    [agreementLines],
+  );
+  const scheduleFromAgreement = draftUseAgreementSchedule && agreementLines.length > 0;
 
   const loadAll = useCallback(async () => {
     setError(null);
@@ -743,10 +899,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (financeReadOnly) return;
-    const nome =
-      tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ"
-        ? (selectedEmployee?.full_name ?? "").trim()
-        : draftName.trim();
+    const nome = draftEmployeeLinked ? (selectedEmployee?.full_name ?? "").trim() : draftName.trim();
     const itemDescription = draftItemDescription.trim();
     const ref = calculatedRef;
     // Endividamento segue o padrão do Custos Fixos: Manual exige Nome; Colaborador exige
@@ -776,7 +929,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
       setError("Informe a data de início.");
       return;
     }
-    if (createValidationError) {
+    if (createValidationError && !scheduleFromAgreement) {
       setError(createValidationError);
       return;
     }
@@ -790,10 +943,23 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         return;
       }
     }
+    if (draftOwnValue) {
+      if (!draftEmployeeId) {
+        setError("Selecione um colaborador.");
+        return;
+      }
+      if (!draftNatureId) {
+        setError("Selecione a natureza do pagamento.");
+        return;
+      }
+    }
     setSaving(true);
     setError(null);
     try {
-      await createCompanyFinanceItem({
+      // Cronograma do acordo: a dívida nasce no Modo 2 (cronograma = fonte oficial) e o total
+      // renegociado é a soma das parcelas — o fechamento que o Cronograma exige.
+      const schedule = tipo === "endividamento" && scheduleFromAgreement;
+      const created = await createCompanyFinanceItem({
         tipo,
         // Endividamento: Manual envia o Nome; Colaborador deriva o nome do colaborador no backend.
         nome:
@@ -803,57 +969,92 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               : undefined
             : nome,
         item_description: tipo === "endividamento" ? itemDescription || undefined : undefined,
-        valor_referencia: ref,
+        valor_referencia: schedule ? agreementLinesTotal : ref,
         category: draftCategory.trim() || defaultCategory(tipo),
         cost_center_ref: draftCostCenterRef || defaultCostCenterRef(tipo),
         description: draftDescription.trim() || null,
         recurrence: draftRecurrence.trim() || defaultRecurrence(tipo),
         // Endividamento sempre persiste item_type=MANUAL (o "Colaborador" e o "Desligado" são só
         // identificação). DESLIGADO nunca chega ao banco como item_type — é escolha de interface.
-        item_type:
-          tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? "COLABORADOR_MATRIZ" : "MANUAL",
+        item_type: draftEmployeeLinked ? (draftItemType as "COLABORADOR_MATRIZ" | "COLABORADOR_VALOR") : "MANUAL",
         employee_id:
           tipo === "endividamento"
             ? draftItemType === "COLABORADOR_MATRIZ"
               ? draftEmployeeId || null
               : null
-            : tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ"
+            : draftEmployeeLinked
               ? draftEmployeeId
               : null,
         // Desligado: o nome sai do cadastro do Jurídico, no backend (mesmo caminho do Colaborador).
         legal_person_id:
           tipo === "endividamento" && draftItemType === "DESLIGADO" ? draftLegalPersonId || null : null,
+        legal_case_id:
+          tipo === "endividamento" && draftItemType === "DESLIGADO" ? draftLegalCaseId || null : null,
         percentual: tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" ? percentualN : null,
+        payment_component_type_id: draftOwnValue ? draftNatureId : null,
         is_monthly_required: draftIsMonthlyRequired,
         fleet_allocation: tipo === "custo_fixo" ? draftFleetAllocation : null,
         // Só vale para centro de custo = projeto; fora disso o campo nem aparece, então vai null.
         project_cost_group:
           tipo === "custo_fixo" && isProjectCostCenterRef(draftCostCenterRef) ? draftProjectCostGroup : null,
         has_legal_process: tipo === "endividamento" ? draftHasLegalProcess : false,
-        has_renegotiation: tipo === "endividamento" ? draftHasRenegotiation : false,
-        renegotiated_amount: tipo === "endividamento" && draftHasRenegotiation ? renegotiatedAmountN : null,
-        renegotiation_type:
-          tipo === "endividamento" && draftHasRenegotiation ? (draftRenegotiationType as RenegotiationType) : null,
-        installment_count:
-          tipo === "endividamento" && draftHasRenegotiation && draftRenegotiationType === "INSTALLMENTS"
-            ? installmentCountN
-            : null,
-        installment_value:
-          tipo === "endividamento" && draftHasRenegotiation && draftRenegotiationType === "INSTALLMENTS"
-            ? installmentValueN
-            : null,
-        renegotiation_agreement_date:
-          tipo === "endividamento" && draftHasRenegotiation ? draftRenegAgreementDate || null : null,
-        renegotiation_first_payment_date:
-          tipo === "endividamento" && draftHasRenegotiation ? draftRenegFirstPaymentDate || null : null,
-        renegotiation_due_day:
-          tipo === "endividamento" && draftHasRenegotiation && draftRenegDueDay
-            ? Number(draftRenegDueDay)
-            : null,
+        ...(schedule
+          ? {
+              has_renegotiation: true,
+              renegotiated_amount: agreementLinesTotal,
+              renegotiation_type: "INSTALLMENTS" as RenegotiationType,
+              installment_count: null,
+              installment_value: null,
+              renegotiation_agreement_date: draftStartDate,
+              renegotiation_first_payment_date: agreementLines[0]?.vencimento ?? null,
+              renegotiation_due_day: null,
+              uses_custom_schedule: true,
+            }
+          : {
+              has_renegotiation: tipo === "endividamento" ? draftHasRenegotiation : false,
+              renegotiated_amount:
+                tipo === "endividamento" && draftHasRenegotiation ? renegotiatedAmountN : null,
+              renegotiation_type:
+                tipo === "endividamento" && draftHasRenegotiation
+                  ? (draftRenegotiationType as RenegotiationType)
+                  : null,
+              installment_count:
+                tipo === "endividamento" && draftHasRenegotiation && draftRenegotiationType === "INSTALLMENTS"
+                  ? installmentCountN
+                  : null,
+              installment_value:
+                tipo === "endividamento" && draftHasRenegotiation && draftRenegotiationType === "INSTALLMENTS"
+                  ? installmentValueN
+                  : null,
+              renegotiation_agreement_date:
+                tipo === "endividamento" && draftHasRenegotiation ? draftRenegAgreementDate || null : null,
+              renegotiation_first_payment_date:
+                tipo === "endividamento" && draftHasRenegotiation ? draftRenegFirstPaymentDate || null : null,
+              renegotiation_due_day:
+                tipo === "endividamento" && draftHasRenegotiation && draftRenegDueDay
+                  ? Number(draftRenegDueDay)
+                  : null,
+            }),
         is_active: true,
         start_date: draftStartDate,
         end_date: null,
       });
+      if (schedule) {
+        try {
+          await replaceSchedule(created.id, agreementLines);
+        } catch (err) {
+          // A dívida já existe: o cronograma pode ser montado depois pelo botão Cronograma.
+          setError(
+            `Dívida criada, mas o cronograma não foi gravado: ${
+              isAxiosError(err) ? String(err.response?.data?.detail ?? err.message) : "erro inesperado"
+            }. Abra o Cronograma da dívida para concluir.`,
+          );
+          resetCreateForm();
+          setShowCreateForm(false);
+          await loadAll();
+          return;
+        }
+      }
       resetCreateForm();
       setShowCreateForm(false);
       await loadAll();
@@ -1398,7 +1599,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
         className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 shadow-sm"
       >
         <h2 className="text-sm font-medium text-slate-800">Novo item</h2>
-        <form onSubmit={handleCreate} className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        {/* Topo, não base: campos com texto de apoio embaixo (desligado escolhido, termos do acordo)
+            ficariam com a caixa deslocada para cima em relação aos vizinhos da mesma linha. */}
+        <form onSubmit={handleCreate} className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start">
           {/* Tipo (Manual/Colaborador) — mesmo padrão em Custos Fixos e Endividamento. */}
           <label className="flex w-full min-w-[220px] flex-col gap-1 text-sm sm:w-56">
             <span className="text-slate-600">Tipo</span>
@@ -1409,7 +1612,11 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               disabled={financeReadOnly}
             >
               <option value="MANUAL">Manual</option>
-              <option value="COLABORADOR_MATRIZ">Colaborador</option>
+              <option value="COLABORADOR_MATRIZ">
+                {tipo === "custo_fixo" ? "Colaborador (% do custo)" : "Colaborador"}
+              </option>
+              {/* Valor próprio que não sai do custo do colaborador (ex.: Retirada de Capital). */}
+              {tipo === "custo_fixo" && <option value="COLABORADOR_VALOR">Colaborador (valor próprio)</option>}
               {/* Só Endividamento: um custo fixo recorrente não é de quem já saiu da empresa. */}
               {tipo === "endividamento" && <option value="DESLIGADO">Desligado (Jurídico)</option>}
             </select>
@@ -1426,7 +1633,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                 className="rounded-lg border border-slate-300 px-3 py-2"
                 placeholder="Ex.: Financiamento veículos"
                 required
-                disabled={financeReadOnly || (tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ")}
+                disabled={financeReadOnly || draftEmployeeLinked}
               />
             </label>
           )}
@@ -1469,6 +1676,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                               setDraftLegalPersonId(pessoa.id);
                               setDraftLegalPersonQuery("");
                               setDraftLegalPersonOpen(false);
+                              // Centro de custo do contrato em que a pessoa trabalhou (vínculo na
+                              // Administração do Jurídico); sem vínculo, fica o que já estava.
+                              if (pessoa.cost_center_ref) setDraftCostCenterRef(pessoa.cost_center_ref);
                             }}
                             className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-slate-50"
                           >
@@ -1492,6 +1702,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                     <button
                       type="button"
                       onClick={() => {
+                        if (selectedLegalPerson.cost_center_ref && draftCostCenterRef === selectedLegalPerson.cost_center_ref) {
+                          setDraftCostCenterRef(defaultCostCenterRef(tipo));
+                        }
                         setDraftLegalPersonId("");
                         setDraftLegalPersonQuery("");
                       }}
@@ -1503,6 +1716,30 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                   </p>
                 ) : null}
               </label>
+              )}
+              {draftItemType === "DESLIGADO" && draftLegalPersonId && (
+                <label className="flex w-full min-w-[200px] flex-col gap-1 text-sm sm:w-72">
+                  <span className="text-slate-600">Processo (acordo)</span>
+                  <select
+                    value={draftLegalCaseId}
+                    onChange={(e) => setDraftLegalCaseId(e.target.value)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2"
+                    disabled={financeReadOnly || draftAgreements.length === 0}
+                  >
+                    <option value="">
+                      {draftAgreements.length === 0 ? "Nenhum processo com acordo" : "Sem processo (acordo de rescisão)"}
+                    </option>
+                    {draftAgreements.map((a) => (
+                      <option key={a.case_id} value={a.case_id} disabled={!!a.linked_debt}>
+                        {a.case_number} · {LEGAL_STATUS_LABELS[a.status] ?? a.status}
+                        {a.linked_debt ? " (já tem dívida)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedAgreement?.agreement_terms ? (
+                    <span className="text-xs text-slate-500">Acordo: {selectedAgreement.agreement_terms}</span>
+                  ) : null}
+                </label>
               )}
               {draftItemType === "COLABORADOR_MATRIZ" && (
               <label className="flex w-full min-w-[200px] flex-col gap-1 text-sm sm:w-64">
@@ -1631,7 +1868,17 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               onChange={setDraftCostCenterRef}
               projects={projectOptions}
               disabled={financeReadOnly || (tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ")}
+              legacyLabel={
+                selectedLegalPerson?.cost_center_ref === draftCostCenterRef ? selectedLegalPerson?.cost_center_label : null
+              }
             />
+            {draftItemType === "DESLIGADO" && selectedLegalPerson?.project ? (
+              <span className="text-xs text-slate-500">
+                {selectedLegalPerson.cost_center_ref
+                  ? `Do projeto do desligado: ${selectedLegalPerson.project}`
+                  : `Projeto do desligado sem vínculo (${selectedLegalPerson.project}) — vincule em Jurídico › Administração › Projetos.`}
+              </span>
+            ) : null}
           </label>
           <label className="flex w-full min-w-[160px] flex-col gap-1 text-sm sm:w-48">
             <span className="text-slate-600">Recorrência</span>
@@ -1713,7 +1960,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
           )}
 
 
-          {tipo === "custo_fixo" && draftItemType === "COLABORADOR_MATRIZ" && (
+          {draftEmployeeLinked && (
             <div className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <label className="flex flex-col gap-1 text-sm">
                 <span className="text-slate-600">Colaborador</span>
@@ -1761,32 +2008,90 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
                     </div>
                   ) : null}
                 </div>
-                {selectedEmployee ? (
+                {selectedEmployee && !draftOwnValue ? (
                   <p className="mt-1 text-xs text-slate-500">
                     Base: <span className="font-medium tabular-nums text-slate-700">{formatBRL(selectedEmployee.total_cost)}</span>
                   </p>
                 ) : null}
+                {selectedEmployee && draftOwnValue ? (
+                  <p className="mt-1 text-xs font-medium text-slate-700">{selectedEmployee.full_name}</p>
+                ) : null}
               </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-slate-600">Percentual (%)</span>
-                <input
-                  value={draftPercentual}
-                  onChange={(e) => setDraftPercentual(e.target.value)}
-                  className="rounded-lg border border-slate-300 px-3 py-2"
-                  inputMode="decimal"
+              {draftOwnValue ? (
+                <NatureSelect
+                  value={draftNatureId}
+                  onChange={setDraftNatureId}
+                  options={natureOptions}
                   disabled={financeReadOnly}
                 />
+              ) : (
+                <>
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-slate-600">Percentual (%)</span>
+                    <input
+                      value={draftPercentual}
+                      onChange={(e) => setDraftPercentual(e.target.value)}
+                      className="rounded-lg border border-slate-300 px-3 py-2"
+                      inputMode="decimal"
+                      disabled={financeReadOnly}
+                    />
+                  </label>
+                  <div className="flex flex-col justify-end">
+                    <p className="text-xs text-slate-500">
+                      Centro de custo: <span className="font-medium text-slate-700">Administrativo</span>
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {tipo === "endividamento" && selectedAgreement && selectedAgreement.installments.length > 0 && (
+            <div className="w-full rounded-lg border border-indigo-200 bg-indigo-50/60 p-3 text-sm">
+              <label className="flex items-center gap-2 font-medium text-indigo-900">
+                <input
+                  type="checkbox"
+                  checked={draftUseAgreementSchedule}
+                  onChange={(e) => setDraftUseAgreementSchedule(e.target.checked)}
+                  disabled={financeReadOnly}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                Criar com o cronograma do acordo ({selectedAgreement.installments.length} parcela
+                {selectedAgreement.installments.length > 1 ? "s" : ""}
+                {selectedAgreement.due_day ? `, todo dia ${selectedAgreement.due_day}` : ""})
               </label>
-              <div className="flex flex-col justify-end">
-                <p className="text-xs text-slate-500">
-                  Centro de custo: <span className="font-medium text-slate-700">Administrativo</span>
-                </p>
-              </div>
+              {draftUseAgreementSchedule ? (
+                agreementLines.length === 0 ? (
+                  <p className="mt-2 text-xs text-indigo-800">Informe o Início para calcular os vencimentos.</p>
+                ) : (
+                  <>
+                    <ul className="mt-2 grid gap-1 text-xs text-slate-700 sm:grid-cols-2 lg:grid-cols-4">
+                      {agreementLines.map((l) => (
+                        <li key={l.seq} className="flex justify-between gap-3 rounded bg-white px-2 py-1 tabular-nums">
+                          <span>
+                            {l.seq}ª · {formatDateBR(l.vencimento)}
+                          </span>
+                          <span className="font-medium">{formatBRL(l.valor)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-xs text-indigo-800">
+                      Total {formatBRL(agreementLinesTotal)}
+                      {selectedAgreement.amount_agreed != null &&
+                      Math.abs(selectedAgreement.amount_agreed - agreementLinesTotal) > 0.009
+                        ? ` — diferente do acordo (${formatBRL(selectedAgreement.amount_agreed)}): o valor da dívida será o total das parcelas.`
+                        : " — o valor da dívida será o total das parcelas."}{" "}
+                      Cada parcela vira um título no Contas a Pagar; ajuste depois pelo botão Cronograma, se
+                      precisar.
+                    </p>
+                  </>
+                )
+              ) : null}
             </div>
           )}
 
           {tipo === "endividamento" && (
-            <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-end">
+            <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center sm:self-center">
               <label className="flex items-center gap-2 text-sm text-slate-700">
                 <input
                   type="checkbox"
@@ -1800,9 +2105,9 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               <label className="flex items-center gap-2 text-sm text-slate-700">
                 <input
                   type="checkbox"
-                  checked={draftHasRenegotiation}
+                  checked={draftHasRenegotiation || scheduleFromAgreement}
                   onChange={(e) => setDraftHasRenegotiation(e.target.checked)}
-                  disabled={financeReadOnly}
+                  disabled={financeReadOnly || scheduleFromAgreement}
                   className="h-4 w-4 rounded border-slate-300"
                 />
                 <span>Possui renegociação</span>
@@ -1810,7 +2115,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             </div>
           )}
 
-          {tipo === "endividamento" && draftHasRenegotiation && (
+          {tipo === "endividamento" && draftHasRenegotiation && !scheduleFromAgreement && (
             <div className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <label className="flex flex-col gap-1 text-sm">
                 <span className="text-slate-600">Valor renegociado</span>
@@ -1913,7 +2218,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
             type="submit"
             disabled={saving || financeReadOnly}
             title={financeReadOnlyTitle}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:opacity-50"
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:opacity-50 sm:self-center"
           >
             {saving ? "Salvando…" : "Adicionar"}
           </button>
@@ -1962,6 +2267,7 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               expanded={expandedId === it.id}
               monthKeys={monthKeys}
               projectOptions={projectOptions}
+              natureOptions={natureOptions}
               readOnly={financeReadOnly}
               onToggle={() => setExpandedId((prev) => (prev === it.id ? null : it.id))}
               onDelete={() => void handleDelete(it.id)}
@@ -2256,6 +2562,7 @@ function FinanceItemCard({
   expanded,
   monthKeys,
   projectOptions,
+  natureOptions,
   readOnly,
   onToggle,
   onDelete,
@@ -2268,6 +2575,7 @@ function FinanceItemCard({
   expanded: boolean;
   monthKeys: string[];
   projectOptions: Project[];
+  natureOptions: PaymentComponentType[];
   readOnly: boolean;
   onToggle: () => void;
   onDelete: () => void;
@@ -2282,7 +2590,15 @@ function FinanceItemCard({
   const hasLegal = Boolean(item.has_legal_process);
   const hasReneg = Boolean(item.has_renegotiation);
   const isMatrixCollaborator = tipo === "custo_fixo" && item.item_type === "COLABORADOR_MATRIZ";
-  const itemTypeLabel = tipo === "custo_fixo" ? (isMatrixCollaborator ? "Colaborador" : "Manual") : null;
+  const isOwnValueCollaborator = tipo === "custo_fixo" && item.item_type === "COLABORADOR_VALOR";
+  const itemTypeLabel =
+    tipo === "custo_fixo"
+      ? isMatrixCollaborator
+        ? "Colaborador"
+        : isOwnValueCollaborator
+          ? `Colaborador — ${item.payment_component_type_name ?? "valor próprio"}`
+          : "Manual"
+      : null;
 
   const [localPayments, setLocalPayments] = useState<Record<string, string>>(() => {
     const m: Record<string, string> = {};
@@ -2304,6 +2620,13 @@ function FinanceItemCard({
   // Trocar a pessoa vinculada é raro e arriscado (o nome do título muda junto); aqui o vínculo é
   // só EXIBIDO. Para trocar, o caminho é criar o item certo — como já vale para o Colaborador.
   const [structureLegalPersonName] = useState(item.legal_person_name ?? "");
+  // Custo Fixo (fora da matriz): Manual ↔ Colaborador com valor próprio. Converter um Manual
+  // antigo não mexe em valor nem pagamento — só o nome/categoria dos títulos acompanham.
+  const [structureFixedType, setStructureFixedType] = useState<"MANUAL" | "COLABORADOR_VALOR">(
+    item.item_type === "COLABORADOR_VALOR" ? "COLABORADOR_VALOR" : "MANUAL",
+  );
+  const [structureNatureId, setStructureNatureId] = useState(item.payment_component_type_id ?? "");
+  const structureOwnValue = tipo === "custo_fixo" && !isMatrixCollaborator && structureFixedType === "COLABORADOR_VALOR";
   const [structureEmployeeName, setStructureEmployeeName] = useState(item.employee_name ?? "");
   const [structureEmployeeQuery, setStructureEmployeeQuery] = useState("");
   const [structureEmployeeOptions, setStructureEmployeeOptions] = useState<Employee[]>([]);
@@ -2375,6 +2698,8 @@ function FinanceItemCard({
     setStructureItemDescription(item.item_description ?? "");
     setStructureEmployeeId(item.employee_id ?? "");
     setStructureDebtType(item.employee_id ? "COLABORADOR_MATRIZ" : "MANUAL");
+    setStructureFixedType(item.item_type === "COLABORADOR_VALOR" ? "COLABORADOR_VALOR" : "MANUAL");
+    setStructureNatureId(item.payment_component_type_id ?? "");
     setStructureEmployeeName(item.employee_name ?? "");
     setStructureEmployeeQuery("");
     setStructureEmployeeOptions([]);
@@ -2409,7 +2734,7 @@ function FinanceItemCard({
 
   // Autocomplete de colaborador na edição de Endividamento (opcional, só identificação).
   useEffect(() => {
-    if (tipo !== "endividamento" || !structureEmployeeOpen) return;
+    if (!structureEmployeeOpen || (tipo !== "endividamento" && !structureOwnValue)) return;
     const t = window.setTimeout(() => {
       setStructureEmployeeLoading(true);
       void listEmployees({
@@ -2423,7 +2748,7 @@ function FinanceItemCard({
         .finally(() => setStructureEmployeeLoading(false));
     }, 300);
     return () => window.clearTimeout(t);
-  }, [tipo, structureEmployeeOpen, structureEmployeeQuery, competencia]);
+  }, [tipo, structureOwnValue, structureEmployeeOpen, structureEmployeeQuery, competencia]);
 
   // Bump depois de cada gravação da grade: o razão do Endividamento é DERIVADO dos
   // pagamentos, então precisa ser recalculado quando eles mudam.
@@ -2538,6 +2863,15 @@ function FinanceItemCard({
         setStructureError("Vínculo com o desligado não encontrado.");
         return;
       }
+    } else if (structureOwnValue) {
+      if (!structureEmployeeId) {
+        setStructureError("Selecione um colaborador.");
+        return;
+      }
+      if (!structureNatureId) {
+        setStructureError("Selecione a natureza do pagamento.");
+        return;
+      }
     } else if (!nome) {
       setStructureError("Informe o nome do item.");
       return;
@@ -2559,7 +2893,16 @@ function FinanceItemCard({
               structureDebtType === "DESLIGADO" ? item.legal_person_id ?? null : null,
             ...(structureDebtType === "MANUAL" ? { nome } : {}),
           }
-        : { nome }),
+        : isMatrixCollaborator
+          ? { nome }
+          : structureOwnValue
+            ? {
+                // O nome do item passa a ser o do colaborador (no backend).
+                item_type: "COLABORADOR_VALOR" as const,
+                employee_id: structureEmployeeId,
+                payment_component_type_id: structureNatureId,
+              }
+            : { nome, item_type: "MANUAL" as const }),
       // Colaborador da matriz não tem valor próprio: enviá-lo gravaria na coluna um número que
       // nenhuma leitura usa, deixando o banco divergente da tela.
       ...(isMatrixCollaborator ? {} : { valor_referencia: parseBRLInput(structureRef) }),
@@ -2631,6 +2974,74 @@ function FinanceItemCard({
       setStructureSaving(false);
     }
   }
+
+  // Seletor de colaborador da edição da estrutura (Endividamento e Custo Fixo com valor próprio).
+  const structureEmployeePicker = (
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Colaborador *</span>
+                      <div className="relative">
+                        <input
+                          value={structureEmployeeQuery}
+                          onChange={(e) => {
+                            setStructureEmployeeQuery(e.target.value);
+                            setStructureEmployeeOpen(true);
+                          }}
+                          onFocus={() => setStructureEmployeeOpen(true)}
+                          onBlur={() => window.setTimeout(() => setStructureEmployeeOpen(false), 150)}
+                          placeholder={structureEmployeeName || "Digite para buscar…"}
+                          className="w-full rounded border border-slate-300 px-2 py-1.5"
+                          disabled={readOnly || structureSaving}
+                        />
+                        {structureEmployeeOpen ? (
+                          <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                            <div className="px-3 py-2 text-xs text-slate-500">
+                              {structureEmployeeLoading
+                                ? "Buscando…"
+                                : structureEmployeeOptions.length === 0
+                                  ? "Nenhum colaborador encontrado."
+                                  : "Selecione um colaborador"}
+                            </div>
+                            <div className="max-h-56 overflow-auto">
+                              {structureEmployeeOptions.map((em) => (
+                                <button
+                                  key={em.id}
+                                  type="button"
+                                  onMouseDown={(ev) => {
+                                    ev.preventDefault();
+                                    setStructureEmployeeId(em.id);
+                                    setStructureEmployeeName(em.full_name);
+                                    setStructureEmployeeQuery("");
+                                    setStructureEmployeeOpen(false);
+                                  }}
+                                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50"
+                                >
+                                  <span className="truncate text-slate-900">{em.full_name}</span>
+                                  <EmployeeOptionBadges employee={em} />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                      {structureEmployeeId ? (
+                        <p className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                          <span className="font-medium text-slate-700">{structureEmployeeName}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setStructureEmployeeId("");
+                              setStructureEmployeeName("");
+                              setStructureEmployeeQuery("");
+                            }}
+                            className="text-indigo-600 hover:underline"
+                            disabled={readOnly || structureSaving}
+                          >
+                            remover
+                          </button>
+                        </p>
+                      ) : null}
+                    </label>
+  );
 
   return (
     <article
@@ -2815,70 +3226,7 @@ function FinanceItemCard({
                         />
                       </label>
                     ) : (
-                    <label className="flex flex-col gap-1 text-sm">
-                      <span className="text-slate-600">Colaborador *</span>
-                      <div className="relative">
-                        <input
-                          value={structureEmployeeQuery}
-                          onChange={(e) => {
-                            setStructureEmployeeQuery(e.target.value);
-                            setStructureEmployeeOpen(true);
-                          }}
-                          onFocus={() => setStructureEmployeeOpen(true)}
-                          onBlur={() => window.setTimeout(() => setStructureEmployeeOpen(false), 150)}
-                          placeholder={structureEmployeeName || "Digite para buscar…"}
-                          className="w-full rounded border border-slate-300 px-2 py-1.5"
-                          disabled={readOnly || structureSaving}
-                        />
-                        {structureEmployeeOpen ? (
-                          <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
-                            <div className="px-3 py-2 text-xs text-slate-500">
-                              {structureEmployeeLoading
-                                ? "Buscando…"
-                                : structureEmployeeOptions.length === 0
-                                  ? "Nenhum colaborador encontrado."
-                                  : "Selecione um colaborador"}
-                            </div>
-                            <div className="max-h-56 overflow-auto">
-                              {structureEmployeeOptions.map((em) => (
-                                <button
-                                  key={em.id}
-                                  type="button"
-                                  onMouseDown={(ev) => {
-                                    ev.preventDefault();
-                                    setStructureEmployeeId(em.id);
-                                    setStructureEmployeeName(em.full_name);
-                                    setStructureEmployeeQuery("");
-                                    setStructureEmployeeOpen(false);
-                                  }}
-                                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50"
-                                >
-                                  <span className="truncate text-slate-900">{em.full_name}</span>
-                                  <EmployeeOptionBadges employee={em} />
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                      {structureEmployeeId ? (
-                        <p className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-                          <span className="font-medium text-slate-700">{structureEmployeeName}</span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setStructureEmployeeId("");
-                              setStructureEmployeeName("");
-                              setStructureEmployeeQuery("");
-                            }}
-                            className="text-indigo-600 hover:underline"
-                            disabled={readOnly || structureSaving}
-                          >
-                            remover
-                          </button>
-                        </p>
-                      ) : null}
-                    </label>
+                    {structureEmployeePicker}
                     )}
                     <label className="flex flex-col gap-1 text-sm">
                       <span className="text-slate-600">Descrição (opcional)</span>
@@ -2892,15 +3240,50 @@ function FinanceItemCard({
                     </label>
                   </>
                 ) : (
-                  <label className="flex flex-col gap-1 text-sm">
-                    <span className="text-slate-600">Nome</span>
-                    <input
-                      value={structureName}
-                      onChange={(e) => setStructureName(e.target.value)}
-                      className="rounded border border-slate-300 px-2 py-1.5"
-                      disabled={readOnly || structureSaving}
-                    />
-                  </label>
+                  <>
+                    {!isMatrixCollaborator && (
+                      <label className="flex flex-col gap-1 text-sm">
+                        <span className="text-slate-600">Tipo</span>
+                        <select
+                          value={structureFixedType}
+                          onChange={(e) => setStructureFixedType(e.target.value as "MANUAL" | "COLABORADOR_VALOR")}
+                          className="rounded border border-slate-300 bg-white px-2 py-1.5"
+                          disabled={readOnly || structureSaving}
+                        >
+                          <option value="MANUAL">Manual</option>
+                          <option value="COLABORADOR_VALOR">Colaborador (valor próprio)</option>
+                        </select>
+                        {structureOwnValue && !isOwnValueCollaborator && (
+                          <span className="text-[11px] leading-tight text-slate-500">
+                            Valores e pagamentos ficam como estão; os títulos passam a sair com o nome do
+                            colaborador e a natureza.
+                          </span>
+                        )}
+                      </label>
+                    )}
+                    {structureOwnValue ? (
+                      <>
+                        {structureEmployeePicker}
+                        <NatureSelect
+                          value={structureNatureId}
+                          onChange={setStructureNatureId}
+                          options={natureOptions}
+                          disabled={readOnly || structureSaving}
+                          compact
+                        />
+                      </>
+                    ) : (
+                      <label className="flex flex-col gap-1 text-sm">
+                        <span className="text-slate-600">Nome</span>
+                        <input
+                          value={structureName}
+                          onChange={(e) => setStructureName(e.target.value)}
+                          className="rounded border border-slate-300 px-2 py-1.5"
+                          disabled={readOnly || structureSaving}
+                        />
+                      </label>
+                    )}
+                  </>
                 )}
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="text-slate-600">Valor base</span>

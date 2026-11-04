@@ -235,6 +235,7 @@ LEGAL_CASE_SENSITIVE_FIELDS: tuple[str, ...] = (
     "amount_paid",
     "amount_pending",
     "agreement_terms",  # descreve o plano de pagamento do acordo (valor por parcela)
+    "payment_total",  # total da dívida que paga o acordo (Endividamento)
 )
 # Valores da RESCISÃO do ex-colaborador + agregados derivados dos seus processos.
 LEGAL_PERSON_SENSITIVE_FIELDS: tuple[str, ...] = (
@@ -246,7 +247,14 @@ LEGAL_PERSON_SENSITIVE_FIELDS: tuple[str, ...] = (
     "total_agreed",
     "total_paid",
     "total_pending",
-)  # `case_count` (quantidade) permanece
+    "debt_total",
+    "debt_paid",
+    "debt_pending",
+)  # `case_count`/`debt_count` (quantidades) e `debt_status` permanecem
+# Dívida do desligado na ficha: some o valor, fica a situação (quitado/em pagamento).
+LEGAL_PERSON_DEBT_SENSITIVE_FIELDS: tuple[str, ...] = ("total", "paid", "pending")
+# Vínculo dívida × Jurídico (Administração): mesmos valores, sob o sensitive de Processos.
+LEGAL_DEBT_LINK_SENSITIVE_FIELDS: tuple[str, ...] = ("total", "paid", "pending", "debt_total", "case_agreed")
 # KPIs e séries dos gráficos da tela de Processos (contagens permanecem).
 LEGAL_KPIS_SENSITIVE_FIELDS: tuple[str, ...] = (
     "total_claimed",
@@ -455,6 +463,9 @@ SENSITIVE_SPECS: dict[str, SensitiveSpec] = {
     # (`legal_persons.sensitive` × `legal_cases.sensitive`), e propagar vazaria valor de processo
     # para quem só tem o sensitive de Desligados. O router redige cada nível com o SEU recurso.
     "legal_person": SensitiveSpec(LEGAL_PERSONS_SENSITIVE, LEGAL_PERSON_SENSITIVE_FIELDS),
+    # Dívidas da ficha do desligado: redigidas pelo router, nível a nível (como os processos).
+    "legal_person_debt": SensitiveSpec(LEGAL_PERSONS_SENSITIVE, LEGAL_PERSON_DEBT_SENSITIVE_FIELDS),
+    "legal_debt_link": SensitiveSpec(LEGAL_CASES_SENSITIVE, LEGAL_DEBT_LINK_SENSITIVE_FIELDS),
     "legal_kpis": SensitiveSpec(LEGAL_CASES_SENSITIVE, LEGAL_KPIS_SENSITIVE_FIELDS),
     "legal_bucket": SensitiveSpec(LEGAL_CASES_SENSITIVE, LEGAL_BUCKET_SENSITIVE_FIELDS),
     "legal_overview": SensitiveSpec(

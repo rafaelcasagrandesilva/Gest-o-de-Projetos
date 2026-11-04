@@ -96,6 +96,14 @@ class LegalCaseRead(ORMModel, LegalCaseBase):
     # nome e CPF da pessoa sem precisar buscar o cadastro.
     person_name: str | None = None
     person_cpf: str | None = None
+    # Pagamento do acordo pelo Endividamento (dívida vinculada ao processo). `paid_source` diz de
+    # onde vêm `amount_paid`/`amount_pending`: None = digitado no Jurídico; "ENDIVIDAMENTO" =
+    # calculado pela dívida (somente leitura). Status/mês/nomes não são valor; o total é.
+    paid_source: str | None = None
+    payment_status: str | None = None  # "QUITADO" | "EM_PAGAMENTO" | None (sem dívida vinculada)
+    payment_total: float | None = None
+    payment_settled_month: date | None = None
+    payment_debts: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +159,91 @@ class LegalPersonRead(ORMModel, LegalPersonBase):
     total_agreed: float | None = None
     total_paid: float | None = None
     total_pending: float | None = None
+    # Dívidas do desligado no Endividamento (acordo de rescisão, com ou sem processo).
+    debt_status: str | None = None  # "QUITADO" | "EM_PAGAMENTO" | None (nenhuma dívida vinculada)
+    debt_count: int = 0
+    debt_total: float | None = None
+    debt_paid: float | None = None
+    debt_pending: float | None = None
+
+
+class LegalPersonDebtRead(BaseModel):
+    """Uma dívida do desligado, como o Endividamento a vê (somente leitura)."""
+
+    item_id: UUID
+    name: str
+    case_id: UUID | None = None
+    case_number: str | None = None
+    status: str  # "QUITADO" | "EM_PAGAMENTO"
+    settled_month: date | None = None
+    is_active: bool = True
+    total: float | None = None
+    paid: float | None = None
+    pending: float | None = None
+
+
+class LegalDebtLinkSuggestion(BaseModel):
+    """Par dívida × processo/desligado que parece ser o mesmo acordo (a confirmar)."""
+
+    item_id: UUID
+    debt_name: str
+    debt_total: float | None = None
+    debt_active: bool = True
+    person_id: UUID
+    person_name: str
+    case_id: UUID | None = None
+    case_number: str | None = None
+    case_status: str | None = None
+    case_agreed: float | None = None
+    confidence: str  # "VINCULADA" (dívida já do desligado) | "ALTA" | "MEDIA"
+    value_matches: bool = False
+
+
+class LegalDebtLinkRead(BaseModel):
+    """Dívida já vinculada ao Jurídico (aba de vínculos da Administração)."""
+
+    item_id: UUID
+    debt_name: str
+    person_id: UUID | None = None
+    person_name: str | None = None
+    case_id: UUID | None = None
+    case_number: str | None = None
+    status: str
+    total: float | None = None
+    paid: float | None = None
+    pending: float | None = None
+
+
+class LegalPersonAgreementRef(BaseModel):
+    """Processo COM ACORDO do desligado, para o cadastro da dívida no Endividamento.
+
+    Valores (acordo, condições, parcelas) só vão para quem vê valor de Processos ou do
+    Endividamento — o resto é referência (número/status) para escolher o processo certo.
+    """
+
+    case_id: UUID
+    case_number: str
+    status: str
+    amount_agreed: float | None = None
+    agreement_terms: str | None = None
+    installments: list[float] = []  # valor de cada parcela, na ordem (lido das condições)
+    due_day: int | None = None
+    linked_debt: str | None = None  # dívida que já paga este acordo (evita cadastrar duas vezes)
+
+
+class LegalDebtLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: UUID
+    case_id: UUID | None = None
+    person_id: UUID | None = None
+
+
+class LegalDebtUnlinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: UUID
+    include_person: bool = False
 
 
 class LegalPersonDocumentRead(ORMModel):
@@ -172,6 +265,7 @@ class LegalPersonDetail(LegalPersonRead):
     """Detalhe (modal do ex-colaborador): inclui os processos relacionados."""
 
     cases: list[LegalCaseRead] = []
+    debts: list[LegalPersonDebtRead] = []
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +354,8 @@ class LegalProjectBase(BaseModel):
     client: str | None = Field(default=None, max_length=255)
     notes: str | None = None
     is_active: bool = True
+    # Centro de custo do SGC (código sistêmico ou UUID de projeto, inclusive encerrado).
+    cost_center_ref: str | None = Field(default=None, max_length=64)
 
 
 class LegalProjectCreate(LegalProjectBase):
@@ -272,11 +368,13 @@ class LegalProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     client: str | None = Field(default=None, max_length=255)
     notes: str | None = None
+    cost_center_ref: str | None = Field(default=None, max_length=64)
 
 
 class LegalProjectRead(ORMModel, LegalProjectBase):
     id: UUID
     case_count: int = 0
+    cost_center_label: str | None = None
 
 
 class LegalChangeLogRead(ORMModel):
