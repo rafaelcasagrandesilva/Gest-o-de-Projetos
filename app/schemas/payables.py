@@ -76,6 +76,9 @@ class PayableSnapshotRead(UUIDTimestampRead):
     paid_in_period: float | None = 0.0
     # Competência da obrigação fora do mês filtrado na tela operacional.
     competence_out_of_view: bool = False
+    # Comprovantes do lançamento de origem (hoje: Premiação/Reembolso, origin=VARIABLE, de
+    # projeto ou de Custo Fixo). Só a quantidade — os arquivos saem por /payables/{id}/attachments.
+    attachment_count: int = 0
 
 
 class PayableSnapshotRegisterPaymentBody(BaseModel):

@@ -5,6 +5,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import MissingGreenlet
 from sqlalchemy import func, or_, select
@@ -32,6 +33,7 @@ from app.core.permission_codes import (
     INVOICES_LIST,
     INVOICES_UPDATE,
     PAYABLES_LIST,
+    PAYABLES_READ,
     PAYABLES_CREATE,
     PAYABLES_DELETE,
     PAYABLES_UPDATE,
@@ -43,7 +45,7 @@ from app.core.permission_codes import (
 )
 from app.core.scenario import coerce_scenario, parse_scenario
 from app.database.session import get_db
-from app.api.sensitive import redact_for
+from app.api.sensitive import redact_for, sensitive_include
 from app.models.user import User
 from app.schemas.financial import (
     InvoiceAnticipationCreate,
@@ -54,7 +56,10 @@ from app.schemas.financial import (
     RevenueRead,
     RevenueUpdate,
 )
-from app.models.payable_snapshot import PayableSnapshotType, default_origin_for_type
+from app.models.payable_snapshot import PayableOrigin, PayableSnapshotType, default_origin_for_type
+from app.schemas.payment_variable_component import PaymentComponentAttachmentRead
+from app.services.payment_component_attachment_service import PaymentComponentAttachmentService
+from app.utils.media_type import resolve_media_type
 from app.schemas.cost_center_alias import CostCenterAliasCreate, CostCenterAliasRead
 from app.schemas.payable_import import (
     PayableImportAnalyzeResult,
@@ -793,6 +798,13 @@ async def _snapshots_to_read(
         )
         for r in rows
     ]
+    # Comprovantes: título de Premiação/Reembolso aponta (ref_id) para o componente de origem.
+    variable_refs = [r.ref_id for r in rows if r.origin == PayableOrigin.VARIABLE.value and r.ref_id]
+    if variable_refs:
+        counts = await PaymentComponentAttachmentService(svc.session).count_by_component(variable_refs)
+        for model, r in zip(reads, rows):
+            if r.origin == PayableOrigin.VARIABLE.value and r.ref_id in counts:
+                model.attachment_count = counts[r.ref_id]
     # Dados sensíveis: sem `payables.sensitive`, o backend omite os valores (envia None).
     if user is not None:
         reads = [redact_for("payables", m, user) for m in reads]
@@ -883,6 +895,68 @@ async def _ensure_payable_snapshot_edit_access(*, row, user: User, db: AsyncSess
             allowed = set(await ProjectRepository(db).list_all_project_ids())
         if row.type == PayableSnapshotType.COLLABORATOR and row.project_id not in allowed:
             raise HTTPException(status_code=403, detail="Sem permissão.")
+
+
+# --------------------------------------------------------------------------- comprovantes
+# O CAP mostra os comprovantes do lançamento de ORIGEM do título (Premiação/Reembolso de projeto
+# ou de Custo Fixo) com a permissão do PRÓPRIO CAP — quem paga não precisa de acesso ao projeto
+# ou ao Custo Fixo. Comprovante mostra valor: vale a MESMA regra que decide se os valores do CAP
+# aparecem (`sensitive_include("payables")`, que lê o efetivo — funciona com o código inativo).
+_PAYABLE_ATTACHMENTS_DEPS = [Depends(require_permission(PAYABLES_READ, PAYABLES_LIST))]
+
+
+async def _payable_attachment_component_id(snapshot_id: UUID, user: User, db: AsyncSession) -> UUID | None:
+    """Componente de origem do título (None = título sem comprovantes possíveis)."""
+    if not sensitive_include("payables", user):
+        raise HTTPException(status_code=403, detail="Sem permissão para ver os valores do Contas a Pagar.")
+    row = await FinanceService(db).payable_snapshots.get(snapshot_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Lançamento não encontrado.")
+    await _ensure_payable_snapshot_edit_access(row=row, user=user, db=db)
+    if row.origin != PayableOrigin.VARIABLE.value or row.ref_id is None:
+        return None
+    return row.ref_id
+
+
+@router.get(
+    "/payables/{snapshot_id}/attachments",
+    response_model=list[PaymentComponentAttachmentRead],
+    dependencies=_PAYABLE_ATTACHMENTS_DEPS,
+)
+async def list_payable_attachments(
+    snapshot_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[PaymentComponentAttachmentRead]:
+    component_id = await _payable_attachment_component_id(snapshot_id, user, db)
+    if component_id is None:
+        return []
+    rows = await PaymentComponentAttachmentService(db).list_for_component(component_id)
+    # O download sai pela rota do CAP (mesma permissão desta lista), não pela do componente.
+    return [
+        PaymentComponentAttachmentRead.model_validate(
+            {**r, "download_url": f"financial/payables/{snapshot_id}/attachments/{r['id']}/download"}
+        )
+        for r in rows
+    ]
+
+
+@router.get("/payables/{snapshot_id}/attachments/{attachment_id}/download", dependencies=_PAYABLE_ATTACHMENTS_DEPS)
+async def download_payable_attachment(
+    snapshot_id: UUID,
+    attachment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> FileResponse:
+    component_id = await _payable_attachment_component_id(snapshot_id, user, db)
+    attachments = PaymentComponentAttachmentService(db)
+    att = await attachments.get(component_id, attachment_id) if component_id is not None else None
+    if att is None:
+        raise HTTPException(status_code=404, detail="Comprovante não encontrado.")
+    path = attachments.disk_path(att)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado no servidor.")
+    return FileResponse(path, media_type=resolve_media_type(att.mime_type, att.file_name), filename=att.file_name)
 
 
 @router.patch("/payables/{snapshot_id}", response_model=PayableSnapshotRead, dependencies=[Depends(require_permission(PAYABLES_UPDATE))])

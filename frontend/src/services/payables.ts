@@ -1,3 +1,6 @@
+import { hydrateBlobError } from "@/utils/apiError";
+import { saveBlobAsFile, viewFileInNewTab } from "@/utils/fileView";
+import type { PaymentComponentAttachment } from "./paymentComponentAttachments";
 import { api } from "./api";
 
 /** Formata uma `Date` local como `YYYY-MM` (competência do mês). */
@@ -100,6 +103,8 @@ export interface PayableSnapshotRow {
   /** Soma dos pagamentos com data no mês filtrado (visão operacional). */
   paid_in_period?: number | null;
   competence_out_of_view?: boolean;
+  /** Comprovantes do lançamento de origem (Premiação/Reembolso de projeto ou de Custo Fixo). */
+  attachment_count?: number;
 }
 
 export async function listPayableSnapshots(params?: {
@@ -419,4 +424,27 @@ export async function confirmPayablesImportLegacy(file: File): Promise<PayableIm
     { timeout: 120_000 },
   );
   return data;
+}
+
+/** Comprovantes do título (vêm do componente de origem; a rota é do CAP, com a permissão dele). */
+export async function listPayableAttachments(snapshotId: string): Promise<PaymentComponentAttachment[]> {
+  const { data } = await api.get<PaymentComponentAttachment[]>(`/financial/payables/${snapshotId}/attachments`);
+  return data;
+}
+
+async function fetchPayableAttachmentBlob(att: PaymentComponentAttachment): Promise<Blob> {
+  try {
+    const resp = await api.get<Blob>(`/${att.download_url}`, { responseType: "blob" });
+    return resp.data;
+  } catch (e) {
+    throw await hydrateBlobError(e);
+  }
+}
+
+export async function viewPayableAttachment(att: PaymentComponentAttachment): Promise<void> {
+  await viewFileInNewTab(() => fetchPayableAttachmentBlob(att));
+}
+
+export async function downloadPayableAttachment(att: PaymentComponentAttachment): Promise<void> {
+  saveBlobAsFile(await fetchPayableAttachmentBlob(att), att.file_name);
 }
