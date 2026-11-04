@@ -19,7 +19,6 @@ import {
 } from "@/services/payables";
 import { usePermission } from "@/hooks/usePermission";
 import { useAuth } from "@/context/AuthContext";
-import { PeriodFilter } from "@/components/PeriodFilter";
 import { TruncatedCell } from "@/components/TruncatedText";
 import { listProjects, type Project } from "@/services/projects";
 import { formatApiError } from "@/utils/apiError";
@@ -52,6 +51,82 @@ const money = formatCurrencyOrDash;
 
 /** Valor numérico para input (pt-BR, sem R$) — fonte única (utils/currency). */
 const formatMoneyFieldBr = formatCurrencyField;
+
+/** Período do CAP. "Até o mês atual" substitui o antigo "Todos": um mês futuro aberto por engano
+ *  (ex.: nov/2027) não entra mais na lista padrão; para ver o futuro, use "Intervalo". */
+type CapPeriodMode = "MONTH" | "UNTIL_NOW" | "RANGE";
+
+/** [de, até] em YYYY-MM (inclusivo); null = sem limite. "MONTH" já vem recortado do servidor. */
+function capPeriodBounds(mode: CapPeriodMode, rangeStart: string, rangeEnd: string): [string | null, string | null] {
+  if (mode === "UNTIL_NOW") return [null, formatMonthToYYYYMM(new Date())];
+  if (mode === "RANGE") return rangeStart <= rangeEnd ? [rangeStart, rangeEnd] : [rangeEnd, rangeStart];
+  return [null, null];
+}
+
+function CapPeriodFilter({
+  mode,
+  month,
+  rangeStart,
+  rangeEnd,
+  onModeChange,
+  onMonthChange,
+  onRangeChange,
+}: {
+  mode: CapPeriodMode;
+  month: string;
+  rangeStart: string;
+  rangeEnd: string;
+  onModeChange: (mode: CapPeriodMode) => void;
+  onMonthChange: (month: string) => void;
+  onRangeChange: (start: string, end: string) => void;
+}) {
+  const inputCls = "rounded-lg border border-slate-300 px-3 py-2";
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      <span className="font-medium text-slate-700">Mês (fluxo de caixa)</span>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={mode}
+          onChange={(e) => onModeChange(e.target.value as CapPeriodMode)}
+          aria-label="Período"
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        >
+          <option value="MONTH">Mês</option>
+          <option value="UNTIL_NOW">Até o mês atual</option>
+          <option value="RANGE">Intervalo</option>
+        </select>
+        {mode === "MONTH" && (
+          <input
+            type="month"
+            value={month}
+            onChange={(e) => onMonthChange(e.target.value || month)}
+            aria-label="Mês"
+            className={inputCls}
+          />
+        )}
+        {mode === "RANGE" && (
+          <>
+            <input
+              type="month"
+              value={rangeStart}
+              onChange={(e) => onRangeChange(e.target.value || rangeStart, rangeEnd)}
+              aria-label="Mês inicial"
+              className={inputCls}
+            />
+            <span className="text-slate-500">até</span>
+            <input
+              type="month"
+              value={rangeEnd}
+              onChange={(e) => onRangeChange(rangeStart, e.target.value || rangeEnd)}
+              aria-label="Mês final"
+              className={inputCls}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function formatDateBr(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
@@ -201,8 +276,13 @@ export function Payables() {
   const canRegenerateSnapshot = Boolean(user?.is_superuser);
   const canReconcileSnapshot = usePermission("payable_snapshot.reconcile");
 
-  const [periodMode, setPeriodMode] = useState<"MONTH" | "ALL">("MONTH");
+  const [periodMode, setPeriodMode] = useState<CapPeriodMode>("MONTH");
   const [period, setPeriod] = useState(() => formatMonthToYYYYMM(new Date()));
+  // "Até o mês atual" e "Intervalo" leem a lista completa e recortam por competência aqui:
+  // trocar entre os dois (ou mexer no intervalo) não refaz a busca.
+  const fetchAll = periodMode !== "MONTH";
+  const [rangeStart, setRangeStart] = useState(() => `${new Date().getFullYear()}-01`);
+  const [rangeEnd, setRangeEnd] = useState(() => formatMonthToYYYYMM(new Date()));
   const [statusFilter, setStatusFilter] = useState<PayableSnapshotStatus | "">("");
   const [search, setSearch] = useState("");
   const [onlyUnclassifiedManual, setOnlyUnclassifiedManual] = useState(false);
@@ -293,7 +373,7 @@ export function Payables() {
     setSelectedIds(new Set());
     try {
       const list =
-        periodMode === "ALL" ? await listPayableSnapshots() : await listPayableSnapshots({ month: period });
+        fetchAll ? await listPayableSnapshots() : await listPayableSnapshots({ month: period });
       setRows(list);
       setEmptyMessage(list.length === 0 ? "Nenhuma conta a pagar neste período." : null);
     } catch (e) {
@@ -318,7 +398,7 @@ export function Payables() {
     } finally {
       setLoading(false);
     }
-  }, [canView, period, periodMode]);
+  }, [canView, period, fetchAll]);
 
   async function regenerateMonthSnapshot() {
     if (!canRegenerateSnapshot || periodMode !== "MONTH") return;
@@ -388,7 +468,10 @@ export function Payables() {
 
   const filteredRows = useMemo(() => {
     const q = search.trim();
+    const [from, to] = capPeriodBounds(periodMode, rangeStart, rangeEnd);
     return rows.filter((r) => {
+      const comp = (r.month || "").slice(0, 7);
+      if ((from && comp < from) || (to && comp > to)) return false;
       if (statusFilter && r.status !== statusFilter) return false;
       if (onlyUnclassifiedManual && !isUnclassifiedManual(r)) return false;
       if (costCenterFilter && (r.cost_center || "").trim() !== costCenterFilter) return false;
@@ -397,7 +480,7 @@ export function Payables() {
       // Por palavras (qualquer ordem, sem acento) — inclui o subtítulo (descrição do lançamento).
       return matchesSearchWords([r.name, r.item_description, r.cost_center, r.category], q);
     });
-  }, [rows, statusFilter, search, onlyUnclassifiedManual, costCenterFilter, tipoFilter]);
+  }, [rows, periodMode, rangeStart, rangeEnd, statusFilter, search, onlyUnclassifiedManual, costCenterFilter, tipoFilter]);
 
   // Opções dos filtros vêm das linhas do período carregado: nunca oferecem algo que não existe.
   const costCenterOptions = useMemo(
@@ -797,7 +880,7 @@ export function Payables() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={!canEdit || periodMode === "ALL"}
+            disabled={!canEdit || periodMode !== "MONTH"}
             onClick={() => setImportOpen(true)}
             className="rounded-lg border border-indigo-200 bg-white px-4 py-2 text-sm font-medium text-indigo-800 shadow-sm hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -805,7 +888,7 @@ export function Payables() {
           </button>
           <button
             type="button"
-            disabled={!canCreate || periodMode === "ALL"}
+            disabled={!canCreate || periodMode !== "MONTH"}
             onClick={() => setShowForm((s) => !s)}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -813,7 +896,7 @@ export function Payables() {
           </button>
         </div>
       </div>
-      {periodMode === "ALL" && (
+      {periodMode !== "MONTH" && (
         <p className="text-sm text-slate-600">
           Para adicionar despesa manual, selecione um mês específico.
         </p>
@@ -835,12 +918,17 @@ export function Payables() {
 
       <section className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap gap-3">
-          <PeriodFilter
-            label="Mês (fluxo de caixa)"
+          <CapPeriodFilter
             mode={periodMode}
-            value={period}
+            month={period}
+            rangeStart={rangeStart}
+            rangeEnd={rangeEnd}
             onModeChange={setPeriodMode}
-            onChange={setPeriod}
+            onMonthChange={setPeriod}
+            onRangeChange={(start, end) => {
+              setRangeStart(start);
+              setRangeEnd(end);
+            }}
           />
 
           <label className="flex flex-col gap-1 text-sm">
