@@ -10,6 +10,7 @@ import {
   FilterChip,
   FilterGroup,
   KpiCard,
+  PaymentBadge,
   StatusPill,
   formatCount,
 } from "@/components/legal/LegalPanelPieces";
@@ -486,6 +487,7 @@ export function LegalCases() {
                 <SortableTh label="Status" column="status" {...headerSort} />
                 <SortableTh label="Valor da causa" column="claimed" align="right" {...headerSort} />
                 <SortableTh label="Valor do acordo" column="agreed" align="right" {...headerSort} />
+                <SortableTh label="Pago" column="paid" align="right" {...headerSort} />
                 <SortableTh label="Última movimentação" column="last_movement" {...headerSort} />
                 <th className="px-2 py-2 text-center text-xs font-semibold uppercase tracking-wide">
                   JusBrasil
@@ -495,7 +497,7 @@ export function LegalCases() {
             <tbody>
               {sortedRows.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-10 text-center text-sm text-slate-400">
+                  <td colSpan={12} className="px-4 py-10 text-center text-sm text-slate-400">
                     Nenhum processo com esses filtros.
                   </td>
                 </tr>
@@ -551,6 +553,13 @@ export function LegalCases() {
                     ) : null}
                     <Money value={c.amount_agreed} />
                   </td>
+                  <td className="px-2 py-2">
+                    {/* Pago vindo do Endividamento leva o selo; digitado no Jurídico, só o valor. */}
+                    <div className="flex flex-col items-end gap-0.5">
+                      <Money value={c.amount_paid} />
+                      <PaymentBadge status={c.payment_status} />
+                    </div>
+                  </td>
                   <td
                     className="max-w-[18rem] truncate px-2 py-2 text-xs text-slate-500"
                     title={c.last_movement ?? ""}
@@ -583,6 +592,7 @@ export function LegalCases() {
         <LegalCaseModal
           legalCase={selected}
           onClose={fecharDetalhe}
+          onChanged={() => void load()}
           onOpenPerson={(id) => {
             fecharDetalhe();
             navigate(`/legal/persons?person_id=${id}`);

@@ -55,6 +55,7 @@ from app.services.operational_report_export import (
 )
 from app.services.operational_report_service import OperationalReportService, resolve_project_access
 from app.services.legal_report_export import render_legal_report_bytes
+from app.services.legal_debt_link_service import LegalDebtLinkService
 from app.services.legal_report_service import LegalReportService
 from app.services.legal_service import CaseFilters
 from app.services.report_export import render_report_bytes
@@ -260,6 +261,8 @@ async def generate_report(
                 detail="Sem permissão para exportar o relatório do Jurídico.",
             )
         legal_filters = _legal_filters(f)
+        # Pago dos acordos vinculados ao Endividamento atualizado antes de exportar.
+        await LegalDebtLinkService(db).sync_cases()
         payload = await LegalReportService(db).generate(
             filters=legal_filters,
             # Sem o `sensitive` do recurso, o arquivo sai SEM aqueles valores (igual à tela).

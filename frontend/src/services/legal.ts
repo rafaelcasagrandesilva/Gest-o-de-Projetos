@@ -53,7 +53,16 @@ export type LegalCase = {
   hearing_date: string | null;
   distribution_date: string | null;
   notes: string | null;
+  /** De onde vêm Valor pago/em aberto: null = digitado aqui; "ENDIVIDAMENTO" = dívida vinculada. */
+  paid_source: "ENDIVIDAMENTO" | null;
+  /** Situação do acordo no Endividamento (null = sem dívida vinculada). */
+  payment_status: LegalPaymentStatus | null;
+  payment_total: number | null;
+  payment_settled_month: string | null;
+  payment_debts: string[];
 };
+
+export type LegalPaymentStatus = "QUITADO" | "EM_PAGAMENTO";
 
 export type LegalPerson = {
   id: string;
@@ -76,9 +85,28 @@ export type LegalPerson = {
   total_agreed: number | null;
   total_paid: number | null;
   total_pending: number | null;
+  /** Dívidas do desligado no Endividamento (acordo de rescisão, com ou sem processo). */
+  debt_status: LegalPaymentStatus | null;
+  debt_count: number;
+  debt_total: number | null;
+  debt_paid: number | null;
+  debt_pending: number | null;
 };
 
-export type LegalPersonDetail = LegalPerson & { cases: LegalCase[] };
+export type LegalPersonDebt = {
+  item_id: string;
+  name: string;
+  case_id: string | null;
+  case_number: string | null;
+  status: LegalPaymentStatus;
+  settled_month: string | null;
+  is_active: boolean;
+  total: number | null;
+  paid: number | null;
+  pending: number | null;
+};
+
+export type LegalPersonDetail = LegalPerson & { cases: LegalCase[]; debts: LegalPersonDebt[] };
 
 export type LegalKpis = {
   case_count: number;
@@ -199,6 +227,11 @@ export type LegalPersonRef = {
   name: string;
   company: string | null;
   termination_date: string | null;
+  /** Projeto do desligado no Jurídico (texto da planilha). */
+  project: string | null;
+  /** Centro de custo do SGC vinculado a esse projeto na Administração › Projetos (null = sem vínculo). */
+  cost_center_ref: string | null;
+  cost_center_label: string | null;
 };
 
 /**
@@ -214,6 +247,26 @@ export async function searchLegalPersonsReference(q: string, limit = 20): Promis
     params: { q: term, limit },
   });
   return data;
+}
+
+/** Processo COM ACORDO do desligado, para o cadastro da dívida no Endividamento. */
+export type LegalPersonAgreement = {
+  case_id: string;
+  case_number: string;
+  status: LegalCaseStatus;
+  /** null sem permissão de ver valores (Processos ou Endividamento). */
+  amount_agreed: number | null;
+  agreement_terms: string | null;
+  /** Valor de cada parcela, na ordem, lido das condições do acordo ("3 X 2.333,34"). */
+  installments: number[];
+  /** "vencimento todo dia 30"; null = o dia do início. */
+  due_day: number | null;
+  /** Dívida que já paga este acordo (evita cadastrar duas vezes). */
+  linked_debt: string | null;
+};
+
+export async function fetchLegalPersonAgreements(personId: string): Promise<LegalPersonAgreement[]> {
+  return (await api.get<LegalPersonAgreement[]>(`/legal/persons/${personId}/agreements`)).data;
 }
 
 export async function fetchLegalPersonFacets(): Promise<LegalFacets> {
@@ -289,6 +342,9 @@ export type LegalProjectItem = {
   notes: string | null;
   is_active: boolean;
   case_count: number;
+  /** Centro de custo do SGC: código sistêmico ou id de projeto (inclusive encerrado). */
+  cost_center_ref: string | null;
+  cost_center_label: string | null;
 };
 
 export type LegalChangeLog = {
@@ -404,6 +460,73 @@ export async function setLegalCaseActive(id: string, active: boolean): Promise<L
   const action = active ? "restore" : "deactivate";
   return (await api.post<LegalCase>(`/legal/cases/${id}/${action}`)).data;
 }
+/** Status → "Acordo finalizado", só aceito quando o Endividamento já quitou o acordo. */
+export async function finalizeLegalAgreement(id: string): Promise<LegalCase> {
+  return (await api.post<LegalCase>(`/legal/cases/${id}/finalize-agreement`)).data;
+}
+
+// ---------------------------------------------------------------------------
+// Vínculo com o Endividamento: a dívida que paga o acordo do processo/desligado.
+// O nome só SUGERE; o vínculo é confirmado aqui e gravado na dívida.
+// ---------------------------------------------------------------------------
+
+export type LegalDebtLinkSuggestion = {
+  item_id: string;
+  debt_name: string;
+  debt_total: number | null;
+  debt_active: boolean;
+  person_id: string;
+  person_name: string;
+  case_id: string | null;
+  case_number: string | null;
+  case_status: LegalCaseStatus | null;
+  case_agreed: number | null;
+  /** VINCULADA = a dívida já é do desligado no Endividamento; ALTA/MEDIA = pelo nome. */
+  confidence: "VINCULADA" | "ALTA" | "MEDIA";
+  value_matches: boolean;
+};
+
+export type LegalDebtLink = {
+  item_id: string;
+  debt_name: string;
+  person_id: string | null;
+  person_name: string | null;
+  case_id: string | null;
+  case_number: string | null;
+  status: LegalPaymentStatus;
+  total: number | null;
+  paid: number | null;
+  pending: number | null;
+};
+
+export async function listLegalDebtLinkSuggestions(): Promise<LegalDebtLinkSuggestion[]> {
+  return (await api.get<LegalDebtLinkSuggestion[]>("/legal/debt-links/suggestions")).data;
+}
+export async function listLegalDebtLinks(): Promise<LegalDebtLink[]> {
+  return (await api.get<LegalDebtLink[]>("/legal/debt-links")).data;
+}
+export async function linkLegalDebt(data: {
+  item_id: string;
+  case_id: string | null;
+  person_id: string | null;
+}): Promise<void> {
+  await api.post("/legal/debt-links", data);
+}
+export async function unlinkLegalDebt(itemId: string, includePerson: boolean): Promise<void> {
+  await api.post("/legal/debt-links/unlink", { item_id: itemId, include_person: includePerson });
+}
+export async function dismissLegalDebtLink(data: {
+  item_id: string;
+  case_id: string | null;
+  person_id: string | null;
+}): Promise<void> {
+  await api.post("/legal/debt-links/dismiss", data);
+}
+
+export const LEGAL_PAYMENT_STATUS_LABELS: Record<LegalPaymentStatus, string> = {
+  QUITADO: "Quitado",
+  EM_PAGAMENTO: "Em pagamento",
+};
 
 export async function listLegalCompanies(includeInactive = false): Promise<LegalCompany[]> {
   const q = includeInactive ? "?include_inactive=true" : "";
@@ -424,10 +547,16 @@ export async function listLegalProjectItems(includeInactive = false): Promise<Le
   const q = includeInactive ? "?include_inactive=true" : "";
   return (await api.get<LegalProjectItem[]>(`/legal/projects${q}`)).data;
 }
-export async function createLegalProject(data: { name: string; client?: string | null; notes?: string | null }) {
+type LegalProjectPayload = {
+  name?: string;
+  client?: string | null;
+  notes?: string | null;
+  cost_center_ref?: string | null;
+};
+export async function createLegalProject(data: LegalProjectPayload & { name: string }) {
   return (await api.post<LegalProjectItem>("/legal/projects", data)).data;
 }
-export async function updateLegalProject(id: string, data: { name?: string; client?: string | null; notes?: string | null }) {
+export async function updateLegalProject(id: string, data: LegalProjectPayload) {
   return (await api.patch<LegalProjectItem>(`/legal/projects/${id}`, data)).data;
 }
 export async function setLegalProjectActive(id: string, active: boolean) {

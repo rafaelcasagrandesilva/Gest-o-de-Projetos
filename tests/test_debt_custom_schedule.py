@@ -111,6 +111,78 @@ class DebtCustomScheduleTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await session.rollback()
 
+    async def test_schedule_without_payment_can_be_deleted(self) -> None:
+        """Parcelas PLANEJADAS não são movimentação: sem nada pago, a dívida é excluível."""
+        from sqlalchemy import select
+        from app.database.session import AsyncSessionLocal, engine
+        from app.models.company_finance import CompanyFinancialItem, CompanyFinancialPayment
+        from app.services.company_finance_service import CompanyFinanceService
+        from app.services.payable_snapshot_service import PayableSnapshotService
+
+        await engine.dispose()
+        tag = uuid4().hex[:6]
+        async with AsyncSessionLocal() as session:
+            await self._prelude(session)
+            try:
+                item = _debt_item(tag, uses_schedule=True, renegotiated=3000.0)
+                session.add(item)
+                await session.flush()
+                cf = CompanyFinanceService(session)
+                await cf.replace_schedule(
+                    item_id=item.id,
+                    lines=[
+                        {"seq": 1, "vencimento": date(2099, 5, 20), "valor": 1000.0, "descricao": "Parcela 1"},
+                        {"seq": 2, "vencimento": date(2099, 6, 20), "valor": 2000.0, "descricao": "Parcela 2"},
+                    ],
+                )
+                await PayableSnapshotService(session)._generate_company_finance_payables(payment_month=date(2099, 5, 1))
+                await session.flush()
+                self.assertEqual(len(await self._title(session, item.id)), 1)
+
+                self.assertTrue(await cf.delete_item(item_id=item.id))
+                await session.flush()
+                self.assertIsNone(await session.get(CompanyFinancialItem, item.id))
+                self.assertEqual(await self._title(session, item.id), [], "título em aberto deve sair junto")
+                left = (
+                    await session.execute(
+                        select(CompanyFinancialPayment).where(CompanyFinancialPayment.item_id == item.id)
+                    )
+                ).scalars().all()
+                self.assertEqual(left, [], "parcelas planejadas devem sair junto")
+            finally:
+                await session.rollback()
+
+    async def test_schedule_with_paid_installment_cannot_be_deleted(self) -> None:
+        from app.database.session import AsyncSessionLocal, engine
+        from app.services.company_finance_service import CompanyFinanceService
+        from app.services.payable_snapshot_service import PayableSnapshotService
+        from app.utils.lifecycle import DELETE_WITH_MOVEMENT_MSG
+
+        await engine.dispose()
+        tag = uuid4().hex[:6]
+        async with AsyncSessionLocal() as session:
+            await self._prelude(session)
+            try:
+                item = _debt_item(tag, uses_schedule=True, renegotiated=1000.0)
+                session.add(item)
+                await session.flush()
+                cf = CompanyFinanceService(session)
+                await cf.replace_schedule(
+                    item_id=item.id,
+                    lines=[{"seq": 1, "vencimento": date(2099, 5, 20), "valor": 1000.0, "descricao": "Parcela 1"}],
+                )
+                await PayableSnapshotService(session)._generate_company_finance_payables(payment_month=date(2099, 5, 1))
+                await session.flush()
+                (title,) = await self._title(session, item.id)
+                title.amount_paid = 400
+                await session.flush()
+
+                with self.assertRaises(ValueError) as ctx:
+                    await cf.delete_item(item_id=item.id)
+                self.assertEqual(str(ctx.exception), DELETE_WITH_MOVEMENT_MSG)
+            finally:
+                await session.rollback()
+
     async def test_legacy_installments_still_materialize_reference(self) -> None:
         """Modo 1 (parcelas iguais + obrigatório mensal) permanece gerando a referência."""
         from app.database.session import AsyncSessionLocal, engine

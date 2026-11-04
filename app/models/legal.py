@@ -216,6 +216,9 @@ class LegalCase(TimestampUUIDMixin, Base):
     # Plano de pagamento do acordo em texto livre ("3 X 2.333,34"), como registrado pelo jurídico.
     # `amount_agreed` é o total já somado. Vira tabela de parcelas numa fase futura.
     agreement_terms: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # De onde vem `amount_paid`/`amount_pending`: NULL = digitado no Jurídico; 'ENDIVIDAMENTO' =
+    # calculado pela dívida vinculada (`company_financial_items.legal_case_id`), somente leitura.
+    paid_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     last_movement: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_movement_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
@@ -257,6 +260,11 @@ class LegalProject(TimestampUUIDMixin, Base):
     client: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    # Centro de custo do SGC a que este projeto do Jurídico corresponde: código sistêmico
+    # (ADMINISTRATIVO/FINANCEIRO/RH/ALMOXARIFADO) ou o UUID de um projeto — inclusive encerrado.
+    # Os nomes do Jurídico são texto da planilha e não casam com os do SGC, por isso o vínculo é
+    # explícito. Uso: pré-preencher o centro de custo da dívida de um desligado no Endividamento.
+    cost_center_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class LegalImportRun(TimestampUUIDMixin, Base):
@@ -326,3 +334,25 @@ class LegalChangeLog(TimestampUUIDMixin, Base):
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     changed_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class LegalDebtLinkDismissal(TimestampUUIDMixin, Base):
+    """Sugestão de vínculo dívida × processo/desligado descartada pelo usuário (não volta)."""
+
+    __tablename__ = "legal_debt_link_dismissals"
+
+    item_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("company_financial_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    case_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("legal_cases.id", ondelete="CASCADE"), nullable=True
+    )
+    person_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("legal_persons.id", ondelete="CASCADE"), nullable=True
+    )
+    created_by_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )

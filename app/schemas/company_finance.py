@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 TipoFinanceiro = Literal["endividamento", "custo_fixo"]
 RenegotiationType = Literal["UNIQUE", "INSTALLMENTS"]
-CompanyFinancialItemType = Literal["MANUAL", "COLABORADOR_MATRIZ"]
+CompanyFinancialItemType = Literal["MANUAL", "COLABORADOR_MATRIZ", "COLABORADOR_VALOR"]
 CompanyFinancialCostCenterSystem = Literal["ADMINISTRATIVO", "FINANCEIRO"]
 # Rateio pela frota: LOCACAO = fatura de locação (substitui o custo dos veículos);
 # ADICIONAL = custo adicional da frota (soma ao custo dos veículos). None = sem rateio.
@@ -52,6 +52,13 @@ class PagamentoMes(BaseModel):
         return f"{y:04d}-{m:02d}"
 
 
+def _validate_own_value_collaborator(employee_id: UUID | None, type_id: UUID | None) -> None:
+    if employee_id is None:
+        raise ValueError("Selecione o colaborador.")
+    if type_id is None:
+        raise ValueError("Selecione a natureza do pagamento.")
+
+
 class CompanyFinancialItemCreate(BaseModel):
     tipo: TipoFinanceiro
     # Nome opcional: em Endividamento é composto automaticamente pelo serviço a partir de
@@ -72,7 +79,11 @@ class CompanyFinancialItemCreate(BaseModel):
     item_type: CompanyFinancialItemType = "MANUAL"
     employee_id: UUID | None = None
     legal_person_id: UUID | None = None
+    # Processo do desligado cujo acordo esta dívida paga (o Jurídico passa a ler o pago daqui).
+    legal_case_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
+    # Natureza do pagamento (só COLABORADOR_VALOR) — id em payment_component_types.
+    payment_component_type_id: UUID | None = None
     is_monthly_required: bool = False
     # Rateio pela frota (só custo_fixo; o serviço força None em endividamento).
     fleet_allocation: FleetAllocation | None = None
@@ -132,10 +143,16 @@ class CompanyFinancialItemCreate(BaseModel):
                 raise ValueError("employee_id é obrigatório para item COLABORADOR_MATRIZ.")
             if self.percentual is None:
                 raise ValueError("percentual é obrigatório para item COLABORADOR_MATRIZ.")
+            self.payment_component_type_id = None
+        elif self.item_type == "COLABORADOR_VALOR":
+            _validate_own_value_collaborator(self.employee_id, self.payment_component_type_id)
+            self.percentual = None
         else:
             self.employee_id = None
             self.percentual = None
+            self.payment_component_type_id = None
         self.legal_person_id = None  # vínculo exclusivo de Endividamento
+        self.legal_case_id = None
         return self
 
     @model_validator(mode="after")
@@ -148,6 +165,7 @@ class CompanyFinancialItemCreate(BaseModel):
             return self
         self.item_type = "MANUAL"
         self.percentual = None
+        self.payment_component_type_id = None
         # Colaborador (cadastro operacional) e Desligado (cadastro do Jurídico) são cadastros
         # distintos e o item aponta para UM. Aceitar os dois deixaria o nome ambíguo.
         if self.employee_id is not None and self.legal_person_id is not None:
@@ -156,6 +174,8 @@ class CompanyFinancialItemCreate(BaseModel):
         has_desc = bool(self.item_description and self.item_description.strip())
         if self.employee_id is None and self.legal_person_id is None and not has_nome and not has_desc:
             raise ValueError("Informe o Nome (Manual), um Colaborador ou um Desligado.")
+        if self.legal_case_id is not None and self.legal_person_id is None:
+            raise ValueError("O processo só pode ser vinculado a uma dívida de Desligado.")
         return self
 
 
@@ -176,6 +196,7 @@ class CompanyFinancialItemUpdate(BaseModel):
     employee_id: UUID | None = None
     legal_person_id: UUID | None = None
     percentual: float | None = Field(default=None, ge=0, le=100)
+    payment_component_type_id: UUID | None = None
     is_monthly_required: bool | None = None
     # Rateio pela frota (só custo_fixo). Ausente = não altera; presente com null = limpa
     # (o router usa model_dump(exclude_unset=True) e o serviço testa a presença da chave).
@@ -258,6 +279,8 @@ class CompanyFinancialItemUpdate(BaseModel):
                 raise ValueError("employee_id é obrigatório para item COLABORADOR_MATRIZ.")
             if self.percentual is None:
                 raise ValueError("percentual é obrigatório para item COLABORADOR_MATRIZ.")
+        if self.item_type == "COLABORADOR_VALOR":
+            _validate_own_value_collaborator(self.employee_id, self.payment_component_type_id)
         # Mesma exclusividade da criação: o item aponta para UM cadastro de pessoa.
         if self.employee_id is not None and self.legal_person_id is not None:
             raise ValueError("Selecione um Colaborador OU um Desligado, não os dois.")
@@ -289,10 +312,14 @@ class CompanyFinancialItemRead(BaseModel):
     item_type: CompanyFinancialItemType | None = None
     employee_id: UUID | None = None
     legal_person_id: UUID | None = None
+    # Processo do Jurídico cujo acordo esta dívida paga (vinculado pelo Jurídico).
+    legal_case_id: UUID | None = None
     employee_name: str | None = None
     employee_employment_type: str | None = None
     legal_person_name: str | None = None
     percentual: float | None = None
+    payment_component_type_id: UUID | None = None
+    payment_component_type_name: str | None = None
     nome: str
     item_description: str | None = None
     valor_referencia: float | None = None

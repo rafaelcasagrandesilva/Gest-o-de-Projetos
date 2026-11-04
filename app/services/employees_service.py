@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
 
 from app.core.scenario import Scenario
-from app.models.company_finance import CompanyFinancialItem
+from app.models.company_finance import (
+    NON_REMUNERATION_NATURE_CODES,
+    CompanyFinancialItem,
+    CompanyFinancialItemType,
+)
 from app.models.employee import Employee, EmployeeAllocation
 from app.models.employee_assignment import EmployeeAssignment
 from app.models.fleet import Vehicle
@@ -112,6 +116,8 @@ class EmployeesService:
 
     #: Componentes da folha que NÃO entram na média (eventuais, distorcem o mês).
     PAYROLL_AVERAGE_EXCLUDED_LABELS = frozenset({"Férias CLT", "Rescisão CLT"})
+    #: Naturezas de Custo Fixo (Colaborador com valor próprio) que não são remuneração.
+    PAYROLL_AVERAGE_EXCLUDED_NATURE_CODES = NON_REMUNERATION_NATURE_CODES
 
     async def payroll_averages(self, employees: list) -> dict:
         """Remuneração média mensal de cada colaborador, apurada no Contas a Pagar.
@@ -121,7 +127,8 @@ class EmployeesService:
 
         Fontes (todas ligadas ao colaborador, nunca por nome):
           - Mão de obra do projeto (COLLABORATOR, ref_id = colaborador), exceto Férias/Rescisão;
-          - Custos Fixos com colaborador vinculado (item.employee_id) — quem é pago pela matriz;
+          - Custos Fixos com colaborador vinculado (item.employee_id) — quem é pago pela matriz —,
+            exceto natureza que não é remuneração (Retirada de Capital);
           - Componentes variáveis: Ajuda de custo sempre; Premiação só de PJ. Reembolso e
             "Outros pagamentos" ficam fora.
         Valor do mês = o que foi EFETIVAMENTE PAGO (amount_paid), não o valor do título: há quem
@@ -158,11 +165,19 @@ class EmployeesService:
         fixos = await self.session.execute(
             select(CompanyFinancialItem.employee_id, *cols)
             .join(CompanyFinancialItem, CompanyFinancialItem.id == PayableSnapshot.ref_id)
+            .outerjoin(
+                PaymentComponentType,
+                PaymentComponentType.id == CompanyFinancialItem.payment_component_type_id,
+            )
             .where(
                 vivo,
                 PayableSnapshot.type == PayableSnapshotType.FIXED_COST,
                 func.coalesce(PayableSnapshot.origin, "") != "VARIABLE",
                 CompanyFinancialItem.employee_id.in_(ids),
+                # Natureza que não é remuneração (Retirada de Capital dos sócios) fica fora.
+                func.coalesce(PaymentComponentType.code, "").not_in(
+                    self.PAYROLL_AVERAGE_EXCLUDED_NATURE_CODES
+                ),
             )
         )
         linhas.extend(fixos.all())
@@ -258,6 +273,8 @@ class EmployeesService:
                     select(CompanyFinancialItem).where(
                         CompanyFinancialItem.tipo == "custo_fixo",
                         CompanyFinancialItem.employee_id.in_(ids),
+                        # Valor próprio (ex.: Retirada de Capital) não é mão de obra.
+                        CompanyFinancialItem.item_type != CompanyFinancialItemType.COLABORADOR_VALOR,
                     )
                 )
             )
@@ -577,6 +594,11 @@ class EmployeesService:
         if _EMPLOYEE_PAYABLE_COST_FIELDS & patch.keys():
             await PayableSnapshotService(self.session).sync_collaborator_payables_for_employee(
                 employee_id=emp.id
+            )
+        if "full_name" in patch and (before.get("full_name") or "") != (emp.full_name or ""):
+            # Custos Indiretos, Endividamento e Componentes Variáveis ligados ao colaborador.
+            await PayableSnapshotService(self.session).sync_employee_name(
+                employee_id=emp.id, old_name=before.get("full_name")
             )
         await self.audit.log_action(
             user=actor,

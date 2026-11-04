@@ -42,6 +42,7 @@ from app.schemas.legal import (
     LegalKpis,
     LegalOverview,
 )
+from app.services.legal_debt_link_service import PAID_SOURCE_DEBT
 
 # Base de valor dos gráficos e da faixa de valor.
 BASIS_CONSIDERED = "considered"
@@ -333,6 +334,9 @@ class LegalService:
         row = await self.get_case(case_id)
         if row is None:
             raise LookupError("Processo não encontrado.")
+        if row.paid_source == PAID_SOURCE_DEBT:
+            # Pago/saldo vêm da dívida vinculada (Endividamento): somente leitura aqui.
+            data = {k: v for k, v in data.items() if k not in ("amount_paid", "amount_pending")}
         changed = self._log_diff(
             entity_type=LegalEntityType.CASE, row=row, data=data, actor=actor
         )

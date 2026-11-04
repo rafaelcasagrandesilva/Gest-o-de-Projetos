@@ -34,14 +34,16 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_permission
+from app.api.deps import get_current_user, require_permission, user_has_permission
 from app.api.sensitive import SENSITIVE_SPECS, redact_for, sensitive_include
 from app.core.permission_codes import (
     LEGAL_CASES_CREATE,
     LEGAL_CASES_DELETE,
     LEGAL_CASES_LIST,
     LEGAL_CASES_READ,
+    LEGAL_CASES_SENSITIVE,
     LEGAL_CASES_UPDATE,
+    DEBTS_SENSITIVE,
     LEGAL_COMPANIES_CREATE,
     LEGAL_COMPANIES_DELETE,
     LEGAL_COMPANIES_LIST,
@@ -64,6 +66,7 @@ from app.core.permission_codes import (
 )
 from app.database.session import get_db
 from app.core.config import settings
+from app.models.company_finance import CompanyFinancialItem
 from app.models.legal import (
     LegalCase,
     LegalChangeLog,
@@ -78,12 +81,18 @@ from app.schemas.legal import (
     LegalCaseRead,
     LegalCaseUpdate,
     LegalChangeLogRead,
+    LegalDebtLinkRead,
+    LegalDebtLinkRequest,
+    LegalDebtLinkSuggestion,
+    LegalDebtUnlinkRequest,
     LegalCompanyCreate,
     LegalCompanyRead,
     LegalCompanyUpdate,
     LegalFacets,
     LegalOverview,
+    LegalPersonAgreementRef,
     LegalPersonCreate,
+    LegalPersonDebtRead,
     LegalPersonDetail,
     LegalPersonDocumentRead,
     LegalPersonRead,
@@ -107,6 +116,13 @@ from app.services.legal_import_parser import (
     ParsedSources,
     build_payload,
 )
+from app.services.legal_debt_link_service import (
+    LegalDebtLinkError,
+    LegalDebtLinkService,
+    PaymentSummary,
+    has_agreement,
+    parse_agreement_installments,
+)
 from app.services.legal_import_service import LegalImportService
 from app.services.legal_operation_service import (
     LegalEventService,
@@ -114,6 +130,11 @@ from app.services.legal_operation_service import (
     LegalWorkService,
 )
 from app.models.legal_operation import LegalTimelineEntryType
+from app.services.legal_cost_center import (
+    cost_center_by_project_name,
+    cost_center_labels,
+    validate_cost_center_ref,
+)
 from app.services.legal_service import (
     DOCUMENT_CATEGORY_LABELS,
     MONEY_FIELDS,
@@ -197,20 +218,59 @@ def _strip_sensitive_writes(resource: str, data: dict, user: User) -> dict:
     return {k: v for k, v in data.items() if k not in hidden}
 
 
-def _case_read(case: LegalCase) -> LegalCaseRead:
-    """Monta o schema desnormalizando nome/CPF da pessoa (evita N+1 no frontend)."""
+def _case_read(case: LegalCase, payments: dict[UUID, PaymentSummary] | None = None) -> LegalCaseRead:
+    """Monta o schema desnormalizando nome/CPF da pessoa (evita N+1 no frontend).
+
+    `payments` (por processo) traz a situação do acordo no Endividamento; sem ele, os campos de
+    pagamento ficam vazios — só as rotas de leitura calculam (ver `_payments`).
+    """
     model = LegalCaseRead.model_validate(case)
     person = case.person
-    return model.model_copy(
-        update={
-            "person_name": person.full_name if person else None,
-            "person_cpf": person.cpf if person else None,
-        }
+    update: dict = {
+        "person_name": person.full_name if person else None,
+        "person_cpf": person.cpf if person else None,
+    }
+    summary = (payments or {}).get(case.id)
+    if summary is not None:
+        update.update(
+            payment_status=summary.status,
+            payment_total=summary.total,
+            payment_settled_month=summary.settled_month,
+            payment_debts=[d.name for d in summary.debts],
+        )
+    return model.model_copy(update=update)
+
+
+def _person_debt_fields(summary: PaymentSummary | None) -> dict:
+    if summary is None:
+        return {}
+    return {
+        "debt_status": summary.status,
+        "debt_count": len(summary.debts),
+        "debt_total": summary.total,
+        "debt_paid": summary.paid,
+        "debt_pending": summary.pending,
+    }
+
+
+def _person_read(
+    person: LegalPerson, totals: dict, summary: PaymentSummary | None = None
+) -> LegalPersonRead:
+    return LegalPersonRead.model_validate(person).model_copy(
+        update={**totals, **_person_debt_fields(summary)}
     )
 
 
-def _person_read(person: LegalPerson, totals: dict) -> LegalPersonRead:
-    return LegalPersonRead.model_validate(person).model_copy(update=totals)
+async def _payments(db: AsyncSession) -> LegalDebtLinkService:
+    """Atualiza o pago dos processos vinculados e devolve o serviço com as dívidas já lidas.
+
+    Chamado no início das leituras do Jurídico: o pago vem do Endividamento/CAP e muda por
+    caminhos que o Jurídico não vê (pagamento, estorno, grade, cronograma) — sincronizar na
+    leitura é o que garante que tela, indicadores e relatório nunca mostrem valor velho.
+    """
+    svc = LegalDebtLinkService(db)
+    await svc.sync_cases()
+    return svc
 
 
 def _change_log_read(entry: LegalChangeLog, *, money_by_entity: dict[str, bool]) -> LegalChangeLogRead:
@@ -292,8 +352,10 @@ async def list_cases(
         status_, type_, uf, company, project, client, person_id, value_min, value_max, q, basis,
         include_inactive, only_agreements,
     )
+    links = await _payments(db)
+    by_case = links.by_case(links.loaded)
     rows = await LegalService(db).list_cases(filters)
-    return [redact_for("legal_case", _case_read(row), user) for row in rows]
+    return [redact_for("legal_case", _case_read(row, by_case), user) for row in rows]
 
 
 @router.get("/cases/overview", response_model=LegalOverview, dependencies=_overview + _workspace)
@@ -319,6 +381,7 @@ async def cases_overview(
         status_, type_, uf, company, project, client, person_id, value_min, value_max, q, basis,
         only_agreements=only_agreements,
     )
+    await _payments(db)
     return redact_for("legal_overview", await LegalService(db).overview(filters), user)
 
 
@@ -328,10 +391,11 @@ async def get_case(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> LegalCaseRead:
+    links = await _payments(db)
     row = await LegalService(db).get_case(case_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Processo não encontrado.")
-    return redact_for("legal_case", _case_read(row), user)
+    return redact_for("legal_case", _case_read(row, links.by_case(links.loaded)), user)
 
 
 @router.post(
@@ -374,7 +438,8 @@ async def update_case(
             status_code=status.HTTP_409_CONFLICT,
             detail="Já existe um processo com este número.",
         ) from e
-    return redact_for("legal_case", _case_read(row), user)
+    links = await _payments(db)
+    return redact_for("legal_case", _case_read(row, links.by_case(links.loaded)), user)
 
 
 @router.post(
@@ -434,8 +499,10 @@ async def list_persons(
         q=q,
         include_inactive=include_inactive,
     )
+    links = await _payments(db)
+    by_person = links.by_person(links.loaded)
     rows = await LegalService(db).list_persons(filters)
-    return [redact_for("legal_person", _person_read(p, t), user) for p, t in rows]
+    return [redact_for("legal_person", _person_read(p, t, by_person.get(p.id)), user) for p, t in rows]
 
 
 @router.get("/persons/facets", response_model=LegalFacets, dependencies=_persons_list + _workspace)
@@ -469,16 +536,75 @@ async def search_persons(
     if not term:
         return []
     rows = await LegalService(db).search_persons_reference(term=term, limit=limit)
-    return [
-        {
-            "id": str(r.id),
-            "name": r.full_name,
-            "company": r.company,
-            "termination_date": r.termination_date.isoformat() if r.termination_date else None,
-        }
-        for r in rows
-        if getattr(r, "full_name", None)
-    ]
+    # Centro de custo pelo vínculo do projeto do desligado (aba Projetos da Administração):
+    # o Endividamento pré-preenche a dívida com o contrato em que a pessoa trabalhou.
+    refs = await cost_center_by_project_name(db, (r.project for r in rows))
+    labels = await cost_center_labels(db, refs.values())
+    result = []
+    for r in rows:
+        if not getattr(r, "full_name", None):
+            continue
+        ref = refs.get((r.project or "").strip())
+        result.append(
+            {
+                "id": str(r.id),
+                "name": r.full_name,
+                "company": r.company,
+                "termination_date": r.termination_date.isoformat() if r.termination_date else None,
+                "project": r.project,
+                "cost_center_ref": ref,
+                "cost_center_label": labels.get(ref) if ref else None,
+            }
+        )
+    return result
+
+
+@router.get(
+    "/persons/{person_id}/agreements",
+    response_model=list[LegalPersonAgreementRef],
+    dependencies=[Depends(require_permission(LEGAL_PERSONS_REFERENCE))],
+)
+async def person_agreements(
+    person_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[LegalPersonAgreementRef]:
+    """Processos com acordo do desligado — REFERÊNCIA para o cadastro da dívida no Endividamento.
+
+    Mesmo gate da busca de desligados (`legal_persons.reference`). O valor do acordo, que vira o
+    valor da dívida, só vai para quem vê valores de Processos OU do Endividamento.
+    """
+    person = await db.get(LegalPerson, person_id)
+    if person is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pessoa não encontrada.")
+    with_values = user_has_permission(user, LEGAL_CASES_SENSITIVE) or user_has_permission(
+        user, DEBTS_SENSITIVE
+    )
+    cases = [c for c in (person.cases or []) if c.is_active and has_agreement(c)]
+    linked = {}
+    if cases:
+        rows = await db.execute(
+            select(CompanyFinancialItem.legal_case_id, CompanyFinancialItem.nome).where(
+                CompanyFinancialItem.legal_case_id.in_([c.id for c in cases])
+            )
+        )
+        linked = {case_id: nome for case_id, nome in rows.all()}
+    out: list[LegalPersonAgreementRef] = []
+    for c in cases:
+        plan = parse_agreement_installments(c.agreement_terms)
+        out.append(
+            LegalPersonAgreementRef(
+                case_id=c.id,
+                case_number=c.case_number,
+                status=getattr(c.status, "value", c.status),
+                amount_agreed=float(c.amount_agreed) if with_values and c.amount_agreed is not None else None,
+                agreement_terms=c.agreement_terms if with_values else None,
+                installments=plan.values() if with_values and plan else [],
+                due_day=plan.due_day if plan else None,
+                linked_debt=linked.get(c.id),
+            )
+        )
+    return out
 
 
 @router.get(
@@ -489,18 +615,46 @@ async def get_person(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> LegalPersonDetail:
+    links = await _payments(db)
     found = await LegalService(db).get_person(person_id)
     if found is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pessoa não encontrada.")
     person, totals = found
+    summary = links.by_person(links.loaded).get(person.id)
+    by_case = links.by_case(links.loaded)
+    case_numbers = {c.id: c.case_number for c in (person.cases or [])}
     # DOIS gates independentes nesta resposta: os dados da pessoa (rescisão/FGTS/totais) dependem
     # de `legal_persons.sensitive`; os processos da ficha, de `legal_cases.sensitive`. Por isso
     # cada nível é redigido com o SEU recurso, em vez de usar `nested` — que propagaria a decisão
     # do pai e deixaria quem tem só o sensitive de Desligados enxergar valor de processo.
+    # As dívidas da ficha são do recurso de Desligados e também são redigidas uma a uma.
+    debts = [
+        redact_for(
+            "legal_person_debt",
+            LegalPersonDebtRead(
+                item_id=d.item_id,
+                name=d.name,
+                case_id=d.case_id,
+                case_number=case_numbers.get(d.case_id) if d.case_id else None,
+                status="QUITADO" if d.settled else "EM_PAGAMENTO",
+                settled_month=d.settled_month,
+                is_active=d.is_active,
+                total=d.total,
+                paid=d.paid,
+                pending=d.pending,
+            ),
+            user,
+        )
+        for d in (summary.debts if summary else [])
+    ]
     detail = LegalPersonDetail.model_validate(person).model_copy(
         update={
             **totals,
-            "cases": [redact_for("legal_case", _case_read(c), user) for c in (person.cases or [])],
+            **_person_debt_fields(summary),
+            "cases": [
+                redact_for("legal_case", _case_read(c, by_case), user) for c in (person.cases or [])
+            ],
+            "debts": debts,
         }
     )
     return redact_for("legal_person", detail, user)
@@ -812,10 +966,20 @@ async def list_projects(
     db: AsyncSession = Depends(get_db),
 ) -> list[LegalProjectRead]:
     rows = await LegalService(db).list_projects(include_inactive=include_inactive)
+    labels = await cost_center_labels(db, (row.cost_center_ref for row, _ in rows))
     return [
-        LegalProjectRead.model_validate(row).model_copy(update={"case_count": count})
+        LegalProjectRead.model_validate(row).model_copy(
+            update={"case_count": count, "cost_center_label": labels.get(row.cost_center_ref or "")}
+        )
         for row, count in rows
     ]
+
+
+async def _project_read(db: AsyncSession, row) -> LegalProjectRead:
+    labels = await cost_center_labels(db, [row.cost_center_ref])
+    return LegalProjectRead.model_validate(row).model_copy(
+        update={"cost_center_label": labels.get(row.cost_center_ref or "")}
+    )
 
 
 @router.post(
@@ -829,14 +993,18 @@ async def create_project(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> LegalProjectRead:
+    data = payload.model_dump()
     try:
-        row = await LegalService(db).create_catalog("projects", payload.model_dump(), actor=user)
+        data["cost_center_ref"] = await validate_cost_center_ref(db, data.get("cost_center_ref"))
+        row = await LegalService(db).create_catalog("projects", data, actor=user)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except IntegrityError as e:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Já existe um projeto com este nome."
         ) from e
-    return LegalProjectRead.model_validate(row)
+    return await _project_read(db, row)
 
 
 @router.patch(
@@ -848,18 +1016,21 @@ async def update_project(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> LegalProjectRead:
+    data = payload.model_dump(exclude_unset=True)
     try:
-        row = await LegalService(db).update_catalog(
-            "projects", project_id, payload.model_dump(exclude_unset=True), actor=user
-        )
+        if "cost_center_ref" in data:
+            data["cost_center_ref"] = await validate_cost_center_ref(db, data["cost_center_ref"])
+        row = await LegalService(db).update_catalog("projects", project_id, data, actor=user)
     except LookupError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except IntegrityError as e:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Já existe um projeto com este nome."
         ) from e
-    return LegalProjectRead.model_validate(row)
+    return await _project_read(db, row)
 
 
 @router.post(
@@ -1052,6 +1223,7 @@ async def work_center(db: AsyncSession = Depends(get_db)) -> dict:
 
 @router.get("/summary", response_model=LegalExecutiveSummary, dependencies=_overview + _workspace)
 async def executive_summary(db: AsyncSession = Depends(get_db)) -> LegalExecutiveSummary:
+    await _payments(db)
     return LegalExecutiveSummary(**await LegalWorkService(db).executive_summary())
 
 
@@ -1172,3 +1344,148 @@ async def _events_with_case_context(db: AsyncSession, events: list) -> list[Lega
         numero, reclamante = contexto.get(e.case_id, (None, None))
         out.append(read.model_copy(update={"case_number": numero, "claimant": reclamante}))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Vínculo com o Endividamento (pagamento dos acordos)
+#
+# Ligar uma dívida a um processo/desligado é um PONTEIRO: não muda nome nem valor da dívida.
+# Por isso o gate é o de editar o lado do Jurídico (processo ou desligado), sem exigir
+# `debts.update` — o perfil que mantém o Jurídico é quem sabe qual acordo é qual.
+# ---------------------------------------------------------------------------
+
+_links_manage = [Depends(require_permission(LEGAL_CASES_UPDATE, LEGAL_PERSONS_UPDATE))]
+
+
+def _require_link_permission(user: User, case_id: UUID | None) -> None:
+    code = LEGAL_CASES_UPDATE if case_id is not None else LEGAL_PERSONS_UPDATE
+    if not user_has_permission(user, code):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sem permissão para vincular a dívida a este registro do Jurídico.",
+        )
+
+
+@router.get(
+    "/debt-links/suggestions",
+    response_model=list[LegalDebtLinkSuggestion],
+    dependencies=_links_manage + _workspace,
+)
+async def debt_link_suggestions(
+    db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> list[LegalDebtLinkSuggestion]:
+    rows = await LegalDebtLinkService(db).suggestions()
+    return [redact_for("legal_debt_link", LegalDebtLinkSuggestion(**r), user) for r in rows]
+
+
+@router.get("/debt-links", response_model=list[LegalDebtLinkRead], dependencies=_links_manage + _workspace)
+async def list_debt_links(
+    db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> list[LegalDebtLinkRead]:
+    links = await _payments(db)
+    case_ids = {p.case_id for p in links.loaded if p.case_id}
+    person_ids = {p.person_id for p in links.loaded if p.person_id}
+    cases = {
+        c.id: c
+        for c in (await db.execute(select(LegalCase).where(LegalCase.id.in_(case_ids)))).scalars().unique()
+    } if case_ids else {}
+    persons = {
+        p.id: p
+        for p in (await db.execute(select(LegalPerson).where(LegalPerson.id.in_(person_ids)))).scalars().unique()
+    } if person_ids else {}
+    out = [
+        LegalDebtLinkRead(
+            item_id=p.item_id,
+            debt_name=p.name,
+            person_id=p.person_id,
+            person_name=persons[p.person_id].full_name if p.person_id in persons else None,
+            case_id=p.case_id,
+            case_number=cases[p.case_id].case_number if p.case_id in cases else None,
+            status="QUITADO" if p.settled else "EM_PAGAMENTO",
+            total=p.total,
+            paid=p.paid,
+            pending=p.pending,
+        )
+        for p in links.loaded
+    ]
+    out.sort(key=lambda r: (r.person_name or r.debt_name).upper())
+    return [redact_for("legal_debt_link", r, user) for r in out]
+
+
+@router.post("/debt-links", status_code=status.HTTP_204_NO_CONTENT, dependencies=_links_manage + _workspace)
+async def link_debt(
+    payload: LegalDebtLinkRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    _require_link_permission(user, payload.case_id)
+    try:
+        await LegalDebtLinkService(db).link(
+            item_id=payload.item_id, case_id=payload.case_id, person_id=payload.person_id, actor=user
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except LegalDebtLinkError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
+
+
+@router.post(
+    "/debt-links/unlink", status_code=status.HTTP_204_NO_CONTENT, dependencies=_links_manage + _workspace
+)
+async def unlink_debt(
+    payload: LegalDebtUnlinkRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    item = await db.get(CompanyFinancialItem, payload.item_id)
+    if item is None or item.tipo != "endividamento":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dívida não encontrada.")
+    if (item.legal_case_id is not None and not user_has_permission(user, LEGAL_CASES_UPDATE)) or (
+        payload.include_person and not user_has_permission(user, LEGAL_PERSONS_UPDATE)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para desfazer este vínculo."
+        )
+    try:
+        await LegalDebtLinkService(db).unlink(
+            item_id=payload.item_id, include_person=payload.include_person, actor=user
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+
+@router.post(
+    "/debt-links/dismiss", status_code=status.HTTP_204_NO_CONTENT, dependencies=_links_manage + _workspace
+)
+async def dismiss_debt_link(
+    payload: LegalDebtLinkRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    try:
+        await LegalDebtLinkService(db).dismiss(
+            item_id=payload.item_id, case_id=payload.case_id, person_id=payload.person_id, actor=user
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+
+@router.post(
+    "/cases/{case_id}/finalize-agreement",
+    response_model=LegalCaseRead,
+    dependencies=_cases_update + _workspace,
+)
+async def finalize_agreement(
+    case_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> LegalCaseRead:
+    """Marca "Acordo finalizado" no processo cujo acordo o Endividamento já quitou."""
+    svc = LegalDebtLinkService(db)
+    try:
+        row = await svc.finalize_case(case_id=case_id, actor=user)
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except LegalDebtLinkError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
+    return redact_for("legal_case", _case_read(row, svc.by_case(svc.loaded)), user)

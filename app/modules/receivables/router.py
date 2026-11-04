@@ -140,7 +140,11 @@ async def list_invoices(
         default=None,
         pattern="^(EMITIDA|ANTECIPADA|RECEBIDA|CANCELADA)$",
     ),
-    client: str | None = Query(default=None, max_length=255),
+    client: str | None = Query(
+        default=None,
+        max_length=255,
+        description="Busca geral por palavras: nº da NF, cliente, projeto e observações (sem acento).",
+    ),
     period_field: str = Query(
         default="issue",
         pattern="^(issue|due)$",
@@ -215,7 +219,11 @@ async def list_invoices(
 async def get_kpis(
     project_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None, pattern="^(EMITIDA|ANTECIPADA|RECEBIDA|CANCELADA)$"),
-    client: str | None = Query(default=None, max_length=255),
+    client: str | None = Query(
+        default=None,
+        max_length=255,
+        description="Busca geral por palavras: nº da NF, cliente, projeto e observações (sem acento).",
+    ),
     year: int | None = Query(default=None, ge=2000, le=2100),
     month: int | None = Query(default=None, ge=1, le=12),
     period_field: str = Query(default="issue", pattern="^(issue|due)$"),

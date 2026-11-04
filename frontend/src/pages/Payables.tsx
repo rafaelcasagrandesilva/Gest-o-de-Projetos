@@ -23,6 +23,7 @@ import { PeriodFilter } from "@/components/PeriodFilter";
 import { TruncatedCell } from "@/components/TruncatedText";
 import { listProjects, type Project } from "@/services/projects";
 import { formatApiError } from "@/utils/apiError";
+import { matchesSearchWords } from "@/utils/textSearch";
 import { formatCurrencyField, formatCurrencyOrDash, normalizeCurrencyForApi, parseCurrencyInput } from "@/utils/currency";
 import { PayablesImportModal } from "@/components/PayablesImportModal";
 import { SortableTh } from "@/components/table";
@@ -92,6 +93,20 @@ function payableTipoLabel(r: PayableSnapshotRow): string {
   if (r.type === "FIXED_COST" && r.category === "Custo Fixo") return "Custo Indireto";
   if (r.type === "FIXED_COST" && r.category === "Colaborador") return r.category;
   return typeLabel(r.type);
+}
+
+/**
+ * Nome do título separado do componente: "Fulano — Retirada de Capital" → ["Fulano", "Retirada
+ * de Capital"]. Só em títulos gerados pelo sistema (o " — " é o separador que a geração usa);
+ * no lançamento MANUAL o nome é texto livre e fica inteiro. Na tela o componente vira etiqueta
+ * própria, que nunca é cortada mesmo com nome comprido, tela pequena ou zoom.
+ */
+function splitPayableName(r: PayableSnapshotRow): [string, string | null] {
+  if (r.type === "MANUAL") return [r.name, null];
+  const i = r.name.lastIndexOf(" — ");
+  if (i <= 0) return [r.name, null];
+  const label = r.name.slice(i + 3).trim();
+  return label ? [r.name.slice(0, i), label] : [r.name, null];
 }
 
 /** Premiação/Reembolso de colaborador (Componente Variável), lançado à parte do salário. */
@@ -372,15 +387,15 @@ export function Payables() {
   }, [load]);
 
   const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim();
     return rows.filter((r) => {
       if (statusFilter && r.status !== statusFilter) return false;
       if (onlyUnclassifiedManual && !isUnclassifiedManual(r)) return false;
       if (costCenterFilter && (r.cost_center || "").trim() !== costCenterFilter) return false;
       if (tipoFilter && !matchesTipoFilter(r, tipoFilter)) return false;
       if (!q) return true;
-      const hay = `${r.name} ${r.cost_center} ${r.category}`.toLowerCase();
-      return hay.includes(q);
+      // Por palavras (qualquer ordem, sem acento) — inclui o subtítulo (descrição do lançamento).
+      return matchesSearchWords([r.name, r.item_description, r.cost_center, r.category], q);
     });
   }, [rows, statusFilter, search, onlyUnclassifiedManual, costCenterFilter, tipoFilter]);
 
@@ -1499,18 +1514,32 @@ function PayablesSnapshotTable({
                     {/* Tooltip com o nome completo (obrigações de operação de antecipação
                         guardam o nome longo em observation; demais lançamentos usam o nome).
                         Endividamento: `name` é o Credor e `item_description` a Descrição. */}
-                    <div
-                      className="truncate max-w-[280px]"
-                      title={
-                        r.type === "ANTECIPACAO_OPERACAO"
-                          ? r.observation ?? r.name
-                          : r.item_description
-                            ? `${r.name} — ${r.item_description}`
-                            : r.name
-                      }
-                    >
-                      {r.name}
-                    </div>
+                    {(() => {
+                      // Nome em até 2 linhas; o componente ("Retirada de Capital", "Reembolso"…)
+                      // em etiqueta à parte, para não sumir no corte do nome.
+                      const [nameHead, componentLabel] = splitPayableName(r);
+                      return (
+                        <>
+                          <div
+                            className="line-clamp-2 max-w-[280px] break-words leading-snug"
+                            title={
+                              r.type === "ANTECIPACAO_OPERACAO"
+                                ? r.observation ?? r.name
+                                : r.item_description
+                                  ? `${r.name} — ${r.item_description}`
+                                  : r.name
+                            }
+                          >
+                            {nameHead}
+                          </div>
+                          {componentLabel ? (
+                            <span className="mt-0.5 inline-block whitespace-nowrap rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium leading-none text-indigo-700 ring-1 ring-indigo-200">
+                              {componentLabel}
+                            </span>
+                          ) : null}
+                        </>
+                      );
+                    })()}
                     {r.item_description ? (
                       <div className="truncate max-w-[280px] text-xs text-slate-500">
                         {r.item_description}

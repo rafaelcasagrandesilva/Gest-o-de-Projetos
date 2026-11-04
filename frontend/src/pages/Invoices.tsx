@@ -698,11 +698,12 @@ export function Invoices() {
             </select>
           </label>
           <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-sm">
-            <span className="font-medium text-slate-700">Cliente</span>
+            {/* Busca geral (backend): nº da NF, cliente, projeto e observações, por palavras. */}
+            <span className="font-medium text-slate-700">Buscar</span>
             <input
               value={clienteFilter}
               onChange={(e) => setClienteFilter(e.target.value)}
-              placeholder="Buscar…"
+              placeholder="Nº da NF, cliente, projeto…"
               className="rounded-lg border border-slate-300 px-3 py-2"
             />
           </label>

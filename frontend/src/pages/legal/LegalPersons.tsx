@@ -6,7 +6,13 @@ import { useTableSort } from "@/hooks/useTableSort";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import { LegalCaseModal } from "@/components/legal/LegalCaseModal";
 import { LegalPersonModal } from "@/components/legal/LegalPersonModal";
-import { FilterChip, FilterGroup, KpiCard, formatCount } from "@/components/legal/LegalPanelPieces";
+import {
+  FilterChip,
+  FilterGroup,
+  KpiCard,
+  PaymentBadge,
+  formatCount,
+} from "@/components/legal/LegalPanelPieces";
 import { LEGAL_PERSON_SORT_COLUMNS, defaultLegalPersonSort } from "@/tableSort/legal";
 import { formatApiError } from "@/utils/apiError";
 import { formatCurrencyOrDash, sumCurrencyOrNull } from "@/utils/currency";
@@ -32,6 +38,8 @@ import {
 const TYPING_DEBOUNCE_MS = 350;
 
 type HasCasesFilter = "all" | "with" | "without";
+/** Situação dos acordos no Endividamento (dívidas vinculadas ao desligado). */
+type PaymentFilter = "all" | "QUITADO" | "EM_PAGAMENTO" | "none";
 
 function toggle(list: string[], value: string): string[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
@@ -49,6 +57,7 @@ export function LegalPersons() {
   const [companies, setCompanies] = useState<string[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [hasCases, setHasCases] = useState<HasCasesFilter>("all");
+  const [payment, setPayment] = useState<PaymentFilter>("all");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
 
@@ -129,22 +138,32 @@ export function LegalPersons() {
     setSearchParams(next, { replace: true });
   }, [deepLinkId, openPerson, searchParams, setSearchParams]);
 
-  const { sortedRows, headerSort } = useTableSort(people, LEGAL_PERSON_SORT_COLUMNS, {
+  // Filtro de pagamento é local: a situação já vem em cada linha (debt_status).
+  const visible = useMemo(
+    () =>
+      payment === "all"
+        ? people
+        : people.filter((p) => (payment === "none" ? !p.debt_status : p.debt_status === payment)),
+    [people, payment],
+  );
+
+  const { sortedRows, headerSort } = useTableSort(visible, LEGAL_PERSON_SORT_COLUMNS, {
     defaultCompare: defaultLegalPersonSort,
   });
 
   const totals = useMemo(
     () => ({
-      people: people.length,
-      cases: people.reduce((sum, p) => sum + p.case_count, 0),
-      withCases: people.filter((p) => p.case_count > 0).length,
-      claimed: sumCurrencyOrNull(people.map((p) => p.total_claimed)),
-      considered: sumCurrencyOrNull(people.map((p) => p.total_considered)),
+      people: visible.length,
+      cases: visible.reduce((sum, p) => sum + p.case_count, 0),
+      withCases: visible.filter((p) => p.case_count > 0).length,
+      claimed: sumCurrencyOrNull(visible.map((p) => p.total_claimed)),
+      considered: sumCurrencyOrNull(visible.map((p) => p.total_considered)),
     }),
-    [people],
+    [visible],
   );
 
-  const hasFilters = companies.length > 0 || projects.length > 0 || hasCases !== "all" || !!search;
+  const hasFilters =
+    companies.length > 0 || projects.length > 0 || hasCases !== "all" || payment !== "all" || !!search;
 
   return (
     <div className="space-y-4">
@@ -173,6 +192,24 @@ export function LegalPersons() {
               label={label}
               active={hasCases === value}
               onClick={() => setHasCases(value)}
+            />
+          ))}
+        </FilterGroup>
+
+        <FilterGroup label="Acordos no Endividamento">
+          {(
+            [
+              ["all", "Todos"],
+              ["QUITADO", "Quitados"],
+              ["EM_PAGAMENTO", "Em pagamento"],
+              ["none", "Sem dívida vinculada"],
+            ] as [PaymentFilter, string][]
+          ).map(([value, label]) => (
+            <FilterChip
+              key={value}
+              label={label}
+              active={payment === value}
+              onClick={() => setPayment(value)}
             />
           ))}
         </FilterGroup>
@@ -236,6 +273,7 @@ export function LegalPersons() {
                 setCompanies([]);
                 setProjects([]);
                 setHasCases("all");
+                setPayment("all");
                 setSearchInput("");
                 setSearch("");
               }}
@@ -302,12 +340,13 @@ export function LegalPersons() {
                 <SortableTh label="Processos" column="case_count" align="right" {...headerSort} />
                 <SortableTh label="Valor total" column="claimed" align="right" {...headerSort} />
                 <SortableTh label="Valor considerado" column="considered" align="right" {...headerSort} />
+                <SortableTh label="Acordos pagos" column="debt_paid" align="right" {...headerSort} />
               </tr>
             </thead>
             <tbody>
               {sortedRows.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-400">
+                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-400">
                     Nenhum desligado com esses filtros.
                   </td>
                 </tr>
@@ -349,6 +388,23 @@ export function LegalPersons() {
                   </td>
                   <td className="px-2 py-2">
                     <Money value={p.total_considered} />
+                  </td>
+                  <td className="px-2 py-2">
+                    {p.debt_status ? (
+                      <div
+                        className="flex flex-col items-end gap-0.5"
+                        title={
+                          p.debt_total != null
+                            ? `Pago ${formatCurrencyOrDash(p.debt_paid)} de ${formatCurrencyOrDash(p.debt_total)}`
+                            : undefined
+                        }
+                      >
+                        <Money value={p.debt_paid} />
+                        <PaymentBadge status={p.debt_status} />
+                      </div>
+                    ) : (
+                      <span className="block text-right text-slate-300">—</span>
+                    )}
                   </td>
                 </tr>
               ))}

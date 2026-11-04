@@ -4,6 +4,9 @@ import { hasPermission } from "@/permissions";
 import { useAuth } from "@/context/AuthContext";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import { Money } from "@/components/Money";
+import { CostCenterSelect } from "@/components/company-finance/CostCenterSelect";
+import { listProjects, type Project } from "@/services/projects";
+import { LegalDebtLinksTab } from "@/components/legal/LegalDebtLinksTab";
 import { LegalPersonDocuments } from "@/components/legal/LegalPersonDocuments";
 import {
   ActiveBadge,
@@ -59,15 +62,15 @@ import {
 /**
  * Administração do Workspace Jurídico — manutenção dos dados.
  *
- * Cinco abas numa única rota (`/legal/admin?tab=…`): Pessoas, Processos, Empresas, Projetos e
- * Importações. Regra transversal: **não existe exclusão física**. Todo "remover" é uma baixa
+ * Abas numa única rota (`/legal/admin?tab=…`): Pessoas, Processos, Empresas, Projetos,
+ * Importações e Vínculos com Endividamento. Regra transversal: **não existe exclusão física**. Todo "remover" é uma baixa
  * lógica (Desativar) reversível por Restaurar, e toda alteração manual gera histórico no backend.
  *
  * As abas Empresas/Projetos são o VOCABULÁRIO que alimenta os filtros das demais telas — por isso
  * cada linha mostra em quantos processos o nome é usado, para o admin ver o impacto antes de mexer.
  */
 
-type TabKey = "persons" | "cases" | "companies" | "projects" | "imports";
+type TabKey = "persons" | "cases" | "companies" | "projects" | "imports" | "debts";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "persons", label: "Desligados" },
@@ -75,6 +78,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "companies", label: "Empresas" },
   { key: "projects", label: "Projetos" },
   { key: "imports", label: "Importações" },
+  { key: "debts", label: "Vínculos com Endividamento" },
 ];
 
 /** Aba → recurso de permissão correspondente (um recurso por MENU, como no backend). */
@@ -84,6 +88,7 @@ const TAB_RESOURCE: Record<TabKey, string> = {
   companies: "legal_companies",
   projects: "legal_projects",
   imports: "legal_imports",
+  debts: "legal_cases",
 };
 
 function matches(haystack: (string | null | undefined)[], needle: string): boolean {
@@ -140,6 +145,7 @@ const HISTORY_FIELD_LABELS: Record<string, string> = {
   last_movement_date: "Data da última movimentação",
   hearing_date: "Audiência",
   distribution_date: "Distribuição",
+  debt_link: "Dívida do Endividamento",
 };
 
 export function LegalAdmin() {
@@ -164,7 +170,12 @@ export function LegalAdmin() {
   const projectsPerms = permsFor("legal_projects");
 
   /** Aba visível quando o usuário pode ao menos LISTAR aquele recurso. */
-  const visibleTabs = TABS.filter((t) => hasPermission(perms, `${TAB_RESOURCE[t.key]}.list`));
+  // Vínculos com o Endividamento: só para quem edita Processos ou Desligados (é manutenção).
+  const canLinkDebts =
+    hasPermission(perms, "legal_cases.update") || hasPermission(perms, "legal_persons.update");
+  const visibleTabs = TABS.filter((t) =>
+    t.key === "debts" ? canLinkDebts : hasPermission(perms, `${TAB_RESOURCE[t.key]}.list`),
+  );
   const canImport = hasPermission(perms, "legal_imports.create");
 
   const tabParam = (searchParams.get("tab") ?? "") as TabKey;
@@ -210,6 +221,12 @@ export function LegalAdmin() {
       {tab === "companies" ? <CompaniesTab {...companiesPerms} /> : null}
       {tab === "projects" ? <ProjectsTab {...projectsPerms} /> : null}
       {tab === "imports" ? <ImportsTab canRun={canImport} /> : null}
+      {tab === "debts" ? (
+        <LegalDebtLinksTab
+          canLinkCases={casesPerms.canUpdate}
+          canLinkPersons={personsPerms.canUpdate}
+        />
+      ) : null}
     </div>
   );
 }
@@ -715,6 +732,7 @@ function CaseForm({
   const [considered, setConsidered] = useState(formatCurrencyInputFromApi(c?.amount_considered));
   const [agreed, setAgreed] = useState(formatCurrencyInputFromApi(c?.amount_agreed));
   const [paid, setPaid] = useState(formatCurrencyInputFromApi(c?.amount_paid));
+  const paidFromDebt = c?.paid_source === "ENDIVIDAMENTO";
   const [pending, setPending] = useState(formatCurrencyInputFromApi(c?.amount_pending));
   const [agreementTerms, setAgreementTerms] = useState(c?.agreement_terms ?? "");
   const [notes, setNotes] = useState(c?.notes ?? "");
@@ -770,8 +788,9 @@ function CaseForm({
             amount_claimed: numOrNull(claimed),
             amount_considered: numOrNull(considered),
             amount_agreed: numOrNull(agreed),
-            amount_paid: numOrNull(paid),
-            amount_pending: numOrNull(pending),
+            ...(paidFromDebt
+              ? {}
+              : { amount_paid: numOrNull(paid), amount_pending: numOrNull(pending) }),
             agreement_terms: orNull(agreementTerms),
           }
         : {}),
@@ -904,11 +923,15 @@ function CaseForm({
           <Field label="Valor acordado">
             <input className={inputClass} inputMode="decimal" value={agreed} onChange={(e) => setAgreed(e.target.value)} placeholder="0,00" />
           </Field>
-          <Field label="Valor pago">
-            <input className={inputClass} inputMode="decimal" value={paid} onChange={(e) => setPaid(e.target.value)} placeholder="0,00" />
+          {/* Dívida vinculada: pago/saldo vêm do Endividamento e o backend ignora o que for digitado. */}
+          <Field
+            label="Valor pago"
+            hint={paidFromDebt ? "Calculado pelo Endividamento (dívida vinculada)." : undefined}
+          >
+            <input className={inputClass} inputMode="decimal" value={paid} onChange={(e) => setPaid(e.target.value)} placeholder="0,00" disabled={paidFromDebt} />
           </Field>
-          <Field label="Saldo pendente">
-            <input className={inputClass} inputMode="decimal" value={pending} onChange={(e) => setPending(e.target.value)} placeholder="0,00" />
+          <Field label="Saldo pendente" hint={paidFromDebt ? "Calculado pelo Endividamento." : undefined}>
+            <input className={inputClass} inputMode="decimal" value={pending} onChange={(e) => setPending(e.target.value)} placeholder="0,00" disabled={paidFromDebt} />
           </Field>
           <Field label="Condições do acordo" wide>
             <textarea className={inputClass} rows={2} value={agreementTerms} onChange={(e) => setAgreementTerms(e.target.value)} />
@@ -1081,7 +1104,7 @@ function ProjectsTab({ canCreate, canUpdate, canDeactivate }: CrudPerms) {
   return (
     <div className="space-y-3">
       <AdminToolbar
-        description="Projetos/contratos e seus clientes. Alimentam os filtros das telas do módulo."
+        description="Projetos/contratos e seus clientes. Alimentam os filtros das telas do módulo; o centro de custo vira o padrão da dívida do desligado no Endividamento."
         search={search}
         onSearch={setSearch}
         showInactive={showInactive}
@@ -1098,6 +1121,7 @@ function ProjectsTab({ canCreate, canUpdate, canDeactivate }: CrudPerms) {
           <>
             <Th>Projeto / Contrato</Th>
             <Th>Cliente</Th>
+            <Th>Centro de custo (SGC)</Th>
             <Th align="right">Processos</Th>
             <Th>Situação</Th>
             <Th align="right">Ações</Th>
@@ -1105,7 +1129,7 @@ function ProjectsTab({ canCreate, canUpdate, canDeactivate }: CrudPerms) {
         }
       >
         {visible.length === 0 ? (
-          <EmptyRow colSpan={5}>Nenhum projeto cadastrado.</EmptyRow>
+          <EmptyRow colSpan={6}>Nenhum projeto cadastrado.</EmptyRow>
         ) : (
           visible.map((r) => (
             <tr
@@ -1116,6 +1140,9 @@ function ProjectsTab({ canCreate, canUpdate, canDeactivate }: CrudPerms) {
             >
               <td className="px-3 py-2 font-medium text-slate-800">{r.name}</td>
               <td className="px-3 py-2 text-slate-600">{r.client ?? "—"}</td>
+              <td className="px-3 py-2 text-slate-600">
+                {r.cost_center_label ?? <span className="text-amber-700">sem vínculo</span>}
+              </td>
               <td className="px-3 py-2 text-right tabular-nums text-slate-700">{r.case_count}</td>
               <td className="px-3 py-2">
                 <ActiveBadge active={r.is_active} />
@@ -1170,8 +1197,27 @@ function CatalogForm({
     row ? (isCompany ? ((row as LegalCompany).cnpj ?? "") : ((row as LegalProjectItem).client ?? "")) : "",
   );
   const [notes, setNotes] = useState(row?.notes ?? "");
+  const [costCenterRef, setCostCenterRef] = useState(
+    !isCompany ? ((row as LegalProjectItem | null)?.cost_center_ref ?? "") : "",
+  );
+  const [sgcProjects, setSgcProjects] = useState<Project[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Todos os projetos do SGC, encerrados inclusive: o desligado pertence ao contrato em que
+  // trabalhou. Sem acesso à lista de projetos, sobram os centros fixos (e o vínculo atual).
+  useEffect(() => {
+    if (isCompany) return;
+    let cancelled = false;
+    void listProjects({ status: "ALL", limit: 200 })
+      .then((list) => {
+        if (!cancelled) setSgcProjects(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [isCompany]);
 
   async function submit() {
     if (!name.trim()) {
@@ -1186,7 +1232,12 @@ function CatalogForm({
         if (row) await updateLegalCompany(row.id, payload);
         else await createLegalCompany(payload);
       } else {
-        const payload = { name: name.trim(), client: orNull(second), notes: orNull(notes) };
+        const payload = {
+          name: name.trim(),
+          client: orNull(second),
+          notes: orNull(notes),
+          cost_center_ref: costCenterRef || null,
+        };
         if (row) await updateLegalProject(row.id, payload);
         else await createLegalProject(payload);
       }
@@ -1218,6 +1269,23 @@ function CatalogForm({
       <Field label={isCompany ? "CNPJ" : "Cliente"} wide>
         <input className={inputClass} value={second} onChange={(e) => setSecond(e.target.value)} />
       </Field>
+      {!isCompany ? (
+        <Field
+          label="Centro de custo no SGC"
+          hint="Padrão do centro de custo quando se cria a dívida de um desligado deste projeto no Endividamento."
+          wide
+        >
+          <CostCenterSelect
+            value={costCenterRef}
+            onChange={setCostCenterRef}
+            projects={sgcProjects}
+            includeClosed
+            emptyLabel="Sem vínculo"
+            legacyLabel={(row as LegalProjectItem | null)?.cost_center_label}
+            className={inputClass}
+          />
+        </Field>
+      ) : null}
       <Field label="Observações" wide>
         <textarea className={inputClass} rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
       </Field>
