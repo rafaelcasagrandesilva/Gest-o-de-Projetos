@@ -50,6 +50,7 @@ export function LancamentosCompetenciaModal({
   readOnly = false,
   onClose,
   onSaved,
+  onOpenComponents,
 }: {
   itemId: string;
   itemLabel: string;
@@ -58,6 +59,9 @@ export function LancamentosCompetenciaModal({
   readOnly?: boolean;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
+  /** Item com colaborador: abre os Componentes (Premiação/Reembolso, com anexos) desta competência.
+   *  Sem isto o aviso "edite em Componentes" não levava a lugar nenhum. */
+  onOpenComponents?: () => void;
 }) {
   const [rows, setRows] = useState<EntryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -260,11 +264,23 @@ export function LancamentosCompetenciaModal({
           )}
         </div>
 
-        {componentes.length > 0 && (
+        {(componentes.length > 0 || onOpenComponents) && (
           <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-              Premiação e reembolso (somente leitura — edite em Componentes)
-            </p>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Premiação e reembolso</p>
+              {onOpenComponents ? (
+                <button
+                  type="button"
+                  onClick={onOpenComponents}
+                  className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                >
+                  {readOnly ? "Ver componentes e anexos" : "Editar componentes e anexos"}
+                </button>
+              ) : null}
+            </div>
+            {componentes.length === 0 ? (
+              <p className="mt-2 text-sm text-slate-500">Nenhum nesta competência.</p>
+            ) : null}
             <ul className="mt-2 space-y-1">
               {componentes.map((c) => (
                 <li key={c.id} className="flex items-center justify-between gap-3 text-sm">

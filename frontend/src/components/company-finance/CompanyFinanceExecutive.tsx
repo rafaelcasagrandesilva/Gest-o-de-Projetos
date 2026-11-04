@@ -1460,6 +1460,14 @@ export function CompanyFinanceExecutive({ tipo, title, subtitle }: Props) {
               onSaved={async () => {
                 await loadAll();
               }}
+              onOpenComponents={
+                entriesFor.employee_id
+                  ? () => {
+                      setComponentsFor(entriesFor);
+                      setEntriesFor(null);
+                    }
+                  : undefined
+              }
             />
           )}
           {componentsFor && (
@@ -2704,6 +2712,8 @@ function FinanceItemCard({
   const [structureSuccess, setStructureSuccess] = useState<string | null>(null);
   // Modal genérico "Lançamentos da Competência" (N por mês). Aberto pela célula do mês.
   const [entriesModalMes, setEntriesModalMes] = useState<string | null>(null);
+  // Componentes (Premiação/Reembolso com anexos) de uma competência — mesmo modal do extrato analítico.
+  const [componentsModalMes, setComponentsModalMes] = useState<string | null>(null);
 
   const paymentsSyncKey = JSON.stringify(
     item.pagamentos.map((p) => ({ mes: p.mes, valor: p.valor })).sort((a, b) => a.mes.localeCompare(b.mes)),
@@ -3725,7 +3735,19 @@ function FinanceItemCard({
           ) : (
           <>
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Pagamentos por mês (12 meses)</p>
+            <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+              Pagamentos por mês (12 meses)
+              {tipo === "custo_fixo" && item.employee_id ? (
+                <button
+                  type="button"
+                  onClick={() => setComponentsModalMes(competencia)}
+                  className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium normal-case tracking-normal text-emerald-800 hover:bg-emerald-100"
+                  title="Premiação e reembolso (com anexos) do colaborador na competência selecionada"
+                >
+                  Componentes
+                </button>
+              ) : null}
+            </p>
             {hasPending ? (
               <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 ring-1 ring-blue-200">
                 {dirtyMonths.size} alteração(ões) não salva(s)
@@ -3886,6 +3908,25 @@ function FinanceItemCard({
           competenciaLabel={`${mesLabel(entriesModalMes)} / ${entriesModalMes.slice(0, 4)}`}
           readOnly={readOnly}
           onClose={() => setEntriesModalMes(null)}
+          onSaved={onSaved}
+          onOpenComponents={
+            tipo === "custo_fixo" && item.employee_id
+              ? () => {
+                  setComponentsModalMes(entriesModalMes);
+                  setEntriesModalMes(null);
+                }
+              : undefined
+          }
+        />
+      )}
+      {componentsModalMes && (
+        <VariableComponentsModal
+          itemId={item.id}
+          itemLabel={item.employee_name || item.nome}
+          competencia={`${componentsModalMes}-01`}
+          competenciaLabel={`${mesLabel(componentsModalMes)} / ${componentsModalMes.slice(0, 4)}`}
+          readOnly={readOnly}
+          onClose={() => setComponentsModalMes(null)}
           onSaved={onSaved}
         />
       )}

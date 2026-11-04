@@ -25,6 +25,7 @@ import { formatApiError } from "@/utils/apiError";
 import { matchesSearchWords } from "@/utils/textSearch";
 import { formatCurrencyField, formatCurrencyOrDash, normalizeCurrencyForApi, parseCurrencyInput } from "@/utils/currency";
 import { PayablesImportModal } from "@/components/PayablesImportModal";
+import { PayableAttachmentsModal } from "@/components/PayableAttachmentsModal";
 import { SortableTh } from "@/components/table";
 import { useTableSort, type TableSortHeaderProps } from "@/hooks/useTableSort";
 import { PAYABLE_SORT_COLUMNS, defaultPayableOperationalSort, defaultPayableSort } from "@/tableSort/payables";
@@ -273,6 +274,10 @@ export function Payables() {
   // Incluir e excluir despesa têm verbo próprio (o backend exige payables.create / payables.delete).
   const canCreate = usePermission("payables.create");
   const canDelete = usePermission("payables.delete");
+  // Comprovante mostra valor: aparece para quem VÊ os valores do CAP. A decisão é a do backend
+  // (linha com valor = não redigida) — `payables.sensitive` ainda é código inativo na sessão, e
+  // olhar `permission_names` escondia o botão de todo mundo.
+  const [attachmentsRow, setAttachmentsRow] = useState<PayableSnapshotRow | null>(null);
   const canRegenerateSnapshot = Boolean(user?.is_superuser);
   const canReconcileSnapshot = usePermission("payable_snapshot.reconcile");
 
@@ -860,6 +865,7 @@ export function Payables() {
     onRegisterPayment: openRegisterPayment,
     onReversePayment: openReversePayment,
     onDeleteManual: openDeleteManual,
+    onViewAttachments: setAttachmentsRow,
     selectedIds,
     selectableManualIds,
     onToggleSelect: toggleSelect,
@@ -1238,6 +1244,10 @@ export function Payables() {
         </>
       )}
 
+      {attachmentsRow && (
+        <PayableAttachmentsModal row={attachmentsRow} onClose={() => setAttachmentsRow(null)} />
+      )}
+
       <PayablesImportModal
         open={importOpen}
         onClose={() => setImportOpen(false)}
@@ -1484,6 +1494,8 @@ type PayablesSnapshotTableProps = {
   onRegisterPayment: (r: PayableSnapshotRow) => void;
   onReversePayment: (r: PayableSnapshotRow) => void;
   onDeleteManual: (r: PayableSnapshotRow) => void;
+  /** Comprovantes do título (o botão só aparece em linha com valor visível). */
+  onViewAttachments: (r: PayableSnapshotRow) => void;
   /** Seleção para exclusão em massa (só lançamentos MANUAIS). */
   selectedIds: Set<string>;
   selectableManualIds: string[];
@@ -1515,6 +1527,7 @@ function PayablesSnapshotTable({
   onRegisterPayment,
   onReversePayment,
   onDeleteManual,
+  onViewAttachments,
   selectedIds,
   selectableManualIds,
   onToggleSelect,
@@ -1543,19 +1556,12 @@ function PayablesSnapshotTable({
               ) : null}
             </th>
             <SortableTh label="Tipo" column="type" className="w-[90px] px-2 py-2" {...headerSort} />
-            <SortableTh label="Nome" column="name" className="w-[280px] px-2 py-2" {...headerSort} />
+            <SortableTh label="Nome" column="name" className="w-[250px] px-2 py-2" {...headerSort} />
             <SortableTh label="Competência" column="month" className="w-[110px] px-2 py-2" {...headerSort} />
-            <SortableTh label="Centro de custo" column="cost_center" className="w-[160px] px-2 py-2" {...headerSort} />
+            <SortableTh label="Centro de custo" column="cost_center" className="w-[150px] px-2 py-2" {...headerSort} />
             <SortableTh
               label="Valor original"
               column="amount_original"
-              className="w-[100px] px-2 py-2"
-              align="right"
-              {...headerSort}
-            />
-            <SortableTh
-              label="Valor final"
-              column="amount_final"
               className="w-[100px] px-2 py-2"
               align="right"
               {...headerSort}
@@ -1570,6 +1576,7 @@ function PayablesSnapshotTable({
               className="w-[120px] px-2 py-2"
               {...headerSort}
             />
+            <th className="w-[90px] whitespace-nowrap px-2 py-2 text-center">Anexos</th>
             <th className="w-[220px] whitespace-nowrap px-2 py-2 text-right">Ações</th>
           </tr>
         </thead>
@@ -1645,10 +1652,9 @@ function PayablesSnapshotTable({
                   <td className="min-w-0 px-2 py-1.5 align-middle text-slate-700">
                     <TruncatedCell value={r.cost_center} maxWidthClass="max-w-[160px]" />
                   </td>
+                  {/* Valor: o original; o ajuste do "Editar" (valor final, raro) aparece embaixo — a
+                      coluna "Valor final" era redundante. O Saldo já é calculado sobre o final. */}
                   <td className="whitespace-nowrap px-2 py-1.5 text-slate-700">
-                    <Money value={r.amount_original} />
-                  </td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-right align-middle tabular-nums text-slate-900">
                     {isEditing ? (
                       <input
                         type="number"
@@ -1668,7 +1674,19 @@ function PayablesSnapshotTable({
                         className="w-full min-w-[5.5rem] rounded border border-slate-300 px-1.5 py-0.5 text-right text-sm"
                       />
                     ) : (
-                      money(r.amount_final)
+                      <>
+                        <Money value={r.amount_original} />
+                        {r.amount_final != null &&
+                        r.amount_original != null &&
+                        Math.abs(r.amount_final - r.amount_original) > 0.005 ? (
+                          <span
+                            className="block text-right text-[11px] text-amber-700"
+                            title="Valor alterado pelo Editar (valor final). O saldo usa este valor."
+                          >
+                            ajustado: {money(r.amount_final)}
+                          </span>
+                        ) : null}
+                      </>
                     )}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-slate-800">
@@ -1719,6 +1737,21 @@ function PayablesSnapshotTable({
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">
                     {r.last_payment_date ? formatDateBr(r.last_payment_date) : "—"}
+                  </td>
+                  {/* Coluna própria: com ou sem anexo, as ações ficam sempre na mesma posição. */}
+                  <td className="whitespace-nowrap px-2 py-1.5 text-center">
+                    {(r.attachment_count ?? 0) > 0 && r.amount_final != null ? (
+                      <button
+                        type="button"
+                        onClick={() => onViewAttachments(r)}
+                        className="rounded px-1.5 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+                        title="Ver os comprovantes anexados ao lançamento"
+                      >
+                        📎 Anexo ({r.attachment_count})
+                      </button>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right">
                     {isEditing ? (
