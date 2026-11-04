@@ -52,7 +52,7 @@ const money = formatCurrencyOrDash;
 /** Valor numérico para input (pt-BR, sem R$) — fonte única (utils/currency). */
 const formatMoneyFieldBr = formatCurrencyField;
 
-/** Período do CAP. "Até o mês atual" substitui o antigo "Todos": um mês futuro aberto por engano
+/** Período do CAP. "Todos" vai só até o mês atual: um mês futuro aberto por engano
  *  (ex.: nov/2027) não entra mais na lista padrão; para ver o futuro, use "Intervalo". */
 type CapPeriodMode = "MONTH" | "UNTIL_NOW" | "RANGE";
 
@@ -92,7 +92,7 @@ function CapPeriodFilter({
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
         >
           <option value="MONTH">Mês</option>
-          <option value="UNTIL_NOW">Até o mês atual</option>
+          <option value="UNTIL_NOW">Todos</option>
           <option value="RANGE">Intervalo</option>
         </select>
         {mode === "MONTH" && (
@@ -278,7 +278,7 @@ export function Payables() {
 
   const [periodMode, setPeriodMode] = useState<CapPeriodMode>("MONTH");
   const [period, setPeriod] = useState(() => formatMonthToYYYYMM(new Date()));
-  // "Até o mês atual" e "Intervalo" leem a lista completa e recortam por competência aqui:
+  // "Todos" (até o mês atual) e "Intervalo" leem a lista completa e recortam por competência aqui:
   // trocar entre os dois (ou mexer no intervalo) não refaz a busca.
   const fetchAll = periodMode !== "MONTH";
   const [rangeStart, setRangeStart] = useState(() => `${new Date().getFullYear()}-01`);
