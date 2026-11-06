@@ -377,6 +377,48 @@ async def load_company_costs(
     return out
 
 
+async def load_repasse_debts(session: AsyncSession, months: list[date]) -> dict[date, list[CostLine]]:
+    """Por mês de pagamento: dívidas pagas por Retirada do Repasse (ex.: Lepta, R$ 50 mil/mês).
+
+    Essas retiradas abatem a dívida mas NÃO geram título no CAP (o dinheiro já estava retido na
+    instituição) — ver `DebtLedgerService._repasse_by_month`, que usa a mesma regra: só débitos
+    ativos (sem estorno), competência = mês do `occurred_at`. Já aconteceram, então valem nos dois
+    cenários (pago = lançado).
+    """
+    from app.models.advance_repasse_ledger import AdvanceRepasseLedgerEntry, RepasseLedgerDirection
+    from app.services.debt_accrual import first_of_month
+
+    out: dict[date, list[CostLine]] = {normalize_competencia(m): [] for m in months}
+    if not out:
+        return out
+    rows = (
+        await session.execute(
+            select(
+                AdvanceRepasseLedgerEntry.occurred_at,
+                AdvanceRepasseLedgerEntry.amount,
+                CompanyFinancialItem.id,
+                CompanyFinancialItem.nome,
+            )
+            .join(CompanyFinancialItem, CompanyFinancialItem.id == AdvanceRepasseLedgerEntry.debt_item_id)
+            .where(
+                AdvanceRepasseLedgerEntry.direction == RepasseLedgerDirection.DEBIT,
+                AdvanceRepasseLedgerEntry.reversed_at.is_(None),
+            )
+        )
+    ).all()
+    sums: dict[tuple[date, UUID], float] = defaultdict(float)
+    names: dict[UUID, str] = {}
+    for occurred_at, amount, item_id, nome in rows:
+        comp = first_of_month(occurred_at)
+        if comp in out:
+            sums[(comp, item_id)] += _f(amount)
+            names[item_id] = str(nome)
+    for (comp, item_id), amount in sums.items():
+        if amount > _EPS:
+            out[comp].append(CostLine(item_id, names[item_id], DEBT_CATEGORY, False, amount))
+    return out
+
+
 @dataclass
 class ProjectPayables:
     """Títulos do CAP com projeto num mês de pagamento (folha, sistemas e custos diversos dos projetos)."""
@@ -391,10 +433,14 @@ class ProjectPayables:
         return self.labor + self.system + self.fixed
 
 
-async def load_project_payables(session: AsyncSession, months: list[date], *, basis: str) -> dict[date, ProjectPayables]:
+async def load_project_payables(
+    session: AsyncSession, months: list[date], *, basis: str, project_ids: set[UUID] | None = None
+) -> dict[date, ProjectPayables]:
     """Por mês de pagamento: títulos de Colaborador com projeto → mão de obra (inclusive componentes
     variáveis); títulos de sistema do projeto → sistemas; custos diversos do projeto e lançamentos
-    manuais classificados como «Custo direto do projeto» → fixos."""
+    manuais classificados como «Custo direto do projeto» → fixos.
+
+    `project_ids` = só os títulos desses projetos (None = todos)."""
     from app.services.payable_snapshot_service import SOURCE_TAG_PROJECT_SYSTEM
 
     out = {normalize_competencia(comp): ProjectPayables() for comp in months}
@@ -425,6 +471,8 @@ async def load_project_payables(session: AsyncSession, months: list[date], *, ba
         .all()
     )
     for row in rows:
+        if project_ids is not None and (row.project_id or row.result_project_id) not in project_ids:
+            continue
         target = out[normalize_competencia(row.month)]
         amount, open_amount = snapshot_amounts(row, paid_basis=basis == BASIS_PAID)
         type_value = getattr(row.type, "value", row.type)

@@ -19,8 +19,6 @@ import {
 } from "@/utils/currency";
 import { CHART_COLORS } from "@/utils/chartTheme";
 import {
-  anticipationInstitutions,
-  taxBreakdownLines,
   taxRegimeName,
 } from "@/utils/projectCostBasis";
 import { DashboardHeader } from "@/components/dashboard/executive/DashboardHeader";
@@ -28,6 +26,16 @@ import { DashboardFilterBar, FilterField } from "@/components/dashboard/executiv
 import { ChartCard } from "@/components/dashboard/executive/ChartCard";
 import { EChart } from "@/components/dashboard/executive/EChart";
 import { Money } from "@/components/Money";
+import { ProjectFilterDropdown } from "@/components/indicators/ProjectFilterDropdown";
+import {
+  COMPANY_SERIES,
+  COMPANY_SERIES_IDS,
+  DEFAULT_SERIES_VISIBILITY,
+  FinancialEvolutionMainChart,
+  companySeriesPoints,
+} from "@/components/indicators/FinancialEvolutionMainChart";
+import { useFinancialChartViz } from "@/hooks/useFinancialChartViz";
+import { fetchIndicatorFilters, type FilterProject } from "@/services/indicators";
 
 /**
  * Resultado da Empresa — quanto entra pelos projetos e quanto a empresa realmente precisa pagar.
@@ -59,7 +67,9 @@ const HELP_SCENARIO =
 const HELP_ANTICIPATION =
   "Antecipação: custo das operações do mês seguinte (Lepta + Daycoval, sem repasse) — no Realizado, só as operações já feitas; no Previsto, o custo real ou a taxa média.";
 const HELP_RETENTION =
-  "Retenção: 10% retidos pelo cliente, devolvidos no fim do contrato — não disponível para pagar contas.";
+  "Retenção: 10% retidos pelo cliente, devolvidos no fim do contrato — descontada depois do lucro líquido (não está disponível para pagar contas).";
+const HELP_DEBTS =
+  "Dívidas pagas: parcelas do Endividamento no Contas a Pagar + retiradas do Repasse que abatem dívida (ex.: Lepta), que não geram título no Contas a Pagar.";
 const HELP_PROJECTION =
   "O faturamento de um mês paga as contas do mês seguinte: os custos do mês trabalhado vêm do Contas a Pagar do mês seguinte.";
 const COSTS_PARTIAL_TITLE =
@@ -70,7 +80,7 @@ const HELP_FLEET =
   "Frota: rateada entre projetos e indiretos pelo centro de custo dos veículos.";
 const HELP_PROJECT_CAP =
   "Itens dos Custos Indiretos com o projeto como centro de custo somam no custo do projeto conforme o cadastro do item (ex.: combustível em Veículos, plano de saúde em Mão de obra).";
-const HELP_TEXT = [HELP_SCENARIO, HELP_PROJECTION, HELP_ANTICIPATION, HELP_RETENTION, HELP_TAXES, HELP_FLEET, HELP_PROJECT_CAP].join("\n");
+const HELP_TEXT = [HELP_SCENARIO, HELP_PROJECTION, HELP_ANTICIPATION, HELP_DEBTS, HELP_RETENTION, HELP_TAXES, HELP_FLEET, HELP_PROJECT_CAP].join("\n");
 
 const SCENARIO_TITLE: Record<ScenarioKind, string> = {
   REALIZADO:
@@ -78,6 +88,8 @@ const SCENARIO_TITLE: Record<ScenarioKind, string> = {
   PREVISTO:
     "Simulação do mês se todas as contas lançadas forem pagas (estimativa quando as contas ainda não foram lançadas).",
 };
+const PROJECT_FILTER_CAPTION =
+  "Filtrado por projetos: custos indiretos e dívidas pagas não entram (são da empresa, não de um projeto).";
 const SCENARIO_CAPTION: Record<ScenarioKind, string> = {
   REALIZADO: "Realizado: igual ao Contas a Pagar — atualiza conforme os pagamentos são registrados.",
   PREVISTO: "Previsto: simulação com todas as contas lançadas pagas.",
@@ -91,14 +103,6 @@ function basisOf(data: CompanyResult): CompanyResultBasis {
 /** Valor "a pagar" só conta na base PAGO e quando é positivo. */
 function openAmount(basis: CompanyResultBasis, v: number | null | undefined): number | null {
   return basis === "PAGO" && v != null && v > 0.005 ? v : null;
-}
-
-const PROFIT_TAX_TITLE =
-  "IRPJ/CSLL do Lucro Real sobre o lucro da empresa (lucro operacional − custos indiretos); zero quando há prejuízo.";
-
-/** A cascata ganha o degrau "IRPJ/CSLL (Lucro Real)" quando há valor ou o período tem Lucro Real. */
-function showsProfitTax(t: CompanyResultMonth): boolean {
-  return (t.profit_tax_amount ?? 0) > 0.005 || t.tax_regime === "LUCRO_REAL" || t.tax_regime === "MISTO";
 }
 
 const PARTIAL_TITLE =
@@ -133,10 +137,6 @@ function sumOrNull(...values: Array<number | null | undefined>): number | null {
 }
 
 const isProjectedMonth = (m: CompanyResultMonth) => m.indirect_projected || m.debt_projected;
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
-}
 
 const TOOLTIP_BASE = {
   borderColor: "#e2e8f0",
@@ -266,250 +266,6 @@ function LegendDot({ color, label, dashed }: { color: string; label: string; das
 }
 
 // ---------------------------------------------------------------------------
-// Cascata do resultado (waterfall)
-// ---------------------------------------------------------------------------
-
-type WfKind = "start" | "delta" | "subtotal";
-
-interface WfStep {
-  /** rótulo do eixo (pode ter quebra de linha) */
-  axis: string;
-  /** rótulo do tooltip */
-  label: string;
-  kind: WfKind;
-  start: number;
-  end: number;
-  /** valor original do contrato (dedução positiva = sai dinheiro); null = redigido */
-  raw: number | null;
-  color: string;
-  note?: "partial" | "projected";
-  /** linhas extras do tooltip */
-  detail?: string[];
-}
-
-function buildWaterfall(t: CompanyResultMonth, basis: CompanyResultBasis): WfStep[] {
-  const steps: WfStep[] = [];
-  let running = 0;
-
-  const start = (axis: string, label: string, v: number | null, color: string) => {
-    running = v ?? 0;
-    steps.push({ axis, label, kind: "start", start: 0, end: running, raw: v, color });
-  };
-  const deduct = (axis: string, label: string, v: number | null, color: string, extra?: Partial<WfStep>) => {
-    const s = running;
-    running = s - (v ?? 0);
-    steps.push({ axis, label, kind: "delta", start: s, end: running, raw: v, color, ...extra });
-  };
-  // Subtotal usa o valor do backend (fonte da verdade); cai no acumulado só se vier redigido.
-  const subtotal = (axis: string, label: string, v: number | null, posColor: string) => {
-    running = v ?? running;
-    steps.push({ axis, label, kind: "subtotal", start: 0, end: running, raw: v, color: running < 0 ? COLORS.neg : posColor });
-  };
-
-  const openLine = (v: number | null | undefined) => {
-    const open = openAmount(basis, v);
-    return open == null ? [] : [`${formatCurrencyOrDash(open)} a pagar (lançado, ainda não pago — fora do resultado)`];
-  };
-
-  start("Receita", "Receita dos projetos", t.revenue, COLORS.revenue);
-  deduct("Custos\ndiretos", "Custos diretos", t.direct_cost, COLORS.projectCost, {
-    detail: [
-      `Mão de obra: ${formatCurrencyOrDash(t.labor_cost)}`,
-      `Veículos: ${formatCurrencyOrDash(t.vehicle_cost)}`,
-      `Sistemas: ${formatCurrencyOrDash(t.system_cost)}`,
-      `Custos fixos operacionais: ${formatCurrencyOrDash(t.fixed_operational_cost)}`,
-      ...openLine(t.direct_open_cost),
-    ],
-  });
-  deduct("Impostos", `Impostos — ${taxRegimeName(t.tax_regime)}`, t.tax_amount, COLORS.projectCost, {
-    detail: [`Taxa efetiva sobre a receita: ${formatFraction(t.tax_rate)}`, ...taxBreakdownLines(t)],
-  });
-  deduct("Antecipação", "Antecipação", t.anticipation_amount, COLORS.projectCost, {
-    note: t.anticipation_partial ? "partial" : undefined,
-    detail: [
-      `Taxa sobre a receita: ${formatFraction(t.anticipation_rate)}`,
-      ...anticipationInstitutions(t.anticipation_by_institution).map(
-        ([name, v]) =>
-          `${name}: ${formatCurrencyOrDash(v)} (${formatFraction(shareOf(v, t.anticipation_amount))} da antecipação)`,
-      ),
-    ],
-  });
-  subtotal("Lucro\noperacional", "Lucro operacional", t.operational_profit, COLORS.pos);
-  deduct("Retenção\n10%", "Retenção 10%", t.retention, COLORS.projectCost);
-  subtotal("Lucro\ndisponível", "Lucro disponível", t.available_profit, COLORS.available);
-  deduct("Custos\nindiretos", "Custos indiretos", t.indirect_cost, COLORS.indirect, {
-    note: t.indirect_projected ? "projected" : undefined,
-    detail: openLine(t.indirect_open_cost),
-  });
-  if (showsProfitTax(t)) {
-    deduct("IRPJ/CSLL\n(Lucro Real)", "IRPJ/CSLL (Lucro Real)", t.profit_tax_amount ?? null, COLORS.indirect, {
-      detail: [PROFIT_TAX_TITLE],
-    });
-  }
-  deduct("Dívidas\npagas", "Dívidas pagas", t.debt_cost, COLORS.debt, {
-    note: t.debt_projected ? "projected" : undefined,
-    detail: openLine(t.debt_open_cost),
-  });
-  subtotal("Resultado\nda empresa", "Resultado da empresa", t.company_result, COLORS.pos);
-  return steps;
-}
-
-/**
- * Limites do eixo Y com folga para o rótulo de valor. Sem ela, uma barra que termina rente ao limite
- * do eixo (ex.: resultado negativo de −196 mil com eixo em −200 mil) desenha o rótulo fora da área do
- * gráfico — por cima do nome da barra, e pior quanto menor a tela. A folga é proporcional à amplitude
- * (não arredondada para passos grandes, que achatariam as barras); as linhas continuam em valores
- * redondos escolhidos pelo ECharts e os rótulos quebrados das bordas ficam ocultos.
- */
-function waterfallAxisBounds(steps: WfStep[]): { min: number; max: number } {
-  const values = steps.flatMap((s) => [s.start, s.end]);
-  const lo = Math.min(0, ...values);
-  const hi = Math.max(0, ...values);
-  const range = hi - lo || 1;
-  return {
-    min: lo < 0 ? lo - range * 0.09 : 0,
-    max: hi + range * 0.07,
-  };
-}
-
-function WaterfallChart({
-  totals,
-  basis,
-  height = 380,
-}: {
-  totals: CompanyResultMonth;
-  basis: CompanyResultBasis;
-  height?: number;
-}) {
-  const option = useMemo<EChartsOption>(() => {
-    const steps = buildWaterfall(totals, basis);
-    const revenue = totals.revenue;
-
-    const deltaText = (s: WfStep, short: boolean) => {
-      if (s.raw == null) return SENSITIVE_PLACEHOLDER;
-      const fmt = short ? formatCurrencyShort : (n: number) => formatCurrencyOrDash(n);
-      if (s.kind !== "delta") return fmt(s.raw);
-      return s.raw >= 0 ? `−${fmt(s.raw)}` : `+${fmt(-s.raw)}`;
-    };
-
-    const bounds = waterfallAxisBounds(steps);
-
-    return {
-      // containLabel: a margem esquerda acompanha a largura real dos valores do eixo em qualquer tela.
-      grid: { top: 28, right: 16, bottom: 12, left: 8, containLabel: true },
-      tooltip: {
-        ...TOOLTIP_BASE,
-        trigger: "axis",
-        axisPointer: { type: "shadow" },
-        formatter: (params: unknown) => {
-          const arr = params as Array<{ dataIndex: number }>;
-          const s = steps[arr[0]?.dataIndex ?? -1];
-          if (!s) return "";
-          const share = s.raw == null ? null : shareOf(s.kind === "delta" ? s.raw : s.end, revenue);
-          let html = `<div style="font-weight:600;color:#0f172a">${escapeHtml(s.label)}</div>`;
-          html += tooltipRow(s.color, s.kind === "delta" ? "Valor" : "Total", deltaText(s, false));
-          html += tooltipRow("transparent", "% da receita", formatFraction(share));
-          for (const d of s.detail ?? []) {
-            html += `<div style="color:#64748b;font-size:11px;margin-top:2px">${escapeHtml(d)}</div>`;
-          }
-          if (s.note === "partial") html += `<div style="color:#b45309;font-size:11px;margin-top:4px;max-width:260px;white-space:normal">${escapeHtml(PARTIAL_TITLE)}</div>`;
-          if (s.note === "projected") html += `<div style="color:#0369a1;font-size:11px;margin-top:4px;max-width:260px;white-space:normal">${escapeHtml(PROJECTED_TITLE)}</div>`;
-          return html;
-        },
-      },
-      xAxis: {
-        type: "category",
-        data: steps.map((s) => s.axis),
-        axisLine: { lineStyle: { color: "#cbd5e1" } },
-        axisTick: { show: false },
-        axisLabel: {
-          color: "#475569",
-          fontSize: 11,
-          interval: 0,
-          lineHeight: 14,
-          formatter: (value: string, idx: number) => {
-            const note = steps[idx]?.note;
-            if (note === "partial") return `${value}\n{partial|parcial}`;
-            if (note === "projected") return `${value}\n{projected|projeção}`;
-            return value;
-          },
-          rich: {
-            partial: { backgroundColor: "#fef3c7", color: "#b45309", borderRadius: 3, padding: [1, 4], fontSize: 9, fontWeight: "bold" },
-            projected: { backgroundColor: "#e0f2fe", color: "#0369a1", borderRadius: 3, padding: [1, 4], fontSize: 9, fontWeight: "bold" },
-          },
-        },
-      },
-      yAxis: {
-        type: "value",
-        min: bounds.min,
-        max: bounds.max,
-        splitLine: { lineStyle: { color: CHART_COLORS.grid, type: "dashed" } },
-        axisLabel: {
-          color: "#64748b",
-          fontSize: 11,
-          // As bordas do eixo são a folga (valor quebrado): só as linhas redondas levam rótulo.
-          showMinLabel: false,
-          showMaxLabel: false,
-          formatter: (v: number) => formatCurrencyShort(v),
-        },
-      },
-      series: [
-        // Série auxiliar transparente: empurra a barra visível até o início da dedução.
-        // `stackStrategy: "all"` empilha somando valores de qualquer sinal — é o que permite
-        // uma dedução cruzar o zero (base negativa + altura positiva).
-        {
-          name: "base",
-          type: "bar",
-          stack: "wf",
-          stackStrategy: "all",
-          silent: true,
-          itemStyle: { color: "transparent" },
-          emphasis: { disabled: true },
-          data: steps.map((s) => (s.kind === "delta" ? Math.min(s.start, s.end) : 0)),
-        },
-        {
-          name: "valor",
-          type: "bar",
-          stack: "wf",
-          stackStrategy: "all",
-          barMaxWidth: 58,
-          data: steps.map((s) => {
-            const value = s.kind === "delta" ? Math.abs(s.end - s.start) : s.end;
-            const negTotal = s.kind !== "delta" && s.end < 0;
-            return {
-              value,
-              itemStyle: { color: s.color, borderRadius: negTotal ? [0, 0, 3, 3] : [3, 3, 0, 0] },
-              label: { position: negTotal ? ("bottom" as const) : ("top" as const) },
-            };
-          }),
-          label: {
-            show: true,
-            distance: 5,
-            fontSize: 10,
-            fontWeight: "bold",
-            color: "#475569",
-            formatter: (p: { dataIndex?: number }) => {
-              const s = steps[p.dataIndex ?? -1];
-              return s ? deltaText(s, true) : "";
-            },
-          },
-          labelLayout: { hideOverlap: true },
-          markLine: {
-            silent: true,
-            symbol: "none",
-            label: { show: false },
-            lineStyle: { color: CHART_COLORS.zeroLine, width: 1, type: "solid", opacity: 0.35 },
-            data: [{ yAxis: 0 }],
-          },
-        },
-      ],
-    };
-  }, [totals, basis]);
-
-  return <EChart option={option} height={height} />;
-}
-
-// ---------------------------------------------------------------------------
 // Evolução mensal
 // ---------------------------------------------------------------------------
 
@@ -551,8 +307,8 @@ function MonthlyEvolutionChart({ months, height = 320 }: { months: CompanyResult
           const res = m.company_result;
           let html = `<div style="font-weight:600;color:#0f172a">${monthShort(m.competencia)}${isProjectedMonth(m) ? " · projeção" : ""}</div>`;
           html += tooltipRow(COLORS.revenueMuted, "Receita dos projetos", formatCurrencyOrDash(m.revenue));
-          html += tooltipRow(COLORS.available, "Lucro disponível", formatCurrencyOrDash(m.available_profit));
-          html += tooltipRow(COLORS.companyCosts, "Indiretos + dívidas pagas", formatCurrencyOrDash(sumOrNull(m.indirect_cost, m.debt_cost)));
+          html += tooltipRow(COLORS.available, "Lucro líquido", formatCurrencyOrDash(m.net_profit));
+          html += tooltipRow(COLORS.debt, "Dívidas pagas", formatCurrencyOrDash(m.debt_cost));
           html += tooltipRow(res != null && res < 0 ? COLORS.neg : COLORS.pos, "Resultado da empresa", formatCurrencyOrDash(res));
           if (m.anticipation_partial) html += `<div style="color:#b45309;font-size:11px;margin-top:4px">Antecipação parcial</div>`;
           return html;
@@ -610,23 +366,23 @@ function MonthlyEvolutionChart({ months, height = 320 }: { months: CompanyResult
           }),
         },
         {
-          name: "Lucro disponível",
+          name: "Lucro líquido",
           type: "line",
           smooth: false,
           symbolSize: 7,
           itemStyle: { color: COLORS.available },
           lineStyle: { width: 2.5, color: COLORS.available },
-          data: months.map((m) => ({ value: m.available_profit, symbol: isProjectedMonth(m) ? "emptyCircle" : "circle" })),
+          data: months.map((m) => ({ value: m.net_profit, symbol: isProjectedMonth(m) ? "emptyCircle" : "circle" })),
         },
         {
-          name: "Indiretos + dívidas pagas",
+          name: "Dívidas pagas",
           type: "line",
           smooth: false,
           symbolSize: 7,
-          itemStyle: { color: COLORS.companyCosts },
-          lineStyle: { width: 2, color: COLORS.companyCosts, type: "dashed" },
+          itemStyle: { color: COLORS.debt },
+          lineStyle: { width: 2, color: COLORS.debt, type: "dashed" },
           data: months.map((m) => ({
-            value: sumOrNull(m.indirect_cost, m.debt_cost),
+            value: m.debt_cost,
             symbol: isProjectedMonth(m) ? "emptyCircle" : "circle",
           })),
         },
@@ -831,6 +587,54 @@ export function ResultadoEmpresa() {
   const [error, setError] = useState<string | null>(null);
   const reqId = useRef(0);
 
+  // Filtro de projetos: por padrão só os ATIVOS marcados (= empresa inteira). Desmarcar algum ativo
+  // filtra pelos projetos marcados — aí custos indiretos e dívidas zeram (são da empresa).
+  const [projects, setProjects] = useState<FilterProject[] | null>(null);
+  const [selProjects, setSelProjects] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    void (async () => {
+      try {
+        const f = await fetchIndicatorFilters();
+        setProjects(f.projects);
+        setSelProjects(new Set(f.projects.filter((p) => p.is_active ?? true).map((p) => p.project_id)));
+      } catch {
+        setProjects([]); // sem acesso às opções: fica a empresa inteira, sem filtro
+      }
+    })();
+  }, []);
+  const projectOptions = useMemo(
+    () =>
+      [...(projects ?? [])]
+        .sort(
+          (a, b) =>
+            Number(!(a.is_active ?? true)) - Number(!(b.is_active ?? true)) ||
+            a.project_name.localeCompare(b.project_name, "pt-BR"),
+        )
+        .map((p) => ({ id: p.project_id, name: (p.is_active ?? true) ? p.project_name : `${p.project_name} (inativo)` })),
+    [projects],
+  );
+  // null = empresa inteira (todos os ativos marcados); lista = só esses projetos.
+  const projectFilter = useMemo<string[] | null>(() => {
+    if (!projects || projects.length === 0) return null;
+    const allActive = projects.filter((p) => p.is_active ?? true).every((p) => selProjects.has(p.project_id));
+    return allActive ? null : [...selProjects].sort();
+  }, [projects, selProjects]);
+  const projectKey = projectFilter ? projectFilter.join(",") : "";
+  const noProjectSelected = !!projectFilter && projectFilter.length === 0;
+  const toggleProject = useCallback(
+    (id: string) =>
+      setSelProjects((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }),
+    [],
+  );
+
+  // Linhas do gráfico (mesmas da Evolução Financeira): padrão Faturamento, Custos Diretos e Lucro Líquido.
+  const { selectedSeries, applySelection } = useFinancialChartViz(COMPANY_SERIES_IDS, DEFAULT_SERIES_VISIBILITY);
+
   useEffect(() => {
     setWorkspace("indicators");
   }, [setWorkspace]);
@@ -845,7 +649,13 @@ export function ResultadoEmpresa() {
   const df = monthToCompetencia(endMonth);
 
   const load = useCallback(async () => {
-    if (!canRead) {
+    if (!canRead || projects === null) {
+      setLoading(!canRead ? false : true);
+      return;
+    }
+    if (noProjectSelected) {
+      reqId.current++;
+      setData(null);
       setLoading(false);
       return;
     }
@@ -853,7 +663,12 @@ export function ResultadoEmpresa() {
     setLoading(true);
     setError(null);
     try {
-      const payload = await fetchCompanyResult({ data_inicial: di, data_final: df, scenario: globalScenario });
+      const payload = await fetchCompanyResult({
+        data_inicial: di,
+        data_final: df,
+        scenario: globalScenario,
+        project_ids: projectKey ? projectKey.split(",") : undefined,
+      });
       if (myId !== reqId.current) return;
       setData(payload);
     } catch (e) {
@@ -868,7 +683,7 @@ export function ResultadoEmpresa() {
     } finally {
       if (myId === reqId.current) setLoading(false);
     }
-  }, [canRead, di, df, globalScenario]);
+  }, [canRead, di, df, globalScenario, projects, projectKey, noProjectSelected]);
 
   useEffect(() => {
     void load();
@@ -976,6 +791,18 @@ export function ResultadoEmpresa() {
           </FilterField>
         ) : null}
 
+        {projectOptions.length > 0 ? (
+          <FilterField label="Projeto">
+            <ProjectFilterDropdown
+              options={projectOptions}
+              selected={selProjects}
+              onToggle={toggleProject}
+              emptyText="Nenhum projeto"
+              noOptionsText="Nenhum projeto cadastrado."
+            />
+          </FilterField>
+        ) : null}
+
         <FilterField label="Cenário">
           <div className="inline-flex overflow-hidden rounded-lg border border-slate-300">
             {(["REALIZADO", "PREVISTO"] as ScenarioKind[]).map((s) => (
@@ -992,7 +819,10 @@ export function ResultadoEmpresa() {
           </div>
         </FilterField>
       </DashboardFilterBar>
-      <p className="-mt-2 px-1 text-xs text-slate-500">{SCENARIO_CAPTION[globalScenario]}</p>
+      <p className="-mt-2 px-1 text-xs text-slate-500">
+        {SCENARIO_CAPTION[globalScenario]}
+        {projectFilter ? " " + PROJECT_FILTER_CAPTION : ""}
+      </p>
 
       {error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
@@ -1002,19 +832,31 @@ export function ResultadoEmpresa() {
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-10 text-center text-sm text-amber-800">
           Valores ocultos: sem permissão para dados sensíveis
         </div>
+      ) : noProjectSelected ? (
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-500">
+          Selecione ao menos um projeto.
+        </div>
       ) : !hasData || !data || !t ? (
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-500">
           Não há dados financeiros para o período selecionado.
         </div>
       ) : (
         <div className={`space-y-4 transition-opacity ${loading ? "opacity-60" : ""}`}>
-          {/* KPIs — linha 1: o que entra e o que a empresa paga */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {/* KPIs — linha 1: a receita e o que sai dela até o lucro líquido (ordem da cascata) */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <ResultKpi
               label="Receita dos projetos"
               value={formatCurrencyOrDash(t.revenue)}
               color={COLORS.revenue}
               hint={`${data.month_count} ${data.month_count === 1 ? "mês" : "meses"} · ${periodLabel}`}
+            />
+            <ResultKpi
+              label="Antecipação"
+              value={formatCurrencyOrDash(t.anticipation_amount)}
+              color={COLORS.projectCost}
+              title={HELP_ANTICIPATION}
+              chip={t.anticipation_partial ? <StatusChip tone="amber" title={PARTIAL_TITLE}>parcial</StatusChip> : null}
+              hint={`${formatFraction(t.anticipation_rate ?? shareOf(t.anticipation_amount, t.revenue))} da receita`}
             />
             <ResultKpi
               label="Custos diretos"
@@ -1031,35 +873,34 @@ export function ResultadoEmpresa() {
               hint={`${formatFraction(shareOf(t.indirect_cost, t.revenue))} da receita`}
             />
             <ResultKpi
+              label="Impostos"
+              value={formatCurrencyOrDash(sumOrNull(t.tax_amount, t.profit_tax_amount))}
+              color={COLORS.projectCost}
+              title={HELP_TAXES}
+              hint={`${formatFraction(shareOf(sumOrNull(t.tax_amount, t.profit_tax_amount), t.revenue))} da receita · ${taxRegimeName(t.tax_regime)}`}
+            />
+          </div>
+
+          {/* KPIs — linha 2: lucro líquido, retenção, dívidas e a resposta (ordem da cascata) */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <ResultKpi
+              label="Lucro líquido"
+              value={formatCurrencyOrDash(t.net_profit ?? null)}
+              color={t.net_profit != null && t.net_profit < 0 ? COLORS.neg : COLORS.available}
+              hint={`${formatFraction(shareOf(t.net_profit, t.revenue))} da receita · Receita − antecipação − custos diretos − custos indiretos − impostos`}
+            />
+            <ResultKpi
               label="Retenção"
               value={formatCurrencyOrDash(t.retention)}
               color={COLORS.projectCost}
               title={HELP_RETENTION}
               hint={`${formatFraction(shareOf(t.retention, t.revenue))} da receita`}
             />
-          </div>
-
-          {/* KPIs — linha 2: impostos, antecipação, dívidas e a resposta */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <ResultKpi
-              label="Impostos"
-              value={formatCurrencyOrDash(t.tax_amount)}
-              color={COLORS.projectCost}
-              title={HELP_TAXES}
-              hint={`${formatFraction(t.tax_rate ?? shareOf(t.tax_amount, t.revenue))} da receita · ${taxRegimeName(t.tax_regime)}`}
-            />
-            <ResultKpi
-              label="Antecipação"
-              value={formatCurrencyOrDash(t.anticipation_amount)}
-              color={COLORS.projectCost}
-              title={HELP_ANTICIPATION}
-              chip={t.anticipation_partial ? <StatusChip tone="amber" title={PARTIAL_TITLE}>parcial</StatusChip> : null}
-              hint={`${formatFraction(t.anticipation_rate ?? shareOf(t.anticipation_amount, t.revenue))} da receita`}
-            />
             <ResultKpi
               label="Dívidas pagas"
               value={formatCurrencyOrDash(t.debt_cost)}
               color={COLORS.debt}
+              title={HELP_DEBTS}
               chip={<CostStateChip basis={basis} projected={t.debt_projected} partial={t.company_costs_partial} />}
               hint={`${formatFraction(shareOf(t.debt_cost, t.revenue))} da receita`}
             />
@@ -1069,22 +910,18 @@ export function ResultadoEmpresa() {
               color={result != null && result < 0 ? COLORS.neg : COLORS.pos}
               valueClassName={resultClass}
               chip={projectedChip}
-              hint={`${formatFraction(shareOf(result, t.revenue))} da receita · ${
-                showsProfitTax(t)
-                  ? "Lucro disponível − custos indiretos − IRPJ/CSLL (Lucro Real) − dívidas pagas"
-                  : "Lucro disponível − custos indiretos − dívidas pagas"
-              }`}
+              hint={`${formatFraction(shareOf(result, t.revenue))} da receita · Lucro líquido − retenção − dívidas pagas`}
             />
           </div>
 
-          {/* Cascata do resultado (largura total) */}
+          {/* Evolução do resultado — uma linha por card (largura total) */}
           <div className="grid grid-cols-1 gap-4">
             <ChartCard
-              title="Cascata do resultado"
+              title="Evolução do resultado"
               subtitle={
                 basis === "PAGO"
-                  ? `Da receita ao resultado · ${periodLabel}`
-                  : `Da receita ao resultado — todas as contas lançadas · ${periodLabel}`
+                  ? `Uma linha por card · ${periodLabel}`
+                  : `Uma linha por card — todas as contas lançadas · ${periodLabel}`
               }
               aside={
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -1106,19 +943,14 @@ export function ResultadoEmpresa() {
                 </div>
               }
             >
-              <div className="mb-1 flex flex-wrap gap-x-4 gap-y-1">
-                <LegendDot color={COLORS.revenue} label="Receita" />
-                <LegendDot color={COLORS.projectCost} label="Deduções dos projetos" />
-                <LegendDot color={COLORS.pos} label="Subtotal" />
-                <LegendDot color={COLORS.indirect} label="Custos indiretos" />
-                <LegendDot color={COLORS.debt} label="Dívidas pagas" />
-              </div>
-              <div className="overflow-x-auto">
-                {/* Mínimo só para telas muito estreitas (celular); em notebook e monitor o gráfico acompanha a largura. */}
-                <div className={showsProfitTax(t) ? "min-w-[600px]" : "min-w-[540px]"}>
-                  <WaterfallChart totals={t} basis={basis} />
-                </div>
-              </div>
+              <FinancialEvolutionMainChart
+                points={companySeriesPoints(data.months)}
+                seriesCatalog={COMPANY_SERIES}
+                showAllValues={false}
+                selectedSeries={selectedSeries}
+                onSelectedSeriesChange={applySelection}
+                height={520}
+              />
             </ChartCard>
           </div>
 

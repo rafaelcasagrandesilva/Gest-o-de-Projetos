@@ -409,6 +409,7 @@ class IndicatorsService:
                 "project_id": p.id,
                 "project_name": p.name,
                 "cost_center": (p.cost_center or None),
+                "is_active": bool(getattr(p, "is_active", True)),
             }
             for p in projects
         ]

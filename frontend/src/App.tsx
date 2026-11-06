@@ -37,7 +37,6 @@ import { LegalWorkCenter } from "@/pages/legal/LegalWorkCenter";
 import { LegalAgenda } from "@/pages/legal/LegalAgenda";
 import { LegalPersons } from "@/pages/legal/LegalPersons";
 import { RoiOperacional } from "@/pages/indicators/RoiOperacional";
-import { EvolucaoFinanceira } from "@/pages/indicators/EvolucaoFinanceira";
 import { ResultadoEmpresa } from "@/pages/indicators/ResultadoEmpresa";
 
 function LegacyProjectDetailRedirect() {
@@ -128,7 +127,8 @@ export default function App() {
               <Route path="legal/admin" element={<LegalAdmin />} />
 
               <Route path="indicators/roi" element={<RoiOperacional />} />
-              <Route path="indicators/evolucao-financeira" element={<EvolucaoFinanceira />} />
+              {/* Evolução Financeira foi absorvida pelo gráfico do Resultado da Empresa: links antigos vão para lá. */}
+              <Route path="indicators/evolucao-financeira" element={<Navigate to="/indicators/resultado-empresa" replace />} />
               <Route path="indicators/resultado-empresa" element={<ResultadoEmpresa />} />
 
               {/* Sem acesso a nenhuma tela do Workspace (dentro do Layout). */}

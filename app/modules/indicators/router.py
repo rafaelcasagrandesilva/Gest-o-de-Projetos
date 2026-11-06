@@ -255,6 +255,10 @@ async def company_result(
     scenario_param: str | None = Query(
         default=None, alias="scenario", description="PREVISTO ou REALIZADO; omitir = REALIZADO"
     ),
+    project_ids: str | None = Query(
+        default=None,
+        description="UUIDs separados por vírgula; omitir = empresa inteira. Com filtro, custos indiretos e dívidas zeram.",
+    ),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> CompanyResultRead:
@@ -265,7 +269,9 @@ async def company_result(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Selecione um período de até 36 meses.",
         )
-    data = await CompanyResultService(db).company_result(start=start, end=end, scenario=scenario_param)
+    data = await CompanyResultService(db).company_result(
+        start=start, end=end, scenario=scenario_param, project_ids=_parse_project_ids(project_ids)
+    )
     return _hide_item_names(redact_for("company_result", CompanyResultRead.model_validate(data), actor), actor)
 
 

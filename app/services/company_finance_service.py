@@ -628,6 +628,7 @@ class CompanyFinanceService:
                 "description": getattr(it, "description", None),
                 "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
                 "is_monthly_required": bool(getattr(it, "is_monthly_required", False)),
+                "include_in_company_result": bool(getattr(it, "include_in_company_result", True)),
                 "fleet_allocation": getattr(it, "fleet_allocation", None) or None,
                 "project_cost_group": getattr(it, "project_cost_group", None) or None,
                 "is_active": bool(getattr(it, "is_active", True)),
@@ -688,6 +689,7 @@ class CompanyFinanceService:
             "description": getattr(it, "description", None),
             "recurrence": getattr(it, "recurrence", None) or _default_recurrence(it.tipo),
             "is_monthly_required": bool(getattr(it, "is_monthly_required", False)),
+            "include_in_company_result": bool(getattr(it, "include_in_company_result", True)),
             "fleet_allocation": getattr(it, "fleet_allocation", None) or None,
             "project_cost_group": getattr(it, "project_cost_group", None) or None,
             "is_active": bool(getattr(it, "is_active", True)),
@@ -781,6 +783,7 @@ class CompanyFinanceService:
                 else None
             ),
             is_monthly_required=bool(data.get("is_monthly_required") or False),
+            include_in_company_result=bool(data.get("include_in_company_result", True)),
             # Rateio pela frota só existe em custo fixo; endividamento nunca rateia.
             fleet_allocation=(data.get("fleet_allocation") or None) if data["tipo"] == "custo_fixo" else None,
             # "Entra no projeto como" só existe em custo fixo; endividamento é sempre None.
@@ -860,6 +863,8 @@ class CompanyFinanceService:
             row.recurrence = (data.get("recurrence") or _default_recurrence(row.tipo)).strip()
         if data.get("is_monthly_required") is not None:
             row.is_monthly_required = bool(data["is_monthly_required"])
+        if data.get("include_in_company_result") is not None:
+            row.include_in_company_result = bool(data["include_in_company_result"])
         if "fleet_allocation" in data:
             # Presente com null = limpa. Rateio pela frota só existe em custo fixo;
             # endividamento nunca rateia.

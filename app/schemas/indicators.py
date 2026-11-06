@@ -154,6 +154,8 @@ class FilterProject(BaseModel):
     project_id: UUID
     project_name: str
     cost_center: str | None
+    # Projeto ativo hoje (cadastro). A Evolução Financeira marca só os ativos por padrão.
+    is_active: bool = True
 
 
 class IndicatorFilters(BaseModel):

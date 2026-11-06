@@ -85,6 +85,8 @@ class CompanyFinancialItemCreate(BaseModel):
     # Natureza do pagamento (só COLABORADOR_VALOR) — id em payment_component_types.
     payment_component_type_id: UUID | None = None
     is_monthly_required: bool = False
+    # Só endividamento: conta em "Dívidas pagas" do Resultado da Empresa.
+    include_in_company_result: bool = True
     # Rateio pela frota (só custo_fixo; o serviço força None em endividamento).
     fleet_allocation: FleetAllocation | None = None
     # "Entra no projeto como" (só custo_fixo; o serviço força None em endividamento).
@@ -198,6 +200,8 @@ class CompanyFinancialItemUpdate(BaseModel):
     percentual: float | None = Field(default=None, ge=0, le=100)
     payment_component_type_id: UUID | None = None
     is_monthly_required: bool | None = None
+    # Só endividamento: conta em "Dívidas pagas" do Resultado da Empresa. Ausente = não altera.
+    include_in_company_result: bool | None = None
     # Rateio pela frota (só custo_fixo). Ausente = não altera; presente com null = limpa
     # (o router usa model_dump(exclude_unset=True) e o serviço testa a presença da chave).
     fleet_allocation: FleetAllocation | None = None
@@ -333,6 +337,7 @@ class CompanyFinancialItemRead(BaseModel):
     cost_center_system: CompanyFinancialCostCenterSystem | None = None
     description: str | None = None
     recurrence: str | None = None
+    include_in_company_result: bool = True
     is_monthly_required: bool = False
     # Rateio pela frota: LOCACAO (substitui o custo dos veículos) | ADICIONAL (soma) | None.
     fleet_allocation: FleetAllocation | None = None

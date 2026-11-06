@@ -117,6 +117,13 @@ class CompanyFinancialItem(TimestampUUIDMixin, Base):
         Boolean, nullable=False, default=False, server_default="false"
     )
 
+    # Só endividamento: a dívida conta em "Dívidas pagas" do Resultado da Empresa (Indicadores).
+    # Desmarcar tira a dívida SÓ dessa conta — CAP, Endividamento e Jurídico seguem iguais.
+    # Migration 0161 (Rogério Ifran desmarcado a pedido do Rafael).
+    include_in_company_result: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+
     # Rateio pela frota (só custos fixos / "Custos Indiretos"). Modo com três estados:
     #   - NULL: sem rateio pela frota (padrão) — o item é custo indireto.
     #   - FLEET_ALLOCATION_RENTAL ("LOCACAO"): fatura de locação da frota — SUBSTITUI o custo dos

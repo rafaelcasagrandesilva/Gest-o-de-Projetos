@@ -65,12 +65,13 @@ class CascadeTests(unittest.TestCase):
             ),
         )
         self.assertEqual(row["operational_profit"], 300.0)  # 1000 − 500 − 90 − 110 (sem overhead)
-        self.assertEqual(row["available_profit"], 200.0)  # − retenção 100
         self.assertEqual((row["indirect_labor_cost"], row["indirect_supplier_cost"]), (120.0, 80.0))
         self.assertEqual(row["profit_tax_amount"], 0.0)  # Presumido: IR/CSLL já estão nos impostos
-        self.assertEqual(row["company_result"], -50.0)  # 200 − 200 − 50
-        self.assertAlmostEqual(row["coverage"], 200 / 250)
-        self.assertAlmostEqual(row["required_margin"], 250 / 1_000)  # indiretos + dívidas ÷ receita
+        # Lucro líquido = 1000 − antecipação 110 − diretos 500 − indiretos 200 − impostos 90
+        self.assertEqual(row["net_profit"], 100.0)
+        self.assertEqual(row["company_result"], -50.0)  # lucro líquido 100 − retenção 100 − dívidas 50
+        self.assertAlmostEqual(row["coverage"], 100 / 150)
+        self.assertAlmostEqual(row["required_margin"], 150 / 1_000)  # (retenção + dívidas) ÷ receita
         # Zero a zero: (diretos 500 + indiretos 200 + dívidas 50) ÷ (1 − 30% de impostos/antecipação/retenção)
         self.assertAlmostEqual(row["break_even_revenue"], 750 / 0.7)
         self.assertAlmostEqual(row["revenue_gap"], 750 / 0.7 - 1_000)
@@ -97,7 +98,9 @@ class CascadeTests(unittest.TestCase):
                           **month(indirect=[CostLine(None, "Aluguel", "C", False, 30_000.0)]))
         base = 130_000.0 - 30_000.0  # lucro operacional − indiretos
         self.assertAlmostEqual(row["profit_tax_amount"], base * 0.15 + (base - 20_000) * 0.10 + base * 0.09)
-        self.assertAlmostEqual(row["company_result"], 110_000.0 - 30_000.0 - row["profit_tax_amount"])
+        self.assertAlmostEqual(row["net_profit"], 130_000.0 - 30_000.0 - row["profit_tax_amount"])
+        # Retenção sai depois do lucro líquido: não reduz a base do IRPJ/CSLL.
+        self.assertAlmostEqual(row["company_result"], row["net_profit"] - 20_000.0)
         prejuizo = build_month(competencia=AGO, cons={**cons, "operational_cost": 180_000.0}, settings=SETTINGS,
                                **month(indirect=[CostLine(None, "Aluguel", "C", False, 30_000.0)]))
         self.assertEqual(prejuizo["profit_tax_amount"], 0.0)
@@ -115,15 +118,32 @@ class CascadeTests(unittest.TestCase):
         )
         self.assertEqual((row["indirect_cost"], row["indirect_open_cost"]), (50_000.0, 8_000.0))
         self.assertEqual((row["debt_cost"], row["debt_open_cost"]), (0.0, 3_000.0))
-        self.assertEqual(row["company_result"], 200.0 - 50_000.0)
+        self.assertEqual(row["company_result"], 300.0 - 50_000.0 - 100.0)
         self.assertTrue(row["paid_basis"])
 
     def test_resultado_negativo_tambem_tem_faturamento_do_zero_a_zero(self) -> None:
-        row = build_month(competencia=AGO, cons={**CONS, "total_retention": 400.0}, settings=SETTINGS,
+        row = build_month(competencia=AGO, cons={**CONS, "operational_cost": 900.0}, settings=SETTINGS,
                           **month(debts=[CostLine(None, "B", "Endividamento", False, 10.0)]))
         self.assertLess(row["available_margin"], 0)
-        self.assertAlmostEqual(row["break_even_revenue"], 510 / (1 - 0.6))  # (500 + 10) ÷ (1 − 60%)
+        self.assertAlmostEqual(row["break_even_revenue"], 910 / (1 - 0.3))  # (900 + 10) ÷ (1 − 30%)
         self.assertGreater(row["revenue_gap"], 0)
+
+    def test_retencao_sai_depois_do_lucro_liquido(self) -> None:
+        kw = dict(competencia=AGO, settings=SETTINGS, **month(indirect=[CostLine(None, "X", "C", False, 200.0)]))
+        sem = build_month(cons={**CONS, "total_retention": 0.0}, **kw)
+        com = build_month(cons={**CONS, "total_retention": 400.0}, **kw)
+        self.assertEqual(sem["net_profit"], com["net_profit"])
+        self.assertEqual(sem["company_result"] - com["company_result"], 400.0)
+
+    def test_divida_paga_pelo_repasse_entra_nas_dividas(self) -> None:
+        # Lepta: retirada do Repasse abate a dívida sem título no CAP — mesmo assim é dívida paga.
+        lepta = CostLine(uuid.uuid4(), "Letpa Multisetorial", "Endividamento", False, 50_000.0)
+        row = build_month(competencia=AGO, cons=CONS, settings=SETTINGS,
+                          repasse_debts=[lepta], **month(debts=[CostLine(None, "Banco", "Endividamento", False, 50.0)]))
+        self.assertEqual(row["debt_cost"], 50_050.0)
+        self.assertEqual(row["company_result"], row["net_profit"] - 100.0 - 50_050.0)
+        _, _, debts = summarize_lines([([], CompanyCostMonth())], extra_debts=[lepta])
+        self.assertEqual([(d["name"], d["amount"]) for d in debts], [("Letpa Multisetorial", 50_000.0)])
 
     def test_sem_receita_nao_ha_zero_a_zero(self) -> None:
         row = build_month(competencia=AGO, cons={**CONS, "revenue_total": 0.0}, settings=SETTINGS, **month())
@@ -140,7 +160,7 @@ class CascadeTests(unittest.TestCase):
         self.assertEqual(total["revenue"], 4_000.0)
         self.assertEqual(total["indirect_open_cost"], 5.0)
         self.assertEqual(total["tax_regime"], "MISTO")
-        self.assertAlmostEqual(total["available_margin"], total["available_profit"] / 4_000.0)
+        self.assertAlmostEqual(total["available_margin"], total["net_profit"] / 4_000.0)
         self.assertTrue(total["anticipation_partial"] and total["indirect_projected"] and total["paid_basis"])
         self.assertIsNone(total["competencia"])
 

@@ -2684,6 +2684,7 @@ function FinanceItemCard({
     typeof item.percentual === "number" ? String(item.percentual).replace(".", ",") : "",
   );
   const [structureHasLegal, setStructureHasLegal] = useState(Boolean(item.has_legal_process));
+  const [structureInResult, setStructureInResult] = useState(item.include_in_company_result ?? true);
   const [structureHasReneg, setStructureHasReneg] = useState(Boolean(item.has_renegotiation));
   const [structureRenegAmount, setStructureRenegAmount] = useState(
     typeof item.renegotiated_amount === "number" ? formatCurrencyInputFromApi(item.renegotiated_amount) : "",
@@ -2743,6 +2744,7 @@ function FinanceItemCard({
     setStructureDescription(item.description ?? "");
     setStructureRecurrence(item.recurrence ?? defaultRecurrence(tipo));
     setStructureIsMonthlyRequired(Boolean(item.is_monthly_required));
+    setStructureInResult(item.include_in_company_result ?? true);
     setStructureFleetAllocation(item.fleet_allocation ?? null);
     setStructureProjectCostGroup(item.project_cost_group ?? null);
     setStructurePercentual(typeof item.percentual === "number" ? String(item.percentual).replace(".", ",") : "");
@@ -2958,6 +2960,7 @@ function FinanceItemCard({
     }
     if (tipo === "endividamento") {
       payload.has_legal_process = structureHasLegal;
+      payload.include_in_company_result = structureInResult;
       payload.has_renegotiation = structureHasReneg;
       payload.renegotiated_amount = structureHasReneg ? parseBRLInput(structureRenegAmount) : null;
       payload.renegotiation_type = structureHasReneg ? structureRenegType : null;
@@ -3203,6 +3206,14 @@ function FinanceItemCard({
                   <dt className="text-xs text-slate-500">Recorrência</dt>
                   <dd className="font-medium text-slate-900">{item.recurrence ?? defaultRecurrence(tipo)}</dd>
                 </div>
+                {tipo === "endividamento" && (
+                  <div>
+                    <dt className="text-xs text-slate-500">Resultado da Empresa</dt>
+                    <dd className="font-medium text-slate-900">
+                      {(item.include_in_company_result ?? true) ? "Entra" : "Não entra"}
+                    </dd>
+                  </div>
+                )}
                 {tipo === "custo_fixo" && (
                   <div>
                     <dt className="text-xs text-slate-500">Obrigatório mensal</dt>
@@ -3450,6 +3461,18 @@ function FinanceItemCard({
                         disabled={readOnly || structureSaving}
                       />
                       <span>Processo judicial</span>
+                    </label>
+                    <label
+                      className="flex items-center gap-2 pt-6 text-sm text-slate-700"
+                      title="Desmarcado: a dívida não conta em Dívidas pagas do Resultado da Empresa (Indicadores). Contas a Pagar e Endividamento não mudam."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={structureInResult}
+                        onChange={(e) => setStructureInResult(e.target.checked)}
+                        disabled={readOnly || structureSaving}
+                      />
+                      <span>Entra no Resultado da Empresa</span>
                     </label>
                     <label className="flex items-center gap-2 pt-6 text-sm text-slate-700">
                       <input

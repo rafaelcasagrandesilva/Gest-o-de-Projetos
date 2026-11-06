@@ -59,7 +59,6 @@ export const WORKSPACE_MENUS: Record<WorkspaceName, WorkspaceMenuItem[]> = {
   ],
   indicators: [
     { to: "/indicators/roi", label: "ROI Operacional", perm: "indicators.read" },
-    { to: "/indicators/evolucao-financeira", label: "Evolução Financeira", perm: "indicators.read" },
     { to: "/indicators/resultado-empresa", label: "Resultado da Empresa", short: "RE", perm: "company_result.read" },
   ],
   legal: [

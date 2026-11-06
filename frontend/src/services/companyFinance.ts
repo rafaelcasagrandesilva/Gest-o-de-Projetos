@@ -55,6 +55,8 @@ export interface CompanyFinancialItem {
   description?: string | null;
   recurrence?: string | null;
   is_monthly_required?: boolean;
+  /** Só endividamento: conta em "Dívidas pagas" do Resultado da Empresa (padrão true). */
+  include_in_company_result?: boolean;
   /** Rateio pela frota (só custo fixo): LOCACAO substitui o custo dos veículos; ADICIONAL soma; null = sem rateio. */
   fleet_allocation?: FleetAllocation | null;
   /** "Entra no projeto como" (só custo fixo com centro de custo = projeto). null = Fixos operacionais. */
@@ -168,6 +170,8 @@ export async function createCompanyFinanceItem(payload: {
   legal_case_id?: string | null;
   percentual?: number | null;
   is_monthly_required?: boolean;
+  /** Só endividamento: conta em "Dívidas pagas" do Resultado da Empresa (padrão true). */
+  include_in_company_result?: boolean;
   /** Rateio pela frota (só custo fixo): LOCACAO substitui o custo dos veículos; ADICIONAL soma; null = sem rateio. */
   fleet_allocation?: FleetAllocation | null;
   /** "Entra no projeto como" (só custo fixo com centro de custo = projeto). null = Fixos operacionais. */
@@ -210,6 +214,7 @@ export async function updateCompanyFinanceItem(
     legal_person_id?: string | null;
     percentual?: number | null;
     is_monthly_required?: boolean;
+    include_in_company_result?: boolean;
     fleet_allocation?: FleetAllocation | null;
     project_cost_group?: ProjectCostGroup | null;
     has_legal_process?: boolean;
