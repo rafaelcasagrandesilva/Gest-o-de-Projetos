@@ -193,6 +193,8 @@ export interface FilterProject {
   project_id: string;
   project_name: string;
   cost_center: string | null;
+  /** Projeto ativo hoje (cadastro). */
+  is_active?: boolean;
 }
 
 export interface IndicatorFilters {

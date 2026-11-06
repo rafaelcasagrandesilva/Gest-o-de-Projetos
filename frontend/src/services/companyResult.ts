@@ -60,10 +60,12 @@ export interface CompanyResultMonth {
   anticipation_by_institution?: Record<string, number> | null;
   /** revenue − direct − tax − anticipation */
   operational_profit: number | null;
-  /** Retenção 10% (retida pelo cliente, não disponível) */
+  /** Retenção 10% (retida pelo cliente) — descontada depois do lucro líquido */
   retention: number | null;
-  /** operational_profit − retention */
+  /** Legado (operational_profit − retention); não é mais usado na cascata */
   available_profit: number | null;
+  /** revenue − anticipation − direct − indirect − tax − profit_tax_amount */
+  net_profit?: number | null;
   // Empresa
   indirect_cost: number | null;
   indirect_labor_cost: number | null;
@@ -82,15 +84,15 @@ export interface CompanyResultMonth {
   paid_basis: boolean;
   /** IRPJ/CSLL do Lucro Real sobre o lucro da empresa (0 com prejuízo ou no Presumido). */
   profit_tax_amount?: number | null;
-  /** available_profit − indirect_cost − profit_tax_amount − debt_cost */
+  /** net_profit − retention − debt_cost (dívidas incluem retiradas do Repasse, ex. Lepta) */
   company_result: number | null;
-  /** fração: available_profit / revenue */
+  /** fração: net_profit / revenue */
   available_margin: number | null;
-  /** fração: available_profit / (indirect_cost + profit_tax_amount + debt_cost) */
+  /** fração: net_profit / (retention + debt_cost) */
   coverage: number | null;
   /**
-   * fração: margem que teria que sobrar como lucro disponível para pagar custos indiretos,
-   * IRPJ/CSLL e dívidas e fechar em zero = (indirect_cost + profit_tax_amount + debt_cost) / revenue.
+   * fração: margem que teria que sobrar como lucro líquido para cobrir retenção e dívidas e fechar
+   * em zero = (retention + debt_cost) / revenue.
    * null quando a receita é 0.
    */
   required_margin: number | null;
@@ -125,6 +127,8 @@ export interface CompanyResultDebtItem {
 
 export interface CompanyResult {
   scenario: CompanyResultScenario;
+  /** true = filtrado por projetos: custos indiretos e dívidas zerados (são da empresa). */
+  project_filtered?: boolean;
   /** REALIZADO → "PAGO", PREVISTO → "LANCADO". Ausente em backends antigos: derivar de `scenario`. */
   basis?: CompanyResultBasis;
   period_start: string;
@@ -147,12 +151,15 @@ export async function fetchCompanyResult(params: {
   data_inicial: string;
   data_final: string;
   scenario: CompanyResultScenario;
+  /** Só esses projetos (custos indiretos e dívidas zeram). Omitir = empresa inteira. */
+  project_ids?: string[];
 }): Promise<CompanyResult> {
   const { data } = await api.get<CompanyResult>("/indicators/company-result", {
     params: {
       data_inicial: params.data_inicial,
       data_final: params.data_final,
       scenario: params.scenario,
+      ...(params.project_ids?.length ? { project_ids: params.project_ids.join(",") } : {}),
     },
   });
   return data;

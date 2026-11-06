@@ -3,17 +3,20 @@
 Cascata por competência:
 
     Receita dos projetos
-    − Custos diretos (mão de obra, veículos, sistemas, fixos operacionais —   ┐
-      já com os itens dos Custos Indiretos que são do projeto)                │ motor do Dashboard
-    − Impostos sobre a receita (pelo regime tributário do mês)                │ Operacional
-    − Antecipação (custo real das operações do mês seguinte)                  │ (FinancialService)
-    = Lucro operacional                                                       │
-    − Retenção 10% (retida pelo cliente, indisponível)                        │
-    = Lucro disponível                                                        ┘
+    − Antecipação (custo real das operações do mês seguinte)
+    − Custos diretos (mão de obra, veículos, sistemas, fixos operacionais — já com os itens dos
+      Custos Indiretos que são do projeto)
     − Custos indiretos (menu Custos Indiretos, sem a parte que é dos projetos)
-    − IRPJ/CSLL sobre o lucro (só em mês de Lucro Real; zero no prejuízo)
-    − Endividamento (parcelas que vão ao Contas a Pagar)
+    − Impostos (sobre a receita pelo regime do mês + IRPJ/CSLL sobre o lucro no Lucro Real)
+    = Lucro líquido
+    − Retenção 10% (retida pelo cliente, indisponível até o fim do contrato)
+    − Dívidas pagas (parcelas do Contas a Pagar + retiradas do Repasse que abatem dívida, ex. Lepta;
+      fora as dívidas desmarcadas em "Entra no Resultado da Empresa", ex. Rogério Ifran)
     = Resultado da empresa
+
+A Retenção sai DEPOIS do lucro líquido (Rafael, 2026-11-05) — não entra na base do IRPJ/CSLL.
+`operational_profit` (receita − diretos − impostos − antecipação) continua no contrato
+para a Evolução Financeira.
 
 O "Rateio / overhead" (receita × overhead_rate) do motor NÃO entra: aqui os custos indiretos
 reais substituem esse percentual — somar os dois contaria a mesma coisa duas vezes.
@@ -39,9 +42,11 @@ from collections import defaultdict
 from collections.abc import Iterable
 from datetime import date
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.scenario import Scenario, coerce_scenario
+from app.models.company_finance import CompanyFinancialItem
 from app.services.anticipation_rate import SOURCE_MEDIA, SOURCE_PARCIAL, AnticipationRate
 from app.services.company_costs import (  # noqa: F401 — reexportados para os testes/consumidores
     BASIS_LAUNCHED,
@@ -60,6 +65,7 @@ from app.services.company_costs import (  # noqa: F401 — reexportados para os 
     load_company_costs,
     load_fleet,
     load_project_payables,
+    load_repasse_debts,
     project_group_of,
     projected_item_amount,
     split_month,
@@ -90,6 +96,7 @@ _MONEY_SUM_KEYS = (
     "operational_profit",
     "retention",
     "available_profit",
+    "net_profit",
     "indirect_cost",
     "indirect_labor_cost",
     "indirect_supplier_cost",
@@ -121,11 +128,12 @@ def build_month(
     indirect: list[CostLine],
     costs: CompanyCostMonth,
     settings=None,
+    repasse_debts: list[CostLine] | None = None,
 ) -> dict:
     """Uma linha da cascata a partir do consolidado dos projetos + custos da empresa.
 
     `indirect` = linhas que ficaram indiretas depois de `split_month` (a parte dos projetos já está
-    dentro do consolidado).
+    dentro do consolidado). `repasse_debts` = dívidas pagas por Retirada do Repasse (fora do CAP).
     """
     revenue = _f(cons.get("revenue_total"))
     direct = _f(cons.get("operational_cost"))
@@ -133,10 +141,10 @@ def build_month(
     anticipation = _f(cons.get("anticipation_amount"))
     retention = _f(cons.get("total_retention"))
     operational_profit = revenue - direct - tax - anticipation
-    available = operational_profit - retention
     indirect_cost = sum(line.amount for line in indirect)
     indirect_labor = sum(line.amount for line in indirect if line.is_labor)
-    debt = sum(line.amount for line in costs.debts)
+    repasse_debts = repasse_debts or []
+    debt = sum(line.amount for line in costs.debts) + sum(line.amount for line in repasse_debts)
     regime = cons.get("tax_regime")
     profit_tax = 0.0
     if regime == LUCRO_REAL:
@@ -144,6 +152,7 @@ def build_month(
         # menos os custos indiretos. Parcelas de dívida são amortização, não despesa.
         irpj, csll = profit_taxes_real(settings=settings, taxable_profit=operational_profit - indirect_cost)
         profit_tax = irpj + csll
+    net_profit = operational_profit - indirect_cost - profit_tax
     row = {
         "competencia": competencia,
         "revenue": revenue,
@@ -168,7 +177,7 @@ def build_month(
         "anticipation_by_institution": {k: _f(v) for k, v in (cons.get("anticipation_by_institution") or {}).items()},
         "operational_profit": operational_profit,
         "retention": retention,
-        "available_profit": available,
+        "available_profit": operational_profit - retention,
         "indirect_cost": indirect_cost,
         "indirect_labor_cost": indirect_labor,
         "indirect_supplier_cost": indirect_cost - indirect_labor,
@@ -180,7 +189,8 @@ def build_month(
         "debt_projected": costs.projected,
         "paid_basis": costs.paid_basis,
         "company_costs_partial": bool(cons.get("company_costs_partial", costs.partial)),
-        "company_result": available - indirect_cost - profit_tax - debt,
+        "net_profit": net_profit,
+        "company_result": net_profit - retention - debt,
     }
     return with_ratios(row)
 
@@ -188,20 +198,22 @@ def build_month(
 def with_ratios(row: dict) -> dict:
     """Percentuais sempre recalculados sobre os valores da própria linha (mês ou período)."""
     revenue = row["revenue"]
-    available = row["available_profit"]
-    burden = row["indirect_cost"] + row["profit_tax_amount"] + row["debt_cost"]
+    net = row["net_profit"]
+    debt = row["debt_cost"]
     has_revenue = revenue > _EPS
     row["anticipation_rate"] = row["anticipation_amount"] / revenue if has_revenue else None
     row["tax_rate"] = row["tax_amount"] / revenue if has_revenue else None
-    row["available_margin"] = available / revenue if has_revenue else None
-    # Margem necessária: quanto da receita teria que sobrar (lucro disponível) para pagar os custos
-    # da empresa — indiretos, IRPJ/CSLL e dívidas — e fechar em zero.
+    # Margem líquida: lucro líquido ÷ receita.
+    row["available_margin"] = net / revenue if has_revenue else None
+    # Margem necessária: quanto da receita teria que sobrar (lucro líquido) para cobrir a retenção
+    # e as dívidas e fechar em zero.
+    burden = row["retention"] + debt
     row["required_margin"] = burden / revenue if has_revenue else None
-    row["coverage"] = available / burden if burden > _EPS else None
+    row["coverage"] = net / burden if burden > _EPS else None
     # Faturamento para fechar 0 a 0 (existe também com resultado negativo): os custos que NÃO crescem
     # com a receita (diretos, indiretos, dívidas) ÷ o que sobra de cada real faturado depois do que
     # cresce com ela (impostos, antecipação e retenção, nas taxas efetivas do mês/período).
-    # IRPJ/CSLL do Lucro Real incidem sobre o lucro — no zero a zero não há lucro, então não entram.
+    # IRPJ/CSLL do Lucro Real incidem sobre o lucro — no zero a zero não há lucro.
     variable_share = (row["tax_amount"] + row["anticipation_amount"] + row["retention"]) / revenue if has_revenue else None
     fixed_costs = row["direct_cost"] + row["indirect_cost"] + row["debt_cost"]
     if variable_share is not None and variable_share < 1 - _EPS and fixed_costs > _EPS:
@@ -230,6 +242,7 @@ def aggregate_months(rows: list[dict]) -> dict:
 
 def summarize_lines(
     months: Iterable[tuple[list[CostLine], CompanyCostMonth]],
+    extra_debts: Iterable[CostLine] = (),
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """(indiretos por categoria, indiretos por item, dívidas por item) no período, desc."""
     by_category: dict[str, float] = defaultdict(float)
@@ -253,6 +266,11 @@ def summarize_lines(
             entry = debts.setdefault(key, {"item_id": line.item_id, "name": line.name, "amount": 0.0})
             entry["amount"] += line.amount
 
+    for line in extra_debts:
+        key = (line.item_id, line.name if line.item_id is None else None)
+        entry = debts.setdefault(key, {"item_id": line.item_id, "name": line.name, "amount": 0.0})
+        entry["amount"] += line.amount
+
     def _desc(values: Iterable[dict]) -> list[dict]:
         return sorted((v for v in values if abs(v["amount"]) > _EPS), key=lambda v: -v["amount"])
 
@@ -266,8 +284,18 @@ class CompanyResultService:
         self.financial = FinancialService(session)
 
     async def company_result(
-        self, *, start: date, end: date, scenario: str | Scenario, current_month: date | None = None
+        self,
+        *,
+        start: date,
+        end: date,
+        scenario: str | Scenario,
+        current_month: date | None = None,
+        project_ids: list | None = None,
     ) -> dict:
+        """`project_ids` = só esses projetos (receita, antecipação, custos diretos, impostos e
+        retenção deles); custos indiretos e dívidas são da empresa e ZERAM com o filtro (Rafael,
+        2026-11-06). None = empresa inteira."""
+        selected = set(project_ids) if project_ids else None
         sc = coerce_scenario(scenario)
         basis = BASIS_PAID if sc == Scenario.REALIZADO else BASIS_LAUNCHED
         current = normalize_competencia(current_month or date.today())
@@ -275,8 +303,31 @@ class CompanyResultService:
         pay_months = [next_competencia(comp) for comp in months]
         settings = await self.financial.get_settings_row()
         company = await load_company_costs(self.session, pay_months, settings=settings, basis=basis)
-        project_titles = await load_project_payables(self.session, pay_months, basis=basis)
+        project_titles = await load_project_payables(self.session, pay_months, basis=basis, project_ids=selected)
         fleets = await load_fleet(self.session, months)
+        repasse = await load_repasse_debts(self.session, pay_months)
+        # Dívidas desmarcadas em "Entra no Resultado da Empresa" (cadastro do Endividamento).
+        excluded = set(
+            (
+                await self.session.execute(
+                    select(CompanyFinancialItem.id).where(
+                        CompanyFinancialItem.tipo == "endividamento",
+                        CompanyFinancialItem.include_in_company_result.is_(False),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if selected is not None:
+            # Filtro de projetos: indiretos e dívidas não pertencem a projeto nenhum — saem da conta.
+            for pm in pay_months:
+                company[pm].debts = []
+                repasse[pm] = []
+        elif excluded:
+            for pm in pay_months:
+                company[pm].debts = [line for line in company[pm].debts if line.item_id not in excluded]
+                repasse[pm] = [line for line in repasse[pm] if line.item_id not in excluded]
         rows = []
         split_months = []
         for comp, pay_month in zip(months, pay_months):
@@ -286,15 +337,36 @@ class CompanyResultService:
             indirect, by_project = split_month(
                 costs, fleets[comp], rental_due=False, registry_fallback=basis == BASIS_LAUNCHED
             )
+            if selected is not None:
+                indirect = []
+                by_project = {pid: lines for pid, lines in by_project.items() if pid in selected}
             cons = await self._projects_month(
-                comp, sc, settings=settings, costs=costs, titles=project_titles[pay_month], by_project=by_project
+                comp,
+                sc,
+                settings=settings,
+                costs=costs,
+                titles=project_titles[pay_month],
+                by_project=by_project,
+                project_ids=selected,
             )
             cons["company_costs_partial"] = sc == Scenario.REALIZADO and pay_month >= current
-            rows.append(build_month(competencia=comp, cons=cons, indirect=indirect, costs=costs, settings=settings))
+            rows.append(
+                build_month(
+                    competencia=comp,
+                    cons=cons,
+                    indirect=indirect,
+                    costs=costs,
+                    settings=settings,
+                    repasse_debts=repasse[pay_month],
+                )
+            )
             split_months.append((indirect, costs))
-        categories, items, debts = summarize_lines(split_months)
+        categories, items, debts = summarize_lines(
+            split_months, extra_debts=[line for pm in pay_months for line in repasse[pm]]
+        )
         return {
             "scenario": sc.value,
+            "project_filtered": selected is not None,
             "basis": basis,
             "period_start": months[0],
             "period_end": months[-1],
@@ -315,16 +387,25 @@ class CompanyResultService:
         costs: CompanyCostMonth,
         titles: ProjectPayables,
         by_project: dict,
+        project_ids: set | None = None,
     ) -> dict:
-        """Receita, tributos, antecipação e custos diretos do mês trabalhado, no formato do consolidado."""
+        """Receita, tributos, antecipação e custos diretos do mês trabalhado, no formato do consolidado.
+
+        `project_ids` = soma só desses projetos (None = empresa inteira, numa chamada só)."""
         fin = self.financial
+        scope = sorted(project_ids, key=str) if project_ids is not None else [None]
+
+        async def total(fn, scenario) -> float:
+            values = [await fn(project_id=pid, competencia=comp, scenario=scenario) for pid in scope]
+            return float(sum(_f(v) for v in values))
+
         revenue_sc = Scenario.REALIZADO
-        revenue = await fin.calcular_receita_total(project_id=None, competencia=comp, scenario=revenue_sc)
+        revenue = await total(fin.calcular_receita_total, revenue_sc)
         if sc == Scenario.PREVISTO and revenue <= _EPS:
             # Mês ainda sem receita realizada: a simulação usa a receita prevista.
             revenue_sc = Scenario.PREVISTO
-            revenue = await fin.calcular_receita_total(project_id=None, competencia=comp, scenario=revenue_sc)
-        retention = await fin.calcular_total_retencao(project_id=None, competencia=comp, scenario=revenue_sc)
+            revenue = await total(fin.calcular_receita_total, revenue_sc)
+        retention = await total(fin.calcular_total_retencao, revenue_sc)
         taxes = await fin.impostos_receita(receita=revenue, competencia=comp, scenario=revenue_sc)
         rate = await fin.taxa_antecipacao(settings=settings, competencia=comp, scenario=Scenario.REALIZADO)
         if sc == Scenario.REALIZADO and rate.source == SOURCE_MEDIA:
@@ -335,9 +416,13 @@ class CompanyResultService:
         lines = [line for project_lines in by_project.values() for line in project_lines]
         if costs.projected:
             # Contas do mês de pagamento ainda não geradas (só no PREVISTO): estimativa pelos cadastros.
-            parts = await fin.calcular_operacional_estruturado(project_id=None, competencia=comp, scenario=revenue_sc)
-            labor, vehicle = parts["labor_cost"], parts["vehicle_cost"]
-            system, fixed = parts["system_cost"], parts["fixed_operational_cost"]
+            labor = vehicle = system = fixed = 0.0
+            for pid in scope:
+                parts = await fin.calcular_operacional_estruturado(project_id=pid, competencia=comp, scenario=revenue_sc)
+                labor += _f(parts["labor_cost"])
+                vehicle += _f(parts["vehicle_cost"])
+                system += _f(parts["system_cost"])
+                fixed += _f(parts["fixed_operational_cost"])
             direct_open = 0.0
         else:
             groups: dict[str, float] = defaultdict(float)

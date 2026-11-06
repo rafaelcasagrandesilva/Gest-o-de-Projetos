@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from "react";
+import type { CompanyResultMonth } from "@/services/companyResult";
 import type { EChartsOption, EChartsType, LineSeriesOption } from "echarts";
 import type { FinancialEvolutionPoint } from "@/services/indicators";
 import type { SeriesVisibility } from "@/hooks/useFinancialChartViz";
@@ -39,18 +40,21 @@ export const MAIN_SERIES = [
 }>;
 
 /**
- * Empresa inteira (todos os projetos, sem filtro de centro de custo): mesma fonte e regras do
- * Resultado da Empresa (`/indicators/company-result`) — faturamento, custos diretos, custos
- * indiretos, endividamento, lucro operacional e resultado da empresa. Os campos são montados
- * pela página a partir dos meses do Resultado da Empresa.
+ * Empresa inteira (todos os projetos ativos selecionados): mesma fonte, regras e ORDEM dos cards
+ * do Resultado da Empresa (`/indicators/company-result`) — uma linha por card. Os campos são
+ * montados pela página a partir dos meses do Resultado da Empresa. Ids próprios (prefixo `emp`)
+ * para a visibilidade não se misturar com as linhas dos projetos.
  */
 export const COMPANY_SERIES = [
-  { id: "faturamento", name: "Faturamento", field: "faturamento", color: CHART_COLORS.faturamento },
-  { id: "custoDireto", name: "Custos Diretos", field: "custo_direto", color: CHART_COLORS.custos },
-  { id: "custoIndireto", name: "Custos Indiretos", field: "custo_indireto", color: "#ea580c" },
-  { id: "endividamento", name: "Endividamento", field: "endividamento", color: "#7c3aed" },
-  { id: "lucroOperacional", name: "Lucro Operacional", field: "lucro_operacional", color: CHART_COLORS.caixaPos },
-  { id: "resultadoEmpresa", name: "Resultado da Empresa", field: "resultado_empresa", color: "#0f172a" },
+  { id: "empFaturamento", name: "Faturamento", field: "faturamento", color: CHART_COLORS.faturamento },
+  { id: "empAntecipacao", name: "Antecipação", field: "antecipacao", color: "#94a3b8" },
+  { id: "empCustoDireto", name: "Custos Diretos", field: "custo_direto", color: CHART_COLORS.custos },
+  { id: "empCustoIndireto", name: "Custos Indiretos", field: "custo_indireto", color: "#ea580c" },
+  { id: "empImpostos", name: "Impostos", field: "impostos", color: "#a16207" },
+  { id: "empLucroLiquido", name: "Lucro Líquido", field: "lucro_liquido", color: "#0d9488" },
+  { id: "empRetencao", name: "Retenção", field: "retencao", color: "#64748b" },
+  { id: "empDividas", name: "Dívidas Pagas", field: "dividas", color: "#7c3aed" },
+  { id: "empResultado", name: "Resultado da Empresa", field: "resultado_empresa", color: "#0f172a" },
 ] as const satisfies ReadonlyArray<{
   id: string;
   name: string;
@@ -58,26 +62,41 @@ export const COMPANY_SERIES = [
   color: string;
 }>;
 
+/** Meses do Resultado da Empresa → pontos com os campos de `COMPANY_SERIES` (mesmos valores dos cards). */
+export function companySeriesPoints(months: ReadonlyArray<CompanyResultMonth>) {
+  return months.map((m) => ({
+    competencia: m.competencia ?? "",
+    faturamento: m.revenue,
+    antecipacao: m.anticipation_amount,
+    custo_direto: m.direct_cost,
+    custo_indireto: m.indirect_cost,
+    // Mesmo valor do card Impostos: sobre a receita + IRPJ/CSLL do Lucro Real.
+    impostos: m.tax_amount == null ? null : m.tax_amount + (m.profit_tax_amount ?? 0),
+    lucro_liquido: m.net_profit ?? null,
+    retencao: m.retention,
+    dividas: m.debt_cost,
+    resultado_empresa: m.company_result,
+  }));
+}
+
 export const MAIN_SERIES_IDS = MAIN_SERIES.map((s) => s.id);
 export const COMPANY_SERIES_IDS = COMPANY_SERIES.map((s) => s.id);
 
 /**
- * Padrão de visibilidade: acesas só Faturamento, Custos (Diretos) e Lucro Operacional; as demais
- * entram desligadas e o usuário liga pela legenda.
+ * Padrão de visibilidade (as demais entram desligadas e o usuário liga pela legenda):
+ * projetos = Faturamento, Custos e Lucro Operacional; empresa = Faturamento, Custos Diretos e
+ * Lucro Líquido.
  */
 export const DEFAULT_SERIES_VISIBILITY: Record<string, boolean> = {
   faturamento: true,
   custo: true,
   lucroOperacional: true,
   lucroLiquido: false,
-  custoDireto: true,
-  custoIndireto: false,
-  endividamento: false,
-  resultadoEmpresa: false,
+  ...Object.fromEntries(COMPANY_SERIES.map((s) => [s.id, false])),
+  empFaturamento: true,
+  empCustoDireto: true,
+  empLucroLiquido: true,
 };
-const NAME_TO_ID = Object.fromEntries(
-  [...MAIN_SERIES, ...COMPANY_SERIES].map((s) => [s.name, s.id]),
-);
 
 type SeriesSpec = { id: string; name: string; field: string; color: string };
 
@@ -117,8 +136,10 @@ export function FinancialEvolutionMainChart({
   /** Catálogo de séries: MAIN_SERIES (projetos filtrados) ou COMPANY_SERIES (empresa inteira). */
   seriesCatalog?: ReadonlyArray<SeriesSpec>;
 }) {
+  const catalog = (seriesCatalog ?? MAIN_SERIES) as ReadonlyArray<SeriesSpec>;
+  // Nome → id do catálogo em uso (os dois catálogos repetem nomes, ex.: "Lucro Líquido").
+  const nameToId = useMemo(() => Object.fromEntries(catalog.map((s) => [s.name, s.id])), [catalog]);
   const option = useMemo<EChartsOption>(() => {
-    const catalog = (seriesCatalog ?? MAIN_SERIES) as ReadonlyArray<SeriesSpec>;
     const months = points.map((p) => monthLabel(p.competencia));
     const last = points.length - 1;
     const numsById: Record<string, number[]> = Object.fromEntries(
@@ -240,7 +261,8 @@ export function FinancialEvolutionMainChart({
     );
 
     return {
-      grid: { top: 64, right: 40, bottom: expanded ? 78 : 40, left: 68 },
+      // Muitas séries: a legenda pode quebrar em duas linhas — mais espaço no topo.
+      grid: { top: catalog.length > 6 ? 84 : 64, right: 40, bottom: expanded ? 78 : 40, left: 68 },
       legend: {
         top: 8,
         icon: "roundRect",
@@ -261,7 +283,7 @@ export function FinancialEvolutionMainChart({
           const idx = arr[0].dataIndex;
           const rows = arr
             .map((s) => {
-              const nums = numsById[NAME_TO_ID[s.seriesName]] ?? [];
+              const nums = numsById[nameToId[s.seriesName]] ?? [];
               const pct = momPct(nums, idx);
               const variação =
                 pct === null
@@ -298,7 +320,7 @@ export function FinancialEvolutionMainChart({
       },
       series,
     };
-  }, [points, showAllValues, expanded, selectedSeries, seriesCatalog]);
+  }, [points, showAllValues, expanded, selectedSeries, catalog, nameToId]);
 
   const onEvents = useMemo(
     () => ({
@@ -306,13 +328,13 @@ export function FinancialEvolutionMainChart({
         const p = params as { selected: Record<string, boolean> };
         const next: SeriesVisibility = {};
         for (const [name, on] of Object.entries(p.selected)) {
-          const id = NAME_TO_ID[name];
+          const id = nameToId[name];
           if (id) next[id] = on;
         }
         onSelectedSeriesChange(next);
       },
     }),
-    [onSelectedSeriesChange],
+    [onSelectedSeriesChange, nameToId],
   );
 
   const handleReady = useCallback((inst: EChartsType) => onReady?.(inst), [onReady]);

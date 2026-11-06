@@ -43,8 +43,12 @@ class CompanyResultMonthRead(BaseModel):
     anticipation_rate: float | None = None
     anticipation_partial: bool = False
     operational_profit: float | None = None
+    # Retenção 10%: só informativa, não entra em nenhuma conta.
     retention: float | None = None
+    # Legado (operacional − retenção): não é mais usado na cascata.
     available_profit: float | None = None
+    # Receita − antecipação − diretos − indiretos − impostos (inclui IRPJ/CSLL do Lucro Real).
+    net_profit: float | None = None
     # Empresa
     indirect_cost: float | None = None
     indirect_labor_cost: float | None = None
@@ -61,7 +65,7 @@ class CompanyResultMonthRead(BaseModel):
     company_result: float | None = None
     available_margin: float | None = None
     coverage: float | None = None
-    # Fração da receita que teria que sobrar (lucro disponível) para pagar indiretos + IR/CSLL + dívidas.
+    # Fração da receita que teria que sobrar (lucro líquido) para pagar as dívidas.
     required_margin: float | None = None
     # Faturamento para fechar 0 a 0 no mês/período e a diferença para a receita atual (+ = faltou).
     break_even_revenue: float | None = None
@@ -89,6 +93,8 @@ class CompanyResultDebtItemRead(BaseModel):
 
 class CompanyResultRead(BaseModel):
     scenario: str
+    # True = filtrado por projetos (custos indiretos e dívidas zerados — são da empresa).
+    project_filtered: bool = False
     # Base dos custos: "PAGO" (REALIZADO, pago até agora) | "LANCADO" (PREVISTO, tudo o que foi lançado).
     basis: str | None = None
     period_start: date

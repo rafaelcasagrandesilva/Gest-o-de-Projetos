@@ -398,7 +398,7 @@ SENSITIVE_SPECS: dict[str, SensitiveSpec] = {
             "fixed_operational_cost", "direct_open_cost", "anticipation_by_institution", "contribution_margin",
             "tax_amount", "tax_rate",
             "tax_pis", "tax_cofins", "tax_iss", "tax_irpj", "tax_csll", "profit_tax_amount", "anticipation_amount",
-            "anticipation_rate", "operational_profit", "retention", "available_profit",
+            "anticipation_rate", "operational_profit", "retention", "available_profit", "net_profit",
             "indirect_cost", "indirect_labor_cost", "indirect_supplier_cost", "indirect_open_cost",
             "debt_cost", "debt_open_cost",
             "company_result", "available_margin", "coverage", "break_even_revenue", "required_margin", "revenue_gap",
