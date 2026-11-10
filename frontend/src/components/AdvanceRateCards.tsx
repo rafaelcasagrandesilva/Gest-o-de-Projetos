@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { formatCurrency, formatCurrencyShort } from "@/utils/currency";
+import { formatCurrency } from "@/utils/currency";
 import { summarizeAdvanceRates, type AdvanceRateGroup } from "@/utils/advanceRates";
 import type { AdvanceBatch } from "@/services/receivableAdvanceBatches";
 
@@ -42,34 +42,41 @@ function RateStat({ group, variant }: { group: AdvanceRateGroup; variant: RateVa
   const label = isConsolidated ? "Todas as instituições" : group.label;
   const ops = `${group.operations} ${group.operations === 1 ? "operação" : "operações"}`;
   const term = group.termDays == null ? null : `${Math.round(group.termDays)} dias`;
-  const basis = [charges, term].filter(Boolean).join(" · ");
-  const tip = `${label} — ${basis}: ${formatCurrency(group.financeCost)} sobre ${formatCurrency(
-    group.advanced,
-  )} antecipados em ${ops}${term ? `, prazo médio de ${term}` : ""}.`;
+  const nfs = `${group.invoices} ${group.invoices === 1 ? "NF" : "NFs"}`;
+  const credited = group.advanced - group.financeCost;
+  const tip = `${label} — antecipado ${formatCurrency(group.advanced)} em ${ops} (${nfs}); creditado ${formatCurrency(
+    credited,
+  )}. Custo (${charges}): ${formatCurrency(group.financeCost)}${term ? `, prazo médio de ${term}` : ""}.`;
 
   return (
     <div
       className={`rounded-lg border px-3 py-2 ${
-        isConsolidated ? "border-slate-300 bg-white" : "border-slate-200 bg-slate-50"
+        isConsolidated ? "border-indigo-200 bg-indigo-50/60" : "border-slate-200 bg-slate-50"
       }`}
       title={tip}
     >
-      <p className="max-w-[10.5rem] truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+      <p className="max-w-[12rem] truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">
         {label}
       </p>
 
-      <p className="flex items-baseline gap-1.5 tabular-nums">
-        <span className="text-lg font-semibold leading-tight text-slate-900">{pct(group.financePercent)}</span>
-        <span className="text-[11px] text-slate-500">
-          {group.financeMonthly == null ? "prazo indisponível" : `${pct(group.financeMonthly)} a.m.`}
-        </span>
+      {/* Quanto já foi antecipado: o número que a pessoa procura primeiro. */}
+      <p className="whitespace-nowrap text-base font-semibold leading-tight tabular-nums text-slate-900">
+        {formatCurrency(group.advanced)}
+      </p>
+      <p className="whitespace-nowrap text-[10px] tabular-nums text-slate-500">
+        antecipado · {ops} · {nfs}
       </p>
 
-      <p className="max-w-[10.5rem] truncate text-[10px] text-slate-500">{basis}</p>
-      {/* A base ao lado do custo é o que impede a leitura errada de somar os
-          percentuais: ela mostra que cada bloco tem um denominador diferente. */}
+      {/* Taxa efetiva. A base (o antecipado logo acima) é o que impede somar os
+          percentuais: cada bloco tem um denominador diferente. */}
+      <p className="whitespace-nowrap text-[11px] tabular-nums text-slate-600">
+        <span className="font-semibold text-slate-900">{pct(group.financePercent)}</span>
+        {" · "}
+        {group.financeMonthly == null ? "prazo indisponível" : `${pct(group.financeMonthly)} a.m.`}
+        {term ? ` · ${term}` : ""}
+      </p>
       <p className="whitespace-nowrap text-[10px] tabular-nums text-slate-500">
-        {formatCurrency(group.financeCost)} de {formatCurrencyShort(group.advanced)}
+        {charges} {formatCurrency(group.financeCost)}
       </p>
     </div>
   );
