@@ -38,6 +38,8 @@ export interface AdvanceRateGroup {
   /** Nome da instituição, ou "Total" no consolidado. */
   label: string;
   operations: number;
+  /** Quantidade de NFs nas operações do grupo. */
+  invoices: number;
   /** Soma dos valores antecipados (base de todos os percentuais). */
   advanced: number;
   /** Deságio explícito. Sempre 0 no perfil DAYCOVAL — use `financeCost`, não estes. */
@@ -147,6 +149,7 @@ function emptyGroup(label: string): AdvanceRateGroup {
   return {
     label,
     operations: 0,
+    invoices: 0,
     advanced: 0,
     discount: 0,
     fee: 0,
@@ -177,6 +180,7 @@ function newAcc(label: string): Acc {
 
 function add(acc: Acc, b: AdvanceBatch, advanced: number, days: number | null): void {
   acc.g.operations += 1;
+  acc.g.invoices += Number(b.invoice_count ?? 0);
   acc.g.advanced += advanced;
   acc.g.discount += Number(b.discount_amount ?? 0);
   acc.g.fee += Number(b.fee_amount ?? 0);
